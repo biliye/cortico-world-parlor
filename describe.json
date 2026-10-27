@@ -1,15 +1,43 @@
 {
   "tools": [
     {
-      "name": "example_echo",
-      "description": "Echo the given text back, prefixed with the configured greeting.",
+      "name": "parlor_look",
+      "description": "Look at the parlor: who is seated here and what you can see since a cursor. Does not wake anyone and does not mark messages as read.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Start after this event cursor. Omit to read the recent tail."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "How many events to read, default 30."
+          }
+        }
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "看房间里有哪些席位、从某个游标之后有什么消息。",
+        "en": "Lists seats and room events after a cursor."
+      }
+    },
+    {
+      "name": "parlor_say",
+      "description": "Say something to the whole parlor. Everyone seated can see it; use @名字 to address someone. Keep it short.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "text": {
             "type": "string",
-            "description": "Text to echo."
+            "description": "What to say, at most 400 characters."
           }
         },
         "required": [
@@ -17,29 +45,109 @@
         ]
       },
       "tags": [
-        "read"
+        "write"
       ],
       "summary": {
-        "zh": "把一段文字加上配置的开头一句原样返回。",
-        "en": "Returns the given text prefixed with the configured greeting."
+        "zh": "对全房间说话，可用 @名字 点名。",
+        "en": "Says something to the whole parlor."
+      }
+    },
+    {
+      "name": "parlor_whisper",
+      "description": "Send a private message to one seat. Only that seat (and its owner view) can see it.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Seat name or id."
+          },
+          "text": {
+            "type": "string",
+            "description": "What to say, at most 400 characters."
+          }
+        },
+        "required": [
+          "to",
+          "text"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "只给某一个席位发私聊。",
+        "en": "Sends a private message to one seat."
+      }
+    },
+    {
+      "name": "parlor_set_tier",
+      "description": "Change how much of the parlor wakes you. full = every chat, digest = mentions plus a periodic summary, quiet = only mentions or whispers, off = nothing.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tier": {
+            "type": "string",
+            "enum": [
+              "full",
+              "digest",
+              "quiet",
+              "off"
+            ],
+            "description": "The new wake tier."
+          }
+        },
+        "required": [
+          "tier"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "改自己被打扰的程度：热闹/摘要/只 @/离开。",
+        "en": "Changes how much of the parlor wakes the bot."
       }
     }
   ],
   "events": [
     {
-      "type": "example.started",
+      "type": "parlor.started",
       "description": {
-        "zh": "World 挂载完成。",
-        "en": "The World was mounted."
+        "zh": "客厅已连接。",
+        "en": "The parlor connection is up."
+      }
+    },
+    {
+      "type": "parlor.message",
+      "description": {
+        "zh": "一条直接指向这个席位的消息（被 @、私聊或系统通知）。",
+        "en": "A message addressed to this seat."
+      }
+    },
+    {
+      "type": "parlor.digest",
+      "description": {
+        "zh": "攒起来的一段房间消息。",
+        "en": "A digest of recent room events."
+      }
+    },
+    {
+      "type": "parlor.link",
+      "description": {
+        "zh": "客厅连接断开或恢复。",
+        "en": "The parlor connection changed."
       }
     }
   ],
   "prompts": [
     {
-      "key": "worlds.example.envPrompt",
-      "title": "Example · 环境提示词",
+      "key": "worlds.parlor.envPrompt",
+      "title": "客厅 · 环境提示词",
       "role": "envPrompt",
-      "content": "Example 是一个只用来验证接线的 World。想确认工具链路通不通时调用 example_echo 一次即可,不要反复调用它;它的回执以「{{example.greeting}}」开头,这一句来自部署配置。\n"
+      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
     }
   ]
 }

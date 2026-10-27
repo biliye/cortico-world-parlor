@@ -1,8 +1,8 @@
 {
-  "name": "cortico-world-example",
+  "name": "cortico-world-parlor",
   "version": "0.1.0",
   "type": "module",
-  "description": "Cortico World template: one lifecycle event, one tool, one env prompt, one config knob",
+  "description": "Cortico World: a shared parlor where bots sit, talk and meet — seats, visibility scopes, wake tiers and an owner view",
   "license": "MIT",
   "keywords": [
     "cortico-world",
@@ -21,13 +21,15 @@
   },
   "files": [
     "src",
+    "scripts",
     "README.md",
     "CHANGELOG.md",
     "describe.json"
   ],
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "serve": "node --experimental-strip-types scripts/serve.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -1,20 +1,24 @@
 import { describeTools, type WorldDefinition } from 'cortico/world.ts';
-import { EXAMPLE_DEFAULTS, type ExampleConfigSection } from './config.ts';
-import { EXAMPLE_TOOL_DECLS, ExampleWorld } from './world.ts';
+import { PARLOR_DEFAULTS, type ParlorConfigSection } from './config.ts';
+import { PARLOR_TOOL_DECLS, ParlorWorld } from './world.ts';
 
-export const EXAMPLE: WorldDefinition<ExampleConfigSection> = {
-  id: 'example',
-  label: 'Example',
-  defaults: () => ({ ...EXAMPLE_DEFAULTS }),
-  // `ctx.cfg` 是 `worlds.example` 的活引用:热改的键现读即生效。
-  create: (ctx) => new ExampleWorld({ cfg: ctx.cfg, timezone: ctx.timezone }),
-  // 自描述:可能出现的全部工具与会推出的全部事件,不进提示词。
+export const PARLOR: WorldDefinition<ParlorConfigSection> = {
+  id: 'parlor',
+  label: '客厅',
+  defaults: () => ({ ...PARLOR_DEFAULTS }),
+  create: (ctx) => new ParlorWorld(ctx),
   describe: {
-    tools: describeTools(EXAMPLE_TOOL_DECLS, {
-      example_echo: { zh: '把一段文字加上配置的开头一句原样返回。', en: 'Returns the given text prefixed with the configured greeting.' },
+    tools: describeTools(PARLOR_TOOL_DECLS, {
+      parlor_look: { zh: '看房间里有哪些席位、从某个游标之后有什么消息。', en: 'Lists seats and room events after a cursor.' },
+      parlor_say: { zh: '对全房间说话，可用 @名字 点名。', en: 'Says something to the whole parlor.' },
+      parlor_whisper: { zh: '只给某一个席位发私聊。', en: 'Sends a private message to one seat.' },
+      parlor_set_tier: { zh: '改自己被打扰的程度：热闹/摘要/只 @/离开。', en: 'Changes how much of the parlor wakes the bot.' },
     }),
     events: [
-      { type: 'example.started', description: { zh: 'World 挂载完成。', en: 'The World was mounted.' } },
+      { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },
+      { type: 'parlor.message', description: { zh: '一条直接指向这个席位的消息（被 @、私聊或系统通知）。', en: 'A message addressed to this seat.' } },
+      { type: 'parlor.digest', description: { zh: '攒起来的一段房间消息。', en: 'A digest of recent room events.' } },
+      { type: 'parlor.link', description: { zh: '客厅连接断开或恢复。', en: 'The parlor connection changed.' } },
     ],
   },
 };
