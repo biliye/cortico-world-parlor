@@ -8,6 +8,7 @@ import {
   type JoinRequest, type JoinResponse, type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
 } from './protocol.ts';
+import { DiceError, DiceTable, formatPrivate, type TableAction, type TablePublic, type TableStep } from './table.ts';
 
 export interface StoredSeat extends Seat {
   token: string;
@@ -30,6 +31,8 @@ export interface RoomKernelOptions {
   maxSeats?: number;
   historyLimit?: number;
   now?: () => number;
+  /** 牌桌每次行动的时限；测试里可以调短。 */
+  tableTurnMs?: number;
 }
 
 export class RoomError extends Error {
@@ -80,10 +83,12 @@ export class RoomKernel {
   readonly maxSeats: number;
   private readonly historyLimit: number;
   private readonly now: () => number;
+  private readonly tableTurnMs: number;
   private seats: StoredSeat[] = [];
   private events: RoomEvent[] = [];
   private seq = 0;
   private seatSeq = 0;
+  private table?: DiceTable;
   private readonly listeners = new Set<(event: RoomEvent) => void>();
   private readonly lastSay = new Map<string, number>();
 
@@ -93,6 +98,7 @@ export class RoomKernel {
     this.maxSeats = options.maxSeats ?? 8;
     this.historyLimit = options.historyLimit ?? 500;
     this.now = options.now ?? Date.now;
+    this.tableTurnMs = options.tableTurnMs ?? 45_000;
   }
 
   static fromJSON(raw: unknown, options: RoomKernelOptions): RoomKernel {
@@ -241,6 +247,94 @@ export class RoomKernel {
     return publicSeat(seat);
   }
 
+  openTable(seat: StoredSeat): void {
+    if (seat.kind === 'observer') throw new RoomError('invalid', '观看者不能开桌');
+    if (this.table && this.table.status !== 'ended') throw new RoomError('conflict', '已经有一张桌子了');
+    this.table = new DiceTable({ host: { id: seat.id, name: seat.name }, now: this.now(), turnMs: this.tableTurnMs });
+    this.record({
+      type: 'parlor.table.open',
+      from: 'system',
+      scope: { kind: 'room' },
+      text: `${seat.name} 开了一张骰子桌。`,
+      data: { game: 'dice' },
+    });
+  }
+
+  joinTable(seat: StoredSeat): void {
+    const table = this.requireTable();
+    try {
+      this.record({ ...table.join({ id: seat.id, name: seat.name }), from: 'system' });
+    } catch (error) {
+      throw this.tableError(error);
+    }
+  }
+
+  startTable(seat: StoredSeat): void {
+    const table = this.requireTable();
+    let step: TableStep;
+    try {
+      step = table.start(seat.id, this.now());
+    } catch (error) {
+      throw this.tableError(error);
+    }
+    this.recordStep(step);
+  }
+
+  tableAction(seat: StoredSeat, action: TableAction): void {
+    const table = this.requireTable();
+    let step: TableStep;
+    try {
+      step = table.act(seat.id, action, this.now());
+    } catch (error) {
+      throw this.tableError(error);
+    }
+    this.recordStep(step);
+  }
+
+  tickTable(now = this.now()): void {
+    if (!this.table || this.table.status !== 'playing') return;
+    const step = this.table.tick(now);
+    if (step) this.recordStep(step);
+  }
+
+  tablePublic(): TablePublic | undefined {
+    return this.table?.public();
+  }
+
+  private requireTable(): DiceTable {
+    if (!this.table) throw new RoomError('not_found', '现在没有桌子');
+    return this.table;
+  }
+
+  private tableError(error: unknown): RoomError {
+    if (error instanceof RoomError) return error;
+    if (error instanceof DiceError) {
+      if (error.code === 'not_seated' || error.code === 'not_host' || error.code === 'not_turn') {
+        return new RoomError('forbidden', error.message);
+      }
+      if (error.code === 'full' || error.code === 'seated') return new RoomError('conflict', error.message);
+      return new RoomError('invalid', error.message);
+    }
+    return new RoomError('invalid', error instanceof Error ? error.message : String(error));
+  }
+
+  private recordStep(step: TableStep): void {
+    for (const event of step.events) {
+      this.record({ type: event.type, from: 'system', scope: event.scope, text: event.text, data: event.data });
+    }
+    for (const seatId of step.views) {
+      const view = this.table?.view(seatId);
+      if (!view) continue;
+      this.record({
+        type: 'parlor.table.turn',
+        from: 'system',
+        scope: { kind: 'seat', seatId },
+        text: formatPrivate(view, this.now()),
+        data: { table: view },
+      });
+    }
+  }
+
   /** 发言里的 `@名字` 与 `@all`。名字先按长到短匹配，避免「阿岚」吃掉「阿岚的朋友」。 */
   mentions(text: string): string[] {
     const found = new Set<string>();
@@ -274,6 +368,8 @@ export class RoomKernel {
       maxSeats: this.maxSeats,
       latest: this.seq,
       events: this.history(seatId, since, limit),
+      table: this.table?.public(),
+      tablePrivate: this.table?.view(seatId) ?? null,
     };
   }
 

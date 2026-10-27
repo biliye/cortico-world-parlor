@@ -135,4 +135,36 @@ describe('客厅 World', () => {
     await sleep(400);
     expect(host.events.some((event) => event.type === 'parlor.message' || event.type === 'parlor.digest')).toBe(false);
   });
+
+  it('开桌后轮到她时被叫醒，私视图只进她的上下文', async () => {
+    await startServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+
+    const client = new ParlorClient(server.url);
+    const friend = await client.join('inv', { name: '阿岚' });
+    await until(() => server.onlineSeats().length >= 1);
+
+    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    expect(String(await open.handler({}, {} as ToolCallContext))).toContain('骰子桌开了');
+    await client.action(friend.token, { type: 'table_join' });
+    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    expect(String(await start.handler({}, {} as ToolCallContext))).toContain('开始了');
+
+    await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('轮到你')));
+    const turn = host.events.find((event) => event.type === 'parlor.message' && event.text.includes('轮到你'))!;
+    expect(turn.text).toContain('你的点数');
+    expect(turn.text).toContain('还能重掷');
+
+    const friendSnap = await client.snapshot(friend.token, 0, 100);
+    expect(friendSnap.events.some((event) => event.type === 'parlor.table.turn' && event.text.includes('你的点数'))).toBe(false);
+
+    const view = world.tools().find((tool) => tool.name === 'parlor_table_view')!;
+    expect(String(await view.handler({}, {} as ToolCallContext))).toContain('你的点数');
+  });
 });

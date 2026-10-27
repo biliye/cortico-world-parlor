@@ -14,8 +14,9 @@ import { ParlorClient, ParlorHttpError } from './room/client.ts';
 import { ParlorServer } from './room/server.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake,
-  type RoomEvent, type RoomSnapshot, type Seat, type WakeTier,
+  type ActionRequest, type RoomEvent, type RoomSnapshot, type Seat, type WakeTier,
 } from './room/protocol.ts';
+import { formatPrivate, formatPublic } from './room/table.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
@@ -101,6 +102,44 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       required: ['tier'],
     },
   },
+  {
+    name: 'parlor_table_open',
+    description: 'Open a two-to-four seat dice table in the parlor. You take the first seat; only one table can be open per room.',
+    tags: ['write'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_table_join',
+    description: 'Sit down at the open dice table.',
+    tags: ['write'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_table_start',
+    description: 'Start the dice table you opened. Needs at least two seated players.',
+    tags: ['write'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_table_action',
+    description: 'On your turn at the dice table: reroll one hidden die or stand. Highest total wins; the table reveals all dice at the end.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['roll', 'stand'], description: 'roll = reroll one die, stand = keep your total.' },
+        die: { type: 'integer', enum: [0, 1], description: 'Which die to reroll when action is roll.' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'parlor_table_view',
+    description: 'Read the current table and your hidden dice. Does not act and does not wake anyone.',
+    tags: ['read'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
 ];
 
 export class ParlorWorld implements World {
@@ -148,6 +187,11 @@ export class ParlorWorld implements World {
       tool('parlor_say', (args) => this.say(args)),
       tool('parlor_whisper', (args) => this.whisper(args)),
       tool('parlor_set_tier', (args) => this.setTier(args)),
+      tool('parlor_table_open', () => this.tableRequest({ type: 'table_open' }, '骰子桌开了。等人坐下后用 parlor_table_start 开始。')),
+      tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
+      tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '骰子桌开始了；轮到你时会被叫醒。')),
+      tool('parlor_table_action', (args) => this.tableAct(args)),
+      tool('parlor_table_view', () => this.tableView()),
     ];
   }
 
@@ -388,6 +432,12 @@ export class ParlorWorld implements World {
         case 'parlor.joined':
         case 'parlor.left':
         case 'parlor.tier': lines.push(`（系统）${event.text}`); break;
+        case 'parlor.table.turn': lines.push(event.text); break;
+        case 'parlor.table.open':
+        case 'parlor.table.join':
+        case 'parlor.table.start':
+        case 'parlor.table.action':
+        case 'parlor.table.end': lines.push(`（桌子）${event.text}`); break;
         default: lines.push(event.text);
       }
     }
@@ -435,6 +485,8 @@ export class ParlorWorld implements World {
       ...snapshot.seats.map((seat) => `- ${seat.name}（${KIND_LABELS[seat.kind] ?? seat.kind}·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}${online.has(seat.id) ? '·在线' : ''}）`),
       `最新游标 ${snapshot.latest}`,
     ];
+    if (snapshot.table) lines.push(formatPublic(snapshot.table));
+    if (snapshot.tablePrivate) lines.push(formatPrivate(snapshot.tablePrivate, Date.now()));
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
@@ -477,6 +529,41 @@ export class ParlorWorld implements World {
       if (this.seat) this.seat = { ...this.seat, tier };
       this.ctx.persist({ wakeTier: tier });
       return `提醒挡位改成了「${WAKE_TIER_LABELS[tier]}」。`;
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async tableRequest(body: ActionRequest, ok: string): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      await this.client.action(this.token, body);
+      return ok;
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async tableAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    const action = String(args.action ?? '');
+    if (action !== 'roll' && action !== 'stand') return this.failed('action 只能是 roll 或 stand');
+    const die = action === 'roll' ? Number(args.die ?? 0) : undefined;
+    if (die !== undefined && die !== 0 && die !== 1) return this.failed('die 只能是 0 或 1');
+    return this.tableRequest(
+      { type: 'table_action', action, die },
+      action === 'roll' ? '重掷了一颗骰子。' : '停牌了。',
+    );
+  }
+
+  private async tableView(): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      const snapshot = await this.client.snapshot(this.token, 0, 1);
+      if (!snapshot.table) return '现在没有桌子。';
+      const lines = [formatPublic(snapshot.table)];
+      if (snapshot.tablePrivate) lines.push(formatPrivate(snapshot.tablePrivate, Date.now()));
+      else lines.push('你不在桌上。');
+      return lines.join('\n');
     } catch (error) {
       return this.failed(messageOf(error));
     }

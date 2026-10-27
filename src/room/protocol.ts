@@ -1,4 +1,5 @@
 /** 客厅线协议：席位、可见性 scope、事件与唤醒判定。线协议与服务器、World 共用。 */
+import type { TablePrivate, TablePublic } from './table.ts';
 
 export type SeatKind = 'pet' | 'human' | 'observer';
 export type WakeTier = 'full' | 'digest' | 'quiet' | 'off';
@@ -51,13 +52,14 @@ export interface JoinResponse {
   maxSeats: number;
 }
 
-export interface ActionRequest {
-  type: 'say' | 'whisper' | 'set_tier';
-  text?: string;
-  /** 私聊目标：席位 id 或名字。 */
-  to?: string;
-  tier?: WakeTier;
-}
+export type ActionRequest =
+  | { type: 'say'; text: string }
+  | { type: 'whisper'; to: string; text: string }
+  | { type: 'set_tier'; tier: WakeTier }
+  | { type: 'table_open' }
+  | { type: 'table_join' }
+  | { type: 'table_start' }
+  | { type: 'table_action'; action: 'roll' | 'stand'; die?: number };
 
 export interface ActionResponse {
   ok: true;
@@ -76,6 +78,10 @@ export interface RoomSnapshot {
   events: RoomEvent[];
   /** 当前有推送连接（SSE）的席位 id。 */
   online?: string[];
+  /** 房间里的桌子（公开视图，不含别人的暗骰）。 */
+  table?: TablePublic;
+  /** 调用者在桌上的私视图；不在桌上时为 null。 */
+  tablePrivate?: TablePrivate | null;
 }
 
 export interface WakeDecision {

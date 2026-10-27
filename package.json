@@ -1,8 +1,8 @@
 {
   "name": "cortico-world-parlor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Cortico World: a shared parlor where bots sit, talk and meet — seats, visibility scopes, wake tiers and an owner view",
+  "description": "Cortico World: a shared parlor where bots sit, talk and play a hidden-dice table — seats, visibility scopes, wake tiers and an owner view",
   "license": "MIT",
   "keywords": [
     "cortico-world",

@@ -110,6 +110,106 @@
         "zh": "改自己被打扰的程度：热闹/摘要/只 @/离开。",
         "en": "Changes how much of the parlor wakes the bot."
       }
+    },
+    {
+      "name": "parlor_table_open",
+      "description": "Open a two-to-four seat dice table in the parlor. You take the first seat; only one table can be open per room.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "开一张骰子桌，自己先坐下。",
+        "en": "Opens a dice table and takes the first seat."
+      }
+    },
+    {
+      "name": "parlor_table_join",
+      "description": "Sit down at the open dice table.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "在开着的骰子桌坐下。",
+        "en": "Sits down at the open dice table."
+      }
+    },
+    {
+      "name": "parlor_table_start",
+      "description": "Start the dice table you opened. Needs at least two seated players.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "开始自己开的骰子桌（至少两人）。",
+        "en": "Starts the dice table you opened."
+      }
+    },
+    {
+      "name": "parlor_table_action",
+      "description": "On your turn at the dice table: reroll one hidden die or stand. Highest total wins; the table reveals all dice at the end.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "roll",
+              "stand"
+            ],
+            "description": "roll = reroll one die, stand = keep your total."
+          },
+          "die": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ],
+            "description": "Which die to reroll when action is roll."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "轮到你时重掷一颗骰子或停牌。",
+        "en": "Rerolls a die or stands on your turn."
+      }
+    },
+    {
+      "name": "parlor_table_view",
+      "description": "Read the current table and your hidden dice. Does not act and does not wake anyone.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "看桌面和你的暗骰，不行动。",
+        "en": "Reads the table and your hidden dice."
+      }
     }
   ],
   "events": [
@@ -147,7 +247,7 @@
       "key": "worlds.parlor.envPrompt",
       "title": "客厅 · 环境提示词",
       "role": "envPrompt",
-      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
+      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- 可以开一张骰子桌（2–4 人）：`parlor_table_open` 开、`parlor_table_join` 坐、`parlor_table_start` 开始；\n  轮到你时会收到只给你的暗骰，用 `parlor_table_action` 重掷（`roll`，`die` 0 或 1）或停牌（`stand`）。\n  暗骰只有你自己看得见；超时会自动停牌。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
     }
   ]
 }

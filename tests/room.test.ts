@@ -88,6 +88,47 @@ describe('可见性内核', () => {
     seat.tier = 'full';
     expect(decideWake(room, seat).wake).toBe(true);
   });
+
+  it('骰子桌的私视图只给桌上该席位，公开桌面不含暗骰', () => {
+    let now = 0;
+    const kernel = new RoomKernel({ id: 'lobby', inviteCode: 'inv', now: () => (now += 1000) });
+    const a = kernel.join({ name: '阿岚' });
+    const b = kernel.join({ name: '小满' });
+    const c = kernel.join({ name: '旁观' });
+    const sa = kernel.seatById(a.seat.id)!;
+    const sb = kernel.seatById(b.seat.id)!;
+    kernel.openTable(sa);
+    kernel.joinTable(sb);
+    kernel.startTable(sa);
+
+    const turns = (seatId: string) => kernel.history(seatId, 0, 100).filter((event) => event.type === 'parlor.table.turn');
+    expect(turns(a.seat.id)).toHaveLength(1);
+    expect(turns(b.seat.id)).toHaveLength(0);
+    expect(turns(c.seat.id)).toHaveLength(0);
+    expect(kernel.snapshot(a.seat.id, 0, 10).tablePrivate?.dice).toHaveLength(2);
+    const table = kernel.tablePublic()!;
+    expect(table.revealed).toBeUndefined();
+    expect(JSON.stringify(table.seats)).not.toContain('dice');
+
+    kernel.tableAction(sa, { type: 'stand' });
+    expect(turns(b.seat.id)).toHaveLength(1);
+  });
+
+  it('tickTable 超时替当前席位停牌', () => {
+    let now = 0;
+    const kernel = new RoomKernel({ id: 'lobby', inviteCode: 'inv', now: () => now, tableTurnMs: 1000 });
+    const a = kernel.join({ name: '阿岚' });
+    const b = kernel.join({ name: '小满' });
+    const sa = kernel.seatById(a.seat.id)!;
+    const sb = kernel.seatById(b.seat.id)!;
+    kernel.openTable(sa);
+    kernel.joinTable(sb);
+    kernel.startTable(sa);
+    now = 2000;
+    kernel.tickTable();
+    expect(kernel.history(a.seat.id, 0, 100).map((event) => event.text).join('\n')).toContain('超时');
+    expect(kernel.history(b.seat.id, 0, 100).some((event) => event.type === 'parlor.table.turn')).toBe(true);
+  });
 });
 
 describe('房间服务器', () => {
@@ -188,5 +229,25 @@ describe('房间服务器', () => {
     expect(result.ok).toBe(true);
     const snapshot = await client.snapshot(a.token, 0, 1);
     expect(snapshot.seat.tier).toBe('quiet');
+  });
+
+  it('桌子动作走 /v1/action，快照带桌面与自己的私视图', async () => {
+    const client = new ParlorClient(server.url);
+    const a = await client.join('inv', { name: '阿岚' });
+    const b = await client.join('inv', { name: '小满' });
+    await client.action(a.token, { type: 'table_open' });
+    await client.action(b.token, { type: 'table_join' });
+    await expect(client.action(b.token, { type: 'table_start' })).rejects.toMatchObject({ status: 403 });
+    await client.action(a.token, { type: 'table_start' });
+
+    const snapA = await client.snapshot(a.token, 0, 10);
+    expect(snapA.table?.status).toBe('playing');
+    expect(snapA.tablePrivate?.dice).toHaveLength(2);
+    expect(snapA.tablePrivate?.yourTurn).toBe(true);
+
+    await client.action(a.token, { type: 'table_action', action: 'stand' });
+    const snapB = await client.snapshot(b.token, 0, 10);
+    expect(snapB.tablePrivate?.yourTurn).toBe(true);
+    expect(snapB.tablePrivate?.dice).toHaveLength(2);
   });
 });

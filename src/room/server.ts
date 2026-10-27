@@ -16,6 +16,8 @@ export interface ParlorServerOptions {
   host?: string;
   port?: number;
   historyLimit?: number;
+  /** 牌桌每次行动的时限；测试里可以调短。 */
+  tableTurnMs?: number;
 }
 
 export interface ParlorAddress {
@@ -33,6 +35,13 @@ class HttpError extends Error {
     this.name = 'HttpError';
   }
 }
+
+const roomStatus = (error: RoomError): number => (
+  error.code === 'not_found' ? 404
+    : error.code === 'forbidden' ? 403
+      : error.code === 'conflict' || error.code === 'full' ? 409
+        : 400
+);
 
 const json = (res: ServerResponse, status: number, body: unknown): void => {
   const data = JSON.stringify(body);
@@ -88,6 +97,7 @@ export class ParlorServer {
   private readonly clients = new Set<Client>();
   private readonly online = new Map<string, number>();
   private readonly heartbeat: NodeJS.Timeout;
+  private readonly tableClock: NodeJS.Timeout;
   private persistTimer?: NodeJS.Timeout;
   private closed = false;
 
@@ -96,6 +106,10 @@ export class ParlorServer {
     this.kernel = this.load(options);
     this.heartbeat = setInterval(() => this.ping(), 15_000);
     this.heartbeat.unref?.();
+    this.tableClock = setInterval(() => {
+      try { this.kernel.tickTable(Date.now()); } catch { /* 一局坏掉不影响房间 */ }
+    }, 1000);
+    this.tableClock.unref?.();
     this.kernel.onEvent((event) => {
       this.broadcast(event);
       this.schedulePersist();
@@ -131,6 +145,7 @@ export class ParlorServer {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.heartbeat);
+    clearInterval(this.tableClock);
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistNow();
     for (const client of this.clients) {
@@ -158,6 +173,7 @@ export class ParlorServer {
         inviteCode: options.inviteCode,
         maxSeats: options.maxSeats,
         historyLimit: options.historyLimit,
+        tableTurnMs: options.tableTurnMs,
       });
     }
     try {
@@ -167,6 +183,7 @@ export class ParlorServer {
         inviteCode: options.inviteCode,
         maxSeats: options.maxSeats,
         historyLimit: options.historyLimit,
+        tableTurnMs: options.tableTurnMs,
       });
     } catch {
       return new RoomKernel({
@@ -174,6 +191,7 @@ export class ParlorServer {
         inviteCode: options.inviteCode,
         maxSeats: options.maxSeats,
         historyLimit: options.historyLimit,
+        tableTurnMs: options.tableTurnMs,
       });
     }
   }
@@ -199,7 +217,7 @@ export class ParlorServer {
         this.schedulePersist();
         json(res, 200, joined);
       } catch (error) {
-        if (error instanceof RoomError) throw new HttpError(error.code === 'full' ? 409 : error.code === 'conflict' ? 409 : 400, error.message);
+        if (error instanceof RoomError) throw new HttpError(roomStatus(error), error.message);
         throw error;
       }
       return;
@@ -237,7 +255,7 @@ export class ParlorServer {
         const seq = this.action(auth.seat, body);
         json(res, 200, { ok: true, seq });
       } catch (error) {
-        if (error instanceof RoomError) throw new HttpError(error.code === 'not_found' ? 404 : 400, error.message);
+        if (error instanceof RoomError) throw new HttpError(roomStatus(error), error.message);
         throw error;
       }
       return;
@@ -259,11 +277,16 @@ export class ParlorServer {
 
   private action(seat: StoredSeat, body: ActionRequest): number {
     switch (body.type) {
-      case 'say': return this.kernel.say(seat, body.text ?? '').seq;
-      case 'whisper': return this.kernel.whisper(seat, body.to ?? '', body.text ?? '').seq;
-      case 'set_tier': return this.kernel.setTier(seat, body.tier ?? 'digest') ? this.kernel.latest() : this.kernel.latest();
+      case 'say': this.kernel.say(seat, body.text); break;
+      case 'whisper': this.kernel.whisper(seat, body.to, body.text); break;
+      case 'set_tier': this.kernel.setTier(seat, body.tier); break;
+      case 'table_open': this.kernel.openTable(seat); break;
+      case 'table_join': this.kernel.joinTable(seat); break;
+      case 'table_start': this.kernel.startTable(seat); break;
+      case 'table_action': this.kernel.tableAction(seat, { type: body.action, die: body.die }); break;
       default: throw new HttpError(400, '未知动作');
     }
+    return this.kernel.latest();
   }
 
   private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {
