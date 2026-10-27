@@ -11,6 +11,7 @@ import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR_CONFIG_GROUP, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
+import { IDENTITY_FILE, loadOrCreateIdentity, type CooIdentity } from './room/identity.ts';
 import { ParlorServer } from './room/server.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake,
@@ -103,6 +104,12 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     },
   },
   {
+    name: 'parlor_ledger',
+    description: 'Read your own ledger: how many games you played and won in this parlor, plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
+    tags: ['read'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
     name: 'parlor_table_open',
     description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room.',
     tags: ['write'],
@@ -172,6 +179,8 @@ export class ParlorWorld implements World {
 
   private readonly ctx: WorldContext<ParlorConfigSection>;
   private readonly cursorFile: string;
+  private readonly identityFile: string;
+  private identity?: CooIdentity;
   private host?: WorldHost;
   private server?: ParlorServer;
   private client?: ParlorClient;
@@ -192,6 +201,7 @@ export class ParlorWorld implements World {
   constructor(ctx: WorldContext<ParlorConfigSection>) {
     this.ctx = ctx;
     this.cursorFile = join(ctx.dataDir, CURSOR_NAME);
+    this.identityFile = join(ctx.dataDir, IDENTITY_FILE);
   }
 
   envPromptVars(): Record<string, string> {
@@ -212,6 +222,7 @@ export class ParlorWorld implements World {
       tool('parlor_say', (args) => this.say(args)),
       tool('parlor_whisper', (args) => this.whisper(args)),
       tool('parlor_set_tier', (args) => this.setTier(args)),
+      tool('parlor_ledger', () => this.readLedger()),
       tool('parlor_table_open', (args) => this.openTable(args)),
       tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
       tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '桌子开始了；轮到你时会被叫醒。')),
@@ -227,7 +238,7 @@ export class ParlorWorld implements World {
       : undefined;
     const storage: StoragePart[] = [];
     if (!this.ctx.cfg.serverUrl.trim()) storage.push(this.roomStorage());
-    storage.push(this.cursorStorage());
+    storage.push(this.cursorStorage(), this.identityStorage());
     return {
       config: [PARLOR_CONFIG_GROUP],
       links,
@@ -304,7 +315,8 @@ export class ParlorWorld implements World {
 
     this.baseUrl = baseUrl;
     this.inviteCode = invite;
-    const client = new ParlorClient(baseUrl);
+    this.identity = loadOrCreateIdentity(this.identityFile);
+    const client = new ParlorClient(baseUrl, this.identity);
     this.client = client;
 
     const stored = this.ctx.secret(SEAT_SECRET).trim();
@@ -513,6 +525,9 @@ export class ParlorWorld implements World {
     ];
     if (snapshot.table) lines.push(snapshot.table.text);
     if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
+    if (snapshot.ledger && snapshot.ledger.games > 0) {
+      lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平。`);
+    }
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
@@ -543,6 +558,47 @@ export class ParlorWorld implements World {
       return `已私聊（#${result.seq}）。`;
     } catch (error) {
       return this.failed(messageOf(error));
+    }
+  }
+
+  private async readLedger(): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      const snapshot = await this.client.snapshot(this.token, 0, 1);
+      const summary = snapshot.ledger;
+      const room = snapshot.ledgerRoom ?? [];
+      const lines: string[] = [];
+      if (!summary || summary.games === 0) {
+        lines.push('【账本】还没有战绩。');
+      } else {
+        lines.push(`【账本】共 ${summary.games} 局：${summary.wins} 胜 ${summary.losses} 负 ${summary.draws} 平。`);
+        if (summary.recent.length > 0) {
+          lines.push('最近：');
+          for (const entry of summary.recent) lines.push(`- ${this.ledgerTime(entry.ts)} ${entry.text}`);
+        }
+      }
+      if (room.length > 0) {
+        lines.push('本房最近公开结果：');
+        for (const entry of room) lines.push(`- ${this.ledgerTime(entry.ts)} ${entry.text}`);
+      }
+      return lines.join('\n');
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private ledgerTime(ts: number): string {
+    try {
+      return new Intl.DateTimeFormat('zh-CN', {
+        timeZone: this.ctx.timezone,
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(new Date(ts));
+    } catch {
+      return new Date(ts).toISOString().slice(5, 16).replace('T', ' ');
     }
   }
 
@@ -651,6 +707,23 @@ export class ParlorWorld implements World {
       },
       clear: () => {
         try { rmSync(file, { force: true }); return '房间数据已删除，重启后从空房间开始。'; } catch (error) { return `删不掉：${messageOf(error)}`; }
+      },
+    };
+  }
+
+  private identityStorage(): StoragePart {
+    return {
+      key: 'parlor-identity',
+      label: '客厅账本身份',
+      kind: 'disk',
+      location: this.identityFile,
+      danger: true,
+      note: '删掉后会生成新身份，之前的账本记录接不上；席位令牌不受影响。',
+      stat: () => {
+        try { return `${statSync(this.identityFile).size} B`; } catch { return '不存在'; }
+      },
+      clear: () => {
+        try { rmSync(this.identityFile, { force: true }); return '账本身份已删除，下次启动生成新的。'; } catch (error) { return `删不掉：${messageOf(error)}`; }
       },
     };
   }

@@ -13,6 +13,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_say: { zh: '对全房间说话，可用 @名字 点名。', en: 'Says something to the whole parlor.' },
       parlor_whisper: { zh: '只给某一个席位发私聊。', en: 'Sends a private message to one seat.' },
       parlor_set_tier: { zh: '改自己被打扰的程度：热闹/摘要/只 @/离开。', en: 'Changes how much of the parlor wakes the bot.' },
+      parlor_ledger: { zh: '看自己的总战绩与本房最近的公开结果。', en: 'Reads your ledger summary and the room’s recent public results.' },
       parlor_table_open: { zh: '开一张桌子（骰子或斗地主），自己先坐下。', en: 'Opens a dice or 斗地主 table and takes the first seat.' },
       parlor_table_join: { zh: '在开着的桌子坐下。', en: 'Sits down at the open table.' },
       parlor_table_start: { zh: '开始自己开的桌子；斗地主空位由脚本陪练补。', en: 'Starts the table you opened; 斗地主 fills empty seats with script players.' },

@@ -10,14 +10,17 @@ import {
 } from './protocol.ts';
 import { DiceTable } from './table.ts';
 import { DoudizhuTable } from './games/doudizhu-table.ts';
+import { isCooId, LedgerStore } from './ledger.ts';
 import {
   TableError,
-  type TableEngine, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
+  type TableEngine, type TableEvent, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
 } from './table-engine.ts';
 
 export interface StoredSeat extends Seat {
   token: string;
   ownerToken: string;
+  /** 跨房账本身份；老房间没有时按 legacy:<room>:<seat> 算。 */
+  cooId?: string;
 }
 
 export interface RoomState {
@@ -38,6 +41,8 @@ export interface RoomKernelOptions {
   now?: () => number;
   /** 骰子桌每次行动的时限；测试里可以调短（斗地主固定 60 秒一手）。 */
   tableTurnMs?: number;
+  /** 账本；不传时用内存账本（测试用）。 */
+  ledger?: LedgerStore;
 }
 
 export class RoomError extends Error {
@@ -89,6 +94,7 @@ export class RoomKernel {
   private readonly historyLimit: number;
   private readonly now: () => number;
   private readonly tableTurnMs: number;
+  private readonly ledger: LedgerStore;
   private seats: StoredSeat[] = [];
   private events: RoomEvent[] = [];
   private seq = 0;
@@ -104,6 +110,7 @@ export class RoomKernel {
     this.historyLimit = options.historyLimit ?? 500;
     this.now = options.now ?? Date.now;
     this.tableTurnMs = options.tableTurnMs ?? 45_000;
+    this.ledger = options.ledger ?? new LedgerStore({ now: this.now });
   }
 
   static fromJSON(raw: unknown, options: RoomKernelOptions): RoomKernel {
@@ -122,6 +129,7 @@ export class RoomKernel {
         joinedAt: Number(seat.joinedAt) || 0,
         token: seat.token,
         ownerToken: seat.ownerToken,
+        ...(typeof seat.cooId === 'string' && isCooId(seat.cooId) ? { cooId: seat.cooId } : {}),
       }));
     kernel.events = state.events
       .filter((event): event is RoomEvent => !!event && typeof event.seq === 'number' && typeof event.text === 'string')
@@ -152,7 +160,7 @@ export class RoomKernel {
     return this.seats.map(publicSeat);
   }
 
-  join(request: JoinRequest): JoinResponse {
+  join(request: JoinRequest, cooId?: string): JoinResponse {
     const name = cleanName(request.name);
     if (!name) throw new RoomError('invalid', '名字不能为空');
     const kind: SeatKind = isKind(request.kind) ? request.kind : 'pet';
@@ -171,6 +179,7 @@ export class RoomKernel {
       joinedAt: this.now(),
       token: makeToken(),
       ownerToken: makeToken(),
+      ...(cooId && isCooId(cooId) ? { cooId } : {}),
     };
     this.seats.push(seat);
     this.record({
@@ -206,6 +215,19 @@ export class RoomKernel {
     const needle = value.trim().toLowerCase();
     return this.seats.find((seat) => seat.id === value.trim())
       ?? this.seats.find((seat) => seat.name.toLowerCase() === needle);
+  }
+
+  /** 账本用的跨房身份；老席位没有时按 legacy 算，等 World 带身份来再绑。 */
+  cooIdOf(seat: StoredSeat): string {
+    return seat.cooId ?? `legacy:${this.id}:${seat.id}`;
+  }
+
+  /** 把老席位绑到 World 的 cooId；已经有真身份时不覆盖。 */
+  bindCooId(seat: StoredSeat, cooId: string): boolean {
+    if (seat.cooId && !seat.cooId.startsWith('legacy:')) return false;
+    if (!isCooId(cooId)) return false;
+    seat.cooId = cooId;
+    return true;
   }
 
   say(seat: StoredSeat, text: string): RoomEvent {
@@ -384,6 +406,7 @@ export class RoomKernel {
         text: event.text,
         data: event.data,
       });
+      if (event.type === 'parlor.table.end') this.recordGame(event);
     }
     for (const seatId of step.views) {
       // 脚本陪练不是房间席位：它们的视图不进房间日志。
@@ -399,6 +422,43 @@ export class RoomKernel {
         data: { table: view },
       });
     }
+  }
+
+  /** 一局结束：按桌上真实席位写一条公开战绩；脚本陪练不进账本。 */
+  private recordGame(event: TableEvent): void {
+    const table = this.table;
+    if (!table) return;
+    const seats = table.seatIds()
+      .map((seatId) => this.seatById(seatId))
+      .filter((seat): seat is StoredSeat => !!seat && seat.kind !== 'observer');
+    if (seats.length === 0) return;
+    const data = event.data ?? {};
+    const winnerIds = Array.isArray(data.winners)
+      ? data.winners.filter((id): id is string => typeof id === 'string')
+      : [];
+    const winners = seats
+      .filter((seat) => winnerIds.includes(seat.id))
+      .map((seat) => this.cooIdOf(seat));
+    const game = typeof data.game === 'string' ? data.game : table.game;
+    this.ledger.record({
+      kind: 'game',
+      room: this.id,
+      from: 'room',
+      participants: [...new Set(seats.map((seat) => this.cooIdOf(seat)))],
+      winners: [...new Set(winners)],
+      text: event.text,
+      visibility: 'room',
+      data: {
+        game,
+        tie: game === 'dice' && winnerIds.length > 1,
+        multiplier: typeof data.multiplier === 'number' ? data.multiplier : undefined,
+        spring: data.spring === true,
+        antiSpring: data.antiSpring === true,
+        landlord: typeof data.landlord === 'string'
+          ? this.seatById(data.landlord)?.name
+          : undefined,
+      },
+    });
   }
 
   /** 发言里的 `@名字` 与 `@all`。名字先按长到短匹配，避免「阿岚」吃掉「阿岚的朋友」。 */
@@ -436,6 +496,8 @@ export class RoomKernel {
       events: this.history(seatId, since, limit),
       table: this.tableSummary(),
       tablePrivate: this.tablePrivate(seatId),
+      ledger: this.ledger.summaryFor(this.cooIdOf(seat)),
+      ledgerRoom: this.ledger.publicInRoom(this.id, 5),
     };
   }
 

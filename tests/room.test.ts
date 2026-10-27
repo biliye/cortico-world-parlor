@@ -129,6 +129,38 @@ describe('可见性内核', () => {
     expect(kernel.history(a.seat.id, 0, 100).map((event) => event.text).join('\n')).toContain('超时');
     expect(kernel.history(b.seat.id, 0, 100).some((event) => event.type === 'parlor.table.turn')).toBe(true);
   });
+
+  it('一局结束按 cooId 记一条战绩，快照带摘要', () => {
+    const kernel = new RoomKernel({ id: 'lobby', inviteCode: 'inv', now: () => 1000, tableTurnMs: 1000 });
+    const a = kernel.join({ name: '阿岚' }, 'coo-aaaaaaaa');
+    const b = kernel.join({ name: '小满' }, 'coo-bbbbbbbb');
+    const sa = kernel.seatById(a.seat.id)!;
+    const sb = kernel.seatById(b.seat.id)!;
+    kernel.openTable(sa);
+    kernel.joinTable(sb);
+    kernel.startTable(sa);
+    kernel.tableAction(sa, { type: 'stand' });
+    kernel.tableAction(sb, { type: 'stand' });
+
+    const snap = kernel.snapshot(a.seat.id, 0, 10);
+    expect(snap.ledger?.cooId).toBe('coo-aaaaaaaa');
+    expect(snap.ledger?.games).toBe(1);
+    expect((snap.ledger?.wins ?? 0) + (snap.ledger?.losses ?? 0) + (snap.ledger?.draws ?? 0)).toBe(1);
+    expect(snap.ledgerRoom).toHaveLength(1);
+    expect(snap.ledgerRoom?.[0].text).toContain('骰子桌结束');
+    expect(kernel.snapshot(b.seat.id, 0, 10).ledger?.games).toBe(1);
+  });
+
+  it('老席位先用 legacy 身份，绑定后摘要改用 cooId', () => {
+    const kernel = new RoomKernel({ id: 'lobby', inviteCode: 'inv' });
+    const a = kernel.join({ name: '阿岚' });
+    const seat = kernel.seatById(a.seat.id)!;
+    expect(kernel.cooIdOf(seat)).toBe('legacy:lobby:s1');
+    expect(kernel.snapshot(a.seat.id, 0, 1).ledger?.cooId).toBe('legacy:lobby:s1');
+    expect(kernel.bindCooId(seat, 'coo-cccccccc')).toBe(true);
+    expect(kernel.bindCooId(seat, 'coo-dddddddd')).toBe(false);
+    expect(kernel.snapshot(a.seat.id, 0, 1).ledger?.cooId).toBe('coo-cccccccc');
+  });
 });
 
 describe('房间服务器', () => {
@@ -201,7 +233,9 @@ describe('房间服务器', () => {
     const a = await client.join('inv', { name: '阿岚' });
     const page = await fetch(`${server.url}/v1/owner?token=${encodeURIComponent(a.ownerToken)}`);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain('家长页');
+    const html = await page.text();
+    expect(html).toContain('家长页');
+    expect(html).toContain('账本');
     const denied = await fetch(`${server.url}/v1/owner?token=nope`);
     expect(denied.status).toBe(401);
   });
@@ -249,5 +283,38 @@ describe('房间服务器', () => {
     const snapB = await client.snapshot(b.token, 0, 10);
     expect(snapB.tablePrivate?.yourTurn).toBe(true);
     expect(snapB.tablePrivate?.dice).toHaveLength(2);
+  });
+
+  it('同一个 cooId 换 secret 会被拒', async () => {
+    const identity = { cooId: 'coo-aaaaaaaa', cooSecret: 'secret-1234567890' };
+    const a = await new ParlorClient(server.url, identity).join('inv', { name: '阿岚' });
+    expect(a.seat.name).toBe('阿岚');
+    await expect(new ParlorClient(server.url, {
+      cooId: 'coo-aaaaaaaa',
+      cooSecret: 'other-secret-1234',
+    }).join('inv', { name: '小满' })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('账本跟着 ledger.json 落盘，重启后还在', async () => {
+    const identity = { cooId: 'coo-aaaaaaaa', cooSecret: 'secret-1234567890' };
+    const client = new ParlorClient(server.url, identity);
+    const a = await client.join('inv', { name: '阿岚' });
+    const b = await new ParlorClient(server.url, {
+      cooId: 'coo-bbbbbbbb',
+      cooSecret: 'secret-bbbbbbbbbb',
+    }).join('inv', { name: '小满' });
+    await client.action(a.token, { type: 'table_open' });
+    await client.action(b.token, { type: 'table_join' });
+    await client.action(a.token, { type: 'table_start' });
+    await client.action(a.token, { type: 'table_action', action: 'stand' });
+    await client.action(b.token, { type: 'table_action', action: 'stand' });
+    expect((await client.snapshot(a.token, 0, 1)).ledger?.games).toBe(1);
+
+    await server.close();
+    server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(scratch, 'room.json') });
+    await server.listen();
+    const after = await new ParlorClient(server.url, identity).snapshot(a.token, 0, 1);
+    expect(after.ledger?.games).toBe(1);
+    expect(after.ledgerRoom?.[0].text).toContain('骰子桌结束');
   });
 });

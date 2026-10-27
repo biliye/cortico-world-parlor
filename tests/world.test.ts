@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolCallContext } from 'cortico/core/types.ts';
@@ -8,6 +8,7 @@ import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR } from '../src/definition.ts';
 import type { ParlorConfigSection } from '../src/config.ts';
 import { ParlorClient } from '../src/room/client.ts';
+import { IDENTITY_FILE } from '../src/room/identity.ts';
 import { ParlorServer } from '../src/room/server.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
@@ -194,5 +195,35 @@ describe('客厅 World', () => {
     expect(text).toContain('你的牌（20 张）');
     expect(text).toContain('你是地主');
     expect(text).toContain('这一轮你先出');
+  });
+
+  it('打一局后 parlor_ledger 能看到战绩，身份文件落盘', async () => {
+    await startServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+    expect(existsSync(join(ctx.dataDir, IDENTITY_FILE))).toBe(true);
+
+    const client = new ParlorClient(server.url);
+    const friend = await client.join('inv', { name: '阿岚' });
+    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    expect(String(await open.handler({}, {} as ToolCallContext))).toContain('骰子桌开了');
+    await client.action(friend.token, { type: 'table_join' });
+    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    expect(String(await start.handler({}, {} as ToolCallContext))).toContain('开始了');
+
+    const act = world.tools().find((tool) => tool.name === 'parlor_table_action')!;
+    await act.handler({ action: 'stand' }, {} as ToolCallContext);
+    await client.action(friend.token, { type: 'table_action', action: 'stand' });
+    await until(() => server.kernel.tablePublic()?.status === 'ended');
+
+    const ledger = world.tools().find((tool) => tool.name === 'parlor_ledger')!;
+    const text = String(await ledger.handler({}, {} as ToolCallContext));
+    expect(text).toContain('【账本】共 1 局');
+    expect(text).toContain('骰子桌结束');
   });
 });

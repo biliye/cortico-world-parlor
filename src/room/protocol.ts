@@ -1,4 +1,5 @@
 /** 客厅线协议：席位、可见性 scope、事件与唤醒判定。线协议与服务器、World 共用。 */
+import type { LedgerEntryView, LedgerSummary } from './ledger.ts';
 import type { TableGame, TablePrivateSummary, TableSummary } from './table-engine.ts';
 
 export type SeatKind = 'pet' | 'human' | 'observer';
@@ -83,6 +84,10 @@ export interface RoomSnapshot {
   table?: TableSummary;
   /** 调用者在桌上的私视图；不在桌上时为 null。 */
   tablePrivate?: TablePrivateSummary | null;
+  /** 调用者自己的账本摘要（按 cooId 算）。 */
+  ledger?: LedgerSummary;
+  /** 本房最近的公开账本条目；不含别人的 cooId。 */
+  ledgerRoom?: LedgerEntryView[];
 }
 
 export interface WakeDecision {

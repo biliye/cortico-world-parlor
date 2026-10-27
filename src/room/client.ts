@@ -1,4 +1,6 @@
 /** 客厅客户端：World 用它与服务器说话。只发请求，不判断可见性。 */
+import type { CooIdentity } from './identity.ts';
+import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
 import type { ActionRequest, ActionResponse, JoinRequest, JoinResponse, RoomEvent, RoomSnapshot } from './protocol.ts';
 
 export class ParlorHttpError extends Error {
@@ -13,15 +15,17 @@ export class ParlorHttpError extends Error {
 
 export class ParlorClient {
   readonly baseUrl: string;
+  private readonly identity?: CooIdentity;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, identity?: CooIdentity) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.identity = identity;
   }
 
   async join(invite: string, request: JoinRequest): Promise<JoinResponse> {
     const response = await fetch(this.url('/v1/join'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-parlor-invite': invite },
+      headers: this.headers({ 'content-type': 'application/json', 'x-parlor-invite': invite }),
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(15_000),
     });
@@ -31,7 +35,7 @@ export class ParlorClient {
   async snapshot(token: string, since = 0, limit = 30): Promise<RoomSnapshot> {
     const query = new URLSearchParams({ since: String(since), limit: String(limit) });
     const response = await fetch(this.url(`/v1/room?${query}`), {
-      headers: { authorization: `Bearer ${token}` },
+      headers: this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<RoomSnapshot>(response);
@@ -40,7 +44,7 @@ export class ParlorClient {
   async history(token: string, since: number, limit = 30): Promise<{ latest: number; events: RoomEvent[] }> {
     const query = new URLSearchParams({ since: String(since), limit: String(limit) });
     const response = await fetch(this.url(`/v1/history?${query}`), {
-      headers: { authorization: `Bearer ${token}` },
+      headers: this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ latest: number; events: RoomEvent[] }>(response);
@@ -49,7 +53,7 @@ export class ParlorClient {
   async action(token: string, body: ActionRequest): Promise<ActionResponse> {
     const response = await fetch(this.url('/v1/action'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      headers: this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
     });
@@ -65,7 +69,7 @@ export class ParlorClient {
   ): Promise<void> {
     const query = new URLSearchParams({ since: String(since) });
     const response = await fetch(this.url(`/v1/stream?${query}`), {
-      headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream' },
+      headers: this.headers({ authorization: `Bearer ${token}`, accept: 'text/event-stream' }),
       signal,
     });
     if (!response.ok || !response.body) {
@@ -96,6 +100,15 @@ export class ParlorClient {
     } finally {
       try { await reader.cancel(); } catch { /* 已结束 */ }
     }
+  }
+
+  private headers(extra: Record<string, string>): Record<string, string> {
+    if (!this.identity) return extra;
+    return {
+      ...extra,
+      [COO_HEADER]: this.identity.cooId,
+      [COO_SECRET_HEADER]: this.identity.cooSecret,
+    };
   }
 
   private url(path: string): string {

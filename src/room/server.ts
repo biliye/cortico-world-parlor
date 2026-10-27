@@ -4,8 +4,10 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { COO_HEADER, COO_SECRET_HEADER, type CooIdentity } from './identity.ts';
 import { RoomError, RoomKernel, type StoredSeat } from './kernel.ts';
+import { LedgerStore } from './ledger.ts';
 import type { ActionRequest, JoinRequest, RoomEvent, RoomSnapshot } from './protocol.ts';
 
 export interface ParlorServerOptions {
@@ -18,6 +20,8 @@ export interface ParlorServerOptions {
   historyLimit?: number;
   /** 牌桌每次行动的时限；测试里可以调短。 */
   tableTurnMs?: number;
+  /** 账本文件；不填时与 dataFile 同目录的 ledger.json。 */
+  ledgerFile?: string;
 }
 
 export interface ParlorAddress {
@@ -82,6 +86,17 @@ const bearer = (req: IncomingMessage): string => {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 };
 
+const headerValue = (req: IncomingMessage, name: string): string => {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
+};
+
+const identityOf = (req: IncomingMessage): CooIdentity | null => {
+  const cooId = headerValue(req, COO_HEADER).trim();
+  const cooSecret = headerValue(req, COO_SECRET_HEADER).trim();
+  return cooId && cooSecret ? { cooId, cooSecret } : null;
+};
+
 const localUrlHost = (host: string): string => (host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host);
 
 interface Client {
@@ -91,6 +106,7 @@ interface Client {
 
 export class ParlorServer {
   readonly kernel: RoomKernel;
+  readonly ledger: LedgerStore;
   private readonly options: ParlorServerOptions;
   private server?: Server;
   private address?: ParlorAddress;
@@ -103,6 +119,9 @@ export class ParlorServer {
 
   constructor(options: ParlorServerOptions) {
     this.options = options;
+    this.ledger = LedgerStore.load({
+      file: options.ledgerFile ?? (options.dataFile ? join(dirname(options.dataFile), 'ledger.json') : undefined),
+    });
     this.kernel = this.load(options);
     this.heartbeat = setInterval(() => this.ping(), 15_000);
     this.heartbeat.unref?.();
@@ -148,6 +167,7 @@ export class ParlorServer {
     clearInterval(this.tableClock);
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistNow();
+    this.ledger.flush();
     for (const client of this.clients) {
       try { client.res.end(); } catch { /* 已断开 */ }
     }
@@ -166,33 +186,21 @@ export class ParlorServer {
   }
 
   private load(options: ParlorServerOptions): RoomKernel {
+    const common = {
+      id: options.id,
+      inviteCode: options.inviteCode,
+      maxSeats: options.maxSeats,
+      historyLimit: options.historyLimit,
+      tableTurnMs: options.tableTurnMs,
+      ledger: this.ledger,
+    };
     const file = options.dataFile;
-    if (!file || !existsSync(file)) {
-      return new RoomKernel({
-        id: options.id,
-        inviteCode: options.inviteCode,
-        maxSeats: options.maxSeats,
-        historyLimit: options.historyLimit,
-        tableTurnMs: options.tableTurnMs,
-      });
-    }
+    if (!file || !existsSync(file)) return new RoomKernel(common);
     try {
       const raw = JSON.parse(readFileSync(file, 'utf8'));
-      return RoomKernel.fromJSON(raw, {
-        id: options.id,
-        inviteCode: options.inviteCode,
-        maxSeats: options.maxSeats,
-        historyLimit: options.historyLimit,
-        tableTurnMs: options.tableTurnMs,
-      });
+      return RoomKernel.fromJSON(raw, common);
     } catch {
-      return new RoomKernel({
-        id: options.id,
-        inviteCode: options.inviteCode,
-        maxSeats: options.maxSeats,
-        historyLimit: options.historyLimit,
-        tableTurnMs: options.tableTurnMs,
-      });
+      return new RoomKernel(common);
     }
   }
 
@@ -212,8 +220,16 @@ export class ParlorServer {
       const body = await readJson(req);
       const invite = String(req.headers['x-parlor-invite'] ?? body.invite ?? '');
       if (!invite || invite !== this.options.inviteCode) throw new HttpError(403, '邀请码不对');
+      const identity = identityOf(req);
+      let cooId: string | undefined;
+      if (identity) {
+        const claim = this.ledger.claimIdentity(identity.cooId, identity.cooSecret);
+        if (claim === 'mismatch') throw new HttpError(409, '这个账本身份已经被占用了');
+        if (claim === 'invalid') throw new HttpError(400, '账本身份格式不对');
+        cooId = identity.cooId;
+      }
       try {
-        const joined = this.kernel.join(body as unknown as JoinRequest);
+        const joined = this.kernel.join(body as unknown as JoinRequest, cooId);
         this.schedulePersist();
         json(res, 200, joined);
       } catch (error) {
@@ -272,7 +288,18 @@ export class ParlorServer {
     const token = bearer(req) || url.searchParams.get('token') || '';
     const auth = this.kernel.authenticate(token);
     if (!auth) throw new HttpError(401, '令牌无效');
+    if (auth.role === 'pet') this.bindIdentity(req, auth.seat);
     return auth;
+  }
+
+  /** 老席位第一次带 cooId 来时把它绑上；已经是真身份就不动。 */
+  private bindIdentity(req: IncomingMessage, seat: StoredSeat): void {
+    if (seat.cooId && !seat.cooId.startsWith('legacy:')) return;
+    const identity = identityOf(req);
+    if (!identity) return;
+    const claim = this.ledger.claimIdentity(identity.cooId, identity.cooSecret);
+    if (claim !== 'ok') return;
+    if (this.kernel.bindCooId(seat, identity.cooId)) this.schedulePersist();
   }
 
   private action(seat: StoredSeat, body: ActionRequest): number {
@@ -409,6 +436,8 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   #log li .who { color: #79c0ff; }
   #log li.whisper { background: #241f16; border: 1px solid #3d3320; }
   #log li.system { color: #9aa0a6; background: transparent; padding-left: 0; }
+  #ledger .entry { padding: 7px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; color: #c9ccd1; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  #ledger .tier { margin: 8px 0 4px; }
   .bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   select, button { font: inherit; color: inherit; background: #22262c; border: 1px solid #363b43; border-radius: 7px; padding: 5px 8px; }
   button { cursor: pointer; }
@@ -418,11 +447,14 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
 <header><h1>客厅 · ${escapeHtml(room)}</h1><p class="sub">家长页：公开的事，和自家孩子（${escapeHtml(seatName)}）的私聊。</p></header>
 <div id="error" hidden></div>
 <main>
-  <section><h2>席位</h2><ul id="seats"></ul>
-    <div class="bar"><span class="tier">自家提醒</span><select id="tier">
-      <option value="full">热闹</option><option value="digest">摘要</option><option value="quiet">只 @</option><option value="off">离开</option>
-    </select><button id="save">改</button></div>
-  </section>
+  <div>
+    <section><h2>席位</h2><ul id="seats"></ul>
+      <div class="bar"><span class="tier">自家提醒</span><select id="tier">
+        <option value="full">热闹</option><option value="digest">摘要</option><option value="quiet">只 @</option><option value="off">离开</option>
+      </select><button id="save">改</button></div>
+    </section>
+    <section><h2>账本</h2><div id="ledger"></div></section>
+  </div>
   <section><h2>消息</h2><ul id="log"></ul></section>
 </main>
 <script>
@@ -431,6 +463,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const error = document.getElementById('error');
   const seats = document.getElementById('seats');
   const log = document.getElementById('log');
+  const ledger = document.getElementById('ledger');
   const tier = document.getElementById('tier');
   let latest = 0, mine = null;
   const showError = (text) => { error.hidden = false; error.textContent = text; };
@@ -451,8 +484,30 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     latest = event.seq;
     log.append(line(event));
     while (log.children.length > 300) log.firstElementChild.remove();
+    if (event.type === 'parlor.table.end') refreshLedger();
     window.scrollTo(0, document.body.scrollHeight);
   };
+  const ledgerRow = (text, className) => {
+    const row = document.createElement('div'); row.className = className || 'entry'; row.textContent = text; return row;
+  };
+  const renderLedger = (snapshot) => {
+    ledger.textContent = '';
+    const me = snapshot.ledger;
+    if (!me || me.games === 0) ledger.append(ledgerRow('还没有战绩。', 'tier'));
+    else {
+      ledger.append(ledgerRow('共 ' + me.games + ' 局：' + me.wins + ' 胜 ' + me.losses + ' 负 ' + me.draws + ' 平'));
+      for (const entry of (me.recent || []).slice(0, 3)) ledger.append(ledgerRow(entry.text));
+    }
+    const room = snapshot.ledgerRoom || [];
+    if (room.length) {
+      ledger.append(ledgerRow('本房最近：', 'tier'));
+      for (const entry of room.slice(0, 3)) ledger.append(ledgerRow(entry.text));
+    }
+  };
+  async function refreshLedger() {
+    const response = await fetch('/v1/room?limit=1', { headers });
+    if (response.ok) renderLedger(await response.json());
+  }
   const renderSeats = (snapshot) => {
     seats.textContent = '';
     for (const seat of snapshot.seats) {
@@ -470,6 +525,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     if (!response.ok) { showError('令牌无效，或房间已经重开。'); return; }
     const snapshot = await response.json();
     renderSeats(snapshot);
+    renderLedger(snapshot);
     latest = snapshot.latest;
     for (const event of snapshot.events) addEvent(event);
     const source = new EventSource('/v1/stream?since=' + latest + '&token=' + encodeURIComponent(token));
