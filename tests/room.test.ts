@@ -390,3 +390,71 @@ describe('信箱接口', () => {
     }
   });
 });
+
+describe('回执与硬时点', () => {
+  it('动作回执带服务器序号与时刻；私聊只说已投递到信箱', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-receipt-'));
+    const server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(dir, 'room.json') });
+    await server.listen();
+    try {
+      const client = new ParlorClient(server.url);
+      const rich = new ParlorClient(server.url, { cooId: 'coo-receipttest', cooSecret: 'secret-for-receipt-test' });
+      const a = await rich.join('inv', { name: '阿岚' });
+      const b = await client.join('inv', { name: '小满' });
+
+      const said = await client.action(a.token, { type: 'say', text: '有回执吗' });
+      expect(said.seq).toBeGreaterThan(0);
+      expect(said.at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+
+      const whisper = await client.action(a.token, { type: 'whisper', to: '小满', text: '离线也看得到' });
+      expect(whisper.delivered).toHaveLength(1);
+      expect(whisper.delivered![0]).toMatchObject({ to: '小满' });
+      expect(whisper.delivered![0].mailSeq).toBeGreaterThan(0);
+      expect(whisper.delivered![0].at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(whisper).not.toHaveProperty('read');
+
+      const gift = await client.action(a.token, { type: 'gift', to: '小满', text: '一杯奶茶', chips: 5 });
+      expect(gift.delivered?.[0].to).toBe('小满');
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('开局回执列出现读的席位（含脚本陪练）与下一个绝对截止', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-roster-'));
+    const server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(dir, 'room.json') });
+    await server.listen();
+    try {
+      const client = new ParlorClient(server.url);
+      const a = await client.join('inv', { name: '阿岚' });
+      await client.action(a.token, { type: 'table_open', game: 'ddz' });
+      const started = await client.action(a.token, { type: 'table_start' });
+      expect(started.seats).toEqual(['阿岚', '陪练甲（脚本）', '陪练乙（脚本）']);
+      expect(started.deadlineAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(started.deadline! - started.ts).toBeGreaterThan(20_000);
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('轮到出牌时的私视图写出绝对截止时刻', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-deadline-'));
+    const server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(dir, 'room.json') });
+    await server.listen();
+    try {
+      const client = new ParlorClient(server.url);
+      const a = await client.join('inv', { name: '阿岚' });
+      await client.action(a.token, { type: 'table_open', game: 'ddz' });
+      await client.action(a.token, { type: 'table_start' });
+      const snapshot = await client.snapshot(a.token, 0, 100);
+      expect(snapshot.tablePrivate?.text).toContain('截止');
+      expect(snapshot.tablePrivate?.text).toContain('服务器时刻 UTC+8');
+      expect(snapshot.at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

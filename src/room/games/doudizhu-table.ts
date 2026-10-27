@@ -4,6 +4,7 @@
  * 隐藏手牌只进各席位自己的私视图；公开事件只有牌数、上一手与结算。
  */
 import { randomInt } from 'node:crypto';
+import { serverClockLabel } from '../clock.ts';
 import {
   TableError, secondsLeft,
   type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep,
@@ -219,7 +220,7 @@ export class DoudizhuTable implements TableEngine {
         ? `【斗地主·叫你当地主】你的 ${seat.hand.length} 张牌：${formatCards(seat.hand)}`
         : `【斗地主·等 ${turn?.name ?? '？'} 叫地主】你的 ${seat.hand.length} 张牌：${formatCards(seat.hand)}`);
       if (yourTurn) {
-        lines.push(`${secondsLeft(this.deadline, now)} 秒内：parlor_ddz_action {move:"bid", call:true} 叫地主；call:false 不叫。`);
+        lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"bid", call:true} 叫地主；call:false 不叫。`);
         lines.push('底牌 3 张会亮给所有人；叫的人拿走底牌并当地主。');
       } else {
         lines.push(`等 ${turn?.name ?? '？'} 决定。`);
@@ -234,9 +235,9 @@ export class DoudizhuTable implements TableEngine {
     if (this.lastPlay) {
       const owner = this.seats.find((entry) => entry.id === this.lastPlay!.seat);
       lines.push(`上一手：${owner?.name ?? '？'} 出了 ${formatCards(this.lastPlay.move.cards)}（${moveLabel(this.lastPlay.move)}）。`);
-      if (yourTurn) lines.push(`${secondsLeft(this.deadline, now)} 秒内：parlor_ddz_action {move:"play", cards:[…]} 压过它；出不了就 {move:"pass"}。`);
+      if (yourTurn) lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"play", cards:[…]} 压过它；出不了就 {move:"pass"}。`);
     } else if (yourTurn) {
-      lines.push(`这一轮你先出，什么牌型都行。${secondsLeft(this.deadline, now)} 秒内：parlor_ddz_action {move:"play", cards:[…]}。`);
+      lines.push(`这一轮你先出，什么牌型都行。截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"play", cards:[…]}。`);
     } else {
       lines.push('等上一手结算。');
     }

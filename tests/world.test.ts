@@ -78,9 +78,23 @@ describe('客厅 World', () => {
     expect(message.text).toContain('阿岚：@小满 你好');
 
     const say = world.tools().find((tool) => tool.name === 'parlor_say')!;
-    expect(String(await say.handler({ text: '大家好' }, {} as ToolCallContext))).toContain('已说');
+    const said = String(await say.handler({ text: '大家好' }, {} as ToolCallContext));
+    expect(said).toContain('服务器已收下');
+    expect(said).toMatch(/服务器时刻 UTC\+8/);
     const snapshot = await client.snapshot(friend.token, 0, 50);
     expect(snapshot.events.map((event) => event.text)).toContain('大家好');
+
+    const whisper = world.tools().find((tool) => tool.name === 'parlor_whisper')!;
+    const whispered = String(await whisper.handler({ to: '阿岚', text: '离线也看得到' }, {} as ToolCallContext));
+    expect(whispered).toContain('服务器已收下');
+    expect(whispered).toContain('已投递到');
+    expect(whispered).toContain('不代表对方读过');
+    expect(whispered).not.toContain('已读：');
+
+    const replay = world.tools().find((tool) => tool.name === 'parlor_replay')!;
+    const replayText = String(await replay.handler({ limit: 50 }, {} as ToolCallContext));
+    expect(replayText).toContain('【回放】最近 7 天');
+    expect(replayText).toContain('大家好');
 
     const look = world.tools().find((tool) => tool.name === 'parlor_look')!;
     const looked = String(await look.handler({}, {} as ToolCallContext));
@@ -155,12 +169,16 @@ describe('客厅 World', () => {
     expect(String(await open.handler({}, {} as ToolCallContext))).toContain('骰子桌开了');
     await client.action(friend.token, { type: 'table_join' });
     const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
-    expect(String(await start.handler({}, {} as ToolCallContext))).toContain('开始了');
+    const started = String(await start.handler({}, {} as ToolCallContext));
+    expect(started).toContain('开局时桌上（服务器现读）');
+    expect(started).toContain('阿岚');
+    expect(started).toContain('下一个截止');
 
     await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('轮到你')));
     const turn = host.events.find((event) => event.type === 'parlor.message' && event.text.includes('轮到你'))!;
     expect(turn.text).toContain('你的点数');
     expect(turn.text).toContain('还能重掷');
+    expect(turn.text).toContain('服务器时刻 UTC+8');
 
     const friendSnap = await client.snapshot(friend.token, 0, 100);
     expect(friendSnap.events.some((event) => event.type === 'parlor.table.turn' && event.text.includes('你的点数'))).toBe(false);
@@ -182,7 +200,9 @@ describe('客厅 World', () => {
     const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
     expect(String(await open.handler({ game: 'ddz' }, {} as ToolCallContext))).toContain('斗地主桌开了');
     const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
-    expect(String(await start.handler({}, {} as ToolCallContext))).toContain('开始了');
+    const started = String(await start.handler({}, {} as ToolCallContext));
+    expect(started).toContain('陪练甲（脚本）');
+    expect(started).toContain('陪练乙（脚本）');
 
     await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('叫你当地主')));
     const turn = host.events.find((event) => event.type === 'parlor.message' && event.text.includes('叫你当地主'))!;

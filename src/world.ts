@@ -11,13 +11,14 @@ import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR_CONFIG_GROUP, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
+import { serverClockShort } from './room/clock.ts';
 import { gameLabelOf } from './room/game-labels.ts';
 import { IDENTITY_FILE, loadOrCreateIdentity, type CooIdentity } from './room/identity.ts';
 import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake,
-  type ActionRequest, type RoomEvent, type RoomSnapshot, type Seat, type WakeTier,
+  type ActionRequest, type ActionResponse, type RoomEvent, type RoomSnapshot, type Seat, type WakeTier,
 } from './room/protocol.ts';
 import { RANKS } from './room/games/doudizhu.ts';
 
@@ -170,6 +171,19 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
+    name: 'parlor_replay',
+    description: 'Read the server timeline of this parlor from the last 7 days — public events plus your own private turns and messages, oldest to newest, each with its room cursor and server time. Use before with the first seq of a page to look further back. Does not wake anyone.',
+    tags: ['read'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many events to read, default 30.' },
+        before: { type: 'integer', minimum: 1, description: 'Only events with a smaller cursor (for paging back).' },
+      },
+    },
+  },
+  {
     name: 'parlor_table_open',
     description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room. Optional stake: every real player puts that many chips into the pot; script players never pay.',
     tags: ['write'],
@@ -289,6 +303,7 @@ export class ParlorWorld implements World {
       tool('parlor_respond', (args) => this.answerPromise(args)),
       tool('parlor_mail', (args) => this.readMail(args)),
       tool('parlor_ledger', () => this.readLedger()),
+      tool('parlor_replay', (args) => this.readReplay(args)),
       tool('parlor_table_open', (args) => this.openTable(args)),
       tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
       tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '桌子开始了；轮到你时会被叫醒。')),
@@ -589,6 +604,7 @@ export class ParlorWorld implements World {
     const online = new Set(snapshot.online ?? []);
     const lines = [
       `客厅「${snapshot.id}」 · 会说话的席位 ${speakers.length}/${snapshot.maxSeats}`,
+      `服务器时刻：${snapshot.at}（UTC+8）`,
       ...snapshot.seats.map((seat) => `- ${seat.name}（${KIND_LABELS[seat.kind] ?? seat.kind}·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}${online.has(seat.id) ? '·在线' : ''}）`),
       `最新游标 ${snapshot.latest}`,
     ];
@@ -606,7 +622,7 @@ export class ParlorWorld implements World {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
       lines.push('消息：');
-      for (const event of snapshot.events) lines.push(`#${event.seq} ${this.render([event])}`);
+      for (const event of snapshot.events) lines.push(`#${event.seq} ${serverClockShort(event.ts)} ${this.render([event])}`);
     }
     return lines.join('\n');
   }
@@ -615,7 +631,7 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
       const result = await this.client.action(this.token, { type: 'say', text: String(args.text ?? '') });
-      return `已说（#${result.seq}）。`;
+      return this.receipt(result, '已经说给全房间。');
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -629,7 +645,7 @@ export class ParlorWorld implements World {
         to: String(args.to ?? ''),
         text: String(args.text ?? ''),
       });
-      return `已私聊（#${result.seq}）。`;
+      return this.receipt(result, '私聊已经交给服务器。');
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -644,8 +660,8 @@ export class ParlorWorld implements World {
     const chips = args.chips === undefined ? undefined : Number(args.chips);
     if (chips !== undefined && (!Number.isSafeInteger(chips) || chips <= 0)) return this.failed('筹码要是正整数');
     try {
-      await this.client.action(this.token, { type: 'gift', to, text, ...(chips ? { chips } : {}) });
-      return chips ? `礼物送到了，${chips} 枚筹码一起划过去。` : '礼物送到了。';
+      const result = await this.client.action(this.token, { type: 'gift', to, text, ...(chips ? { chips } : {}) });
+      return this.receipt(result, chips ? `礼物已记在账上，${chips} 枚筹码一起划过去。` : '礼物已记在账上。');
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -662,10 +678,13 @@ export class ParlorWorld implements World {
     const chips = args.chips === undefined ? undefined : Number(args.chips);
     if (chips !== undefined && (!Number.isSafeInteger(chips) || chips <= 0)) return this.failed('筹码要是正整数');
     try {
-      await this.client.action(this.token, {
+      const result = await this.client.action(this.token, {
         type: 'promise', to, text, ...(due ? { due } : {}), ...(chips ? { chips } : {}),
       });
-      return `承诺已经发过去了${due ? `（${due} 前）` : ''}${chips ? `，带 ${chips} 枚筹码` : ''}；等对方用 parlor_respond 回应。`;
+      return this.receipt(
+        result,
+        `承诺已经记下${due ? `（${due} 前）` : ''}${chips ? `，带 ${chips} 枚筹码` : ''}；等对方用 parlor_respond 回应。`,
+      );
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -680,9 +699,9 @@ export class ParlorWorld implements World {
       return this.failed('action 只能是 accept、decline、cancel 或 done');
     }
     try {
-      await this.client.action(this.token, { type: 'respond', id, action });
+      const result = await this.client.action(this.token, { type: 'respond', id, action });
       const said = { accept: '答应了', decline: '拒绝了', cancel: '撤回了', done: '了结了' }[action];
-      return `${said}这条承诺。`;
+      return this.receipt(result, `${said}这条承诺。`);
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -760,6 +779,33 @@ export class ParlorWorld implements World {
     }
   }
 
+  private async readReplay(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const limit = args.limit === undefined ? 30 : Number(args.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) return this.failed('limit 要是 1 到 200 的整数');
+    const before = args.before === undefined ? undefined : Number(args.before);
+    if (before !== undefined && (!Number.isInteger(before) || before < 1)) {
+      return this.failed('before 要是正整数（事件游标）');
+    }
+    try {
+      const page = await this.client.replay(this.token, limit, before);
+      const lines = [
+        `【回放】最近 ${page.retentionDays} 天；服务器时刻 ${page.at}（UTC+8）。`,
+      ];
+      if (page.events.length === 0) {
+        lines.push('这段时间没有你能看到的事件。');
+      } else {
+        for (const event of page.events) lines.push(`#${event.seq} ${event.at} ${event.text}`);
+        if (page.older) {
+          lines.push(`还有更早的；用 before=${page.events[0].seq} 往前翻。`);
+        }
+      }
+      return lines.join('\n');
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
   private ledgerTime(ts: number): string {
     try {
       return new Intl.DateTimeFormat('zh-CN', {
@@ -793,10 +839,10 @@ export class ParlorWorld implements World {
     const tier = String(args.tier ?? '') as WakeTier;
     if (!WAKE_TIERS.includes(tier)) return this.failed('未知的提醒挡位');
     try {
-      await this.client.action(this.token, { type: 'set_tier', tier });
+      const result = await this.client.action(this.token, { type: 'set_tier', tier });
       if (this.seat) this.seat = { ...this.seat, tier };
       this.ctx.persist({ wakeTier: tier });
-      return `提醒挡位改成了「${WAKE_TIER_LABELS[tier]}」。`;
+      return this.receipt(result, `提醒挡位改成了「${WAKE_TIER_LABELS[tier]}」。`);
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -836,11 +882,11 @@ export class ParlorWorld implements World {
     return this.failed('move 只能是 bid、play 或 pass');
   }
 
-  private async tableRequest(body: ActionRequest, ok: string): Promise<string | ToolOutcome> {
+  private async tableRequest(body: ActionRequest, done: string): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
-      await this.client.action(this.token, body);
-      return ok;
+      const result = await this.client.action(this.token, body);
+      return this.receipt(result, done);
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -862,13 +908,29 @@ export class ParlorWorld implements World {
     try {
       const snapshot = await this.client.snapshot(this.token, 0, 1);
       if (!snapshot.table) return '现在没有桌子。';
-      const lines = [snapshot.table.text];
+      const lines = [`服务器时刻：${snapshot.at}（UTC+8）。`, snapshot.table.text];
       if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
       else lines.push('你不在桌上。');
       return lines.join('\n');
     } catch (error) {
       return this.failed(messageOf(error));
     }
+  }
+
+  /** 动作回执：统一成「服务器已收下 #游标 · 服务器时刻」，再补这次动作的具体结果。 */
+  private receipt(result: ActionResponse, done: string): string {
+    const lines = [`服务器已收下 #${result.seq} · ${result.at}（服务器时刻 UTC+8）。`, done];
+    if (result.delivered && result.delivered.length > 0) {
+      const inboxes = result.delivered
+        .map((delivery) => `${delivery.to} 的信箱（${delivery.at}）`)
+        .join('、');
+      lines.push(`已投递到：${inboxes}。这只说明信已留底，不代表对方读过。`);
+    }
+    if (result.seats && result.seats.length > 0) {
+      lines.push(`开局时桌上（服务器现读）：${result.seats.join('、')}。`);
+    }
+    if (result.deadlineAt) lines.push(`下一个截止：${result.deadlineAt}（服务器时刻 UTC+8）。`);
+    return lines.join('\n');
   }
 
   private failed(text: string): ToolOutcome {

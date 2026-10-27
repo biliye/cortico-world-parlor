@@ -3,6 +3,7 @@
  * 规则、发牌、隐藏信息全在这里；World 只把私视图交给 bot，把动作送回来。
  */
 import { randomInt } from 'node:crypto';
+import { serverClockLabel } from './clock.ts';
 import {
   TableError, secondsLeft,
   type TableEngine, type TableErrorCode, type TableEvent, type TableSeat, type TableStatus, type TableStep,
@@ -275,7 +276,8 @@ export function formatPrivate(view: TablePrivate, now: number): string {
     `对手：${others}。`,
   ];
   if (view.yourTurn) {
-    lines.push(`${secondsLeft(view.deadline, now)} 秒内：parlor_table_action {action:"roll", die:0|1} 重掷一颗；或 {action:"stand"} 停牌。`);
+    const deadline = view.deadline ? serverClockLabel(view.deadline) : '（服务器还没给出截止时刻）';
+    lines.push(`截止 ${deadline}，还剩 ${secondsLeft(view.deadline, now)} 秒：parlor_table_action {action:"roll", die:0|1} 重掷一颗；或 {action:"stand"} 停牌。`);
   } else {
     lines.push('等对方行动。');
   }

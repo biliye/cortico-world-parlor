@@ -5,9 +5,10 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS,
-  type JoinRequest, type JoinResponse, type RoomEvent, type RoomSnapshot, type Scope,
+  type DeliveryReceipt, type JoinRequest, type JoinResponse, type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
 } from './protocol.ts';
+import { serverClock } from './clock.ts';
 import { DiceTable } from './table.ts';
 import { DoudizhuTable } from './games/doudizhu-table.ts';
 import {
@@ -15,6 +16,7 @@ import {
   type LedgerEntry,
 } from './ledger.ts';
 import { MailStore, type MailPage, type MailView } from './mail.ts';
+import { ReplayStore } from './replay.ts';
 import {
   TableError,
   type TableEngine, type TableEvent, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
@@ -49,6 +51,19 @@ export interface RoomKernelOptions {
   ledger?: LedgerStore;
   /** 信箱；不传时用内存信箱（测试用）。 */
   mail?: MailStore;
+  /** 回放；不传时只留内存里的房间日志（测试用）。 */
+  replay?: ReplayStore;
+}
+
+/** 一条私聊/账本通知处理完之后，给寄信人的投递回执。 */
+export type DeliveredEvent = RoomEvent & { delivered: DeliveryReceipt[] };
+export type DeliveredEntry = LedgerEntry & { delivered?: DeliveryReceipt[] };
+export interface TableReceipt {
+  deadline?: number;
+}
+export interface StartReceipt extends TableReceipt {
+  /** 开局那一刻现读的桌上席位（脚本陪练也列出来）。 */
+  seats: string[];
 }
 
 export class RoomError extends Error {
@@ -141,6 +156,8 @@ export class RoomKernel {
   private readonly ledger: LedgerStore;
   /** 信箱：私聊与账本通知都留一份，离线回来还能看。 */
   readonly mail: MailStore;
+  /** 回放：房间日志会滚动，回放单独留 7 天。 */
+  readonly replay: ReplayStore;
   private seats: StoredSeat[] = [];
   private events: RoomEvent[] = [];
   private seq = 0;
@@ -160,6 +177,7 @@ export class RoomKernel {
     this.tableTurnMs = options.tableTurnMs ?? 45_000;
     this.ledger = options.ledger ?? new LedgerStore({ now: this.now });
     this.mail = options.mail ?? new MailStore({ now: this.now });
+    this.replay = options.replay ?? new ReplayStore({ now: this.now });
   }
 
   static fromJSON(raw: unknown, options: RoomKernelOptions): RoomKernel {
@@ -298,7 +316,7 @@ export class RoomKernel {
     });
   }
 
-  whisper(seat: StoredSeat, to: string, text: string): RoomEvent {
+  whisper(seat: StoredSeat, to: string, text: string): DeliveredEvent {
     const body = cleanText(text);
     const target = this.resolveSeat(to);
     if (!target) throw new RoomError('not_found', `客厅里没有叫「${to}」的席位`);
@@ -311,15 +329,20 @@ export class RoomKernel {
       mentions: [target.id],
       data: { name: seat.name, to: target.id, toName: target.name },
     });
-    // 对方可能不在线：私聊同时进信箱，回来还能看到。
-    this.mail.append({
+    // 对方可能不在线：私聊同时进信箱，回来还能看到。只回「已投递」，不回已读。
+    const letter = this.mail.append({
       room: this.id,
       to: this.cooIdOf(target),
       kind: 'whisper',
       fromName: seat.name,
       text: body,
     });
-    return event;
+    return {
+      ...event,
+      delivered: [{
+        to: target.name, mailSeq: letter.seq, ts: letter.ts, at: serverClock(letter.ts),
+      }],
+    };
   }
 
   setTier(seat: StoredSeat, tier: WakeTier): Seat {
@@ -336,7 +359,7 @@ export class RoomKernel {
   }
 
   /** 送礼：纯文本，可选带筹码。礼物是私密条目，只有收礼的人（和家长页）看得见。 */
-  gift(seat: StoredSeat, to: string, text: string, chips?: number): LedgerEntry {
+  gift(seat: StoredSeat, to: string, text: string, chips?: number): DeliveredEntry {
     const body = cleanSocial(text);
     const target = this.requireTarget(seat, to);
     const amount = chipsOf(chips);
@@ -356,14 +379,14 @@ export class RoomKernel {
       data: { fromName: seat.name, toName: target.name, ...(amount ? { chips: amount } : {}) },
       ...(amount ? { transfers: [{ from: fromCoo, to: toCoo, amount }] } : {}),
     });
-    this.notifyLedger([target.id], `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
+    const delivered = this.notifyLedger([target.id], `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
       entryId: entry.id, kind: 'gift', action: 'gift', from: seat.name,
     });
-    return entry;
+    return { ...entry, ...(delivered.length ? { delivered } : {}) };
   }
 
   /** 承诺：可以带截止时间与筹码；要对方回应才算数。 */
-  promise(seat: StoredSeat, to: string, text: string, due?: number | string, chips?: number): LedgerEntry {
+  promise(seat: StoredSeat, to: string, text: string, due?: number | string, chips?: number): DeliveredEntry {
     const body = cleanSocial(text);
     const target = this.requireTarget(seat, to);
     const amount = chipsOf(chips);
@@ -387,17 +410,17 @@ export class RoomKernel {
         ...(amount ? { chips: amount } : {}),
       },
     });
-    this.notifyLedger([target.id], `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}${amount ? `，${amount} 枚筹码` : ''}。用 parlor_respond 回。`, {
+    const delivered = this.notifyLedger([target.id], `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}${amount ? `，${amount} 枚筹码` : ''}。用 parlor_respond 回。`, {
       entryId: entry.id, kind: 'promise', action: 'promise', from: seat.name,
     });
-    return entry;
+    return { ...entry, ...(delivered.length ? { delivered } : {}) };
   }
 
   /**
    * 回应一条承诺。只有被承诺的人能答应/拒绝/了结；只有提出的人能在对方回应前撤回。
    * 了结只能由债权人做（`to` 那一方），筹码从债务人划给债权人。
    */
-  respond(seat: StoredSeat, id: string, action: 'accept' | 'decline' | 'done' | 'cancel'): LedgerEntry {
+  respond(seat: StoredSeat, id: string, action: 'accept' | 'decline' | 'done' | 'cancel'): DeliveredEntry {
     if (seat.kind === 'observer') throw new RoomError('forbidden', '观看者不能写账本');
     const promise = this.ledger.find(id);
     if (!promise || (promise.kind !== 'promise' && promise.kind !== 'debt')) {
@@ -479,7 +502,7 @@ export class RoomKernel {
     action: 'accept' | 'decline' | 'done' | 'cancel',
     counterpart: StoredSeat | undefined,
     otherName: string,
-  ): LedgerEntry {
+  ): DeliveredEntry {
     const kind = action === 'done' ? 'settle' : action;
     const me = this.cooIdOf(seat);
     const amount = action === 'done' && typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
@@ -509,9 +532,10 @@ export class RoomKernel {
       done: `说了结这条承诺：${promise.text}${amount ? `（${amount} 枚筹码已划给你）` : ''}`,
     }[action];
     if (counterpart) {
-      this.notifyLedger([counterpart.id], `${seat.name} ${text}`, {
+      const delivered = this.notifyLedger([counterpart.id], `${seat.name} ${text}`, {
         entryId: promise.id, kind: 'promise', action,
       });
+      return { ...entry, ...(delivered.length ? { delivered } : {}) };
     }
     return entry;
   }
@@ -543,7 +567,8 @@ export class RoomKernel {
   }
 
   /** 只给该看的席位发一条账本通知；不发公开事件，同时留一封进对方的信箱。 */
-  private notifyLedger(seatIds: string[], text: string, data: Record<string, unknown>): void {
+  private notifyLedger(seatIds: string[], text: string, data: Record<string, unknown>): DeliveryReceipt[] {
+    const delivered: DeliveryReceipt[] = [];
     for (const seatId of new Set(seatIds)) {
       const seat = this.seatById(seatId);
       if (!seat) continue;
@@ -555,7 +580,7 @@ export class RoomKernel {
         data,
       });
       const kind = data.kind === 'gift' ? 'gift' : data.kind === 'promise' ? 'promise' : 'ledger';
-      this.mail.append({
+      const letter = this.mail.append({
         room: this.id,
         to: this.cooIdOf(seat),
         kind,
@@ -564,7 +589,11 @@ export class RoomKernel {
         text,
         ...(typeof data.entryId === 'string' ? { entryId: data.entryId } : {}),
       });
+      delivered.push({
+        to: seat.name, mailSeq: letter.seq, ts: letter.ts, at: serverClock(letter.ts),
+      });
     }
+    return delivered;
   }
 
   /** 某个席位的未读信数。 */
@@ -619,7 +648,7 @@ export class RoomKernel {
     }
   }
 
-  startTable(seat: StoredSeat): void {
+  startTable(seat: StoredSeat): StartReceipt {
     const table = this.requireTable();
     const players = table.seatIds()
       .map((seatId) => this.seatById(seatId))
@@ -657,18 +686,21 @@ export class RoomKernel {
       });
     }
     this.recordStep(step);
+    return { seats: this.tableRoster(), ...this.tableReceipt() };
   }
 
-  tableAction(seat: StoredSeat, action: unknown): void {
+  tableAction(seat: StoredSeat, action: unknown): TableReceipt {
     const table = this.requireTable();
     if (table.game !== 'dice') throw new RoomError('invalid', '这张桌子不是骰子桌；斗地主用 ddz_action');
     this.applyStep(table, () => table.act(seat.id, action, this.now()));
+    return this.tableReceipt();
   }
 
-  ddzAction(seat: StoredSeat, action: unknown): void {
+  ddzAction(seat: StoredSeat, action: unknown): TableReceipt {
     const table = this.requireTable();
     if (table.game !== 'ddz') throw new RoomError('invalid', '这张桌子不是斗地主桌');
     this.applyStep(table, () => table.act(seat.id, action, this.now()));
+    return this.tableReceipt();
   }
 
   tickTable(now = this.now()): void {
@@ -729,6 +761,21 @@ export class RoomKernel {
       ...(this.tableStake > 0 ? { stake: this.tableStake } : {}),
       text: table.publicText(),
     } as TableSummary;
+  }
+
+  /** 开局那一刻现读的桌上席位名（脚本陪练也列出来，带「（脚本）」）。 */
+  private tableRoster(): string[] {
+    const publicView = this.table?.public() as { seats?: Array<{ name?: unknown; bot?: unknown }> } | undefined;
+    return (publicView?.seats ?? [])
+      .map((seat) => (typeof seat.name === 'string' ? (seat.bot === true ? `${seat.name}（脚本）` : seat.name) : '？'));
+  }
+
+  /** 下一步的绝对截止时刻；没有桌子或已经结束就没有。 */
+  private tableReceipt(): TableReceipt {
+    const publicView = this.table?.public() as { deadline?: unknown } | undefined;
+    return typeof publicView?.deadline === 'number' && publicView.deadline > 0
+      ? { deadline: publicView.deadline }
+      : {};
   }
 
   private tablePrivate(seatId: string): TablePrivateSummary | null {
@@ -857,14 +904,26 @@ export class RoomKernel {
     return this.seq;
   }
 
+  nowMs(): number {
+    return this.now();
+  }
+
+  /** 重启后把房间日志里还留着的事件补进回放（不改日志）。 */
+  roomEvents(): RoomEvent[] {
+    return [...this.events];
+  }
+
   snapshot(seatId: string, since: number, limit = 30): Omit<RoomSnapshot, 'seat'> {
     const seat = this.seatById(seatId);
     if (!seat) throw new RoomError('not_found', '席位不存在');
+    const now = this.now();
     return {
       id: this.id,
       seats: this.seatsPublic(),
       maxSeats: this.maxSeats,
       latest: this.seq,
+      now,
+      at: serverClock(now),
       events: this.history(seatId, since, limit),
       table: this.tableSummary(),
       tablePrivate: this.tablePrivate(seatId),
@@ -880,6 +939,7 @@ export class RoomKernel {
     if (this.events.length > this.historyLimit) {
       this.events.splice(0, this.events.length - this.historyLimit);
     }
+    this.replay.append(event);
     for (const listener of this.listeners) {
       try { listener(event); } catch { /* 一个订阅者出错不影响其他人 */ }
     }

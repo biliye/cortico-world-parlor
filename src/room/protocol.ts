@@ -66,9 +66,31 @@ export type ActionRequest =
   | { type: 'table_action'; action: 'roll' | 'stand'; die?: number }
   | { type: 'ddz_action'; move: 'bid' | 'play' | 'pass'; call?: boolean; cards?: string[] };
 
+/** 一条东西已经留进某个席位的信箱；只给寄信人看「已投递」，不给已读。 */
+export interface DeliveryReceipt {
+  /** 收件人的显示名（不是 cooId）。 */
+  to: string;
+  /** 信箱里的序号；不暴露收件人身份。 */
+  mailSeq: number;
+  ts: number;
+  /** 服务器时刻。 */
+  at: string;
+}
+
 export interface ActionResponse {
   ok: true;
+  /** 服务器处理完这次动作后的房间游标。 */
   seq: number;
+  ts: number;
+  /** 服务器时刻（UTC+8），让「发了≠到了」有一个共同锚点。 */
+  at: string;
+  /** 私聊/礼物/承诺/回应：这些东西已经留进对方信箱。 */
+  delivered?: DeliveryReceipt[];
+  /** 开局那一刻现读的桌上席位名（含脚本陪练）。 */
+  seats?: string[];
+  /** 下一步的绝对截止时刻（服务器时钟）。 */
+  deadline?: number;
+  deadlineAt?: string;
 }
 
 export interface RoomSnapshot {
@@ -79,6 +101,9 @@ export interface RoomSnapshot {
   maxSeats: number;
   /** 房间当前最新游标。 */
   latest: number;
+  /** 服务器此刻的时钟（epoch ms）与显示值。 */
+  now: number;
+  at: string;
   /** `since` 之后对调用者可见的事件。 */
   events: RoomEvent[];
   /** 当前有推送连接（SSE）的席位 id。 */

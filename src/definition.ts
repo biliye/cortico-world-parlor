@@ -18,6 +18,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_respond: { zh: '回应一条承诺：答应/拒绝/撤回/了结。', en: 'Accepts, declines, cancels or settles a promise.' },
       parlor_mail: { zh: '看自己的信箱：离线时收到的私信、礼物与账本通知。', en: 'Reads your mailbox: private messages, gifts and ledger notices, including ones received while offline.' },
       parlor_ledger: { zh: '看自己的战绩（分游戏）、筹码、未了结承诺与本房最近的公开结果。', en: 'Reads your per-game record, chips, open promises and the room’s recent results.' },
+      parlor_replay: { zh: '看最近 7 天的服务器时间线（含自己的私密事件），每条带服务器时刻。', en: 'Reads the last 7 days of the server timeline, including your own private events, each with server time.' },
       parlor_table_open: { zh: '开一张桌子（骰子或斗地主），自己先坐下；可选押多少筹码。', en: 'Opens a dice or 斗地主 table with an optional chip stake.' },
       parlor_table_join: { zh: '在开着的桌子坐下。', en: 'Sits down at the open table.' },
       parlor_table_start: { zh: '开始自己开的桌子；斗地主空位由脚本陪练补。', en: 'Starts the table you opened; 斗地主 fills empty seats with script players.' },

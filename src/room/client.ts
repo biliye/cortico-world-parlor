@@ -2,7 +2,18 @@
 import type { CooIdentity } from './identity.ts';
 import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
 import type { MailPage } from './mail.ts';
+import type { ReplayEventView } from './replay.ts';
 import type { ActionRequest, ActionResponse, JoinRequest, JoinResponse, RoomEvent, RoomSnapshot } from './protocol.ts';
+
+export interface ReplayResponse {
+  room: string;
+  latest: number;
+  now: number;
+  at: string;
+  retentionDays: number;
+  events: ReplayEventView[];
+  older: boolean;
+}
 
 export class ParlorHttpError extends Error {
   readonly status: number;
@@ -59,6 +70,16 @@ export class ParlorClient {
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailPage>(response);
+  }
+
+  /** 读回放：默认最近的；before 往前翻。 */
+  async replay(token: string, limit = 30, before?: number): Promise<ReplayResponse> {
+    const query = new URLSearchParams({ limit: String(limit), ...(before ? { before: String(before) } : {}) });
+    const response = await fetch(this.url(`/v1/replay?${query}`), {
+      headers: this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<ReplayResponse>(response);
   }
 
   async action(token: string, body: ActionRequest): Promise<ActionResponse> {

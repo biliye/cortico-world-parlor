@@ -10,7 +10,9 @@ import { GAME_LABELS } from './game-labels.ts';
 import { RoomError, RoomKernel, type StoredSeat } from './kernel.ts';
 import { LedgerStore } from './ledger.ts';
 import { MailStore } from './mail.ts';
-import type { ActionRequest, JoinRequest, RoomEvent, RoomSnapshot } from './protocol.ts';
+import { REPLAY_RETENTION_DAYS, ReplayStore } from './replay.ts';
+import { serverClock } from './clock.ts';
+import type { ActionRequest, ActionResponse, JoinRequest, RoomEvent, RoomSnapshot } from './protocol.ts';
 
 export interface ParlorServerOptions {
   id: string;
@@ -26,6 +28,8 @@ export interface ParlorServerOptions {
   ledgerFile?: string;
   /** 信箱文件；不填时与 dataFile 同目录的 mail.json。 */
   mailFile?: string;
+  /** 回放文件；不填时与 dataFile 同目录的 replay.jsonl。 */
+  replayFile?: string;
 }
 
 export interface ParlorAddress {
@@ -112,6 +116,7 @@ export class ParlorServer {
   readonly kernel: RoomKernel;
   readonly ledger: LedgerStore;
   readonly mail: MailStore;
+  readonly replay: ReplayStore;
   private readonly options: ParlorServerOptions;
   private server?: Server;
   private address?: ParlorAddress;
@@ -130,7 +135,14 @@ export class ParlorServer {
     this.mail = MailStore.load({
       file: options.mailFile ?? (options.dataFile ? join(dirname(options.dataFile), 'mail.json') : undefined),
     });
+    this.replay = ReplayStore.load({
+      file: options.replayFile ?? (options.dataFile ? join(dirname(options.dataFile), 'replay.jsonl') : undefined),
+    });
     this.kernel = this.load(options);
+    // 房间数据被清空重建时，游标会从头开始，旧回放的序号对不上：整份作废。
+    if (this.kernel.roomEvents().length === 0) this.replay.reset();
+    // 崩溃/重启后，房间数据里还留着的事件补进回放（按 seq 去重）。
+    this.replay.seed(this.kernel.roomEvents());
     this.heartbeat = setInterval(() => this.ping(), 15_000);
     this.heartbeat.unref?.();
     this.tableClock = setInterval(() => {
@@ -206,6 +218,7 @@ export class ParlorServer {
       tableTurnMs: options.tableTurnMs,
       ledger: this.ledger,
       mail: this.mail,
+      replay: this.replay,
     };
     const file = options.dataFile;
     if (!file || !existsSync(file)) return new RoomKernel(common);
@@ -226,6 +239,7 @@ export class ParlorServer {
         seats: this.kernel.seatsPublic().length,
         maxSeats: this.kernel.maxSeats,
         latest: this.kernel.latest(),
+        replay: this.replay.count(),
       });
       return;
     }
@@ -286,6 +300,23 @@ export class ParlorServer {
       json(res, 200, this.kernel.readMail(auth.seat, limit, !peek));
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/v1/replay') {
+      const auth = this.auth(req, url);
+      const limit = Number(url.searchParams.get('limit') ?? 100) || 100;
+      const before = Number(url.searchParams.get('before') ?? 0) || 0;
+      const page = this.replay.page(auth.seat.id, limit, before || undefined);
+      const now = this.kernel.nowMs();
+      json(res, 200, {
+        room: this.kernel.id,
+        latest: this.kernel.latest(),
+        now,
+        at: serverClock(now),
+        retentionDays: REPLAY_RETENTION_DAYS,
+        events: page.events,
+        older: page.older,
+      });
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/v1/action') {
       const auth = this.auth(req, url);
       const body = await readJson(req) as unknown as ActionRequest;
@@ -293,8 +324,8 @@ export class ParlorServer {
         throw new HttpError(403, '家长页目前只能改提醒挡位');
       }
       try {
-        const seq = this.action(auth.seat, body);
-        json(res, 200, { ok: true, seq });
+        const receipt = this.action(auth.seat, body);
+        json(res, 200, { ok: true, ...receipt });
       } catch (error) {
         if (error instanceof RoomError) throw new HttpError(roomStatus(error), error.message);
         throw error;
@@ -331,22 +362,38 @@ export class ParlorServer {
     if (this.kernel.bindCooId(seat, identity.cooId)) this.schedulePersist();
   }
 
-  private action(seat: StoredSeat, body: ActionRequest): number {
+  private action(seat: StoredSeat, body: ActionRequest): Omit<ActionResponse, 'ok'> {
+    let delivered: ActionResponse['delivered'];
+    let seats: ActionResponse['seats'];
+    let deadline: number | undefined;
     switch (body.type) {
       case 'say': this.kernel.say(seat, body.text); break;
-      case 'whisper': this.kernel.whisper(seat, body.to, body.text); break;
+      case 'whisper': delivered = this.kernel.whisper(seat, body.to, body.text).delivered; break;
       case 'set_tier': this.kernel.setTier(seat, body.tier); break;
-      case 'gift': this.kernel.gift(seat, body.to, body.text, body.chips); break;
-      case 'promise': this.kernel.promise(seat, body.to, body.text, body.due, body.chips); break;
-      case 'respond': this.kernel.respond(seat, body.id, body.action); break;
+      case 'gift': delivered = this.kernel.gift(seat, body.to, body.text, body.chips).delivered; break;
+      case 'promise': delivered = this.kernel.promise(seat, body.to, body.text, body.due, body.chips).delivered; break;
+      case 'respond': delivered = this.kernel.respond(seat, body.id, body.action).delivered; break;
       case 'table_open': this.kernel.openTable(seat, body.game, body.stake); break;
       case 'table_join': this.kernel.joinTable(seat); break;
-      case 'table_start': this.kernel.startTable(seat); break;
-      case 'table_action': this.kernel.tableAction(seat, { type: body.action, die: body.die }); break;
-      case 'ddz_action': this.kernel.ddzAction(seat, { move: body.move, call: body.call, cards: body.cards }); break;
+      case 'table_start': {
+        const receipt = this.kernel.startTable(seat);
+        seats = receipt.seats;
+        deadline = receipt.deadline;
+        break;
+      }
+      case 'table_action': deadline = this.kernel.tableAction(seat, { type: body.action, die: body.die }).deadline; break;
+      case 'ddz_action': deadline = this.kernel.ddzAction(seat, { move: body.move, call: body.call, cards: body.cards }).deadline; break;
       default: throw new HttpError(400, '未知动作');
     }
-    return this.kernel.latest();
+    const ts = this.kernel.nowMs();
+    return {
+      seq: this.kernel.latest(),
+      ts,
+      at: serverClock(ts),
+      ...(delivered && delivered.length > 0 ? { delivered } : {}),
+      ...(seats ? { seats } : {}),
+      ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
+    };
   }
 
   private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {
@@ -468,8 +515,8 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   #log li .who { color: #79c0ff; }
   #log li.whisper { background: #241f16; border: 1px solid #3d3320; }
   #log li.system { color: #9aa0a6; background: transparent; padding-left: 0; }
-  #ledger .entry { padding: 7px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; color: #c9ccd1; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
-  #ledger .tier { margin: 8px 0 4px; }
+  #ledger .entry, #replay .entry { padding: 7px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; color: #c9ccd1; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  #ledger .tier, #replay .tier { margin: 8px 0 4px; }
   .bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   select, button { font: inherit; color: inherit; background: #22262c; border: 1px solid #363b43; border-radius: 7px; padding: 5px 8px; }
   button { cursor: pointer; }
@@ -487,6 +534,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     </section>
     <section><h2>账本</h2><div id="ledger"></div></section>
     <section><h2>信箱</h2><div id="mail"></div></section>
+    <section><h2>回放</h2><div id="replay"></div></section>
   </div>
   <section><h2>消息</h2><ul id="log"></ul></section>
 </main>
@@ -498,6 +546,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const log = document.getElementById('log');
   const ledger = document.getElementById('ledger');
   const mailBox = document.getElementById('mail');
+  const replayBox = document.getElementById('replay');
   const tier = document.getElementById('tier');
   let latest = 0, mine = null;
   const showError = (text) => { error.hidden = false; error.textContent = text; };
@@ -521,6 +570,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     if (event.type === 'parlor.table.end' || event.type === 'parlor.ledger' || event.type === 'parlor.whisper') {
       refreshLedger();
       refreshMail();
+      refreshReplay();
     }
     window.scrollTo(0, document.body.scrollHeight);
   };
@@ -581,6 +631,19 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     const response = await fetch('/v1/mail?recent=1&limit=3', { headers });
     if (response.ok) renderMail(await response.json());
   }
+  const renderReplay = (page) => {
+    replayBox.textContent = '';
+    const events = page.events || [];
+    replayBox.append(ledgerRow('最近 ' + (page.retentionDays || 7) + ' 天 · 服务器时间（含自家私密）', 'tier'));
+    if (!events.length) replayBox.append(ledgerRow('还没有回放。'));
+    for (const event of events.slice(-30)) {
+      replayBox.append(ledgerRow('#' + event.seq + ' ' + event.at + ' ' + event.text));
+    }
+  };
+  async function refreshReplay() {
+    const response = await fetch('/v1/replay?limit=30', { headers });
+    if (response.ok) renderReplay(await response.json());
+  }
   const renderSeats = (snapshot) => {
     seats.textContent = '';
     for (const seat of snapshot.seats) {
@@ -600,6 +663,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     renderSeats(snapshot);
     renderLedger(snapshot);
     refreshMail();
+    refreshReplay();
     latest = snapshot.latest;
     for (const event of snapshot.events) addEvent(event);
     const source = new EventSource('/v1/stream?since=' + latest + '&token=' + encodeURIComponent(token));
