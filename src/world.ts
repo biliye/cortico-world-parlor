@@ -11,6 +11,7 @@ import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR_CONFIG_GROUP, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
+import { gameLabelOf } from './room/game-labels.ts';
 import { IDENTITY_FILE, loadOrCreateIdentity, type CooIdentity } from './room/identity.ts';
 import { ParlorServer } from './room/server.ts';
 import {
@@ -105,7 +106,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_ledger',
-    description: 'Read your own ledger: how many games you played and won in this parlor, plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
+    description: 'Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
     tags: ['read'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
@@ -526,7 +527,10 @@ export class ParlorWorld implements World {
     if (snapshot.table) lines.push(snapshot.table.text);
     if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
     if (snapshot.ledger && snapshot.ledger.games > 0) {
-      lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平。`);
+      const perGame = (snapshot.ledger.byGame ?? [])
+        .map((row) => `${gameLabelOf(row.game, row.label)} ${row.games} 局`)
+        .join('、');
+      lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平${perGame ? `（${perGame}）` : ''}。`);
     }
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
@@ -572,6 +576,14 @@ export class ParlorWorld implements World {
         lines.push('【账本】还没有战绩。');
       } else {
         lines.push(`【账本】共 ${summary.games} 局：${summary.wins} 胜 ${summary.losses} 负 ${summary.draws} 平。`);
+        const byGame = summary.byGame ?? [];
+        if (byGame.length > 0) {
+          lines.push('按游戏：');
+          for (const row of byGame) {
+            const label = gameLabelOf(row.game, row.label);
+            lines.push(`- ${label}：${row.games} 局，${row.wins} 胜 ${row.losses} 负 ${row.draws} 平`);
+          }
+        }
         if (summary.recent.length > 0) {
           lines.push('最近：');
           for (const entry of summary.recent) lines.push(`- ${this.ledgerTime(entry.ts)} ${entry.text}`);

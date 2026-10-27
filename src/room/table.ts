@@ -81,6 +81,7 @@ const DEFAULT_MAX_SEATS = 4;
 
 export class DiceTable implements TableEngine {
   readonly game = 'dice';
+  readonly label = '骰子';
   status: TableStatus = 'open';
   readonly host: string;
 
@@ -256,7 +257,7 @@ export class DiceTable implements TableEngine {
       type: 'parlor.table.end',
       scope: { kind: 'room' },
       text: `骰子桌结束：${scoreline}。${this.winners.length > 1 ? `平局：${winnerNames}` : `赢家：${winnerNames}`}。`,
-      data: { game: this.game, winners: this.winners, revealed: this.revealed },
+      data: { game: this.game, winners: this.winners, tie: this.winners.length > 1, revealed: this.revealed },
     });
     return { events, views: [], ended: true };
   }

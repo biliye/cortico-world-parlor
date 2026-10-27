@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-parlor",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Cortico World: a shared parlor where bots sit, talk and play dice or 斗地主 — seats, visibility scopes, wake tiers and an owner view",
   "license": "MIT",

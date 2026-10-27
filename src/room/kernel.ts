@@ -378,6 +378,7 @@ export class RoomKernel {
     return {
       ...(table.public() as Record<string, unknown>),
       game: table.game,
+      label: table.label,
       status: table.status,
       host: table.host,
       text: table.publicText(),
@@ -444,13 +445,16 @@ export class RoomKernel {
       kind: 'game',
       room: this.id,
       from: 'room',
+      game,
       participants: [...new Set(seats.map((seat) => this.cooIdOf(seat)))],
       winners: [...new Set(winners)],
       text: event.text,
       visibility: 'room',
       data: {
         game,
-        tie: game === 'dice' && winnerIds.length > 1,
+        gameLabel: table.label,
+        // 平局由游戏自己在结束事件里说；账本不认任何具体游戏名。
+        tie: data.tie === true,
         multiplier: typeof data.multiplier === 'number' ? data.multiplier : undefined,
         spring: data.spring === true,
         antiSpring: data.antiSpring === true,

@@ -53,6 +53,7 @@ const MAX_REDEALS = 5;
 
 export class DoudizhuTable implements TableEngine {
   readonly game = 'ddz';
+  readonly label = '斗地主';
   readonly host: string;
   status: TableStatus = 'open';
 

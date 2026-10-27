@@ -29,6 +29,8 @@ export interface TableSeat {
 
 export interface TableEngine {
   readonly game: string;
+  /** 给人看的游戏名（「骰子」「斗地主」）；账本原样存进 `data.gameLabel`。 */
+  readonly label: string;
   readonly host: string;
   readonly status: TableStatus;
   has(seatId: string): boolean;
@@ -64,6 +66,7 @@ export class TableError extends Error {
 /** 传进 JSON 的公开桌面；游戏自己的字段（暗骰、倍数…）混在同一层。 */
 export interface TableSummary {
   game: string;
+  label: string;
   status: TableStatus;
   host: string;
   text: string;

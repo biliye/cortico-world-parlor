@@ -174,6 +174,7 @@ describe('客厅内核里的斗地主', () => {
     const snapA = room.kernel.snapshot(room.a.id, 0, 100);
     const snapB = room.kernel.snapshot(room.b.id, 0, 100);
     expect(snapA.table?.game).toBe('ddz');
+    expect(snapA.table?.label).toBe('斗地主');
     expect(snapA.table?.status).toBe('bidding');
     expect(JSON.stringify(snapA.table)).not.toContain('"hand"');
     expect((snapA.tablePrivate as unknown as DdzView).hand).toHaveLength(17);

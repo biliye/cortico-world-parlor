@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, join } from 'node:path';
 import { COO_HEADER, COO_SECRET_HEADER, type CooIdentity } from './identity.ts';
+import { GAME_LABELS } from './game-labels.ts';
 import { RoomError, RoomKernel, type StoredSeat } from './kernel.ts';
 import { LedgerStore } from './ledger.ts';
 import type { ActionRequest, JoinRequest, RoomEvent, RoomSnapshot } from './protocol.ts';
@@ -490,12 +491,19 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const ledgerRow = (text, className) => {
     const row = document.createElement('div'); row.className = className || 'entry'; row.textContent = text; return row;
   };
+  const GAME_LABELS = ${JSON.stringify(GAME_LABELS)};
+  const gameName = (row) => (
+    row.label && row.label !== row.game ? row.label : (GAME_LABELS[row.game] || row.label || row.game)
+  );
   const renderLedger = (snapshot) => {
     ledger.textContent = '';
     const me = snapshot.ledger;
     if (!me || me.games === 0) ledger.append(ledgerRow('还没有战绩。', 'tier'));
     else {
       ledger.append(ledgerRow('共 ' + me.games + ' 局：' + me.wins + ' 胜 ' + me.losses + ' 负 ' + me.draws + ' 平'));
+      for (const row of (me.byGame || [])) {
+        ledger.append(ledgerRow(gameName(row) + '：' + row.games + ' 局，' + row.wins + ' 胜 ' + row.losses + ' 负 ' + row.draws + ' 平'));
+      }
       for (const entry of (me.recent || []).slice(0, 3)) ledger.append(ledgerRow(entry.text));
     }
     const room = snapshot.ledgerRoom || [];

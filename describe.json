@@ -113,7 +113,7 @@
     },
     {
       "name": "parlor_ledger",
-      "description": "Read your own ledger: how many games you played and won in this parlor, plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.",
+      "description": "Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,

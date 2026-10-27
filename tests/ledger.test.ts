@@ -8,15 +8,23 @@ const A = 'coo-aaaaaaaa';
 const B = 'coo-bbbbbbbb';
 const C = 'coo-cccccccc';
 
-const game = (room: string, participants: string[], winners: string[], tie = false): Omit<LedgerEntry, 'id' | 'ts'> => ({
+const game = (
+  room: string,
+  participants: string[],
+  winners: string[],
+  tie = false,
+  id = 'dice',
+  label?: string,
+): Omit<LedgerEntry, 'id' | 'ts'> => ({
   kind: 'game',
   room,
   from: 'room',
+  game: id,
   participants,
   winners,
   text: `${room} 的一局`,
   visibility: 'room',
-  data: { game: 'dice', tie },
+  data: { game: id, tie, ...(label ? { gameLabel: label } : {}) },
 });
 
 describe('账本', () => {
@@ -44,6 +52,51 @@ describe('账本', () => {
     expect(store.summaryFor(A)).toMatchObject({ games: 1, draws: 1, losses: 0 });
     expect(store.summaryFor(B)).toMatchObject({ games: 1, draws: 1, losses: 0 });
     expect(store.summaryFor(C)).toMatchObject({ games: 1, draws: 0, losses: 1 });
+  });
+
+  it('按游戏分开统计，局数多的在前；显示名用条目里游戏自己给的', () => {
+    const store = new LedgerStore();
+    store.record(game('lobby', [A, B], [A], false, 'ddz', '斗地主'));
+    store.record(game('lobby', [A, B], [B], false, 'ddz', '斗地主'));
+    store.record(game('lobby', [A, B, C], [A, B], true, 'dice', '骰子'));
+
+    const summary = store.summaryFor(A);
+    expect(summary).toMatchObject({ games: 3, wins: 1, losses: 1, draws: 1 });
+    expect(summary.byGame).toEqual([
+      { game: 'ddz', label: '斗地主', games: 2, wins: 1, losses: 1, draws: 0 },
+      { game: 'dice', label: '骰子', games: 1, wins: 0, losses: 0, draws: 1 },
+    ]);
+  });
+
+  it('老账本条目只有 data.game 也能分开统计；后来的条目带了显示名就用它', () => {
+    const store = new LedgerStore();
+    const legacy: Omit<LedgerEntry, 'id' | 'ts'> = { ...game('lobby', [A], [A], false, 'ddz') };
+    delete legacy.game;
+    store.record(legacy);
+    expect(store.summaryFor(A).byGame).toEqual([
+      { game: 'ddz', label: 'ddz', games: 1, wins: 1, losses: 0, draws: 0 },
+    ]);
+
+    store.record(game('lobby', [A], [A], false, 'ddz', '斗地主'));
+    expect(store.summaryFor(A).byGame[0]).toMatchObject({ game: 'ddz', label: '斗地主', games: 2 });
+  });
+
+  it('没有游戏名的条目归到「其他」，不丢局数', () => {
+    const store = new LedgerStore();
+    store.record({ kind: 'game', room: 'lobby', from: 'room', participants: [A], winners: [A], text: '一局', visibility: 'room' });
+    expect(store.summaryFor(A)).toMatchObject({ games: 1, wins: 1 });
+    expect(store.summaryFor(A).byGame).toEqual([
+      { game: 'unknown', label: '其他', games: 1, wins: 1, losses: 0, draws: 0 },
+    ]);
+  });
+
+  it('账本不认具体游戏：任意 game id 都只按 winners 与 tie 记', () => {
+    const store = new LedgerStore();
+    store.record(game('lobby', [A, B], [A, B], true, 'fakegame', '假游戏'));
+    expect(store.summaryFor(A)).toMatchObject({ games: 1, wins: 0, losses: 0, draws: 1 });
+    expect(store.summaryFor(B)).toMatchObject({ games: 1, draws: 1 });
+    expect(store.summaryFor(C)).toMatchObject({ games: 0, draws: 0 });
+    expect(store.summaryFor(A).byGame[0]).toMatchObject({ game: 'fakegame', label: '假游戏', draws: 1 });
   });
 
   it('公开条目按房间给，私密条目不进公开列表', () => {

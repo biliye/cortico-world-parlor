@@ -224,6 +224,8 @@ describe('客厅 World', () => {
     const ledger = world.tools().find((tool) => tool.name === 'parlor_ledger')!;
     const text = String(await ledger.handler({}, {} as ToolCallContext));
     expect(text).toContain('【账本】共 1 局');
+    expect(text).toContain('按游戏：');
+    expect(text).toContain('骰子：1 局');
     expect(text).toContain('骰子桌结束');
   });
 });

@@ -1,3 +1,18 @@
+## 0.5.0
+
+- 账本按游戏分开统计：条目新增顶层 `game`（`dice` / `ddz` / 以后游戏自己的 id），
+  摘要新增 `byGame`（每种游戏的局数、胜、负、平，局数多的在前）。
+  `parlor_ledger` 与 `parlor_look` 都会显示「斗地主：3 局，2 胜 1 负 0 平」这样的分项。
+- 账本仍不认任何具体游戏：只按 `winners` 与 `tie` 算胜负平；新游戏只要在 `parlor.table.end`
+  的 `data` 里给 `winners`（赢的席位 id 数组）和（平局时）`tie: true`，就会被记下。
+- 平局改由游戏自己在结束事件里给 `data.tie`（骰子平局时给 true）；内核不再写
+  `game === 'dice'` 这种游戏名判断。
+- 牌桌契约新增 `label`（给人看的游戏名）；账本把它存进 `data.gameLabel`。
+  老条目只有 `data.game` 也能读，显示名在 World 与家长页的展示层兜底。
+- 家长页账本块按游戏分行。
+- 70 条测试（新增按游戏分组、老账本兼容、未知游戏、假游戏不认名）、typecheck、
+  `check:extension` 通过。
+
 ## 0.4.0
 
 - 账本第一版：服务器上 `ledger.json`（0600，默认与房间数据同目录）按 `cooId` 记牌局结果；

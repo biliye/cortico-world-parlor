@@ -24,6 +24,11 @@ export interface LedgerEntry {
   text: string;
   visibility: LedgerVisibility;
   data?: Record<string, unknown>;
+  /**
+   * 牌局属于哪种游戏（`dice` / `ddz` / 以后游戏自己的 id）。账本只把它当标签，
+   * 不认任何具体游戏名。老账本没有这一层，读的时候回落到 `data.game`。
+   */
+  game?: string;
 }
 
 /** 发给 World / 家长页的条目：不带别人的 cooId。 */
@@ -34,6 +39,19 @@ export interface LedgerEntryView {
   kind: LedgerKind;
   text: string;
   data?: Record<string, unknown>;
+  game?: string;
+}
+
+/** 单种游戏的战绩；账本按条目里的 game 现算，不存计数器。 */
+export interface GameTally {
+  /** 游戏 id，如 `dice`、`ddz`；老条目/缺字段的是 `unknown`。 */
+  game: string;
+  /** 显示名，由游戏自己给（`data.gameLabel`）；没有就用 id。 */
+  label: string;
+  games: number;
+  wins: number;
+  losses: number;
+  draws: number;
 }
 
 export interface LedgerSummary {
@@ -42,6 +60,8 @@ export interface LedgerSummary {
   wins: number;
   losses: number;
   draws: number;
+  /** 按游戏拆开的战绩，局数多的在前。 */
+  byGame: GameTally[];
   recent: LedgerEntryView[];
 }
 
@@ -96,7 +116,26 @@ const view = (entry: LedgerEntry): LedgerEntryView => ({
   kind: entry.kind,
   text: entry.text,
   ...(entry.data ? { data: entry.data } : {}),
+  ...(entry.kind === 'game' ? { game: gameOf(entry) } : {}),
 });
+
+export const UNKNOWN_GAME = 'unknown';
+
+/** 条目属于哪种游戏：顶层字段优先，老账本回落到 `data.game`。 */
+export function gameOf(entry: LedgerEntry): string {
+  if (typeof entry.game === 'string' && entry.game.length > 0) return entry.game;
+  const legacy = entry.data?.game;
+  if (typeof legacy === 'string' && legacy.length > 0) return legacy;
+  return UNKNOWN_GAME;
+}
+
+/** 显示名：游戏在结束事件里给的 `gameLabel`；没有就用 id（unknown 写成「其他」）。 */
+function labelOf(entry: LedgerEntry): string {
+  const label = entry.data?.gameLabel;
+  if (typeof label === 'string' && label.length > 0) return label;
+  const game = gameOf(entry);
+  return game === UNKNOWN_GAME ? '其他' : game;
+}
 
 export class LedgerStore {
   private entries: LedgerEntry[] = [];
@@ -179,12 +218,30 @@ export class LedgerStore {
     let wins = 0;
     let losses = 0;
     let draws = 0;
+    const byGame = new Map<string, GameTally>();
     for (const entry of mine) {
       if (entry.kind !== 'game') continue;
       games += 1;
-      if (!entry.winners?.includes(cooId)) losses += 1;
-      else if (entry.data?.tie === true) draws += 1;
-      else wins += 1;
+      const game = gameOf(entry);
+      let tally = byGame.get(game);
+      if (!tally) {
+        tally = { game, label: labelOf(entry), games: 0, wins: 0, losses: 0, draws: 0 };
+        byGame.set(game, tally);
+      } else if (tally.label === game || tally.label === '其他') {
+        // 老条目没带显示名，后来的条目带了就用后者的。
+        tally.label = labelOf(entry);
+      }
+      tally.games += 1;
+      if (!entry.winners?.includes(cooId)) {
+        losses += 1;
+        tally.losses += 1;
+      } else if (entry.data?.tie === true) {
+        draws += 1;
+        tally.draws += 1;
+      } else {
+        wins += 1;
+        tally.wins += 1;
+      }
     }
     return {
       cooId,
@@ -192,6 +249,9 @@ export class LedgerStore {
       wins,
       losses,
       draws,
+      byGame: [...byGame.values()].sort((left, right) => (
+        right.games - left.games || left.game.localeCompare(right.game)
+      )),
       recent: mine.slice(-5).reverse().map(view),
     };
   }

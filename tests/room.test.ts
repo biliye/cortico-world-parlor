@@ -146,8 +146,16 @@ describe('可见性内核', () => {
     expect(snap.ledger?.cooId).toBe('coo-aaaaaaaa');
     expect(snap.ledger?.games).toBe(1);
     expect((snap.ledger?.wins ?? 0) + (snap.ledger?.losses ?? 0) + (snap.ledger?.draws ?? 0)).toBe(1);
+    expect(snap.ledger?.byGame).toHaveLength(1);
+    expect(snap.ledger?.byGame?.[0]).toMatchObject({ game: 'dice', label: '骰子', games: 1 });
+    expect(
+      (snap.ledger?.byGame?.[0]?.wins ?? 0)
+      + (snap.ledger?.byGame?.[0]?.losses ?? 0)
+      + (snap.ledger?.byGame?.[0]?.draws ?? 0),
+    ).toBe(1);
     expect(snap.ledgerRoom).toHaveLength(1);
     expect(snap.ledgerRoom?.[0].text).toContain('骰子桌结束');
+    expect(snap.ledgerRoom?.[0].game).toBe('dice');
     expect(kernel.snapshot(b.seat.id, 0, 10).ledger?.games).toBe(1);
   });
 
