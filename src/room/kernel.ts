@@ -60,6 +60,8 @@ export type DeliveredEvent = RoomEvent & { delivered: DeliveryReceipt[] };
 export type DeliveredEntry = LedgerEntry & { delivered?: DeliveryReceipt[] };
 export interface TableReceipt {
   deadline?: number;
+  /** 下一个截止属于谁（显示名）。 */
+  turn?: string;
 }
 export interface StartReceipt extends TableReceipt {
   /** 开局那一刻现读的桌上席位（脚本陪练也列出来）。 */
@@ -770,12 +772,24 @@ export class RoomKernel {
       .map((seat) => (typeof seat.name === 'string' ? (seat.bot === true ? `${seat.name}（脚本）` : seat.name) : '？'));
   }
 
-  /** 下一步的绝对截止时刻；没有桌子或已经结束就没有。 */
+  /** 下一步的绝对截止时刻，以及轮到谁；没有桌子或已经结束就没有。 */
   private tableReceipt(): TableReceipt {
-    const publicView = this.table?.public() as { deadline?: unknown } | undefined;
-    return typeof publicView?.deadline === 'number' && publicView.deadline > 0
-      ? { deadline: publicView.deadline }
-      : {};
+    const publicView = this.table?.public() as {
+      deadline?: unknown;
+      turn?: unknown;
+      seats?: Array<{ id?: unknown; name?: unknown }>;
+    } | undefined;
+    const deadline = typeof publicView?.deadline === 'number' && publicView.deadline > 0
+      ? publicView.deadline
+      : undefined;
+    const turnId = typeof publicView?.turn === 'string' ? publicView.turn : undefined;
+    const name = turnId
+      ? publicView?.seats?.find((seat) => seat.id === turnId)?.name
+      : undefined;
+    return {
+      ...(deadline ? { deadline } : {}),
+      ...(typeof name === 'string' && name ? { turn: name } : {}),
+    };
   }
 
   private tablePrivate(seatId: string): TablePrivateSummary | null {

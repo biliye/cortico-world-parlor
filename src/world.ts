@@ -589,11 +589,16 @@ export class ParlorWorld implements World {
 
   private async look(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
-    const since = Number.isFinite(Number(args.since)) ? Math.max(0, Number(args.since)) : Math.max(0, this.lastSeq - 20);
+    const explicitSince = args.since !== undefined && Number.isFinite(Number(args.since));
+    const since = explicitSince ? Math.max(0, Number(args.since)) : 0;
     const limit = Number.isFinite(Number(args.limit)) ? Math.min(100, Math.max(1, Number(args.limit))) : 30;
+    // 没给 since 时要看「最近 limit 条」，不是「最近 20 条里最旧的 limit 条」。
+    const window = explicitSince ? limit : Math.min(200, Math.max(limit, limit * 3));
+    const from = explicitSince ? since : Math.max(0, this.lastSeq - window);
     try {
-      const snapshot = await this.client.snapshot(this.token, since, limit);
-      return this.formatSnapshot(snapshot);
+      const snapshot = await this.client.snapshot(this.token, from, window);
+      const events = explicitSince ? snapshot.events : snapshot.events.slice(-limit);
+      return this.formatSnapshot({ ...snapshot, events });
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -929,7 +934,9 @@ export class ParlorWorld implements World {
     if (result.seats && result.seats.length > 0) {
       lines.push(`开局时桌上（服务器现读）：${result.seats.join('、')}。`);
     }
-    if (result.deadlineAt) lines.push(`下一个截止：${result.deadlineAt}（服务器时刻 UTC+8）。`);
+    if (result.deadlineAt) {
+      lines.push(`下一个截止：${result.deadlineAt}（服务器时刻 UTC+8）${result.turn ? `，轮到 ${result.turn}` : ''}。`);
+    }
     return lines.join('\n');
   }
 

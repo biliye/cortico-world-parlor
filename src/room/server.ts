@@ -366,6 +366,7 @@ export class ParlorServer {
     let delivered: ActionResponse['delivered'];
     let seats: ActionResponse['seats'];
     let deadline: number | undefined;
+    let turn: string | undefined;
     switch (body.type) {
       case 'say': this.kernel.say(seat, body.text); break;
       case 'whisper': delivered = this.kernel.whisper(seat, body.to, body.text).delivered; break;
@@ -379,10 +380,21 @@ export class ParlorServer {
         const receipt = this.kernel.startTable(seat);
         seats = receipt.seats;
         deadline = receipt.deadline;
+        turn = receipt.turn;
         break;
       }
-      case 'table_action': deadline = this.kernel.tableAction(seat, { type: body.action, die: body.die }).deadline; break;
-      case 'ddz_action': deadline = this.kernel.ddzAction(seat, { move: body.move, call: body.call, cards: body.cards }).deadline; break;
+      case 'table_action': {
+        const receipt = this.kernel.tableAction(seat, { type: body.action, die: body.die });
+        deadline = receipt.deadline;
+        turn = receipt.turn;
+        break;
+      }
+      case 'ddz_action': {
+        const receipt = this.kernel.ddzAction(seat, { move: body.move, call: body.call, cards: body.cards });
+        deadline = receipt.deadline;
+        turn = receipt.turn;
+        break;
+      }
       default: throw new HttpError(400, '未知动作');
     }
     const ts = this.kernel.nowMs();
@@ -393,6 +405,7 @@ export class ParlorServer {
       ...(delivered && delivered.length > 0 ? { delivered } : {}),
       ...(seats ? { seats } : {}),
       ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
+      ...(turn ? { turn } : {}),
     };
   }
 

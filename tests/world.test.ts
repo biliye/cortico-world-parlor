@@ -101,6 +101,11 @@ describe('客厅 World', () => {
     expect(looked).toContain('阿岚');
     expect(looked).toContain('小满');
 
+    await client.action(friend.token, { type: 'say', text: '最后一条测试' });
+    await sleep(200);
+    const tail = String(await look.handler({ limit: 1 }, {} as ToolCallContext));
+    expect(tail).toContain('最后一条测试');
+
     const setTier = world.tools().find((tool) => tool.name === 'parlor_set_tier')!;
     expect(String(await setTier.handler({ tier: 'quiet' }, {} as ToolCallContext))).toContain('只 @');
     const mine = await client.snapshot(secrets.PARLOR_SEAT_TOKEN!, 0, 1);
@@ -173,6 +178,7 @@ describe('客厅 World', () => {
     expect(started).toContain('开局时桌上（服务器现读）');
     expect(started).toContain('阿岚');
     expect(started).toContain('下一个截止');
+    expect(started).toContain('轮到 小满');
 
     await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('轮到你')));
     const turn = host.events.find((event) => event.type === 'parlor.message' && event.text.includes('轮到你'))!;

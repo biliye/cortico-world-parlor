@@ -91,6 +91,8 @@ export interface ActionResponse {
   /** 下一步的绝对截止时刻（服务器时钟）。 */
   deadline?: number;
   deadlineAt?: string;
+  /** 下一个截止属于谁（显示名；脚本陪练也在内）。 */
+  turn?: string;
 }
 
 export interface RoomSnapshot {

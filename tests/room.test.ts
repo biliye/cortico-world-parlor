@@ -431,6 +431,7 @@ describe('回执与硬时点', () => {
       await client.action(a.token, { type: 'table_open', game: 'ddz' });
       const started = await client.action(a.token, { type: 'table_start' });
       expect(started.seats).toEqual(['阿岚', '陪练甲（脚本）', '陪练乙（脚本）']);
+      expect(started.turn).toBe('阿岚');
       expect(started.deadlineAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       expect(started.deadline! - started.ts).toBeGreaterThan(20_000);
     } finally {
