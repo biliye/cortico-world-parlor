@@ -9,9 +9,10 @@ import {
   type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep,
 } from '../table-engine.ts';
 import {
-  canBeat, deal, formatCards, handStrength, moveLabel, parseMove, scoreRound, sortCards, suggestMove,
+  canBeat, deal, formatCards, moveLabel, parseMove, scoreRound, sortCards,
   type Card, type Move,
 } from './doudizhu.ts';
+import { chooseBid, chooseMove, type BotContext } from './doudizhu-bot.ts';
 
 export interface DoudizhuTableOptions {
   host: TableSeat;
@@ -48,7 +49,6 @@ const DEFAULT_TURN_MS = 60_000;
 const DEFAULT_BID_MS = 30_000;
 const DEFAULT_BOT_DELAY_MS = 1500;
 const BOT_NAMES = ['陪练甲', '陪练乙'];
-const BOT_BID_SCORE = 3;
 const MAX_REDEALS = 5;
 
 export class DoudizhuTable implements TableEngine {
@@ -153,12 +153,13 @@ export class DoudizhuTable implements TableEngine {
     const seat = this.currentSeat();
     if (!seat) return null;
     if (this.status === 'bidding') {
-      const call = seat.bot ? handStrength(seat.hand) >= BOT_BID_SCORE : false;
-      return this.bid(seat.id, call, now, !seat.bot);
+      // 超时的真人不替他叫地主：不叫更保守，也不会把底牌塞给没在的人。
+      return this.bid(seat.id, seat.bot ? chooseBid(seat.hand) : false, now, !seat.bot);
     }
-    const picked = suggestMove(seat.hand, this.lastPlay?.move ?? null);
-    if (picked && picked.length > 0) return this.play(seat.id, picked, now, true);
-    return this.pass(seat.id, now, true);
+    const picked = chooseMove(seat.hand, this.lastPlay?.move ?? null, this.botContext(seat));
+    // 脚本陪练正常出牌；人类席位是超时，回执里要说明。
+    if (picked && picked.length > 0) return this.play(seat.id, picked, now, !seat.bot);
+    return this.pass(seat.id, now, !seat.bot);
   }
 
   view(seatId: string): unknown | null {
@@ -465,6 +466,18 @@ export class DoudizhuTable implements TableEngine {
 
   private landlord(): Seat | undefined {
     return this.seats.find((seat) => seat.role === 'landlord');
+  }
+
+  private botContext(seat: Seat): BotContext {
+    const last = this.lastPlay
+      ? this.seats.find((entry) => entry.id === this.lastPlay!.seat)
+      : undefined;
+    const opponents = this.seats.filter((entry) => entry.role !== seat.role);
+    return {
+      role: seat.role ?? 'farmer',
+      lastPlayBy: last?.role ?? undefined,
+      minOpponentLeft: Math.min(...opponents.map((entry) => entry.hand.length)),
+    };
   }
 
   private cardsLeft(): Record<string, number> {

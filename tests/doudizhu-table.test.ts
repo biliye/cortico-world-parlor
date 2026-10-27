@@ -94,7 +94,7 @@ describe('斗地主桌', () => {
     expect(() => table.act('a', { move: 'pass' }, 0)).toThrow(/还没轮到/);
   });
 
-  it('超时按最小合法牌代打', () => {
+  it('超时按脚本出牌代打（会出组合牌）', () => {
     const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(13) });
     table.join(GUEST);
     table.join({ id: 'c', name: '阿满' });
@@ -103,37 +103,48 @@ describe('斗地主桌', () => {
     const before = viewOf(table, 'a').hand.length;
     const step = table.tick(60_001)!;
     expect(step.events.some((event) => event.text.includes('超时，自动'))).toBe(true);
-    expect(viewOf(table, 'a').hand.length).toBe(before - 1);
+    expect(viewOf(table, 'a').hand.length).toBeLessThan(before);
   });
 
-  it('一个人 + 两个脚本陪练能打完整局', () => {
+  it('一个人 + 两个脚本陪练能打完整局，脚本会出组合牌', () => {
     let now = 1_000;
     const table = new DoudizhuTable({ host: HOST, now, botDelayMs: 1_000, rng: seeded(11) });
-    table.start('a', now);
+    const plays: { seat?: string; cards: string[] }[] = [];
+    const collect = (step: { events: { data?: Record<string, unknown> }[] } | null): void => {
+      for (const event of step?.events ?? []) {
+        if (event.data?.action !== 'play' || !Array.isArray(event.data.cards)) continue;
+        plays.push({
+          seat: typeof event.data.seat === 'string' ? event.data.seat : undefined,
+          cards: event.data.cards as string[],
+        });
+      }
+    };
+    collect(table.start('a', now));
     let guard = 0;
     while (table.status !== 'ended' && guard++ < 600) {
       const view = viewOf(table, 'a');
       if (table.status === 'bidding') {
-        if (view.yourTurn) table.act('a', { move: 'bid', call: true }, now);
+        if (view.yourTurn) collect(table.act('a', { move: 'bid', call: true }, now));
         else {
           now += 1_100;
-          table.tick(now);
+          collect(table.tick(now));
         }
         continue;
       }
       if (view.yourTurn) {
         const target = view.lastPlay ? parseMove(view.lastPlay.cards) : null;
         const picked = suggestMove(view.hand, target);
-        table.act('a', picked ? { move: 'play', cards: picked } : { move: 'pass' }, now);
+        collect(table.act('a', picked ? { move: 'play', cards: picked } : { move: 'pass' }, now));
       } else {
         now += 1_100;
-        table.tick(now);
+        collect(table.tick(now));
       }
     }
     expect(table.status).toBe('ended');
     expect(publicOf(table).result).toContain('倍数');
     expect(table.publicText()).toContain('结束');
     expect(publicOf(table).multiplier).toBeGreaterThanOrEqual(1);
+    expect(plays.some((play) => play.seat?.startsWith('bot') && play.cards.length >= 2)).toBe(true);
   });
 });
 
