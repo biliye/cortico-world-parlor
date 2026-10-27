@@ -426,9 +426,9 @@ export class LedgerStore {
         from: 'room',
         to: promise.to,
         participants: [promise.from, promise.to].filter((id): id is string => !!id),
-        text: promise.text,
+        text: `到期没结：${promise.text}`,
         visibility: 'private',
-        data: { fromName: '房间', toName: promise.data?.fromName ?? '' },
+        data: { fromName: '房间', toName: promise.data?.fromName ?? '', promiseText: promise.text },
       }));
     }
     return created;

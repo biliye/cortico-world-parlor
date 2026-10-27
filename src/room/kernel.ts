@@ -392,8 +392,9 @@ export class RoomKernel {
     const status = this.ledger.promiseStatus(promise);
     const counterpartCoo = promise.from === me ? promise.to : promise.from;
     const counterpart = counterpartCoo ? this.seatByCoo(counterpartCoo) : undefined;
+    const storedName = promise.from === me ? promise.data?.toName : promise.data?.fromName;
     const otherName = counterpart?.name
-      ?? (typeof promise.data?.fromName === 'string' ? promise.data.fromName : '对方');
+      ?? (typeof storedName === 'string' && storedName ? storedName : '对方');
 
     if (action === 'accept' || action === 'decline') {
       if (promise.to !== me) throw new RoomError('forbidden', '只有被承诺的人能回应');
@@ -425,7 +426,7 @@ export class RoomKernel {
       const [debtorCoo, creditorCoo] = entry.participants ?? [];
       const debtor = debtorCoo ? this.seatByCoo(debtorCoo) : undefined;
       const creditor = creditorCoo ? this.seatByCoo(creditorCoo) : undefined;
-      const text = typeof entry.text === 'string' ? entry.text : '';
+      const text = typeof entry.data?.promiseText === 'string' ? entry.data.promiseText : entry.text;
       if (debtor) {
         this.notifyLedger([debtor.id], `你对 ${creditor?.name ?? '对方'} 的承诺到期没结：${text}`, {
           entryId: entry.ref, kind: 'promise', action: 'default',
@@ -467,17 +468,19 @@ export class RoomKernel {
     const kind = action === 'done' ? 'settle' : action;
     const me = this.cooIdOf(seat);
     const amount = action === 'done' && typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
+    const prefix = { accept: '已答应', decline: '已拒绝', cancel: '已撤回', done: '已了结' }[action];
     const entry = this.ledger.record({
       kind,
       ref: promise.id,
       room: promise.room,
       from: me,
       ...(promise.from === me ? { to: promise.to } : { to: promise.from }),
-      text: promise.text,
+      text: `${prefix}：${promise.text}`,
       visibility: 'private',
       data: {
         fromName: seat.name,
         toName: otherName,
+        promiseText: promise.text,
         ...(amount ? { chips: amount } : {}),
       },
       ...(amount && promise.from
