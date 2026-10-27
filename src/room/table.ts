@@ -3,8 +3,12 @@
  * 规则、发牌、隐藏信息全在这里；World 只把私视图交给 bot，把动作送回来。
  */
 import { randomInt } from 'node:crypto';
+import {
+  TableError, secondsLeft,
+  type TableEngine, type TableErrorCode, type TableEvent, type TableSeat, type TableStatus, type TableStep,
+} from './table-engine.ts';
 
-export type TableStatus = 'open' | 'playing' | 'ended';
+export type { TableEvent, TableStatus, TableStep } from './table-engine.ts';
 
 export interface TableSeatView {
   id: string;
@@ -47,32 +51,11 @@ export interface TableAction {
   die?: number;
 }
 
-export type TableEventScope = { kind: 'room' } | { kind: 'seat'; seatId: string };
+export type DiceErrorCode = TableErrorCode;
 
-export interface TableEvent {
-  type: string;
-  scope: TableEventScope;
-  text: string;
-  data?: Record<string, unknown>;
-}
-
-export interface TableStep {
-  events: TableEvent[];
-  /** 需要补发私视图的席位（含当前回合的席位）。 */
-  views: string[];
-  ended?: boolean;
-}
-
-export type DiceErrorCode =
-  | 'not_open' | 'not_started' | 'full' | 'seated' | 'not_seated'
-  | 'not_host' | 'not_turn' | 'bad_action' | 'no_rerolls';
-
-export class DiceError extends Error {
-  readonly code: DiceErrorCode;
-
+export class DiceError extends TableError {
   constructor(code: DiceErrorCode, message: string) {
-    super(message);
-    this.code = code;
+    super(code, message);
     this.name = 'DiceError';
   }
 }
@@ -96,7 +79,7 @@ const DEFAULT_TURN_MS = 45_000;
 const DEFAULT_REROLLS = 2;
 const DEFAULT_MAX_SEATS = 4;
 
-export class DiceTable {
+export class DiceTable implements TableEngine {
   readonly game = 'dice';
   status: TableStatus = 'open';
   readonly host: string;
@@ -134,7 +117,7 @@ export class DiceTable {
     return this.turnId;
   }
 
-  join(seat: { id: string; name: string }): TableEvent {
+  join(seat: TableSeat): TableEvent {
     if (this.status !== 'open') throw new DiceError('not_open', '这张桌子已经开始了');
     if (this.has(seat.id)) throw new DiceError('seated', '你已经在桌上了');
     if (this.seats.length >= this.maxSeats) throw new DiceError('full', `这张桌子最多 ${this.maxSeats} 个人`);
@@ -165,11 +148,12 @@ export class DiceTable {
     };
   }
 
-  act(seatId: string, action: TableAction, now: number): TableStep {
+  act(seatId: string, input: unknown, now: number): TableStep {
     if (this.status !== 'playing') throw new DiceError('not_started', '这张桌子没在玩');
     const seat = this.seats.find((entry) => entry.id === seatId);
     if (!seat) throw new DiceError('not_seated', '你不在桌上');
     if (this.turnId !== seatId) throw new DiceError('not_turn', '还没轮到你');
+    const action = (input ?? {}) as TableAction;
     const events: TableEvent[] = [];
     if (action.type === 'roll') {
       const die = action.die ?? 0;
@@ -231,6 +215,15 @@ export class DiceTable {
     };
   }
 
+  privateText(seatId: string, now: number): string | null {
+    const view = this.view(seatId);
+    return view ? formatPrivate(view, now) : null;
+  }
+
+  publicText(): string {
+    return formatPublic(this.public());
+  }
+
   private roll(): number {
     return this.rng();
   }
@@ -268,10 +261,6 @@ export class DiceTable {
     return { events, views: [], ended: true };
   }
 }
-
-const secondsLeft = (deadline: number | undefined, now: number): number => (
-  deadline ? Math.max(0, Math.ceil((deadline - now) / 1000)) : 0
-);
 
 /** 只给桌上该席位看的一段话；服务端把它塞进 `parlor.table.turn`。 */
 export function formatPrivate(view: TablePrivate, now: number): string {

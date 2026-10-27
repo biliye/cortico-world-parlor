@@ -167,4 +167,32 @@ describe('客厅 World', () => {
     const view = world.tools().find((tool) => tool.name === 'parlor_table_view')!;
     expect(String(await view.handler({}, {} as ToolCallContext))).toContain('你的点数');
   });
+
+  it('斗地主：空位补脚本陪练，叫地主走工具，轮到时被叫醒', async () => {
+    await startServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+
+    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    expect(String(await open.handler({ game: 'ddz' }, {} as ToolCallContext))).toContain('斗地主桌开了');
+    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    expect(String(await start.handler({}, {} as ToolCallContext))).toContain('开始了');
+
+    await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('叫你当地主')));
+    const turn = host.events.find((event) => event.type === 'parlor.message' && event.text.includes('叫你当地主'))!;
+    expect(turn.text).toContain('你的 17 张牌');
+
+    const bid = world.tools().find((tool) => tool.name === 'parlor_ddz_action')!;
+    expect(String(await bid.handler({ move: 'bid', call: true }, {} as ToolCallContext))).toContain('叫了地主');
+    const view = world.tools().find((tool) => tool.name === 'parlor_table_view')!;
+    const text = String(await view.handler({}, {} as ToolCallContext));
+    expect(text).toContain('你的牌（20 张）');
+    expect(text).toContain('你是地主');
+    expect(text).toContain('这一轮你先出');
+  });
 });

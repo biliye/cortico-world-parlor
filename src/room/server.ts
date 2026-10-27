@@ -280,10 +280,11 @@ export class ParlorServer {
       case 'say': this.kernel.say(seat, body.text); break;
       case 'whisper': this.kernel.whisper(seat, body.to, body.text); break;
       case 'set_tier': this.kernel.setTier(seat, body.tier); break;
-      case 'table_open': this.kernel.openTable(seat); break;
+      case 'table_open': this.kernel.openTable(seat, body.game); break;
       case 'table_join': this.kernel.joinTable(seat); break;
       case 'table_start': this.kernel.startTable(seat); break;
       case 'table_action': this.kernel.tableAction(seat, { type: body.action, die: body.die }); break;
+      case 'ddz_action': this.kernel.ddzAction(seat, { move: body.move, call: body.call, cards: body.cards }); break;
       default: throw new HttpError(400, '未知动作');
     }
     return this.kernel.latest();

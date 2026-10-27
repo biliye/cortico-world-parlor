@@ -8,7 +8,12 @@ import {
   type JoinRequest, type JoinResponse, type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
 } from './protocol.ts';
-import { DiceError, DiceTable, formatPrivate, type TableAction, type TablePublic, type TableStep } from './table.ts';
+import { DiceTable } from './table.ts';
+import { DoudizhuTable } from './games/doudizhu-table.ts';
+import {
+  TableError,
+  type TableEngine, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
+} from './table-engine.ts';
 
 export interface StoredSeat extends Seat {
   token: string;
@@ -31,7 +36,7 @@ export interface RoomKernelOptions {
   maxSeats?: number;
   historyLimit?: number;
   now?: () => number;
-  /** 牌桌每次行动的时限；测试里可以调短。 */
+  /** 骰子桌每次行动的时限；测试里可以调短（斗地主固定 60 秒一手）。 */
   tableTurnMs?: number;
 }
 
@@ -88,7 +93,7 @@ export class RoomKernel {
   private events: RoomEvent[] = [];
   private seq = 0;
   private seatSeq = 0;
-  private table?: DiceTable;
+  private table?: TableEngine;
   private readonly listeners = new Set<(event: RoomEvent) => void>();
   private readonly lastSay = new Map<string, number>();
 
@@ -247,16 +252,23 @@ export class RoomKernel {
     return publicSeat(seat);
   }
 
-  openTable(seat: StoredSeat): void {
+  openTable(seat: StoredSeat, game: TableGame = 'dice'): void {
     if (seat.kind === 'observer') throw new RoomError('invalid', '观看者不能开桌');
     if (this.table && this.table.status !== 'ended') throw new RoomError('conflict', '已经有一张桌子了');
-    this.table = new DiceTable({ host: { id: seat.id, name: seat.name }, now: this.now(), turnMs: this.tableTurnMs });
+    if (game === 'dice') {
+      this.table = new DiceTable({ host: { id: seat.id, name: seat.name }, now: this.now(), turnMs: this.tableTurnMs });
+    } else if (game === 'ddz') {
+      // 斗地主的一手默认 60 秒（骰子桌 45 秒），所以不套用 tableTurnMs。
+      this.table = new DoudizhuTable({ host: { id: seat.id, name: seat.name }, now: this.now() });
+    } else {
+      throw new RoomError('invalid', '不认识的桌子：只能开 dice（骰子）或 ddz（斗地主）');
+    }
     this.record({
       type: 'parlor.table.open',
       from: 'system',
       scope: { kind: 'room' },
-      text: `${seat.name} 开了一张骰子桌。`,
-      data: { game: 'dice' },
+      text: `${seat.name} 开了一张${game === 'ddz' ? '斗地主' : '骰子'}桌。`,
+      data: { game },
     });
   }
 
@@ -280,35 +292,55 @@ export class RoomKernel {
     this.recordStep(step);
   }
 
-  tableAction(seat: StoredSeat, action: TableAction): void {
+  tableAction(seat: StoredSeat, action: unknown): void {
     const table = this.requireTable();
+    if (table.game !== 'dice') throw new RoomError('invalid', '这张桌子不是骰子桌；斗地主用 ddz_action');
+    this.applyStep(table, () => table.act(seat.id, action, this.now()));
+  }
+
+  ddzAction(seat: StoredSeat, action: unknown): void {
+    const table = this.requireTable();
+    if (table.game !== 'ddz') throw new RoomError('invalid', '这张桌子不是斗地主桌');
+    this.applyStep(table, () => table.act(seat.id, action, this.now()));
+  }
+
+  tickTable(now = this.now()): void {
+    if (!this.table) return;
+    if (this.table.status !== 'playing' && this.table.status !== 'bidding') return;
+    const table = this.table;
+    let step: TableStep | null;
+    try {
+      step = table.tick(now);
+    } catch (error) {
+      // 超时代打是后台任务：坏一手牌不该把整个房间带下去。
+      console.error('parlor: 牌桌超时代打失败', error);
+      return;
+    }
+    if (step) this.recordStep(step);
+  }
+
+  tablePublic(): TableSummary | undefined {
+    return this.tableSummary();
+  }
+
+  private applyStep(table: TableEngine, run: () => TableStep): void {
     let step: TableStep;
     try {
-      step = table.act(seat.id, action, this.now());
+      step = run();
     } catch (error) {
       throw this.tableError(error);
     }
     this.recordStep(step);
   }
 
-  tickTable(now = this.now()): void {
-    if (!this.table || this.table.status !== 'playing') return;
-    const step = this.table.tick(now);
-    if (step) this.recordStep(step);
-  }
-
-  tablePublic(): TablePublic | undefined {
-    return this.table?.public();
-  }
-
-  private requireTable(): DiceTable {
+  private requireTable(): TableEngine {
     if (!this.table) throw new RoomError('not_found', '现在没有桌子');
     return this.table;
   }
 
   private tableError(error: unknown): RoomError {
     if (error instanceof RoomError) return error;
-    if (error instanceof DiceError) {
+    if (error instanceof TableError) {
       if (error.code === 'not_seated' || error.code === 'not_host' || error.code === 'not_turn') {
         return new RoomError('forbidden', error.message);
       }
@@ -318,18 +350,52 @@ export class RoomKernel {
     return new RoomError('invalid', error instanceof Error ? error.message : String(error));
   }
 
+  private tableSummary(): TableSummary | undefined {
+    const table = this.table;
+    if (!table) return undefined;
+    return {
+      ...(table.public() as Record<string, unknown>),
+      game: table.game,
+      status: table.status,
+      host: table.host,
+      text: table.publicText(),
+    } as TableSummary;
+  }
+
+  private tablePrivate(seatId: string): TablePrivateSummary | null {
+    const table = this.table;
+    if (!table) return null;
+    const text = table.privateText(seatId, this.now());
+    if (!text) return null;
+    return {
+      ...(table.view(seatId) as Record<string, unknown>),
+      game: table.game,
+      seat: seatId,
+      text,
+    } as TablePrivateSummary;
+  }
+
   private recordStep(step: TableStep): void {
     for (const event of step.events) {
-      this.record({ type: event.type, from: 'system', scope: event.scope, text: event.text, data: event.data });
+      this.record({
+        type: event.type,
+        from: 'system',
+        scope: event.scope,
+        text: event.text,
+        data: event.data,
+      });
     }
     for (const seatId of step.views) {
+      // 脚本陪练不是房间席位：它们的视图不进房间日志。
+      if (!this.seatById(seatId)) continue;
       const view = this.table?.view(seatId);
-      if (!view) continue;
+      const text = this.table?.privateText(seatId, this.now());
+      if (!view || !text) continue;
       this.record({
         type: 'parlor.table.turn',
         from: 'system',
         scope: { kind: 'seat', seatId },
-        text: formatPrivate(view, this.now()),
+        text,
         data: { table: view },
       });
     }
@@ -368,8 +434,8 @@ export class RoomKernel {
       maxSeats: this.maxSeats,
       latest: this.seq,
       events: this.history(seatId, since, limit),
-      table: this.table?.public(),
-      tablePrivate: this.table?.view(seatId) ?? null,
+      table: this.tableSummary(),
+      tablePrivate: this.tablePrivate(seatId),
     };
   }
 

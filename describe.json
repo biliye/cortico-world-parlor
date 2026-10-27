@@ -113,23 +113,32 @@
     },
     {
       "name": "parlor_table_open",
-      "description": "Open a two-to-four seat dice table in the parlor. You take the first seat; only one table can be open per room.",
+      "description": "Open a table in the parlor and take the first seat. game \"dice\" = 2–4 players rolling hidden dice; game \"ddz\" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {}
+        "properties": {
+          "game": {
+            "type": "string",
+            "enum": [
+              "dice",
+              "ddz"
+            ],
+            "description": "Which game: dice (default) or ddz (斗地主)."
+          }
+        }
       },
       "tags": [
         "write"
       ],
       "summary": {
-        "zh": "开一张骰子桌，自己先坐下。",
-        "en": "Opens a dice table and takes the first seat."
+        "zh": "开一张桌子（骰子或斗地主），自己先坐下。",
+        "en": "Opens a dice or 斗地主 table and takes the first seat."
       }
     },
     {
       "name": "parlor_table_join",
-      "description": "Sit down at the open dice table.",
+      "description": "Sit down at the open table.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -139,13 +148,13 @@
         "write"
       ],
       "summary": {
-        "zh": "在开着的骰子桌坐下。",
-        "en": "Sits down at the open dice table."
+        "zh": "在开着的桌子坐下。",
+        "en": "Sits down at the open table."
       }
     },
     {
       "name": "parlor_table_start",
-      "description": "Start the dice table you opened. Needs at least two seated players.",
+      "description": "Start the table you opened. Dice needs at least two players; 斗地主 fills empty seats with script players.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -155,8 +164,8 @@
         "write"
       ],
       "summary": {
-        "zh": "开始自己开的骰子桌（至少两人）。",
-        "en": "Starts the dice table you opened."
+        "zh": "开始自己开的桌子；斗地主空位由脚本陪练补。",
+        "en": "Starts the table you opened; 斗地主 fills empty seats with script players."
       }
     },
     {
@@ -191,13 +200,13 @@
         "write"
       ],
       "summary": {
-        "zh": "轮到你时重掷一颗骰子或停牌。",
-        "en": "Rerolls a die or stands on your turn."
+        "zh": "骰子桌轮到你时重掷一颗或停牌。",
+        "en": "Rerolls a die or stands on your dice-table turn."
       }
     },
     {
       "name": "parlor_table_view",
-      "description": "Read the current table and your hidden dice. Does not act and does not wake anyone.",
+      "description": "Read the current table and your own hidden cards. Does not act and does not wake anyone.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -207,8 +216,65 @@
         "read"
       ],
       "summary": {
-        "zh": "看桌面和你的暗骰，不行动。",
-        "en": "Reads the table and your hidden dice."
+        "zh": "看桌面和自己的暗牌，不行动。",
+        "en": "Reads the table and your own hidden cards."
+      }
+    },
+    {
+      "name": "parlor_ddz_action",
+      "description": "On your turn at 斗地主: bid for landlord (move \"bid\" with call true/false), play cards (move \"play\" with cards), or pass. Card names are 3,4,5,6,7,8,9,10,J,Q,K,A,2,SJ (small joker),BJ (big joker); there are no suits. The server judges every move and says why an illegal one was refused.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "move": {
+            "type": "string",
+            "enum": [
+              "bid",
+              "play",
+              "pass"
+            ],
+            "description": "bid = call or decline landlord; play = put down cards; pass = skip."
+          },
+          "call": {
+            "type": "boolean",
+            "description": "When move is bid: true = become landlord, false = decline."
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "J",
+                "Q",
+                "K",
+                "A",
+                "2",
+                "SJ",
+                "BJ"
+              ]
+            },
+            "description": "When move is play: the exact cards from your hand, e.g. [\"3\",\"3\"] or [\"3\",\"4\",\"5\",\"6\",\"7\"]."
+          }
+        },
+        "required": [
+          "move"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "斗地主轮到你时叫地主、出牌或过。",
+        "en": "Bids, plays cards or passes on your 斗地主 turn."
       }
     }
   ],
@@ -247,7 +313,7 @@
       "key": "worlds.parlor.envPrompt",
       "title": "客厅 · 环境提示词",
       "role": "envPrompt",
-      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- 可以开一张骰子桌（2–4 人）：`parlor_table_open` 开、`parlor_table_join` 坐、`parlor_table_start` 开始；\n  轮到你时会收到只给你的暗骰，用 `parlor_table_action` 重掷（`roll`，`die` 0 或 1）或停牌（`stand`）。\n  暗骰只有你自己看得见；超时会自动停牌。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
+      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- 可以开一张桌子：`parlor_table_open {game:\"dice\"}` 是骰子桌（2–4 人，`parlor_table_action` 重掷/停牌）；\n  `parlor_table_open {game:\"ddz\"}` 是斗地主（3 人，空位由脚本陪练补，你一个人也能打）。\n  都是先 `parlor_table_join` 坐下、`parlor_table_start` 开始，轮到你时会收到只给你的手牌。\n- 斗地主轮到你时用 `parlor_ddz_action`：叫地主 `{move:\"bid\", call:true|false}`、出牌\n  `{move:\"play\", cards:[\"3\",\"3\"]}`、或过 `{move:\"pass\"}`。牌只写点数（3–10、J、Q、K、A、2、SJ、BJ），\n  没有花色；牌型、压不压得过、炸弹与计分都由服务器判，被拒时回执会说为什么。超时会按最小合法牌代打。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
     }
   ]
 }

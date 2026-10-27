@@ -16,7 +16,7 @@ import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake,
   type ActionRequest, type RoomEvent, type RoomSnapshot, type Seat, type WakeTier,
 } from './room/protocol.ts';
-import { formatPrivate, formatPublic } from './room/table.ts';
+import { RANKS } from './room/games/doudizhu.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
@@ -104,19 +104,25 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_open',
-    description: 'Open a two-to-four seat dice table in the parlor. You take the first seat; only one table can be open per room.',
+    description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room.',
     tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        game: { type: 'string', enum: ['dice', 'ddz'], description: 'Which game: dice (default) or ddz (斗地主).' },
+      },
+    },
   },
   {
     name: 'parlor_table_join',
-    description: 'Sit down at the open dice table.',
+    description: 'Sit down at the open table.',
     tags: ['write'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
     name: 'parlor_table_start',
-    description: 'Start the dice table you opened. Needs at least two seated players.',
+    description: 'Start the table you opened. Dice needs at least two players; 斗地主 fills empty seats with script players.',
     tags: ['write'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
@@ -136,9 +142,28 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_view',
-    description: 'Read the current table and your hidden dice. Does not act and does not wake anyone.',
+    description: 'Read the current table and your own hidden cards. Does not act and does not wake anyone.',
     tags: ['read'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_ddz_action',
+    description: 'On your turn at 斗地主: bid for landlord (move "bid" with call true/false), play cards (move "play" with cards), or pass. Card names are 3,4,5,6,7,8,9,10,J,Q,K,A,2,SJ (small joker),BJ (big joker); there are no suits. The server judges every move and says why an illegal one was refused.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        move: { type: 'string', enum: ['bid', 'play', 'pass'], description: 'bid = call or decline landlord; play = put down cards; pass = skip.' },
+        call: { type: 'boolean', description: 'When move is bid: true = become landlord, false = decline.' },
+        cards: {
+          type: 'array',
+          items: { type: 'string', enum: [...RANKS] },
+          description: 'When move is play: the exact cards from your hand, e.g. ["3","3"] or ["3","4","5","6","7"].',
+        },
+      },
+      required: ['move'],
+    },
   },
 ];
 
@@ -187,11 +212,12 @@ export class ParlorWorld implements World {
       tool('parlor_say', (args) => this.say(args)),
       tool('parlor_whisper', (args) => this.whisper(args)),
       tool('parlor_set_tier', (args) => this.setTier(args)),
-      tool('parlor_table_open', () => this.tableRequest({ type: 'table_open' }, '骰子桌开了。等人坐下后用 parlor_table_start 开始。')),
+      tool('parlor_table_open', (args) => this.openTable(args)),
       tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
-      tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '骰子桌开始了；轮到你时会被叫醒。')),
+      tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '桌子开始了；轮到你时会被叫醒。')),
       tool('parlor_table_action', (args) => this.tableAct(args)),
       tool('parlor_table_view', () => this.tableView()),
+      tool('parlor_ddz_action', (args) => this.ddzAct(args)),
     ];
   }
 
@@ -485,8 +511,8 @@ export class ParlorWorld implements World {
       ...snapshot.seats.map((seat) => `- ${seat.name}（${KIND_LABELS[seat.kind] ?? seat.kind}·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}${online.has(seat.id) ? '·在线' : ''}）`),
       `最新游标 ${snapshot.latest}`,
     ];
-    if (snapshot.table) lines.push(formatPublic(snapshot.table));
-    if (snapshot.tablePrivate) lines.push(formatPrivate(snapshot.tablePrivate, Date.now()));
+    if (snapshot.table) lines.push(snapshot.table.text);
+    if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
@@ -534,6 +560,40 @@ export class ParlorWorld implements World {
     }
   }
 
+  private async openTable(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (args.game !== undefined && args.game !== 'dice' && args.game !== 'ddz') {
+      return this.failed('game 只能是 dice（骰子）或 ddz（斗地主）');
+    }
+    const game = args.game === 'ddz' ? 'ddz' : 'dice';
+    return this.tableRequest(
+      { type: 'table_open', game },
+      game === 'ddz'
+        ? '斗地主桌开了（3 席，空位由脚本陪练补）。用 parlor_table_start 开始；叫地主时会叫你。'
+        : '骰子桌开了。等人坐下后用 parlor_table_start 开始。',
+    );
+  }
+
+  private async ddzAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    const move = String(args.move ?? '');
+    if (move === 'bid') {
+      const call = args.call === true;
+      return this.tableRequest(
+        { type: 'ddz_action', move: 'bid', call },
+        call ? '叫了地主。' : '不叫。',
+      );
+    }
+    if (move === 'play') {
+      const cards = Array.isArray(args.cards) ? args.cards.map((card) => String(card)) : [];
+      if (cards.length === 0) return this.failed('出牌要给 cards，例如 ["3","3"]');
+      return this.tableRequest(
+        { type: 'ddz_action', move: 'play', cards },
+        `出了 ${cards.join(' ')}。`,
+      );
+    }
+    if (move === 'pass') return this.tableRequest({ type: 'ddz_action', move: 'pass' }, '过了。');
+    return this.failed('move 只能是 bid、play 或 pass');
+  }
+
   private async tableRequest(body: ActionRequest, ok: string): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
@@ -560,8 +620,8 @@ export class ParlorWorld implements World {
     try {
       const snapshot = await this.client.snapshot(this.token, 0, 1);
       if (!snapshot.table) return '现在没有桌子。';
-      const lines = [formatPublic(snapshot.table)];
-      if (snapshot.tablePrivate) lines.push(formatPrivate(snapshot.tablePrivate, Date.now()));
+      const lines = [snapshot.table.text];
+      if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
       else lines.push('你不在桌上。');
       return lines.join('\n');
     } catch (error) {
