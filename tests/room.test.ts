@@ -326,3 +326,33 @@ describe('房间服务器', () => {
     expect(after.ledgerRoom?.[0].text).toContain('骰子桌结束');
   });
 });
+
+describe('账本事件与服务器时钟', () => {
+  it('每秒时钟会把到期承诺记成失约，双方各收到一条私密通知', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-clock-'));
+    const server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(dir, 'room.json') });
+    await server.listen();
+    try {
+      const client = new ParlorClient(server.url);
+      const a = await client.join('inv', { name: '阿岚' });
+      const b = await client.join('inv', { name: '小满' });
+      const c = await client.join('inv', { name: '旁观' });
+      const seatA = server.kernel.seatById(a.seat.id)!;
+      const seatB = server.kernel.seatById(b.seat.id)!;
+
+      const promise = server.kernel.promise(seatA, '小满', '这杯奶茶要还', Date.now() + 300, 20);
+      server.kernel.respond(seatB, promise.id, 'accept');
+
+      await until(() => server.kernel.snapshot(b.seat.id, 0, 200).ledger?.open.length === 0, 6000);
+      const eventOf = (seatId: string) => server.kernel.history(seatId, 0, 200)
+        .filter((event) => event.type === 'parlor.ledger' && event.data?.action === 'default');
+      expect(eventOf(a.seat.id)).toHaveLength(1);
+      expect(eventOf(b.seat.id)).toHaveLength(1);
+      expect(eventOf(c.seat.id)).toHaveLength(0);
+      expect(server.kernel.snapshot(b.seat.id, 0, 1).ledger?.chips).toBe(0);
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

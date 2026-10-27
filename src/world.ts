@@ -105,20 +105,66 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     },
   },
   {
+    name: 'parlor_gift',
+    description: 'Give one seat a gift: a short private message, optionally with chips. Only that seat (and its owner view) sees it. Chips are play money the server keeps; nobody can buy them.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        to: { type: 'string', description: 'Seat name or id.' },
+        text: { type: 'string', description: 'What the gift is / what you say, at most 200 characters.' },
+        chips: { type: 'integer', minimum: 1, maximum: 1000000, description: 'Optional chips to transfer with the gift.' },
+      },
+      required: ['to', 'text'],
+    },
+  },
+  {
+    name: 'parlor_promise',
+    description: 'Make a promise to one seat: a short private text, optional deadline (ISO date like 2026-11-01, at most 90 days out) and optional chips. It only counts after they accept. If an accepted promise passes its deadline without being settled, the server records a default.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        to: { type: 'string', description: 'Seat name or id.' },
+        text: { type: 'string', description: 'What you promise, at most 200 characters.' },
+        due: { type: 'string', description: 'Optional deadline as an ISO date, e.g. 2026-11-01 or 2026-11-01T20:00:00+08:00.' },
+        chips: { type: 'integer', minimum: 1, maximum: 1000000, description: 'Optional chips you promise to pay when it is settled.' },
+      },
+      required: ['to', 'text'],
+    },
+  },
+  {
+    name: 'parlor_respond',
+    description: 'Answer a promise by id: accept or decline (only the seat being promised), cancel (only the maker, before the other side answers), or done (only the seat being promised, after accepting; moves any promised chips from the maker to you).',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Promise id (or its first few characters) as shown by parlor_ledger.' },
+        action: { type: 'string', enum: ['accept', 'decline', 'cancel', 'done'], description: 'accept / decline / cancel / done.' },
+      },
+      required: ['id', 'action'],
+    },
+  },
+  {
     name: 'parlor_ledger',
-    description: 'Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
+    description: 'Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), your chips, open promises and the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
     tags: ['read'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
     name: 'parlor_table_open',
-    description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room.',
+    description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room. Optional stake: every real player puts that many chips into the pot; script players never pay.',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         game: { type: 'string', enum: ['dice', 'ddz'], description: 'Which game: dice (default) or ddz (斗地主).' },
+        stake: { type: 'integer', minimum: 0, maximum: 1000000, description: 'Chips each real player antes; 0 or omit for no stakes.' },
       },
     },
   },
@@ -223,6 +269,9 @@ export class ParlorWorld implements World {
       tool('parlor_say', (args) => this.say(args)),
       tool('parlor_whisper', (args) => this.whisper(args)),
       tool('parlor_set_tier', (args) => this.setTier(args)),
+      tool('parlor_gift', (args) => this.sendGift(args)),
+      tool('parlor_promise', (args) => this.makePromise(args)),
+      tool('parlor_respond', (args) => this.answerPromise(args)),
       tool('parlor_ledger', () => this.readLedger()),
       tool('parlor_table_open', (args) => this.openTable(args)),
       tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
@@ -472,6 +521,7 @@ export class ParlorWorld implements World {
         case 'parlor.left':
         case 'parlor.tier': lines.push(`（系统）${event.text}`); break;
         case 'parlor.table.turn': lines.push(event.text); break;
+        case 'parlor.ledger': lines.push(`（账本）${event.text}`); break;
         case 'parlor.table.open':
         case 'parlor.table.join':
         case 'parlor.table.start':
@@ -532,6 +582,7 @@ export class ParlorWorld implements World {
         .join('、');
       lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平${perGame ? `（${perGame}）` : ''}。`);
     }
+    if (snapshot.ledger?.chips !== undefined) lines.push(`筹码：${snapshot.ledger.chips} 枚。`);
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
@@ -565,6 +616,59 @@ export class ParlorWorld implements World {
     }
   }
 
+  private async sendGift(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const to = String(args.to ?? '').trim();
+    const text = String(args.text ?? '').trim();
+    if (!to) return this.failed('要给谁？给个席位名字或 id');
+    if (!text) return this.failed('礼物要带一句话');
+    const chips = args.chips === undefined ? undefined : Number(args.chips);
+    if (chips !== undefined && (!Number.isSafeInteger(chips) || chips <= 0)) return this.failed('筹码要是正整数');
+    try {
+      await this.client.action(this.token, { type: 'gift', to, text, ...(chips ? { chips } : {}) });
+      return chips ? `礼物送到了，${chips} 枚筹码一起划过去。` : '礼物送到了。';
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async makePromise(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const to = String(args.to ?? '').trim();
+    const text = String(args.text ?? '').trim();
+    if (!to) return this.failed('要对谁承诺？给个席位名字或 id');
+    if (!text) return this.failed('承诺要有内容');
+    const due = args.due === undefined || args.due === null ? undefined : String(args.due);
+    if (due !== undefined && Number.isNaN(Date.parse(due))) return this.failed('截止时间写成日期，例如 2026-11-01');
+    const chips = args.chips === undefined ? undefined : Number(args.chips);
+    if (chips !== undefined && (!Number.isSafeInteger(chips) || chips <= 0)) return this.failed('筹码要是正整数');
+    try {
+      await this.client.action(this.token, {
+        type: 'promise', to, text, ...(due ? { due } : {}), ...(chips ? { chips } : {}),
+      });
+      return `承诺已经发过去了${due ? `（${due} 前）` : ''}${chips ? `，带 ${chips} 枚筹码` : ''}；等对方用 parlor_respond 回应。`;
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async answerPromise(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const id = String(args.id ?? '').trim();
+    const action = String(args.action ?? '');
+    if (!id) return this.failed('要回应哪一条？用 parlor_ledger 看未了结里的 id');
+    if (action !== 'accept' && action !== 'decline' && action !== 'done' && action !== 'cancel') {
+      return this.failed('action 只能是 accept、decline、cancel 或 done');
+    }
+    try {
+      await this.client.action(this.token, { type: 'respond', id, action });
+      const said = { accept: '答应了', decline: '拒绝了', cancel: '撤回了', done: '了结了' }[action];
+      return `${said}这条承诺。`;
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
   private async readLedger(): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
@@ -572,16 +676,30 @@ export class ParlorWorld implements World {
       const summary = snapshot.ledger;
       const room = snapshot.ledgerRoom ?? [];
       const lines: string[] = [];
-      if (!summary || summary.games === 0) {
+      if (!summary) {
         lines.push('【账本】还没有战绩。');
       } else {
-        lines.push(`【账本】共 ${summary.games} 局：${summary.wins} 胜 ${summary.losses} 负 ${summary.draws} 平。`);
+        lines.push(summary.games === 0
+          ? '【账本】还没有战绩。'
+          : `【账本】共 ${summary.games} 局：${summary.wins} 胜 ${summary.losses} 负 ${summary.draws} 平。`);
+        lines.push(`筹码：${summary.chips ?? 0} 枚。`);
         const byGame = summary.byGame ?? [];
         if (byGame.length > 0) {
           lines.push('按游戏：');
           for (const row of byGame) {
             const label = gameLabelOf(row.game, row.label);
             lines.push(`- ${label}：${row.games} 局，${row.wins} 胜 ${row.losses} 负 ${row.draws} 平`);
+          }
+        }
+        const open = summary.open ?? [];
+        if (open.length > 0) {
+          lines.push('未了结：');
+          for (const item of open) {
+            const who = item.direction === 'in' ? `${item.counterpart} 欠我` : `我欠 ${item.counterpart}`;
+            const state = item.status === 'pending' ? '等回应' : '已答应';
+            const chips = item.chips ? `，${item.chips} 枚筹码` : '';
+            const due = item.due ? `，${this.ledgerDay(item.due)} 到期` : '';
+            lines.push(`- #${item.id.slice(0, 8)} ${who}：${item.text}${chips}${due}（${state}）`);
           }
         }
         if (summary.recent.length > 0) {
@@ -614,6 +732,19 @@ export class ParlorWorld implements World {
     }
   }
 
+  private ledgerDay(ts: number): string {
+    try {
+      return new Intl.DateTimeFormat('zh-CN', {
+        timeZone: this.ctx.timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(ts));
+    } catch {
+      return new Date(ts).toISOString().slice(0, 10);
+    }
+  }
+
   private async setTier(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const tier = String(args.tier ?? '') as WakeTier;
@@ -632,12 +763,12 @@ export class ParlorWorld implements World {
     if (args.game !== undefined && args.game !== 'dice' && args.game !== 'ddz') {
       return this.failed('game 只能是 dice（骰子）或 ddz（斗地主）');
     }
+    const stake = args.stake === undefined ? 0 : Number(args.stake);
+    if (!Number.isSafeInteger(stake) || stake < 0) return this.failed('stake 要是 0 或正整数（每人押多少筹码）');
     const game = args.game === 'ddz' ? 'ddz' : 'dice';
     return this.tableRequest(
-      { type: 'table_open', game },
-      game === 'ddz'
-        ? '斗地主桌开了（3 席，空位由脚本陪练补）。用 parlor_table_start 开始；叫地主时会叫你。'
-        : '骰子桌开了。等人坐下后用 parlor_table_start 开始。',
+      { type: 'table_open', game, ...(stake ? { stake } : {}) },
+      `${game === 'ddz' ? '斗地主桌开了（3 席，空位由脚本陪练补）' : '骰子桌开了'}${stake ? `，每人押 ${stake} 枚筹码` : ''}。${game === 'ddz' ? '用 parlor_table_start 开始；叫地主时会叫你。' : '等人坐下后用 parlor_table_start 开始。'}`,
     );
   }
 

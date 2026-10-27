@@ -57,7 +57,10 @@ export type ActionRequest =
   | { type: 'say'; text: string }
   | { type: 'whisper'; to: string; text: string }
   | { type: 'set_tier'; tier: WakeTier }
-  | { type: 'table_open'; game?: TableGame }
+  | { type: 'gift'; to: string; text: string; chips?: number }
+  | { type: 'promise'; to: string; text: string; due?: number | string; chips?: number }
+  | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
+  | { type: 'table_open'; game?: TableGame; stake?: number }
   | { type: 'table_join' }
   | { type: 'table_start' }
   | { type: 'table_action'; action: 'roll' | 'stand'; die?: number }

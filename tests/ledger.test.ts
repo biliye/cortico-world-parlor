@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LedgerStore, isCooId, type LedgerEntry } from '../src/room/ledger.ts';
+import {
+  LedgerStore, isCooId, REFILL_GAP_MS, REFILL_TO, START_CHIPS, type LedgerEntry,
+} from '../src/room/ledger.ts';
 
 const A = 'coo-aaaaaaaa';
 const B = 'coo-bbbbbbbb';
@@ -151,5 +153,135 @@ describe('账本', () => {
     expect(store.summaryFor(A).games).toBe(2);
     expect(isCooId(A)).toBe(true);
     expect(isCooId('legacy:lobby:s1')).toBe(false);
+  });
+});
+
+describe('账本：承诺状态与筹码', () => {
+  const promise = (
+    store: LedgerStore,
+    options: { from?: string; to?: string; due?: number; chips?: number } = {},
+  ): LedgerEntry => store.record({
+    kind: 'promise',
+    room: 'lobby',
+    from: options.from ?? A,
+    to: options.to ?? B,
+    text: '一杯奶茶',
+    visibility: 'private',
+    ...(options.due ? { due: options.due } : {}),
+    data: { fromName: '阿岚', toName: '小满', ...(options.chips ? { chips: options.chips } : {}) },
+  });
+
+  it('状态由转移条目现算：pending → accepted → settled；拒绝与撤回各有状态', () => {
+    const store = new LedgerStore({ now: () => 1000 });
+    const first = promise(store);
+    expect(store.promiseStatus(first)).toBe('pending');
+    store.record({ kind: 'accept', ref: first.id, room: 'lobby', from: B, to: A, text: '', visibility: 'private' });
+    expect(store.promiseStatus(first)).toBe('accepted');
+    store.record({
+      kind: 'settle', ref: first.id, room: 'lobby', from: B, to: A, text: '', visibility: 'private',
+      transfers: [{ from: A, to: B, amount: 50 }],
+    });
+    expect(store.promiseStatus(first)).toBe('settled');
+    expect(store.balanceOf(A)).toBe(-50);
+    expect(store.balanceOf(B)).toBe(50);
+
+    const second = promise(store);
+    store.record({ kind: 'decline', ref: second.id, room: 'lobby', from: B, to: A, text: '', visibility: 'private' });
+    expect(store.promiseStatus(second)).toBe('declined');
+
+    const third = promise(store);
+    store.record({ kind: 'cancel', ref: third.id, room: 'lobby', from: A, to: B, text: '', visibility: 'private' });
+    expect(store.promiseStatus(third)).toBe('cancelled');
+  });
+
+  it('未了结列表分「别人欠我 / 我欠别人」，带显示名与到期', () => {
+    const store = new LedgerStore({ now: () => 1000 });
+    const out = promise(store, { chips: 30, due: 5000 });
+    const income = promise(store, { from: B, to: A });
+
+    const mine = store.openFor(A);
+    expect(mine).toHaveLength(2);
+    expect(mine.find((item) => item.id === out.id)).toMatchObject({
+      direction: 'out', counterpart: '小满', status: 'pending', chips: 30, due: 5000,
+    });
+    expect(mine.find((item) => item.id === income.id)).toMatchObject({
+      direction: 'in', counterpart: '阿岚', status: 'pending',
+    });
+    expect(store.countOpenPromises(A)).toBe(2);
+    expect(store.countOpenPromises(C)).toBe(0);
+  });
+
+  it('到期扫描只动已答应且过了期限的；重复调用不重复记', () => {
+    const store = new LedgerStore({ now: () => 1000 });
+    const accepted = promise(store, { due: 2000 });
+    store.record({ kind: 'accept', ref: accepted.id, room: 'lobby', from: B, to: A, text: '', visibility: 'private' });
+    const pending = promise(store, { due: 2000 });
+    const future = promise(store, { due: 999_999 });
+    store.record({ kind: 'accept', ref: future.id, room: 'lobby', from: B, to: A, text: '', visibility: 'private' });
+
+    const created = store.expire(3000);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ kind: 'default', ref: accepted.id, from: 'room', to: B });
+    expect(store.promiseStatus(accepted)).toBe('defaulted');
+    expect(store.promiseStatus(pending)).toBe('pending');
+    expect(store.promiseStatus(future)).toBe('accepted');
+    expect(store.expire(3000)).toHaveLength(0);
+  });
+
+  it('按完整 id 或唯一前缀都找得到', () => {
+    const store = new LedgerStore({ now: () => 1000 });
+    const entry = promise(store);
+    expect(store.find(entry.id)?.id).toBe(entry.id);
+    expect(store.find(entry.id.slice(0, 8))?.id).toBe(entry.id);
+    expect(store.find('zzzz')).toBeUndefined();
+  });
+
+  it('新身份第一次发 1000，重复调用不重复发；见底补到 300 且隔一段', () => {
+    let now = 1000;
+    const store = new LedgerStore({ now: () => now });
+    store.ensureGrant(A, 'lobby');
+    expect(store.balanceOf(A)).toBe(START_CHIPS);
+    expect(store.ensureGrant(A, 'lobby')).toBeNull();
+    expect(store.balanceOf(A)).toBe(START_CHIPS);
+
+    store.record({
+      kind: 'gift', room: 'lobby', from: A, to: B, text: '全给你', visibility: 'private',
+      transfers: [{ from: A, to: B, amount: START_CHIPS }],
+    });
+    expect(store.balanceOf(A)).toBe(0);
+    expect(store.maybeRefill(A, 'lobby')).not.toBeNull();
+    expect(store.balanceOf(A)).toBe(REFILL_TO);
+    expect(store.maybeRefill(A, 'lobby')).toBeNull();
+
+    now += REFILL_GAP_MS + 1;
+    store.record({
+      kind: 'gift', room: 'lobby', from: A, to: B, text: '又花光了', visibility: 'private',
+      transfers: [{ from: A, to: B, amount: REFILL_TO }],
+    });
+    expect(store.maybeRefill(A, 'lobby')).not.toBeNull();
+  });
+
+  it('落盘后重启：筹码、未了结、转移明细都还在', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-ledger-v2-'));
+    try {
+      const file = join(dir, 'ledger.json');
+      const first = LedgerStore.load({ file, now: () => 1000 });
+      first.ensureGrant(A, 'lobby');
+      const created = promise(first, { chips: 40, due: 9000 });
+      first.record({
+        kind: 'gift', room: 'lobby', from: A, to: B, text: '先给你 20', visibility: 'private',
+        transfers: [{ from: A, to: B, amount: 20 }],
+      });
+
+      const second = LedgerStore.load({ file, now: () => 2000 });
+      expect(second.balanceOf(A)).toBe(START_CHIPS - 20);
+      expect(second.balanceOf(B)).toBe(20);
+      expect(second.openFor(A)).toHaveLength(1);
+      expect(second.openFor(A)[0]).toMatchObject({ id: created.id, chips: 40, due: 9000 });
+      expect(second.promiseStatus(second.find(created.id)!)).toBe('pending');
+      expect(second.summaryFor(A).chips).toBe(START_CHIPS - 20);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

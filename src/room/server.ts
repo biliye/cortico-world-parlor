@@ -127,7 +127,11 @@ export class ParlorServer {
     this.heartbeat = setInterval(() => this.ping(), 15_000);
     this.heartbeat.unref?.();
     this.tableClock = setInterval(() => {
-      try { this.kernel.tickTable(Date.now()); } catch { /* 一局坏掉不影响房间 */ }
+      try {
+        this.kernel.tickTable(Date.now());
+        this.kernel.expireLedger(Date.now());
+        this.kernel.refillLedger(Date.now());
+      } catch { /* 一局坏掉不影响房间 */ }
     }, 1000);
     this.tableClock.unref?.();
     this.kernel.onEvent((event) => {
@@ -293,13 +297,17 @@ export class ParlorServer {
     return auth;
   }
 
-  /** 老席位第一次带 cooId 来时把它绑上；已经是真身份就不动。 */
+  /** 老席位第一次带 cooId 来时把它绑上；已经是真身份的就只补发筹码。 */
   private bindIdentity(req: IncomingMessage, seat: StoredSeat): void {
-    if (seat.cooId && !seat.cooId.startsWith('legacy:')) return;
     const identity = identityOf(req);
     if (!identity) return;
     const claim = this.ledger.claimIdentity(identity.cooId, identity.cooSecret);
     if (claim !== 'ok') return;
+    if (seat.cooId && !seat.cooId.startsWith('legacy:')) {
+      // 老座位在 0.6.0 之前就绑过身份：补上第一次进房的筹码。
+      this.ledger.ensureGrant(identity.cooId, this.kernel.id);
+      return;
+    }
     if (this.kernel.bindCooId(seat, identity.cooId)) this.schedulePersist();
   }
 
@@ -308,7 +316,10 @@ export class ParlorServer {
       case 'say': this.kernel.say(seat, body.text); break;
       case 'whisper': this.kernel.whisper(seat, body.to, body.text); break;
       case 'set_tier': this.kernel.setTier(seat, body.tier); break;
-      case 'table_open': this.kernel.openTable(seat, body.game); break;
+      case 'gift': this.kernel.gift(seat, body.to, body.text, body.chips); break;
+      case 'promise': this.kernel.promise(seat, body.to, body.text, body.due, body.chips); break;
+      case 'respond': this.kernel.respond(seat, body.id, body.action); break;
+      case 'table_open': this.kernel.openTable(seat, body.game, body.stake); break;
       case 'table_join': this.kernel.joinTable(seat); break;
       case 'table_start': this.kernel.startTable(seat); break;
       case 'table_action': this.kernel.tableAction(seat, { type: body.action, die: body.die }); break;
@@ -485,7 +496,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     latest = event.seq;
     log.append(line(event));
     while (log.children.length > 300) log.firstElementChild.remove();
-    if (event.type === 'parlor.table.end') refreshLedger();
+    if (event.type === 'parlor.table.end' || event.type === 'parlor.ledger') refreshLedger();
     window.scrollTo(0, document.body.scrollHeight);
   };
   const ledgerRow = (text, className) => {
@@ -495,16 +506,32 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const gameName = (row) => (
     row.label && row.label !== row.game ? row.label : (GAME_LABELS[row.game] || row.label || row.game)
   );
+  const dueDay = (ts) => new Date(ts).toISOString().slice(0, 10);
   const renderLedger = (snapshot) => {
     ledger.textContent = '';
     const me = snapshot.ledger;
-    if (!me || me.games === 0) ledger.append(ledgerRow('还没有战绩。', 'tier'));
+    if (!me) ledger.append(ledgerRow('还没有账本。', 'tier'));
     else {
-      ledger.append(ledgerRow('共 ' + me.games + ' 局：' + me.wins + ' 胜 ' + me.losses + ' 负 ' + me.draws + ' 平'));
-      for (const row of (me.byGame || [])) {
-        ledger.append(ledgerRow(gameName(row) + '：' + row.games + ' 局，' + row.wins + ' 胜 ' + row.losses + ' 负 ' + row.draws + ' 平'));
+      if (me.chips !== undefined) ledger.append(ledgerRow('筹码：' + me.chips + ' 枚'));
+      if (me.games === 0) ledger.append(ledgerRow('还没有战绩。', 'tier'));
+      else {
+        ledger.append(ledgerRow('共 ' + me.games + ' 局：' + me.wins + ' 胜 ' + me.losses + ' 负 ' + me.draws + ' 平'));
+        for (const row of (me.byGame || [])) {
+          ledger.append(ledgerRow(gameName(row) + '：' + row.games + ' 局，' + row.wins + ' 胜 ' + row.losses + ' 负 ' + row.draws + ' 平'));
+        }
+        for (const entry of (me.recent || []).slice(0, 3)) ledger.append(ledgerRow(entry.text));
       }
-      for (const entry of (me.recent || []).slice(0, 3)) ledger.append(ledgerRow(entry.text));
+      const open = me.open || [];
+      if (open.length) {
+        ledger.append(ledgerRow('未了结：', 'tier'));
+        for (const item of open) {
+          const who = item.direction === 'in' ? '对方欠我' : '我欠对方';
+          const state = item.status === 'pending' ? '（等回应）' : '（已答应）';
+          const chips = item.chips ? '，' + item.chips + ' 枚' : '';
+          const due = item.due ? '，' + dueDay(item.due) + ' 到期' : '';
+          ledger.append(ledgerRow('#' + item.id.slice(0, 8) + ' ' + who + ' ' + item.counterpart + '：' + item.text + chips + due + state));
+        }
+      }
     }
     const room = snapshot.ledgerRoom || [];
     if (room.length) {

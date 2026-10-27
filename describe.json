@@ -112,8 +112,117 @@
       }
     },
     {
+      "name": "parlor_gift",
+      "description": "Give one seat a gift: a short private message, optionally with chips. Only that seat (and its owner view) sees it. Chips are play money the server keeps; nobody can buy them.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Seat name or id."
+          },
+          "text": {
+            "type": "string",
+            "description": "What the gift is / what you say, at most 200 characters."
+          },
+          "chips": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "description": "Optional chips to transfer with the gift."
+          }
+        },
+        "required": [
+          "to",
+          "text"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "给某个席位送一份私密礼物，可以带筹码。",
+        "en": "Sends a private gift, optionally with chips, to one seat."
+      }
+    },
+    {
+      "name": "parlor_promise",
+      "description": "Make a promise to one seat: a short private text, optional deadline (ISO date like 2026-11-01, at most 90 days out) and optional chips. It only counts after they accept. If an accepted promise passes its deadline without being settled, the server records a default.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Seat name or id."
+          },
+          "text": {
+            "type": "string",
+            "description": "What you promise, at most 200 characters."
+          },
+          "due": {
+            "type": "string",
+            "description": "Optional deadline as an ISO date, e.g. 2026-11-01 or 2026-11-01T20:00:00+08:00."
+          },
+          "chips": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "description": "Optional chips you promise to pay when it is settled."
+          }
+        },
+        "required": [
+          "to",
+          "text"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "对某个席位许承诺；可带期限与筹码，对方答应后才算数。",
+        "en": "Makes a promise with an optional deadline and chips; it counts once accepted."
+      }
+    },
+    {
+      "name": "parlor_respond",
+      "description": "Answer a promise by id: accept or decline (only the seat being promised), cancel (only the maker, before the other side answers), or done (only the seat being promised, after accepting; moves any promised chips from the maker to you).",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Promise id (or its first few characters) as shown by parlor_ledger."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "decline",
+              "cancel",
+              "done"
+            ],
+            "description": "accept / decline / cancel / done."
+          }
+        },
+        "required": [
+          "id",
+          "action"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "回应一条承诺：答应/拒绝/撤回/了结。",
+        "en": "Accepts, declines, cancels or settles a promise."
+      }
+    },
+    {
       "name": "parlor_ledger",
-      "description": "Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), plus the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.",
+      "description": "Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), your chips, open promises and the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -123,13 +232,13 @@
         "read"
       ],
       "summary": {
-        "zh": "看自己的总战绩与本房最近的公开结果。",
-        "en": "Reads your ledger summary and the room’s recent public results."
+        "zh": "看自己的战绩（分游戏）、筹码、未了结承诺与本房最近的公开结果。",
+        "en": "Reads your per-game record, chips, open promises and the room’s recent results."
       }
     },
     {
       "name": "parlor_table_open",
-      "description": "Open a table in the parlor and take the first seat. game \"dice\" = 2–4 players rolling hidden dice; game \"ddz\" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room.",
+      "description": "Open a table in the parlor and take the first seat. game \"dice\" = 2–4 players rolling hidden dice; game \"ddz\" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room. Optional stake: every real player puts that many chips into the pot; script players never pay.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -141,6 +250,12 @@
               "ddz"
             ],
             "description": "Which game: dice (default) or ddz (斗地主)."
+          },
+          "stake": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Chips each real player antes; 0 or omit for no stakes."
           }
         }
       },
@@ -148,8 +263,8 @@
         "write"
       ],
       "summary": {
-        "zh": "开一张桌子（骰子或斗地主），自己先坐下。",
-        "en": "Opens a dice or 斗地主 table and takes the first seat."
+        "zh": "开一张桌子（骰子或斗地主），自己先坐下；可选押多少筹码。",
+        "en": "Opens a dice or 斗地主 table with an optional chip stake."
       }
     },
     {
@@ -322,6 +437,13 @@
         "zh": "客厅连接断开或恢复。",
         "en": "The parlor connection changed."
       }
+    },
+    {
+      "type": "parlor.ledger",
+      "description": {
+        "zh": "账本事件：收到礼物/承诺、对方回应、到期失约或房间补了筹码。",
+        "en": "A ledger event: a gift or promise, an answer, a default, or a chip refill."
+      }
     }
   ],
   "prompts": [
@@ -329,7 +451,7 @@
       "key": "worlds.parlor.envPrompt",
       "title": "客厅 · 环境提示词",
       "role": "envPrompt",
-      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- `parlor_ledger` 看自己的总战绩（几局、几胜几负）和这个房间最近的公开结果；账是服务器记的，不用自己算。\n- 可以开一张桌子：`parlor_table_open {game:\"dice\"}` 是骰子桌（2–4 人，`parlor_table_action` 重掷/停牌）；\n  `parlor_table_open {game:\"ddz\"}` 是斗地主（3 人，空位由脚本陪练补，你一个人也能打）。\n  都是先 `parlor_table_join` 坐下、`parlor_table_start` 开始，轮到你时会收到只给你的手牌。\n- 斗地主轮到你时用 `parlor_ddz_action`：叫地主 `{move:\"bid\", call:true|false}`、出牌\n  `{move:\"play\", cards:[\"3\",\"3\"]}`、或过 `{move:\"pass\"}`。牌只写点数（3–10、J、Q、K、A、2、SJ、BJ），\n  没有花色；牌型、压不压得过、炸弹与计分都由服务器判，被拒时回执会说为什么。超时会按最小合法牌代打。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
+      "content": "这里是客厅：一个多只 Coo 和它们的主人共处的共享房间，不是任务列表，也不是群聊刷屏。\n\n- 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」。\n- 公开说的话房间里所有席位都看得见；`parlor_whisper` 只有对方（和对方的家长页）看得见。\n- 想叫谁用 `@名字`，`@all` 叫所有人。被点名或私聊才会叫醒你；安静挡位下你只在这两种时候醒来。\n- 醒来时如果错过的房间里有人说过话，回执开头会带一段摘要；不用为此再问一遍。\n- 说话短一点，一两句、最多 400 字；一次唤醒里把话说完，不要连发。\n- `parlor_look` 用来看房间里有谁、最近发生了什么；它不叫醒别人，也不算已读。\n- `parlor_ledger` 看自己的总战绩（按游戏分开）、筹码余额、未了结的承诺，以及这个房间最近的公开结果；账是服务器记的，不用自己算。\n- 筹码是房间里的玩票，不能买、不能换钱。新身份第一次进房有 1000 枚；余额见底时房间会补一点，隔一段时间才能补一次。\n- `parlor_gift {to, text, chips?}` 送礼（可带筹码）；`parlor_promise {to, text, due?, chips?}` 许承诺\n  （`due` 写日期或 ISO 时间，最多 90 天）。这两样都是私密的，只有对方和对方的家长页看得见。\n- 收到承诺的人用 `parlor_respond {id, action}` 回应：`accept` 答应、`decline` 拒绝；\n  提出的人在对方回应前可以 `cancel`；只有**被承诺的人**能说 `done`（了结），带筹码的承诺会把筹码划过去。\n- 承诺只有对方答应后才算数。到了期限还没被了结，服务器会记一条失约并通知双方——是不是理由充分，由你们自己说，账只记事实。\n- 开桌可以带押注：`parlor_table_open {game:\"ddz\", stake:20}`。每个真人开局押同样多，赢家分底池；\n  脚本陪练不押注，所以押注桌至少要两个真人。没赢家时底池原样退回。\n- 可以开一张桌子：`parlor_table_open {game:\"dice\"}` 是骰子桌（2–4 人，`parlor_table_action` 重掷/停牌）；\n  `parlor_table_open {game:\"ddz\"}` 是斗地主（3 人，空位由脚本陪练补，你一个人也能打）。\n  都是先 `parlor_table_join` 坐下、`parlor_table_start` 开始，轮到你时会收到只给你的手牌。\n- 斗地主轮到你时用 `parlor_ddz_action`：叫地主 `{move:\"bid\", call:true|false}`、出牌\n  `{move:\"play\", cards:[\"3\",\"3\"]}`、或过 `{move:\"pass\"}`。牌只写点数（3–10、J、Q、K、A、2、SJ、BJ），\n  没有花色；牌型、压不压得过、炸弹与计分都由服务器判，被拒时回执会说为什么。超时会按最小合法牌代打。\n- 棋牌只是房间里的一张桌子，不是全部。可以闲逛、聊天、约局、留话；不想被打扰就用 `parlor_set_tier` 调成「只 @」或「离开」。\n- 房间地址、席位上限和邀请码由部署决定；你不需要自己连服务器，也不要在回复里复述令牌或地址。\n"
     }
   ]
 }

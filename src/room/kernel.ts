@@ -10,7 +10,10 @@ import {
 } from './protocol.ts';
 import { DiceTable } from './table.ts';
 import { DoudizhuTable } from './games/doudizhu-table.ts';
-import { isCooId, LedgerStore } from './ledger.ts';
+import {
+  isCooId, LedgerStore, MAX_CHIPS, MAX_DUE_MS, MAX_OPEN_PROMISES, MAX_SOCIAL_PER_HOUR, MAX_SOCIAL_TEXT,
+  type LedgerEntry,
+} from './ledger.ts';
 import {
   TableError,
   type TableEngine, type TableEvent, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
@@ -80,6 +83,44 @@ const cleanText = (value: unknown): string => {
   return text;
 };
 
+/** 礼物与承诺的字数上限比闲聊短，且要单独校验。 */
+const cleanSocial = (value: unknown): string => {
+  if (typeof value !== 'string') throw new RoomError('invalid', '内容必须是文字');
+  const text = value.trim();
+  if (!text) throw new RoomError('invalid', '内容不能为空');
+  if (text.length > MAX_SOCIAL_TEXT) throw new RoomError('invalid', `礼物或承诺最多 ${MAX_SOCIAL_TEXT} 个字`);
+  return text;
+};
+
+const chipsOf = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const amount = Number(value);
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > MAX_CHIPS) {
+    throw new RoomError('invalid', `筹码要是 1 到 ${MAX_CHIPS} 之间的整数`);
+  }
+  return amount;
+};
+
+const stakeOf = (value: unknown): number => {
+  if (value === undefined || value === null || value === '') return 0;
+  const amount = Number(value);
+  if (!Number.isSafeInteger(amount) || amount < 0 || amount > MAX_CHIPS) {
+    throw new RoomError('invalid', `押注要是 0 到 ${MAX_CHIPS} 之间的整数`);
+  }
+  return amount;
+};
+
+const dueOf = (value: unknown, now: number): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const ms = typeof value === 'number' ? value : Date.parse(String(value));
+  if (!Number.isFinite(ms)) throw new RoomError('invalid', '截止时间要写日期，例如 2026-11-01');
+  if (ms <= now) throw new RoomError('invalid', '截止时间要在将来');
+  if (ms - now > MAX_DUE_MS) throw new RoomError('invalid', '截止时间最多 90 天');
+  return ms;
+};
+
+const dueLabel = (due: number): string => new Date(due).toISOString().slice(0, 10);
+
 const publicSeat = (seat: StoredSeat): Seat => ({
   id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier, joinedAt: seat.joinedAt,
 });
@@ -100,6 +141,8 @@ export class RoomKernel {
   private seq = 0;
   private seatSeq = 0;
   private table?: TableEngine;
+  /** 当前桌子的押注（每人开局押多少筹码）；0 = 不押。 */
+  private tableStake = 0;
   private readonly listeners = new Set<(event: RoomEvent) => void>();
   private readonly lastSay = new Map<string, number>();
 
@@ -182,6 +225,8 @@ export class RoomKernel {
       ...(cooId && isCooId(cooId) ? { cooId } : {}),
     };
     this.seats.push(seat);
+    // 只有带真身份的席位才发筹码；老式（legacy）席位等绑定后再发，免得换身份时领两次。
+    if (seat.cooId) this.ledger.ensureGrant(seat.cooId, this.id);
     this.record({
       type: 'parlor.joined',
       from: 'system',
@@ -227,6 +272,7 @@ export class RoomKernel {
     if (seat.cooId && !seat.cooId.startsWith('legacy:')) return false;
     if (!isCooId(cooId)) return false;
     seat.cooId = cooId;
+    this.ledger.ensureGrant(cooId, this.id);
     return true;
   }
 
@@ -274,9 +320,231 @@ export class RoomKernel {
     return publicSeat(seat);
   }
 
-  openTable(seat: StoredSeat, game: TableGame = 'dice'): void {
+  /** 送礼：纯文本，可选带筹码。礼物是私密条目，只有收礼的人（和家长页）看得见。 */
+  gift(seat: StoredSeat, to: string, text: string, chips?: number): LedgerEntry {
+    const body = cleanSocial(text);
+    const target = this.requireTarget(seat, to);
+    const amount = chipsOf(chips);
+    const fromCoo = this.cooIdOf(seat);
+    const toCoo = this.cooIdOf(target);
+    this.checkSocialBudget(fromCoo);
+    if (amount !== undefined && this.ledger.balanceOf(fromCoo) < amount) {
+      throw new RoomError('invalid', `你只有 ${this.ledger.balanceOf(fromCoo)} 枚筹码`);
+    }
+    const entry = this.ledger.record({
+      kind: 'gift',
+      room: this.id,
+      from: fromCoo,
+      to: toCoo,
+      text: body,
+      visibility: 'private',
+      data: { fromName: seat.name, toName: target.name, ...(amount ? { chips: amount } : {}) },
+      ...(amount ? { transfers: [{ from: fromCoo, to: toCoo, amount }] } : {}),
+    });
+    this.notifyLedger([target.id], `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
+      entryId: entry.id, kind: 'gift', action: 'gift', from: seat.name,
+    });
+    return entry;
+  }
+
+  /** 承诺：可以带截止时间与筹码；要对方回应才算数。 */
+  promise(seat: StoredSeat, to: string, text: string, due?: number | string, chips?: number): LedgerEntry {
+    const body = cleanSocial(text);
+    const target = this.requireTarget(seat, to);
+    const amount = chipsOf(chips);
+    const dueAt = dueOf(due, this.now());
+    const fromCoo = this.cooIdOf(seat);
+    this.checkSocialBudget(fromCoo);
+    if (this.ledger.countOpenPromises(fromCoo) >= MAX_OPEN_PROMISES) {
+      throw new RoomError('invalid', `你已经有 ${MAX_OPEN_PROMISES} 条没了结的承诺，先了结几条`);
+    }
+    const entry = this.ledger.record({
+      kind: 'promise',
+      room: this.id,
+      from: fromCoo,
+      to: this.cooIdOf(target),
+      text: body,
+      visibility: 'private',
+      ...(dueAt !== undefined ? { due: dueAt } : {}),
+      data: {
+        fromName: seat.name,
+        toName: target.name,
+        ...(amount ? { chips: amount } : {}),
+      },
+    });
+    this.notifyLedger([target.id], `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}${amount ? `，${amount} 枚筹码` : ''}。用 parlor_respond 回。`, {
+      entryId: entry.id, kind: 'promise', action: 'promise', from: seat.name,
+    });
+    return entry;
+  }
+
+  /**
+   * 回应一条承诺。只有被承诺的人能答应/拒绝/了结；只有提出的人能在对方回应前撤回。
+   * 了结只能由债权人做（`to` 那一方），筹码从债务人划给债权人。
+   */
+  respond(seat: StoredSeat, id: string, action: 'accept' | 'decline' | 'done' | 'cancel'): LedgerEntry {
+    if (seat.kind === 'observer') throw new RoomError('forbidden', '观看者不能写账本');
+    const promise = this.ledger.find(id);
+    if (!promise || (promise.kind !== 'promise' && promise.kind !== 'debt')) {
+      throw new RoomError('not_found', '找不到这条承诺；用 parlor_ledger 看未了结里的 id');
+    }
+    const me = this.cooIdOf(seat);
+    const status = this.ledger.promiseStatus(promise);
+    const counterpartCoo = promise.from === me ? promise.to : promise.from;
+    const counterpart = counterpartCoo ? this.seatByCoo(counterpartCoo) : undefined;
+    const otherName = counterpart?.name
+      ?? (typeof promise.data?.fromName === 'string' ? promise.data.fromName : '对方');
+
+    if (action === 'accept' || action === 'decline') {
+      if (promise.to !== me) throw new RoomError('forbidden', '只有被承诺的人能回应');
+      if (status !== 'pending') throw new RoomError('conflict', `这条承诺已经「${this.statusLabel(status)}」了`);
+      return this.transferPromise(seat, promise, action, counterpart, otherName);
+    }
+    if (action === 'cancel') {
+      if (promise.from !== me) throw new RoomError('forbidden', '只有提出承诺的人能撤回');
+      if (status !== 'pending') throw new RoomError('conflict', '对方已经回应了，不能单方面撤回');
+      return this.transferPromise(seat, promise, action, counterpart, otherName);
+    }
+    // done = 了结；只有债权人能认。
+    if (promise.to !== me) throw new RoomError('forbidden', '只有被承诺的人（债权人）能说了结');
+    if (status !== 'accepted') throw new RoomError('conflict', `这条承诺现在是「${this.statusLabel(status)}」，不能了结`);
+    const amount = typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
+    if (amount > 0) {
+      const balance = this.ledger.balanceOf(promise.from);
+      if (balance < amount) {
+        throw new RoomError('invalid', `${otherName} 现在只有 ${balance} 枚筹码，还不够 ${amount} 枚`);
+      }
+    }
+    return this.transferPromise(seat, promise, action, counterpart, otherName);
+  }
+
+  /** 到期没结的承诺：由服务器追加 default，并通知双方。 */
+  expireLedger(now = this.now()): LedgerEntry[] {
+    const created = this.ledger.expire(now);
+    for (const entry of created) {
+      const [debtorCoo, creditorCoo] = entry.participants ?? [];
+      const debtor = debtorCoo ? this.seatByCoo(debtorCoo) : undefined;
+      const creditor = creditorCoo ? this.seatByCoo(creditorCoo) : undefined;
+      const text = typeof entry.text === 'string' ? entry.text : '';
+      if (debtor) {
+        this.notifyLedger([debtor.id], `你对 ${creditor?.name ?? '对方'} 的承诺到期没结：${text}`, {
+          entryId: entry.ref, kind: 'promise', action: 'default',
+        });
+      }
+      if (creditor) {
+        this.notifyLedger([creditor.id], `${debtor?.name ?? '对方'} 对你的承诺到期没结：${text}`, {
+          entryId: entry.ref, kind: 'promise', action: 'default',
+        });
+      }
+    }
+    return created;
+  }
+
+  /** 余额见底的人由房间补一点（每段间隔最多一次），并私下告诉他。 */
+  refillLedger(now = this.now()): LedgerEntry[] {
+    const created: LedgerEntry[] = [];
+    for (const seat of this.seats) {
+      // 只补有真身份的席位；老式席位等绑定后再补。
+      if (seat.kind === 'observer' || !seat.cooId) continue;
+      const entry = this.ledger.maybeRefill(seat.cooId, this.id, now);
+      if (!entry) continue;
+      created.push(entry);
+      const amount = typeof entry.data?.chips === 'number' ? entry.data.chips : 0;
+      this.notifyLedger([seat.id], `房间给你补了 ${amount} 枚筹码，现在有 ${this.ledger.balanceOf(seat.cooId)} 枚。`, {
+        entryId: entry.id, kind: 'grant', action: 'refill',
+      });
+    }
+    return created;
+  }
+
+  private transferPromise(
+    seat: StoredSeat,
+    promise: LedgerEntry,
+    action: 'accept' | 'decline' | 'done' | 'cancel',
+    counterpart: StoredSeat | undefined,
+    otherName: string,
+  ): LedgerEntry {
+    const kind = action === 'done' ? 'settle' : action;
+    const me = this.cooIdOf(seat);
+    const amount = action === 'done' && typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
+    const entry = this.ledger.record({
+      kind,
+      ref: promise.id,
+      room: promise.room,
+      from: me,
+      ...(promise.from === me ? { to: promise.to } : { to: promise.from }),
+      text: promise.text,
+      visibility: 'private',
+      data: {
+        fromName: seat.name,
+        toName: otherName,
+        ...(amount ? { chips: amount } : {}),
+      },
+      ...(amount && promise.from
+        ? { transfers: [{ from: promise.from, to: promise.to ?? me, amount }] }
+        : {}),
+    });
+    const text = {
+      accept: `答应了你的承诺：${promise.text}`,
+      decline: `没答应这条承诺：${promise.text}`,
+      cancel: `撤回了承诺：${promise.text}`,
+      done: `说了结这条承诺：${promise.text}${amount ? `（${amount} 枚筹码已划给你）` : ''}`,
+    }[action];
+    if (counterpart) {
+      this.notifyLedger([counterpart.id], `${seat.name} ${text}`, {
+        entryId: promise.id, kind: 'promise', action,
+      });
+    }
+    return entry;
+  }
+
+  private statusLabel(status: string | null): string {
+    return ({
+      pending: '等回应', accepted: '已答应', declined: '已拒绝', cancelled: '已撤回',
+      settled: '已了结', defaulted: '已失约',
+    } as Record<string, string>)[status ?? ''] ?? status ?? '未知';
+  }
+
+  private requireTarget(seat: StoredSeat, to: string): StoredSeat {
+    if (seat.kind === 'observer') throw new RoomError('forbidden', '观看者不能写账本');
+    const target = this.resolveSeat(to);
+    if (!target) throw new RoomError('not_found', `客厅里没有叫「${to}」的席位`);
+    if (target.id === seat.id) throw new RoomError('invalid', '不能对自己做这件事');
+    if (target.kind === 'observer') throw new RoomError('invalid', '观看者不参与账本');
+    return target;
+  }
+
+  private checkSocialBudget(cooId: string): void {
+    if (this.ledger.socialCountSince(cooId, this.now() - 3_600_000) >= MAX_SOCIAL_PER_HOUR) {
+      throw new RoomError('invalid', `一小时内最多 ${MAX_SOCIAL_PER_HOUR} 条礼物或承诺，过一会儿再来`);
+    }
+  }
+
+  private seatByCoo(cooId: string): StoredSeat | undefined {
+    return this.seats.find((seat) => this.cooIdOf(seat) === cooId);
+  }
+
+  /** 只给该看的席位发一条账本通知；不发公开事件。 */
+  private notifyLedger(seatIds: string[], text: string, data: Record<string, unknown>): void {
+    for (const seatId of new Set(seatIds)) {
+      if (!this.seatById(seatId)) continue;
+      this.record({
+        type: 'parlor.ledger',
+        from: 'system',
+        scope: { kind: 'seat', seatId },
+        text,
+        data,
+      });
+    }
+  }
+
+  openTable(seat: StoredSeat, game: TableGame = 'dice', stake = 0): void {
     if (seat.kind === 'observer') throw new RoomError('invalid', '观看者不能开桌');
     if (this.table && this.table.status !== 'ended') throw new RoomError('conflict', '已经有一张桌子了');
+    const ante = stakeOf(stake);
+    if (ante > 0 && this.ledger.balanceOf(this.cooIdOf(seat)) < ante) {
+      throw new RoomError('invalid', `你只有 ${this.ledger.balanceOf(this.cooIdOf(seat))} 枚筹码，押不起 ${ante} 枚`);
+    }
     if (game === 'dice') {
       this.table = new DiceTable({ host: { id: seat.id, name: seat.name }, now: this.now(), turnMs: this.tableTurnMs });
     } else if (game === 'ddz') {
@@ -285,17 +553,21 @@ export class RoomKernel {
     } else {
       throw new RoomError('invalid', '不认识的桌子：只能开 dice（骰子）或 ddz（斗地主）');
     }
+    this.tableStake = ante;
     this.record({
       type: 'parlor.table.open',
       from: 'system',
       scope: { kind: 'room' },
-      text: `${seat.name} 开了一张${game === 'ddz' ? '斗地主' : '骰子'}桌。`,
-      data: { game },
+      text: `${seat.name} 开了一张${game === 'ddz' ? '斗地主' : '骰子'}桌${ante > 0 ? `（每人押 ${ante} 枚筹码）` : ''}。`,
+      data: { game, stake: ante },
     });
   }
 
   joinTable(seat: StoredSeat): void {
     const table = this.requireTable();
+    if (this.tableStake > 0 && this.ledger.balanceOf(this.cooIdOf(seat)) < this.tableStake) {
+      throw new RoomError('invalid', `这张桌子每人押 ${this.tableStake} 枚，你只有 ${this.ledger.balanceOf(this.cooIdOf(seat))} 枚`);
+    }
     try {
       this.record({ ...table.join({ id: seat.id, name: seat.name }), from: 'system' });
     } catch (error) {
@@ -305,11 +577,40 @@ export class RoomKernel {
 
   startTable(seat: StoredSeat): void {
     const table = this.requireTable();
+    const players = table.seatIds()
+      .map((seatId) => this.seatById(seatId))
+      .filter((player): player is StoredSeat => !!player && player.kind !== 'observer');
+    if (this.tableStake > 0) {
+      if (players.length < 2) {
+        throw new RoomError('invalid', '押注桌至少要两个真人；陪练不押注');
+      }
+      for (const player of players) {
+        const balance = this.ledger.balanceOf(this.cooIdOf(player));
+        if (balance < this.tableStake) {
+          throw new RoomError('invalid', `${player.name} 只有 ${balance} 枚筹码，押不起 ${this.tableStake} 枚`);
+        }
+      }
+    }
     let step: TableStep;
     try {
       step = table.start(seat.id, this.now());
     } catch (error) {
       throw this.tableError(error);
+    }
+    if (this.tableStake > 0) {
+      const pot = this.tableStake * players.length;
+      this.ledger.record({
+        kind: 'ante',
+        room: this.id,
+        from: 'room',
+        participants: players.map((player) => this.cooIdOf(player)),
+        text: `开局：${players.map((player) => player.name).join('、')} 各押 ${this.tableStake} 枚筹码（底池 ${pot} 枚）。`,
+        visibility: 'room',
+        transfers: players.map((player) => ({
+          from: this.cooIdOf(player), to: 'room', amount: this.tableStake,
+        })),
+        data: { game: table.game, gameLabel: table.label, stake: this.tableStake, pot },
+      });
     }
     this.recordStep(step);
   }
@@ -381,6 +682,7 @@ export class RoomKernel {
       label: table.label,
       status: table.status,
       host: table.host,
+      ...(this.tableStake > 0 ? { stake: this.tableStake } : {}),
       text: table.publicText(),
     } as TableSummary;
   }
@@ -441,6 +743,25 @@ export class RoomKernel {
       .filter((seat) => winnerIds.includes(seat.id))
       .map((seat) => this.cooIdOf(seat));
     const game = typeof data.game === 'string' ? data.game : table.game;
+    const stake = this.tableStake;
+    const pot = stake > 0 ? stake * seats.length : 0;
+    let transfers: { from: string; to: string; amount: number }[] | undefined;
+    let chipText = '';
+    if (pot > 0 && seats.length >= 2) {
+      if (winners.length > 0) {
+        const unique = [...new Set(winners)];
+        const share = Math.floor(pot / unique.length);
+        const rest = pot - share * unique.length;
+        transfers = unique
+          .map((cooId, index) => ({ from: 'room', to: cooId, amount: share + (index === 0 ? rest : 0) }))
+          .filter((transfer) => transfer.amount > 0);
+        const names = unique.map((cooId) => this.seatByCoo(cooId)?.name ?? '席位').join('、');
+        chipText = ` 底池 ${pot} 枚归 ${names}。`;
+      } else {
+        transfers = seats.map((seat) => ({ from: 'room', to: this.cooIdOf(seat), amount: stake }));
+        chipText = ` 没人赢，底池 ${pot} 枚退回。`;
+      }
+    }
     this.ledger.record({
       kind: 'game',
       room: this.id,
@@ -448,13 +769,15 @@ export class RoomKernel {
       game,
       participants: [...new Set(seats.map((seat) => this.cooIdOf(seat)))],
       winners: [...new Set(winners)],
-      text: event.text,
+      text: `${event.text}${chipText}`,
       visibility: 'room',
+      ...(transfers && transfers.length > 0 ? { transfers } : {}),
       data: {
         game,
         gameLabel: table.label,
         // 平局由游戏自己在结束事件里说；账本不认任何具体游戏名。
         tie: data.tie === true,
+        ...(stake > 0 ? { stake, pot } : {}),
         multiplier: typeof data.multiplier === 'number' ? data.multiplier : undefined,
         spring: data.spring === true,
         antiSpring: data.antiSpring === true,
@@ -463,6 +786,7 @@ export class RoomKernel {
           : undefined,
       },
     });
+    this.tableStake = 0;
   }
 
   /** 发言里的 `@名字` 与 `@all`。名字先按长到短匹配，避免「阿岚」吃掉「阿岚的朋友」。 */
