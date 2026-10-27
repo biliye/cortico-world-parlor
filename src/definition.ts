@@ -16,6 +16,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_gift: { zh: '给某个席位送一份私密礼物，可以带筹码。', en: 'Sends a private gift, optionally with chips, to one seat.' },
       parlor_promise: { zh: '对某个席位许承诺；可带期限与筹码，对方答应后才算数。', en: 'Makes a promise with an optional deadline and chips; it counts once accepted.' },
       parlor_respond: { zh: '回应一条承诺：答应/拒绝/撤回/了结。', en: 'Accepts, declines, cancels or settles a promise.' },
+      parlor_mail: { zh: '看自己的信箱：离线时收到的私信、礼物与账本通知。', en: 'Reads your mailbox: private messages, gifts and ledger notices, including ones received while offline.' },
       parlor_ledger: { zh: '看自己的战绩（分游戏）、筹码、未了结承诺与本房最近的公开结果。', en: 'Reads your per-game record, chips, open promises and the room’s recent results.' },
       parlor_table_open: { zh: '开一张桌子（骰子或斗地主），自己先坐下；可选押多少筹码。', en: 'Opens a dice or 斗地主 table with an optional chip stake.' },
       parlor_table_join: { zh: '在开着的桌子坐下。', en: 'Sits down at the open table.' },

@@ -9,6 +9,7 @@ import { COO_HEADER, COO_SECRET_HEADER, type CooIdentity } from './identity.ts';
 import { GAME_LABELS } from './game-labels.ts';
 import { RoomError, RoomKernel, type StoredSeat } from './kernel.ts';
 import { LedgerStore } from './ledger.ts';
+import { MailStore } from './mail.ts';
 import type { ActionRequest, JoinRequest, RoomEvent, RoomSnapshot } from './protocol.ts';
 
 export interface ParlorServerOptions {
@@ -23,6 +24,8 @@ export interface ParlorServerOptions {
   tableTurnMs?: number;
   /** 账本文件；不填时与 dataFile 同目录的 ledger.json。 */
   ledgerFile?: string;
+  /** 信箱文件；不填时与 dataFile 同目录的 mail.json。 */
+  mailFile?: string;
 }
 
 export interface ParlorAddress {
@@ -108,6 +111,7 @@ interface Client {
 export class ParlorServer {
   readonly kernel: RoomKernel;
   readonly ledger: LedgerStore;
+  readonly mail: MailStore;
   private readonly options: ParlorServerOptions;
   private server?: Server;
   private address?: ParlorAddress;
@@ -122,6 +126,9 @@ export class ParlorServer {
     this.options = options;
     this.ledger = LedgerStore.load({
       file: options.ledgerFile ?? (options.dataFile ? join(dirname(options.dataFile), 'ledger.json') : undefined),
+    });
+    this.mail = MailStore.load({
+      file: options.mailFile ?? (options.dataFile ? join(dirname(options.dataFile), 'mail.json') : undefined),
     });
     this.kernel = this.load(options);
     this.heartbeat = setInterval(() => this.ping(), 15_000);
@@ -198,6 +205,7 @@ export class ParlorServer {
       historyLimit: options.historyLimit,
       tableTurnMs: options.tableTurnMs,
       ledger: this.ledger,
+      mail: this.mail,
     };
     const file = options.dataFile;
     if (!file || !existsSync(file)) return new RoomKernel(common);
@@ -264,6 +272,18 @@ export class ParlorServer {
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
       json(res, 200, { latest: this.kernel.latest(), events: this.kernel.history(auth.seat.id, since, limit) });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/mail') {
+      const auth = this.auth(req, url);
+      const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
+      const unread = this.kernel.mailUnread(auth.seat);
+      if (url.searchParams.get('recent') === '1') {
+        json(res, 200, { unread, remaining: unread, items: this.kernel.mailRecent(auth.seat, limit), marked: false });
+        return;
+      }
+      const peek = url.searchParams.get('peek') === '1';
+      json(res, 200, this.kernel.readMail(auth.seat, limit, !peek));
       return;
     }
     if (req.method === 'POST' && url.pathname === '/v1/action') {
@@ -466,6 +486,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
       </select><button id="save">改</button></div>
     </section>
     <section><h2>账本</h2><div id="ledger"></div></section>
+    <section><h2>信箱</h2><div id="mail"></div></section>
   </div>
   <section><h2>消息</h2><ul id="log"></ul></section>
 </main>
@@ -476,6 +497,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const seats = document.getElementById('seats');
   const log = document.getElementById('log');
   const ledger = document.getElementById('ledger');
+  const mailBox = document.getElementById('mail');
   const tier = document.getElementById('tier');
   let latest = 0, mine = null;
   const showError = (text) => { error.hidden = false; error.textContent = text; };
@@ -496,7 +518,10 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     latest = event.seq;
     log.append(line(event));
     while (log.children.length > 300) log.firstElementChild.remove();
-    if (event.type === 'parlor.table.end' || event.type === 'parlor.ledger') refreshLedger();
+    if (event.type === 'parlor.table.end' || event.type === 'parlor.ledger' || event.type === 'parlor.whisper') {
+      refreshLedger();
+      refreshMail();
+    }
     window.scrollTo(0, document.body.scrollHeight);
   };
   const ledgerRow = (text, className) => {
@@ -543,6 +568,19 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     const response = await fetch('/v1/room?limit=1', { headers });
     if (response.ok) renderLedger(await response.json());
   }
+  const renderMail = (page) => {
+    mailBox.textContent = '';
+    mailBox.append(ledgerRow('未读 ' + (page.unread || 0) + ' 封', 'tier'));
+    const items = (page.items || []).slice(0, 3);
+    if (!items.length) mailBox.append(ledgerRow('信箱是空的。'));
+    for (const item of items) {
+      mailBox.append(ledgerRow((item.fromName || '系统') + '：' + item.text));
+    }
+  };
+  async function refreshMail() {
+    const response = await fetch('/v1/mail?recent=1&limit=3', { headers });
+    if (response.ok) renderMail(await response.json());
+  }
   const renderSeats = (snapshot) => {
     seats.textContent = '';
     for (const seat of snapshot.seats) {
@@ -561,6 +599,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     const snapshot = await response.json();
     renderSeats(snapshot);
     renderLedger(snapshot);
+    refreshMail();
     latest = snapshot.latest;
     for (const event of snapshot.events) addEvent(event);
     const source = new EventSource('/v1/stream?since=' + latest + '&token=' + encodeURIComponent(token));

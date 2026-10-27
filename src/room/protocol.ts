@@ -91,6 +91,8 @@ export interface RoomSnapshot {
   ledger?: LedgerSummary;
   /** 本房最近的公开账本条目；不含别人的 cooId。 */
   ledgerRoom?: LedgerEntryView[];
+  /** 自己信箱里的未读封数。 */
+  mailUnread?: number;
 }
 
 export interface WakeDecision {

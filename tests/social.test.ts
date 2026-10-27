@@ -229,3 +229,59 @@ describe('账本：筹码与押注', () => {
     expect(() => room2.kernel.joinTable(room2.b)).toThrow(/每人押 500/);
   });
 });
+
+describe('账本：信箱', () => {
+  it('私聊进收件人信箱，别人看不见；读完标已读', () => {
+    const room = build();
+    room.kernel.whisper(room.a, '小满', '只跟你说');
+    expect(room.kernel.mailUnread(room.b)).toBe(1);
+    expect(room.kernel.mailUnread(room.a)).toBe(0);
+    expect(room.kernel.mailUnread(room.c)).toBe(0);
+    expect(room.kernel.snapshot(room.b.id, 0, 1).mailUnread).toBe(1);
+
+    const peek = room.kernel.readMail(room.b, 10, false);
+    expect(peek.items[0]).toMatchObject({ kind: 'whisper', fromName: '阿岚', text: '只跟你说' });
+    expect(room.kernel.mailUnread(room.b)).toBe(1);
+
+    room.kernel.readMail(room.b, 10, true);
+    expect(room.kernel.mailUnread(room.b)).toBe(0);
+    expect(room.kernel.snapshot(room.b.id, 0, 1).mailUnread).toBe(0);
+  });
+
+  it('礼物、承诺、回应与失约都留一封给该看的人', () => {
+    const room = build();
+    room.kernel.gift(room.a, '小满', '一杯茶', 10);
+    expect(room.kernel.readMail(room.b, 10, false).items[0]).toMatchObject({
+      kind: 'gift', fromName: '阿岚', text: '收到一份礼物：一杯茶（10 枚筹码）',
+    });
+    room.kernel.readMail(room.b, 10, true);
+
+    const promise = room.kernel.promise(room.a, '小满', '帮你看代码');
+    expect(room.kernel.readMail(room.b, 10, false).items[0]).toMatchObject({ kind: 'promise' });
+    room.kernel.readMail(room.b, 10, true);
+
+    room.kernel.respond(room.b, promise.id, 'accept');
+    const senderMail = room.kernel.readMail(room.a, 10, false).items[0];
+    expect(senderMail).toMatchObject({ kind: 'promise', action: 'accept' });
+    expect(senderMail.text).toContain('答应了你的承诺');
+
+    const due = room.kernel.promise(room.a, '小满', '到期会失约', room.now() + 1000);
+    room.kernel.respond(room.b, due.id, 'accept');
+    room.kernel.readMail(room.b, 10, true);
+    room.tick(2000);
+    room.kernel.expireLedger();
+    expect(room.kernel.readMail(room.b, 10, false).items[0]).toMatchObject({ kind: 'promise', action: 'default' });
+    expect(room.kernel.mailUnread(room.c)).toBe(0);
+  });
+
+  it('房间补给也进信箱', () => {
+    const room = build();
+    room.kernel.gift(room.a, '小满', '全给你', START_CHIPS);
+    room.kernel.readMail(room.a, 10, true);
+    expect(room.kernel.refillLedger()).toHaveLength(1);
+    const page = room.kernel.readMail(room.a, 10, false);
+    expect(page.unread).toBe(1);
+    expect(page.items[0]).toMatchObject({ kind: 'ledger', action: 'refill' });
+    expect(page.items[0].text).toContain('补了');
+  });
+});

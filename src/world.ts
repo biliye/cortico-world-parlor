@@ -13,6 +13,7 @@ import { PARLOR_CONFIG_GROUP, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
 import { gameLabelOf } from './room/game-labels.ts';
 import { IDENTITY_FILE, loadOrCreateIdentity, type CooIdentity } from './room/identity.ts';
+import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake,
@@ -150,6 +151,19 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     },
   },
   {
+    name: 'parlor_mail',
+    description: 'Read your mailbox: private messages, gifts and ledger notices left for you — including ones that arrived while you were offline. Takes the oldest unread first and marks them read unless peek is true. Does not wake anyone.',
+    tags: ['read'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many letters to take, default 10.' },
+        peek: { type: 'boolean', description: 'Only look; do not mark them read.' },
+      },
+    },
+  },
+  {
     name: 'parlor_ledger',
     description: 'Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), your chips, open promises and the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
     tags: ['read'],
@@ -237,6 +251,7 @@ export class ParlorWorld implements World {
   private ownerToken = '';
   private seat?: Seat;
   private lastSeq = 0;
+  private mailUnread = 0;
   private abort?: AbortController;
   private streamTask?: Promise<void>;
   private digestTimer?: NodeJS.Timeout;
@@ -272,6 +287,7 @@ export class ParlorWorld implements World {
       tool('parlor_gift', (args) => this.sendGift(args)),
       tool('parlor_promise', (args) => this.makePromise(args)),
       tool('parlor_respond', (args) => this.answerPromise(args)),
+      tool('parlor_mail', (args) => this.readMail(args)),
       tool('parlor_ledger', () => this.readLedger()),
       tool('parlor_table_open', (args) => this.openTable(args)),
       tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
@@ -323,7 +339,7 @@ export class ParlorWorld implements World {
       source: this.id,
       origin: 'internal',
       senderKey: this.id,
-      text: `客厅「${this.ctx.cfg.room || 'lobby'}」已连接。席位：${this.seat?.name ?? '未知'}。`,
+      text: `客厅「${this.ctx.cfg.room || 'lobby'}」已连接。席位：${this.seat?.name ?? '未知'}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_mail 看。` : ''}`,
       meta: { room: this.ctx.cfg.room, seat: this.seat?.id, address: this.baseUrl },
     }, { trigger: 'flush' });
   }
@@ -377,6 +393,7 @@ export class ParlorWorld implements World {
         this.ownerToken = this.ctx.secret(OWNER_SECRET).trim();
         this.seat = snapshot.seat;
         this.lastSeq = this.resumeFrom(snapshot.latest);
+        this.mailUnread = snapshot.mailUnread ?? 0;
         return;
       } catch (error) {
         if (!(error instanceof ParlorHttpError) || error.status !== 401) throw error;
@@ -400,6 +417,7 @@ export class ParlorWorld implements World {
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1);
     this.lastSeq = snapshot.latest;
+    this.mailUnread = snapshot.mailUnread ?? 0;
   }
 
   /** 断线重连从上次游标继续；游标比服务器新（房间重建过）时退回服务器最新。 */
@@ -583,6 +601,7 @@ export class ParlorWorld implements World {
       lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平${perGame ? `（${perGame}）` : ''}。`);
     }
     if (snapshot.ledger?.chips !== undefined) lines.push(`筹码：${snapshot.ledger.chips} 枚。`);
+    if ((snapshot.mailUnread ?? 0) > 0) lines.push(`信箱：${snapshot.mailUnread} 封未读（parlor_mail 看）。`);
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
@@ -664,6 +683,30 @@ export class ParlorWorld implements World {
       await this.client.action(this.token, { type: 'respond', id, action });
       const said = { accept: '答应了', decline: '拒绝了', cancel: '撤回了', done: '了结了' }[action];
       return `${said}这条承诺。`;
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async readMail(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const limit = args.limit === undefined ? 10 : Number(args.limit);
+    if (!Number.isInteger(limit) || limit < 1) return this.failed('limit 要是 1 到 50 的整数');
+    const peek = args.peek === true;
+    try {
+      const page = await this.client.mail(this.token, Math.min(50, limit), peek);
+      const lines = [`【信箱】未读 ${page.unread} 封${peek ? '（只看，没标已读）' : ''}。`];
+      if (!peek && page.items.length > 0) lines.push(`这次取走 ${page.items.length} 封。`);
+      if (page.remaining > 0) lines.push(`还有 ${page.remaining} 封没取，再调用一次。`);
+      if (page.items.length === 0) lines.push('信箱是空的。');
+      for (const item of page.items) {
+        const who = item.fromName || '系统';
+        const tag = item.kind === 'gift' ? '礼物'
+          : item.kind === 'promise' ? '承诺'
+            : item.kind === 'whisper' ? '私信' : '账本';
+        lines.push(`- ${this.ledgerTime(item.ts)} ${who}（${tag}）：${item.text}`);
+      }
+      return lines.join('\n');
     } catch (error) {
       return this.failed(messageOf(error));
     }

@@ -1,6 +1,7 @@
 /** 客厅客户端：World 用它与服务器说话。只发请求，不判断可见性。 */
 import type { CooIdentity } from './identity.ts';
 import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
+import type { MailPage } from './mail.ts';
 import type { ActionRequest, ActionResponse, JoinRequest, JoinResponse, RoomEvent, RoomSnapshot } from './protocol.ts';
 
 export class ParlorHttpError extends Error {
@@ -48,6 +49,16 @@ export class ParlorClient {
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ latest: number; events: RoomEvent[] }>(response);
+  }
+
+  /** 读信箱；peek 只看不标已读。 */
+  async mail(token: string, limit = 10, peek = false): Promise<MailPage> {
+    const query = new URLSearchParams({ limit: String(limit), ...(peek ? { peek: '1' } : {}) });
+    const response = await fetch(this.url(`/v1/mail?${query}`), {
+      headers: this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<MailPage>(response);
   }
 
   async action(token: string, body: ActionRequest): Promise<ActionResponse> {

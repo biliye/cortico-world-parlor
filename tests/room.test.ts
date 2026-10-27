@@ -356,3 +356,37 @@ describe('账本事件与服务器时钟', () => {
     }
   });
 });
+
+describe('信箱接口', () => {
+  it('私聊落进收件人信箱；读一次标已读；第三席看不到', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-mail-http-'));
+    const server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(dir, 'room.json') });
+    await server.listen();
+    try {
+      const client = new ParlorClient(server.url);
+      const a = await client.join('inv', { name: '阿岚' });
+      const b = await client.join('inv', { name: '小满' });
+      const c = await client.join('inv', { name: '旁观' });
+
+      await client.action(a.token, { type: 'whisper', to: '小满', text: '你来之前留的话' });
+      const peek = await client.mail(b.token, 10, true);
+      expect(peek).toMatchObject({ unread: 1, marked: false });
+      expect(peek.items[0]).toMatchObject({ kind: 'whisper', fromName: '阿岚', text: '你来之前留的话' });
+
+      const read = await client.mail(b.token, 10);
+      expect(read).toMatchObject({ unread: 1, marked: true });
+      const again = await client.mail(b.token, 10);
+      expect(again).toMatchObject({ unread: 0 });
+      expect(again.items).toHaveLength(0);
+
+      expect((await client.mail(a.token, 10)).items).toHaveLength(0);
+      expect((await client.mail(c.token, 10)).items).toHaveLength(0);
+
+      const recent = await server.mail.recent(server.kernel.cooIdOf(server.kernel.seatById(b.seat.id)!), 'lobby', 3);
+      expect(recent[0]?.text).toBe('你来之前留的话');
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

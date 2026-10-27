@@ -224,8 +224,16 @@ describe('客厅 World', () => {
     expect(friendSnap.ledger?.open[0]).toMatchObject({ direction: 'in', status: 'pending' });
     const openId = friendSnap.ledger!.open[0].id;
 
+    const friendMail = await client.mail(friend.token, 10);
+    expect(friendMail.items.some((item) => item.kind === 'gift')).toBe(true);
+    expect(friendMail.items.some((item) => item.kind === 'promise')).toBe(true);
+
     await client.action(friend.token, { type: 'respond', id: openId, action: 'accept' });
     await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('答应了你的承诺')));
+
+    const mailTool = world.tools().find((tool) => tool.name === 'parlor_mail')!;
+    const mailText = String(await mailTool.handler({}, {} as ToolCallContext));
+    expect(mailText).toContain('答应了你的承诺');
 
     const ledger = world.tools().find((tool) => tool.name === 'parlor_ledger')!;
     const text = String(await ledger.handler({}, {} as ToolCallContext));

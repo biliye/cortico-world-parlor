@@ -14,6 +14,7 @@ import {
   isCooId, LedgerStore, MAX_CHIPS, MAX_DUE_MS, MAX_OPEN_PROMISES, MAX_SOCIAL_PER_HOUR, MAX_SOCIAL_TEXT,
   type LedgerEntry,
 } from './ledger.ts';
+import { MailStore, type MailPage, type MailView } from './mail.ts';
 import {
   TableError,
   type TableEngine, type TableEvent, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
@@ -46,6 +47,8 @@ export interface RoomKernelOptions {
   tableTurnMs?: number;
   /** 账本；不传时用内存账本（测试用）。 */
   ledger?: LedgerStore;
+  /** 信箱；不传时用内存信箱（测试用）。 */
+  mail?: MailStore;
 }
 
 export class RoomError extends Error {
@@ -136,6 +139,8 @@ export class RoomKernel {
   private readonly now: () => number;
   private readonly tableTurnMs: number;
   private readonly ledger: LedgerStore;
+  /** 信箱：私聊与账本通知都留一份，离线回来还能看。 */
+  readonly mail: MailStore;
   private seats: StoredSeat[] = [];
   private events: RoomEvent[] = [];
   private seq = 0;
@@ -154,6 +159,7 @@ export class RoomKernel {
     this.now = options.now ?? Date.now;
     this.tableTurnMs = options.tableTurnMs ?? 45_000;
     this.ledger = options.ledger ?? new LedgerStore({ now: this.now });
+    this.mail = options.mail ?? new MailStore({ now: this.now });
   }
 
   static fromJSON(raw: unknown, options: RoomKernelOptions): RoomKernel {
@@ -297,7 +303,7 @@ export class RoomKernel {
     const target = this.resolveSeat(to);
     if (!target) throw new RoomError('not_found', `客厅里没有叫「${to}」的席位`);
     if (target.id === seat.id) throw new RoomError('invalid', '不能私聊自己');
-    return this.record({
+    const event = this.record({
       type: 'parlor.whisper',
       from: seat.id,
       scope: { kind: 'seat', seatId: target.id },
@@ -305,6 +311,15 @@ export class RoomKernel {
       mentions: [target.id],
       data: { name: seat.name, to: target.id, toName: target.name },
     });
+    // 对方可能不在线：私聊同时进信箱，回来还能看到。
+    this.mail.append({
+      room: this.id,
+      to: this.cooIdOf(target),
+      kind: 'whisper',
+      fromName: seat.name,
+      text: body,
+    });
+    return event;
   }
 
   setTier(seat: StoredSeat, tier: WakeTier): Seat {
@@ -527,10 +542,11 @@ export class RoomKernel {
     return this.seats.find((seat) => this.cooIdOf(seat) === cooId);
   }
 
-  /** 只给该看的席位发一条账本通知；不发公开事件。 */
+  /** 只给该看的席位发一条账本通知；不发公开事件，同时留一封进对方的信箱。 */
   private notifyLedger(seatIds: string[], text: string, data: Record<string, unknown>): void {
     for (const seatId of new Set(seatIds)) {
-      if (!this.seatById(seatId)) continue;
+      const seat = this.seatById(seatId);
+      if (!seat) continue;
       this.record({
         type: 'parlor.ledger',
         from: 'system',
@@ -538,7 +554,32 @@ export class RoomKernel {
         text,
         data,
       });
+      const kind = data.kind === 'gift' ? 'gift' : data.kind === 'promise' ? 'promise' : 'ledger';
+      this.mail.append({
+        room: this.id,
+        to: this.cooIdOf(seat),
+        kind,
+        ...(typeof data.action === 'string' ? { action: data.action } : {}),
+        fromName: typeof data.from === 'string' ? data.from : '系统',
+        text,
+        ...(typeof data.entryId === 'string' ? { entryId: data.entryId } : {}),
+      });
     }
+  }
+
+  /** 某个席位的未读信数。 */
+  mailUnread(seat: StoredSeat): number {
+    return this.mail.unreadCount(this.cooIdOf(seat), this.id);
+  }
+
+  /** 读信：默认把取走的这几封标成已读。 */
+  readMail(seat: StoredSeat, limit = 10, markRead = true): MailPage {
+    return this.mail.list(this.cooIdOf(seat), this.id, limit, markRead);
+  }
+
+  /** 最近几封（含已读），给家长页看，不动游标。 */
+  mailRecent(seat: StoredSeat, limit = 3): MailView[] {
+    return this.mail.recent(this.cooIdOf(seat), this.id, limit);
   }
 
   openTable(seat: StoredSeat, game: TableGame = 'dice', stake = 0): void {
@@ -829,6 +870,7 @@ export class RoomKernel {
       tablePrivate: this.tablePrivate(seatId),
       ledger: this.ledger.summaryFor(this.cooIdOf(seat)),
       ledgerRoom: this.ledger.publicInRoom(this.id, 5),
+      mailUnread: this.mail.unreadCount(this.cooIdOf(seat), this.id),
     };
   }
 
