@@ -135,6 +135,25 @@ describe('截止与托管', () => {
     expect(step.events.length).toBeGreaterThan(0);
   });
 
+  it('脚本陪练会买地，不再只攒钱', () => {
+    const table = make({ seats: [seats()[0]!, { id: 'bot', name: '脚本', bot: true }] });
+    table.act('a', { type: 'roll' }, NOW);
+    table.act('a', { type: 'pass' }, NOW); // a 不买面包房，轮到脚本
+    const rolled = table.tick(NOW + BOT_DELAY_MS)!;
+    expect(rolled.events.some((event) => event.text.includes('掷出'))).toBe(true);
+    const bought = table.tick(NOW + BOT_DELAY_MS * 2)!;
+    expect(bought.events.some((event) => event.text.includes('买下'))).toBe(true);
+  });
+
+  it('托管的人类席位仍然不买地（保守默认不变）', () => {
+    const table = make();
+    table.act('a', { type: 'roll' }, NOW);
+    table.act('a', { type: 'set_auto', on: true }, NOW);
+    const managed = table.tick(NOW + 1)!;
+    expect(managed.events.some((event) => event.text.includes('买下'))).toBe(false);
+    expect(managed.views).toEqual(['b']);
+  });
+
   it('整局时限到就按资产结算', () => {
     const table = make({ gameLimitMs: 5_000 });
     const step = table.tick(NOW + 5_000)!;

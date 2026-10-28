@@ -15,6 +15,7 @@ import {
   cellAt, isItemKind, phaseAction, seatCompensationStep,
   type ItemKind, type MonopolyEnd, type MonopolyState, type Outcome, type Phase,
 } from './monopoly-rules.ts';
+import { chooseMonopolyBotMove } from './monopoly-bot.ts';
 
 export type MonopolyPace = 'standard' | 'quick';
 
@@ -293,9 +294,11 @@ export class MonopolyTable implements TableEngine {
     const seatId = this.engine.currentSeatId;
     const bot = this.bots.has(seatId);
     const auto = this.auto.has(seatId);
-    if (bot || auto) {
-      const delay = bot ? BOT_DELAY_MS : 0;
-      if (now - this.turnStartedAt < delay) return null;
+    if (bot) {
+      if (now - this.turnStartedAt < BOT_DELAY_MS) return null;
+      return this.botStep(now);
+    }
+    if (auto) {
       return this.timeout(now);
     }
     if (now < this.deadline) return null;
@@ -477,6 +480,33 @@ export class MonopolyTable implements TableEngine {
     const actor = this.engine.currentSeatId;
     const out = this.engine.timeout(this.rng());
     return this.apply(out, now, true, actor);
+  }
+
+  /** 脚本陪练按自己的策略出招；托管（auto / 超时）不走这里，仍是保守默认动作。 */
+  private botStep(now: number): TableStep {
+    const seatId = this.engine.currentSeatId;
+    const legal = this.engine.legal();
+    const state = this.engine.snapshot();
+    const move = chooseMonopolyBotMove({
+      phase: legal.phase,
+      cash: state.players[seatId]!.cash,
+      pending: legal.pending,
+      canRoll: legal.canRoll,
+      canBuy: legal.canBuy,
+      canUpgrade: legal.canUpgrade,
+      workshop: legal.workshop,
+      repairTargets: legal.repairTargets,
+    });
+    let out: Outcome;
+    switch (move.type) {
+      case 'roll': out = this.engine.roll(seatId, this.rng()); break;
+      case 'buy': out = this.engine.buy(seatId); break;
+      case 'upgrade': out = this.engine.upgrade(seatId); break;
+      case 'take_item': out = this.engine.takeItem(seatId, { item: move.item }); break;
+      case 'use_item': out = this.engine.useItem(seatId, { item: 'repair', target: move.target }); break;
+      default: out = this.engine.pass(seatId, this.rng());
+    }
+    return this.apply(out, now);
   }
 
   private apply(out: Outcome, now: number, managed = false, managedSeat?: string): TableStep {
