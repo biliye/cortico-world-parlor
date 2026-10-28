@@ -195,6 +195,13 @@ describe('给模型看的话', () => {
     expect(text).toContain('服务器时刻');
   });
 
+  it('第一轮私视图说明起手位次与后手补偿', () => {
+    const table = make({ shuffle: (list: readonly string[]) => [...list].reverse() });
+    const text = table.privateText('a', NOW)!; // 三人局（默认席位），反序后 a 是末位：+50 × 2
+    expect(text).toContain('第 3 位起手');
+    expect(text).toContain('后手补偿 +100');
+  });
+
   it('等别人时只写下一个截止，不给动作提示', () => {
     const table = make();
     table.act('a', { type: 'roll' }, NOW);
