@@ -214,6 +214,22 @@ export class MonopolyTable implements TableEngine {
     return this.auto.has(seatId);
   }
 
+  /** 当前回合号；客户端拿它做 turnId，内核拿它做动作版本。 */
+  get turnSeq(): number {
+    return this.engine.turnSeq;
+  }
+
+  /**
+   * 服务停机不算玩家的时间：恢复时把回合截止与整局时限等量往后推。
+   * 玩家掉线不顺延——那是他们自己的时间。
+   */
+  shiftTime(ms: number): void {
+    if (!(ms > 0) || this.status !== 'playing') return;
+    this.deadline += ms;
+    this.endsAt += ms;
+    this.turnStartedAt += ms;
+  }
+
   /** 席位在开局时就定死了；没有中途坐下这回事。 */
   join(seat: TableSeat): TableEvent {
     if (this.has(seat.id)) throw new TableError('seated', '你已经在这局里了');
@@ -226,7 +242,23 @@ export class MonopolyTable implements TableEngine {
     throw new TableError('not_open', '大富翁在开桌时就开局了，不需要再开始一次');
   }
 
-  act(seatId: string, action: unknown, now: number): TableStep {
+  /** 开局那一步：一条公开的开局事件 + 当前玩家的私视图。 */
+  openingStep(): TableStep {
+    const state = this.engine.snapshot();
+    const first = this.engine.currentSeatId;
+    const roster = this.seats.map((seat) => (seat.bot ? `${seat.name}（脚本）` : seat.name)).join('、');
+    return {
+      events: [{
+        type: 'parlor.table.start',
+        scope: { kind: 'room' },
+        text: `大富翁开局（${PACE_LABELS[this.pace]}）：${roster}。第 ${state.round} 轮，轮到 ${this.engine.nameOf(first)}。`,
+        data: { game: this.game, gameLabel: this.label, pace: this.pace, round: state.round, turn: first },
+      }],
+      views: [first],
+    };
+  }
+
+  act(seatId: string, action: unknown, now: number, injected?: [number, number]): TableStep {
     if (!this.has(seatId)) throw new TableError('not_seated', '你不在这一局里');
     const input = (action ?? {}) as Record<string, unknown>;
     const type = typeof input.type === 'string' ? input.type : '';
@@ -241,12 +273,12 @@ export class MonopolyTable implements TableEngine {
     let out: Outcome;
     try {
       switch (type) {
-        case 'roll': out = this.engine.roll(seatId, this.rng()); break;
+        case 'roll': out = this.engine.roll(seatId, injected ?? this.rng()); break;
         case 'use_item': out = this.engine.useItem(seatId, input); break;
         case 'buy': out = this.engine.buy(seatId); break;
         case 'upgrade': out = this.engine.upgrade(seatId); break;
         case 'take_item': out = this.engine.takeItem(seatId, input); break;
-        case 'pass': out = this.engine.pass(seatId, this.rng()); break;
+        case 'pass': out = this.engine.pass(seatId, injected ?? this.rng()); break;
         default: throw new TableError('bad_action', '不认识的动作：roll / use_item / buy / upgrade / take_item / pass / set_auto');
       }
     } catch (error) {
@@ -284,6 +316,7 @@ export class MonopolyTable implements TableEngine {
       name: seat.name,
       seatIndex,
       startBonus: seatCompensationStep(state.order.length) * seatIndex,
+      turnSeq: state.turnSeq,
       status: this.status,
       round: state.round,
       rounds: MONOPOLY_RULES.rounds,
@@ -441,11 +474,12 @@ export class MonopolyTable implements TableEngine {
   }
 
   private timeout(now: number): TableStep {
+    const actor = this.engine.currentSeatId;
     const out = this.engine.timeout(this.rng());
-    return this.apply(out, now, true);
+    return this.apply(out, now, true, actor);
   }
 
-  private apply(out: Outcome, now: number, managed = false): TableStep {
+  private apply(out: Outcome, now: number, managed = false, managedSeat?: string): TableStep {
     const state = this.engine.snapshot();
     const events: TableEvent[] = [];
     const seatId = out.nextTurn?.seatId ?? this.engine.currentSeatId;
@@ -456,7 +490,7 @@ export class MonopolyTable implements TableEngine {
         type: 'parlor.table.action',
         scope: { kind: 'room' },
         text: fact,
-        data: { ...data, managed },
+        data: { ...data, managed, ...(managed && managedSeat ? { managedSeat } : {}) },
       });
     }
 

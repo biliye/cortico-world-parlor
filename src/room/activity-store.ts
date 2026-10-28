@@ -46,6 +46,17 @@ export interface MonopolyActivity {
   applied: string[];
   /** 写进存档但还没送达的副作用。 */
   outbox: Effect[];
+  /**
+   * 已经受理、还没完成提交的那一手：先写下发点（骰点在里面），再执行规则，
+   * 执行完连同新状态一起落盘。崩溃后按它重放一次，就不会「换一次骰子再掷」。
+   */
+  pending?: {
+    key: string;
+    seatId: string;
+    action: Record<string, unknown>;
+    turnSeq: number;
+    dice?: [number, number];
+  };
 }
 
 export interface ActivityStoreOptions {
@@ -55,7 +66,7 @@ export interface ActivityStoreOptions {
   appliedLimit?: number;
 }
 
-const DEFAULT_REQUEST_LIMIT = 200;
+const DEFAULT_REQUEST_LIMIT = 512;
 const DEFAULT_APPLIED_LIMIT = 500;
 
 export const requestKeyOf = (gameId: string, seatId: string, requestId: string): string => `${gameId}/${seatId}/${requestId}`;

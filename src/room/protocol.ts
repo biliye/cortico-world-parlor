@@ -64,7 +64,30 @@ export type ActionRequest =
   | { type: 'table_join' }
   | { type: 'table_start' }
   | { type: 'table_action'; action: 'roll' | 'stand'; die?: number }
-  | { type: 'ddz_action'; move: 'bid' | 'play' | 'pass'; call?: boolean; cards?: string[] };
+  | { type: 'ddz_action'; move: 'bid' | 'play' | 'pass'; call?: boolean; cards?: string[] }
+  | {
+    type: 'monopoly';
+    action: 'open' | 'join' | 'leave' | 'cancel' | 'start' | 'set_auto'
+      | 'roll' | 'use_item' | 'buy' | 'upgrade' | 'take_item' | 'pass';
+    /** open / start：4 或 6 席。 */
+    size?: number;
+    /** open：standard（30 分钟/回合）或 quick（5 分钟）。 */
+    pace?: string;
+    /** open / start：补几个脚本陪练。 */
+    bots?: number;
+    /** set_auto。 */
+    on?: boolean;
+    /** use_item / take_item：signpost、pass、repair。 */
+    item?: string;
+    /** use_item(signpost)：向前几格。 */
+    steps?: number;
+    /** use_item(repair)：哪块地。 */
+    target?: number;
+    /** 客户端生成，网络重试必须复用同一个。 */
+    requestId?: string;
+    /** 动作是基于哪一回合的视图（表子的 turnSeq）。 */
+    turnId?: number;
+  };
 
 /** 一条东西已经留进某个席位的信箱；只给寄信人看「已投递」，不给已读。 */
 export interface DeliveryReceipt {
@@ -93,6 +116,8 @@ export interface ActionResponse {
   deadlineAt?: string;
   /** 下一个截止属于谁（显示名；脚本陪练也在内）。 */
   turn?: string;
+  /** 大富翁动作之后本人看到的私视图；别的游戏不带。 */
+  text?: string;
 }
 
 export interface RoomSnapshot {
@@ -120,6 +145,30 @@ export interface RoomSnapshot {
   ledgerRoom?: LedgerEntryView[];
   /** 自己信箱里的未读封数。 */
   mailUnread?: number;
+  /** 大富翁：报名表或活动存档的故障。 */
+  monopoly?: MonopolyInfo;
+}
+
+/** 报名表：还没开局的大富翁。 */
+export interface MonopolySignupView {
+  /** 发起人显示名。 */
+  host: string;
+  /** 已报名的席位显示名，发起人在第一个。 */
+  seats: string[];
+  /** 目标人数（4 或 6）。 */
+  size: number;
+  pace: 'standard' | 'quick';
+  /** 报名截止（服务器时刻）。 */
+  deadlineAt: number;
+  /** 还差几个真人；脚本陪练最多补 2 个。 */
+  missing: number;
+}
+
+export interface MonopolyInfo {
+  signup?: MonopolySignupView;
+  /** 有值时这局被冻结：存档读不出来或写不进去，不会自动重开。 */
+  fault?: string;
+  gameId?: string;
 }
 
 export interface WakeDecision {

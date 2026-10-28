@@ -25,6 +25,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_table_action: { zh: '骰子桌轮到你时重掷一颗或停牌。', en: 'Rerolls a die or stands on your dice-table turn.' },
       parlor_table_view: { zh: '看桌面和自己的暗牌，不行动。', en: 'Reads the table and your own hidden cards.' },
       parlor_ddz_action: { zh: '斗地主轮到你时叫地主、出牌或过。', en: 'Bids, plays cards or passes on your 斗地主 turn.' },
+      parlor_monopoly: { zh: '大富翁：开报名/报名/开局，以及掷骰、道具、买地、升级、补卡、放手。', en: 'Monopoly: sign up, start, roll, use items, buy, upgrade, take a card or pass.' },
     }),
     events: [
       { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },

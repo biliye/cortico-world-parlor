@@ -2,15 +2,22 @@
  * 房间内核：席位、令牌、事件日志、可见性与唤醒挡位。
  * 所有可见性判断都在这里；服务器与 World 只按它给的结果发或不发。
  */
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import {
   DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS,
-  type DeliveryReceipt, type JoinRequest, type JoinResponse, type RoomEvent, type RoomSnapshot, type Scope,
+  type ActionRequest, type DeliveryReceipt, type JoinRequest, type JoinResponse, type MonopolyInfo, type MonopolySignupView,
+  type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
 } from './protocol.ts';
 import { serverClock } from './clock.ts';
 import { DiceTable } from './table.ts';
 import { DoudizhuTable } from './games/doudizhu-table.ts';
+import { MonopolyTable, PACE_LABELS, type MonopolyPace } from './games/monopoly-table.ts';
+import {
+  ActivityStore, freshActivity, hashOf, lookupRequest, queueEffect, rememberRequest, requestKeyOf, settleEffect,
+  type Effect, type MonopolyActivity,
+} from './activity-store.ts';
 import {
   isCooId, LedgerStore, MAX_CHIPS, MAX_DUE_MS, MAX_OPEN_PROMISES, MAX_SOCIAL_PER_HOUR, MAX_SOCIAL_TEXT,
   type LedgerEntry,
@@ -37,7 +44,25 @@ export interface RoomState {
   seatSeq: number;
   seats: StoredSeat[];
   events: RoomEvent[];
+  /** 房间代次：清空重建后旧的 activity.json 不能串过来。 */
+  epoch?: string;
+  /** 还没开局的大富翁报名表；不占桌子槽。 */
+  monopolySignup?: MonopolySignup;
 }
+
+/** 大富翁报名：候场期最多 24 小时，开局才占桌子。 */
+export interface MonopolySignup {
+  hostSeatId: string;
+  seats: string[];
+  size: 4 | 6;
+  pace: MonopolyPace;
+  createdAt: number;
+  deadlineAt: number;
+}
+
+const SIGNUP_MS = 24 * 60 * 60_000;
+const MAX_BOTS = 2;
+const MONOPOLY_REQUEST_LIMIT = 512;
 
 export interface RoomKernelOptions {
   id: string;
@@ -53,6 +78,8 @@ export interface RoomKernelOptions {
   mail?: MailStore;
   /** 回放；不传时只留内存里的房间日志（测试用）。 */
   replay?: ReplayStore;
+  /** 大富翁活动存档路径；不传时大富翁只活在内存里（测试用）。 */
+  activityFile?: string;
 }
 
 /** 一条私聊/账本通知处理完之后，给寄信人的投递回执。 */
@@ -66,6 +93,11 @@ export interface TableReceipt {
 export interface StartReceipt extends TableReceipt {
   /** 开局那一刻现读的桌上席位（脚本陪练也列出来）。 */
   seats: string[];
+}
+export interface MonopolyReceipt extends TableReceipt {
+  /** 这一手之后本人看到的私视图。 */
+  text?: string;
+  seats?: string[];
 }
 
 export class RoomError extends Error {
@@ -167,6 +199,16 @@ export class RoomKernel {
   private table?: TableEngine;
   /** 当前桌子的押注（每人开局押多少筹码）；0 = 不押。 */
   private tableStake = 0;
+  private epochValue: string;
+  private signup?: MonopolySignup;
+  private readonly activityFile?: string;
+  private activity?: ActivityStore;
+  private activityData?: MonopolyActivity;
+  private monopolyGameId?: string;
+  /** 存档写不进去 / 读不出来 / 副作用没落盘，这局就冻结，等人处理。 */
+  private activityFault?: string;
+  private tableFault?: string;
+  private effectsFault?: string;
   private readonly listeners = new Set<(event: RoomEvent) => void>();
   private readonly lastSay = new Map<string, number>();
 
@@ -180,6 +222,9 @@ export class RoomKernel {
     this.ledger = options.ledger ?? new LedgerStore({ now: this.now });
     this.mail = options.mail ?? new MailStore({ now: this.now });
     this.replay = options.replay ?? new ReplayStore({ now: this.now });
+    this.epochValue = randomUUID();
+    this.activityFile = options.activityFile;
+    if (options.activityFile) this.activity = new ActivityStore({ file: options.activityFile });
   }
 
   static fromJSON(raw: unknown, options: RoomKernelOptions): RoomKernel {
@@ -205,6 +250,9 @@ export class RoomKernel {
       .slice(-kernel.historyLimit);
     kernel.seq = Math.max(Number(state.seq) || 0, ...kernel.events.map((event) => event.seq), 0);
     kernel.seatSeq = Math.max(Number(state.seatSeq) || 0, ...kernel.seats.map((seat) => Number(seat.id.slice(1)) || 0), 0);
+    if (typeof state.epoch === 'string' && state.epoch.length > 0) kernel.epochValue = state.epoch;
+    kernel.signup = kernel.validSignup(state.monopolySignup);
+    kernel.restoreActivity();
     return kernel;
   }
 
@@ -217,6 +265,8 @@ export class RoomKernel {
       seatSeq: this.seatSeq,
       seats: this.seats,
       events: this.events,
+      epoch: this.epochValue,
+      ...(this.signup ? { monopolySignup: this.signup } : {}),
     };
   }
 
@@ -706,18 +756,39 @@ export class RoomKernel {
   }
 
   tickTable(now = this.now()): void {
+    if (this.signup && now >= this.signup.deadlineAt) {
+      const who = this.signup.seats.map((id) => this.seatById(id)?.name ?? '？').join('、');
+      this.signup = undefined;
+      this.record({
+        type: 'parlor.monopoly.cancel',
+        from: 'system',
+        scope: { kind: 'room' },
+        text: `大富翁报名 24 小时没开局，已取消（${who}）。`,
+        data: { game: 'monopoly' },
+      });
+    }
     if (!this.table) return;
     if (this.table.status !== 'playing' && this.table.status !== 'bidding') return;
     const table = this.table;
+    const beforeSeq = table instanceof MonopolyTable ? table.turnSeq : 0;
     let step: TableStep | null;
     try {
       step = table.tick(now);
     } catch (error) {
-      // 超时代打是后台任务：坏一手牌不该把整个房间带下去。
+      // 长局里一次托管抛错不能让房间继续跑：冻结并让人看见。
+      this.tableFault = `牌桌推进失败：${error instanceof Error ? error.message : String(error)}`;
       console.error('parlor: 牌桌超时代打失败', error);
       return;
     }
-    if (step) this.recordStep(step);
+    if (!step) return;
+    if (table instanceof MonopolyTable) {
+      this.recordStep(step, false);
+      this.attachMonopolyEffects(step, beforeSeq);
+      this.saveActivity();
+      this.flushEffects();
+      return;
+    }
+    this.recordStep(step);
   }
 
   tablePublic(): TableSummary | undefined {
@@ -805,7 +876,7 @@ export class RoomKernel {
     } as TablePrivateSummary;
   }
 
-  private recordStep(step: TableStep): void {
+  private recordStep(step: TableStep, recordGame = true): void {
     for (const event of step.events) {
       this.record({
         type: event.type,
@@ -814,7 +885,7 @@ export class RoomKernel {
         text: event.text,
         data: event.data,
       });
-      if (event.type === 'parlor.table.end') this.recordGame(event);
+      if (event.type === 'parlor.table.end' && recordGame) this.recordGame(event);
     }
     for (const seatId of step.views) {
       // 脚本陪练不是房间席位：它们的视图不进房间日志。
@@ -927,6 +998,482 @@ export class RoomKernel {
     return [...this.events];
   }
 
+
+  // —— 大富翁 ——
+
+  /** 房间代次；活动存档靠它隔离「清空重建」后的旧文件。 */
+  roomEpoch(): string {
+    return this.epochValue;
+  }
+
+  private monopolyFault(): string | undefined {
+    return this.activityFault ?? this.tableFault ?? this.effectsFault;
+  }
+
+  monopolyInfo(): MonopolyInfo | undefined {
+    const fault = this.monopolyFault();
+    const signup = this.signup;
+    const info: MonopolyInfo = {
+      ...(signup ? { signup: this.signupView(signup) } : {}),
+      ...(fault ? { fault } : {}),
+      ...(this.monopolyGameId ? { gameId: this.monopolyGameId } : {}),
+    };
+    return Object.keys(info).length > 0 ? info : undefined;
+  }
+
+  private signupView(signup: MonopolySignup): MonopolySignupView {
+    const humans = signup.seats.length;
+    const spare = Math.min(MAX_BOTS, Math.max(0, signup.size - humans));
+    return {
+      host: this.seatById(signup.hostSeatId)?.name ?? '？',
+      seats: signup.seats.map((id) => this.seatById(id)?.name ?? '？'),
+      size: signup.size,
+      pace: signup.pace,
+      deadlineAt: signup.deadlineAt,
+      missing: Math.max(0, signup.size - humans - spare),
+    };
+  }
+
+  private validSignup(raw: unknown): MonopolySignup | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const value = raw as Partial<MonopolySignup>;
+    if (typeof value.hostSeatId !== 'string' || !this.seatById(value.hostSeatId)) return undefined;
+    if (!Array.isArray(value.seats) || value.seats.length === 0) return undefined;
+    const seats = value.seats.filter((id): id is string => typeof id === 'string' && !!this.seatById(id));
+    if (seats.length !== value.seats.length || !seats.includes(value.hostSeatId)) return undefined;
+    if (value.size !== 4 && value.size !== 6) return undefined;
+    if (value.pace !== 'standard' && value.pace !== 'quick') return undefined;
+    if (typeof value.createdAt !== 'number' || typeof value.deadlineAt !== 'number') return undefined;
+    return {
+      hostSeatId: value.hostSeatId,
+      seats,
+      size: value.size,
+      pace: value.pace,
+      createdAt: value.createdAt,
+      deadlineAt: value.deadlineAt,
+    };
+  }
+
+  /** 从活动存档恢复一局；读不出来就冻结，不悄悄当成没有。 */
+  private restoreActivity(): void {
+    const store = this.activity;
+    if (!store) return;
+    const loaded = store.load();
+    if (!loaded) {
+      if (store.exists() || (store.backupPath && existsSync(store.backupPath))) {
+        this.activityFault = '大富翁活动存档读不出来，这局被冻结，等人处理';
+      }
+      return;
+    }
+    if (loaded.roomId !== this.id || loaded.roomEpoch !== this.epochValue) {
+      this.activityFault = '活动存档属于另一个房间代次，已隔离不加载';
+      return;
+    }
+    try {
+      const table = MonopolyTable.restore(loaded.table, {
+        host: loaded.table.host,
+        seats: loaded.table.seats,
+        pace: loaded.table.pace,
+        now: this.now(),
+      });
+      this.table = table;
+      this.monopolyGameId = loaded.gameId;
+      this.activityData = loaded;
+      const gap = Math.max(0, this.now() - loaded.savedAt);
+      if (gap > 0 && table.status === 'playing') {
+        table.shiftTime(gap);
+        if (gap >= 60_000) {
+          this.record({
+            type: 'parlor.monopoly.shift',
+            from: 'system',
+            scope: { kind: 'room' },
+            text: `服务停了一次（约 ${Math.round(gap / 60_000)} 分钟）；大富翁的回合截止与整局时限顺延了同样长的时间。`,
+            data: { game: 'monopoly', gapMs: gap, since: loaded.savedAt },
+          });
+        }
+      }
+      if (loaded.pending) this.replayPending(loaded.pending);
+      this.flushEffects();
+    } catch (error) {
+      this.activityFault = `大富翁活动存档恢复失败：${error instanceof Error ? error.message : String(error)}`;
+      this.table = undefined;
+      this.activityData = undefined;
+    }
+  }
+
+  /** 崩溃前已提交但没落盘的那一手：用记下来的骰点重放一次。 */
+  private replayPending(pending: NonNullable<MonopolyActivity['pending']>): void {
+    const table = this.table;
+    const data = this.activityData;
+    if (!data || !(table instanceof MonopolyTable)) return;
+    try {
+      const step = table.act(pending.seatId, pending.action, this.now(), pending.dice);
+      this.recordStep(step, false);
+      this.attachMonopolyEffects(step, pending.turnSeq);
+      data.pending = undefined;
+      this.saveActivity();
+    } catch (error) {
+      this.activityFault = `上次没提交完的动作重放失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private startActivity(now: number): void {
+    if (!this.monopolyGameId || !(this.table instanceof MonopolyTable)) return;
+    this.activityData = freshActivity({
+      roomId: this.id,
+      roomEpoch: this.epochValue,
+      gameId: this.monopolyGameId,
+      savedAt: now,
+      table: this.table.snapshot(),
+    });
+  }
+
+  private saveActivity(): boolean {
+    const store = this.activity;
+    const data = this.activityData;
+    if (!store || !data) return true;
+    if (this.table instanceof MonopolyTable) data.table = this.table.snapshot();
+    data.savedAt = this.now();
+    const ok = store.save(data);
+    if (!ok) this.activityFault = '大富翁活动存档写不进去，这局被冻结';
+    return ok;
+  }
+
+  private rollDice(): [number, number] {
+    return [randomInt(1, 7), randomInt(1, 7)];
+  }
+
+  private requireMonopoly(): MonopolyTable {
+    const table = this.table;
+    if (!table || !(table instanceof MonopolyTable)) throw new RoomError('not_found', '现在没有进行中的大富翁');
+    return table;
+  }
+
+  openMonopoly(seat: StoredSeat, body: { size?: unknown; pace?: unknown }): void {
+    if (seat.kind === 'observer') throw new RoomError('invalid', '观看者不能开桌');
+    if (this.monopolyFault()) throw new RoomError('conflict', '大富翁出故障了，先让房主处理');
+    if (this.signup) throw new RoomError('conflict', '已经有一份大富翁报名表了');
+    if (this.table && this.table.status !== 'ended') throw new RoomError('conflict', '现在有一张桌子没结束');
+    if (this.table?.game === 'monopoly' && this.table.status === 'ended') this.table = undefined;
+    const size = Number(body.size) === 6 ? 6 : 4;
+    const pace: MonopolyPace = body.pace === 'quick' ? 'quick' : 'standard';
+    const now = this.now();
+    this.signup = {
+      hostSeatId: seat.id,
+      seats: [seat.id],
+      size,
+      pace,
+      createdAt: now,
+      deadlineAt: now + SIGNUP_MS,
+    };
+    this.record({
+      type: 'parlor.monopoly.open',
+      from: 'system',
+      scope: { kind: 'room' },
+      text: `${seat.name} 开了大富翁报名：${size} 人座，${PACE_LABELS[pace]}；24 小时内没开局就取消。`,
+      mentions: this.seats.filter((entry) => entry.kind !== 'observer').map((entry) => entry.id),
+      data: { game: 'monopoly', size, pace, deadlineAt: this.signup.deadlineAt },
+    });
+  }
+
+  joinMonopoly(seat: StoredSeat): void {
+    const signup = this.signup;
+    if (!signup) throw new RoomError('not_found', '现在没有大富翁报名表');
+    if (seat.kind === 'observer') throw new RoomError('invalid', '观看者不能报名');
+    if (!seat.cooId) throw new RoomError('invalid', '报名要先绑定账本身份');
+    if (signup.seats.includes(seat.id)) throw new RoomError('conflict', '你已经在报名表上了');
+    if (signup.seats.length >= signup.size) throw new RoomError('conflict', '报名满了');
+    signup.seats.push(seat.id);
+    this.record({
+      type: 'parlor.monopoly.join',
+      from: 'system',
+      scope: { kind: 'room' },
+      text: `${seat.name} 报了大富翁（${signup.seats.length}/${signup.size}）。`,
+      data: { game: 'monopoly', seats: signup.seats.map((id) => this.seatById(id)?.name ?? '？') },
+    });
+  }
+
+  leaveMonopoly(seat: StoredSeat): void {
+    const signup = this.signup;
+    if (!signup) throw new RoomError('not_found', '现在没有大富翁报名表');
+    if (signup.hostSeatId === seat.id) throw new RoomError('invalid', '发起人要走请直接取消报名');
+    const index = signup.seats.indexOf(seat.id);
+    if (index < 0) throw new RoomError('conflict', '你不在报名表上');
+    signup.seats.splice(index, 1);
+    this.record({
+      type: 'parlor.monopoly.leave',
+      from: 'system',
+      scope: { kind: 'room' },
+      text: `${seat.name} 退出了大富翁报名（${signup.seats.length}/${signup.size}）。`,
+      data: { game: 'monopoly' },
+    });
+  }
+
+  cancelMonopoly(seat: StoredSeat): void {
+    const signup = this.signup;
+    if (!signup) throw new RoomError('not_found', '现在没有大富翁报名表');
+    if (signup.hostSeatId !== seat.id) throw new RoomError('forbidden', '只有发起人能取消');
+    this.signup = undefined;
+    this.record({
+      type: 'parlor.monopoly.cancel',
+      from: 'system',
+      scope: { kind: 'room' },
+      text: `${seat.name} 取消了大富翁报名。`,
+      data: { game: 'monopoly' },
+    });
+  }
+
+  startMonopoly(seat: StoredSeat, botsWanted?: unknown): StartReceipt {
+    const signup = this.signup;
+    if (!signup) throw new RoomError('not_found', '现在没有大富翁报名表');
+    if (signup.hostSeatId !== seat.id) throw new RoomError('forbidden', '只有发起人能开局');
+    if (this.table && this.table.status !== 'ended') throw new RoomError('conflict', '现在还有一张没结束的桌子');
+    const humans = signup.seats
+      .map((id) => this.seatById(id))
+      .filter((entry): entry is StoredSeat => !!entry && entry.kind !== 'observer');
+    if (humans.length < 2) throw new RoomError('invalid', '至少要有两个真人报名（脚本陪练最多补 2 个）');
+    const noIdentity = humans.find((entry) => !entry.cooId);
+    if (noIdentity) throw new RoomError('invalid', `${noIdentity.name} 还没绑定账本身份，换绑后再开局`);
+    const room = signup.size - humans.length;
+    const asked = Number(botsWanted);
+    const bots = Math.max(0, Math.min(room, Number.isFinite(asked) ? Math.floor(asked) : Math.min(MAX_BOTS, room)));
+    if (humans.length + bots < signup.size) {
+      throw new RoomError('invalid', `还差 ${signup.size - humans.length - bots} 个人；脚本陪练最多补 ${Math.min(MAX_BOTS, room)} 个`);
+    }
+    if (this.monopolyGameId) {
+      this.activityData = undefined;
+      this.activity?.remove();
+    }
+    const tableSeats = [
+      ...humans.map((entry) => ({ id: entry.id, name: entry.name })),
+      ...Array.from({ length: bots }, (_, index) => ({
+        id: `monopoly-bot-${index + 1}`,
+        name: `脚本${index + 1}`,
+        bot: true,
+      })),
+    ];
+    const table = new MonopolyTable({
+      host: seat.id,
+      seats: tableSeats,
+      pace: signup.pace,
+      now: this.now(),
+    });
+    this.table = table;
+    this.tableStake = 0;
+    this.monopolyGameId = randomUUID();
+    this.signup = undefined;
+    this.activityFault = undefined;
+    this.tableFault = undefined;
+    this.effectsFault = undefined;
+    this.startActivity(this.now());
+    this.saveActivity();
+    const opening = table.openingStep();
+    this.recordStep(opening, false);
+    this.attachMonopolyEffects(opening, table.turnSeq);
+    this.saveActivity();
+    this.flushEffects();
+    return { seats: this.tableRoster(), ...this.tableReceipt() };
+  }
+
+  /** 大富翁的一切动作：报名与回合动作都从这里进。 */
+  monopolyAction(seat: StoredSeat, body: Extract<ActionRequest, { type: 'monopoly' }>): MonopolyReceipt {
+    const action = body.action;
+    if (action === 'open') {
+      this.openMonopoly(seat, body);
+      return {};
+    }
+    if (action === 'join') {
+      this.joinMonopoly(seat);
+      return {};
+    }
+    if (action === 'leave') {
+      this.leaveMonopoly(seat);
+      return {};
+    }
+    if (action === 'cancel') {
+      this.cancelMonopoly(seat);
+      return {};
+    }
+    if (action === 'start') {
+      const receipt = this.startMonopoly(seat, body.bots);
+      const text = this.tablePrivate(seat.id)?.text;
+      return { ...receipt, ...(typeof text === 'string' ? { text } : {}) };
+    }
+
+    const fault = this.monopolyFault();
+    if (fault) throw new RoomError('conflict', fault);
+    const table = this.requireMonopoly();
+    if (this.signup) throw new RoomError('conflict', '报名还没开局');
+    if (seat.kind === 'observer') throw new RoomError('forbidden', '观看者不能行动');
+
+    const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+    if (!requestId) throw new RoomError('invalid', '大富翁动作要带 requestId；网络重试必须复用同一个');
+    const data = this.activityData;
+    if (!data) throw new RoomError('conflict', '这一局没有活动存档，不能行动');
+    const key = requestKeyOf(data.gameId, seat.id, requestId);
+    const payload = { type: action, item: body.item, steps: body.steps, target: body.target, on: body.on };
+    const hash = hashOf(payload);
+    const lookup = lookupRequest(data, key, hash);
+    if (lookup.kind === 'mismatch') throw new RoomError('conflict', '同一个 requestId 换了内容；换一个新的 requestId');
+    if (lookup.kind === 'repeat') return lookup.receipt as MonopolyReceipt;
+    if (action !== 'set_auto' && body.turnId !== undefined && body.turnId !== table.turnSeq) {
+      throw new RoomError('conflict', `这份视图已经过期（服务器现在第 ${table.turnSeq} 回合），先看一眼桌面`);
+    }
+
+    const needsDice = action === 'roll' || action === 'pass';
+    const dice = needsDice ? this.rollDice() : undefined;
+    const beforeSeq = table.turnSeq;
+    data.pending = { key, seatId: seat.id, action: payload, turnSeq: beforeSeq, ...(dice ? { dice } : {}) };
+    if (!this.saveActivity()) {
+      data.pending = undefined;
+      throw new RoomError('conflict', '活动存档写不进去，这一手没有执行');
+    }
+
+    let step: TableStep;
+    try {
+      step = table.act(seat.id, payload, this.now(), dice);
+    } catch (error) {
+      data.pending = undefined;
+      this.saveActivity();
+      throw this.monopolyRoomError(error);
+    }
+
+    this.recordStep(step, false);
+    this.attachMonopolyEffects(step, beforeSeq);
+    const text = this.tablePrivate(seat.id)?.text;
+    const receipt: MonopolyReceipt = {
+      ...this.tableReceipt(),
+      ...(typeof text === 'string' ? { text } : {}),
+    };
+    rememberRequest(data, { key, hash, at: this.now(), receipt }, MONOPOLY_REQUEST_LIMIT);
+    data.pending = undefined;
+    this.saveActivity();
+    this.flushEffects();
+    return receipt;
+  }
+
+  private monopolyRoomError(error: unknown): RoomError {
+    if (error instanceof RoomError) return error;
+    if (error instanceof TableError) {
+      if (error.code === 'not_turn') return new RoomError('forbidden', error.message);
+      if (error.code === 'expired') return new RoomError('conflict', error.message);
+      return new RoomError('invalid', error.message);
+    }
+    this.tableFault = `大富翁推进出错：${error instanceof Error ? error.message : String(error)}`;
+    return new RoomError('invalid', this.tableFault);
+  }
+
+  /** 把这一手带来的账/信排进待发队列；真正写盘在 flushEffects。 */
+  private attachMonopolyEffects(step: TableStep, beforeSeq: number): void {
+    const data = this.activityData;
+    const table = this.table;
+    if (!data || !(table instanceof MonopolyTable)) return;
+    const now = this.now();
+
+    if (step.ended) {
+      const endEvent = step.events.find((event) => event.type === 'parlor.table.end');
+      const winners = Array.isArray(endEvent?.data?.winners)
+        ? (endEvent!.data!.winners as unknown[]).filter((id): id is string => typeof id === 'string')
+        : [];
+      const seats = table.seatIds()
+        .map((id) => this.seatById(id))
+        .filter((entry): entry is StoredSeat => !!entry && entry.kind !== 'observer');
+      const endText = typeof endEvent?.text === 'string' ? endEvent.text : '大富翁结束。';
+      queueEffect(data, {
+        id: `${data.gameId}/result`,
+        kind: 'ledger-result',
+        payload: {
+          text: endText,
+          winners: seats.filter((entry) => winners.includes(entry.id)).map((entry) => this.cooIdOf(entry)),
+          participants: seats.map((entry) => this.cooIdOf(entry)),
+          tie: endEvent?.data?.tie === true,
+        },
+      });
+      for (const entry of seats) {
+        queueEffect(data, {
+          id: `${data.gameId}/end/${entry.id}`,
+          kind: 'mail-end',
+          payload: { cooId: this.cooIdOf(entry), name: entry.name, text: endText },
+        });
+      }
+    }
+
+    for (const seatId of step.views) {
+      const seat = this.seatById(seatId);
+      if (!seat) continue;
+      const text = table.privateText(seatId, now);
+      if (!text) continue;
+      const turnSeq = (table.view(seatId) as { turnSeq?: number } | null)?.turnSeq ?? 0;
+      queueEffect(data, {
+        id: `${data.gameId}/turn/${turnSeq}/${seat.id}`,
+        kind: 'mail-turn',
+        payload: { cooId: this.cooIdOf(seat), name: seat.name, text },
+      });
+    }
+
+    for (const event of step.events) {
+      const managedSeat = typeof event.data?.managedSeat === 'string' ? event.data.managedSeat : '';
+      if (event.data?.managed !== true || !managedSeat) continue;
+      const seat = this.seatById(managedSeat);
+      if (!seat) continue;
+      queueEffect(data, {
+        id: `${data.gameId}/managed/${beforeSeq}/${seat.id}`,
+        kind: 'mail-managed',
+        payload: { cooId: this.cooIdOf(seat), name: seat.name, text: `服务器托管了你的回合：${event.text}` },
+      });
+    }
+  }
+
+  /** 待发的账/信逐条送达；写不进去就留着，下一次再试，并标记故障。 */
+  private flushEffects(): void {
+    const data = this.activityData;
+    if (!data) return;
+    let failed = false;
+    for (const effect of [...data.outbox]) {
+      try {
+        this.writeEffect(effect);
+        settleEffect(data, effect.id);
+      } catch (error) {
+        failed = true;
+        this.effectsFault = `大富翁的账/信没写进去：${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (!failed) this.effectsFault = undefined;
+    this.saveActivity();
+  }
+
+  private writeEffect(effect: Effect): void {
+    if (effect.kind === 'ledger-result') {
+      const payload = effect.payload as {
+        text?: unknown; winners?: unknown; participants?: unknown; tie?: unknown;
+      };
+      this.ledger.recordOnce(effect.id, {
+        kind: 'game',
+        room: this.id,
+        from: 'room',
+        game: 'monopoly',
+        participants: Array.isArray(payload.participants) ? payload.participants.filter((id): id is string => typeof id === 'string') : [],
+        winners: Array.isArray(payload.winners) ? payload.winners.filter((id): id is string => typeof id === 'string') : [],
+        text: typeof payload.text === 'string' ? payload.text : '大富翁结束。',
+        visibility: 'room',
+        data: { game: 'monopoly', gameLabel: '大富翁', tie: payload.tie === true },
+      });
+      return;
+    }
+    const payload = effect.payload as { cooId?: unknown; text?: unknown };
+    if (typeof payload.cooId !== 'string' || typeof payload.text !== 'string') {
+      throw new Error('信件缺少收件人或正文');
+    }
+    this.mail.appendOnce(effect.id, {
+      room: this.id,
+      to: payload.cooId,
+      kind: 'ledger',
+      action: effect.kind,
+      fromName: '客厅',
+      text: payload.text,
+    });
+  }
+
   snapshot(seatId: string, since: number, limit = 30): Omit<RoomSnapshot, 'seat'> {
     const seat = this.seatById(seatId);
     if (!seat) throw new RoomError('not_found', '席位不存在');
@@ -944,6 +1491,7 @@ export class RoomKernel {
       ledger: this.ledger.summaryFor(this.cooIdOf(seat)),
       ledgerRoom: this.ledger.publicInRoom(this.id, 5),
       mailUnread: this.mail.unreadCount(this.cooIdOf(seat), this.id),
+      ...(this.monopolyInfo() ? { monopoly: this.monopolyInfo() } : {}),
     };
   }
 

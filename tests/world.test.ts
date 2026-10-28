@@ -300,4 +300,35 @@ describe('客厅 World', () => {
     expect(text).toContain('骰子：1 局');
     expect(text).toContain('骰子桌结束');
   });
+
+  it('大富翁：look 显示报名，工具能报名与托管', async () => {
+    await startServer();
+    const client = new ParlorClient(server.url, { cooId: 'coo-aaaaaaaa', cooSecret: 'secret-aaaaaaaaaaaa' });
+    const host = await client.join('inv', { name: '阿岚' });
+    await client.action(host.token, { type: 'monopoly', action: 'open', size: 4 });
+
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+
+    const look = world.tools().find((tool) => tool.name === 'parlor_look')!;
+    expect(String(await look.handler({}, {} as ToolCallContext))).toContain('大富翁报名');
+
+    const monopoly = world.tools().find((tool) => tool.name === 'parlor_monopoly')!;
+    expect(String(await monopoly.handler({ action: 'join' }, {} as ToolCallContext))).toContain('报上了');
+    expect(String(await look.handler({}, {} as ToolCallContext))).toContain('2/4');
+
+    const started = await client.action(host.token, { type: 'monopoly', action: 'start', bots: 2 });
+    expect(started.seats).toHaveLength(4);
+    const after = String(await look.handler({}, {} as ToolCallContext));
+    expect(after).toContain('大富翁');
+    expect(after).toContain('轮到');
+
+    expect(String(await monopoly.handler({ action: 'set_auto', on: true }, {} as ToolCallContext))).toContain('托管');
+    const bad = await monopoly.handler({ action: 'nope' }, {} as ToolCallContext) as { text?: string };
+    expect(bad.text).toContain('action 只能是');
+  });
 });

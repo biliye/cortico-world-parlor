@@ -2,7 +2,7 @@
  * 客厅 World：连上房间，把可见事件按提醒挡位交给 Core，提供说话/私聊/查看工具。
  * 它不判断谁能看见什么；服务器只发这个席位能看见的事件。
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR_CONFIG_GROUP, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
-import { serverClockShort } from './room/clock.ts';
+import { serverClock, serverClockShort } from './room/clock.ts';
 import { gameLabelOf } from './room/game-labels.ts';
 import { IDENTITY_FILE, loadOrCreateIdentity, type CooIdentity } from './room/identity.ts';
 import type { MailPage } from './room/mail.ts';
@@ -247,6 +247,30 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       required: ['move'],
     },
   },
+  {
+    name: 'parlor_monopoly',
+    description: '大富翁：4–6 人的异步长局。open 开报名（24 小时窗口），join 报名，start 开局（空位可由脚本陪练补），之后按绝对截止走回合。每个回合：先用至多一张道具，再 roll；落地后用 buy / upgrade / take_item 做选择，或 pass 放弃。过了截止服务器按「不买、不升级、不补卡」托管。turnId 不用你填，服务器会带；重复提交同一次动作请复用同一个 requestId。',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['open', 'join', 'leave', 'cancel', 'start', 'set_auto', 'roll', 'use_item', 'buy', 'upgrade', 'take_item', 'pass'],
+          description: 'open = 开报名；join/leave = 报名/退出；cancel = 发起人取消；start = 发起人开局；set_auto = 本人托管开关；其余是回合动作。',
+        },
+        size: { type: 'integer', enum: [4, 6], description: 'open 时的人座数，默认 4。' },
+        pace: { type: 'string', enum: ['standard', 'quick'], description: 'open 时的节奏：standard 30 分钟/回合，quick 5 分钟/回合。' },
+        bots: { type: 'integer', minimum: 0, maximum: 5, description: 'open/start 时补几个脚本陪练；默认补到人数够，最多 2 个。' },
+        on: { type: 'boolean', description: 'set_auto 用：true 托管，false 取消。' },
+        item: { type: 'string', enum: ['signpost', 'pass', 'repair'], description: 'use_item / take_item 用：signpost 路标卡、pass 通行卡、repair 修缮卡。' },
+        steps: { type: 'integer', minimum: 1, maximum: 6, description: 'use_item(signpost) 走几格，1–6。' },
+        target: { type: 'integer', description: 'use_item(repair) 修哪一块自己的地：格号。' },
+      },
+      required: ['action'],
+    },
+  },
 ];
 
 export class ParlorWorld implements World {
@@ -310,6 +334,7 @@ export class ParlorWorld implements World {
       tool('parlor_table_action', (args) => this.tableAct(args)),
       tool('parlor_table_view', () => this.tableView()),
       tool('parlor_ddz_action', (args) => this.ddzAct(args)),
+      tool('parlor_monopoly', (args) => this.monopolyAct(args)),
     ];
   }
 
@@ -613,6 +638,14 @@ export class ParlorWorld implements World {
       ...snapshot.seats.map((seat) => `- ${seat.name}（${KIND_LABELS[seat.kind] ?? seat.kind}·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}${online.has(seat.id) ? '·在线' : ''}）`),
       `最新游标 ${snapshot.latest}`,
     ];
+    if (snapshot.monopoly?.signup) {
+      const signup = snapshot.monopoly.signup;
+      lines.push(`大富翁报名：${signup.seats.join('、')}（${signup.seats.length}/${signup.size}），`
+        + `${signup.pace === 'quick' ? '试玩 5 分钟/回合' : '标准 30 分钟/回合'}；`
+        + `报名截止 ${serverClock(signup.deadlineAt)}（服务器时刻 UTC+8）`
+        + `${signup.missing > 0 ? `，还差 ${signup.missing} 人（脚本陪练最多补 2 个）` : '，可以开局'}。`);
+    }
+    if (snapshot.monopoly?.fault) lines.push(`大富翁故障：${snapshot.monopoly.fault}（这局被冻结，别当成没开）`);
     if (snapshot.table) lines.push(snapshot.table.text);
     if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
     if (snapshot.ledger && snapshot.ledger.games > 0) {
@@ -885,6 +918,69 @@ export class ParlorWorld implements World {
     }
     if (move === 'pass') return this.tableRequest({ type: 'ddz_action', move: 'pass' }, '过了。');
     return this.failed('move 只能是 bid、play 或 pass');
+  }
+
+  private async monopolyAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const action = String(args.action ?? '');
+    const allowed = ['open', 'join', 'leave', 'cancel', 'start', 'set_auto', 'roll', 'use_item', 'buy', 'upgrade', 'take_item', 'pass'];
+    if (!allowed.includes(action)) return this.failed(`action 只能是 ${allowed.join(' / ')}`);
+
+    const body: Extract<ActionRequest, { type: 'monopoly' }> = {
+      type: 'monopoly',
+      action: action as Extract<ActionRequest, { type: 'monopoly' }>['action'],
+      requestId: randomUUID(),
+    };
+    if (action === 'open' || action === 'start') {
+      if (args.size !== undefined) body.size = Number(args.size);
+      if (args.bots !== undefined) body.bots = Number(args.bots);
+      if (action === 'start') {
+        // 开局人数以报名表为准，这里只接受陪练数
+        delete body.size;
+      }
+    }
+    if (action === 'open' && args.pace !== undefined) body.pace = String(args.pace);
+    if (action === 'set_auto') body.on = args.on === true;
+    if (action === 'use_item' || action === 'take_item') {
+      const item = String(args.item ?? '');
+      if (!['signpost', 'pass', 'repair'].includes(item)) return this.failed('item 只能是 signpost、pass 或 repair');
+      body.item = item;
+      if (action === 'use_item' && args.steps !== undefined) body.steps = Number(args.steps);
+      if (action === 'use_item' && args.target !== undefined) body.target = Number(args.target);
+    }
+
+    const turnAction = ['roll', 'use_item', 'buy', 'upgrade', 'take_item', 'pass'].includes(action);
+    if (turnAction) {
+      try {
+        const snapshot = await this.client.snapshot(this.token, 0, 1);
+        const priv = snapshot.tablePrivate as { turnSeq?: unknown } | null | undefined;
+        if (typeof priv?.turnSeq === 'number') body.turnId = priv.turnSeq;
+      } catch { /* 读不到就不带；服务器按当前回合判 */ }
+    }
+
+    const done: Record<string, string> = {
+      open: '报名开了；等别人 join，你再用 start 开局。',
+      join: '报上了；等发起人开局。',
+      leave: '退出报名了。',
+      cancel: '报名取消了。',
+      start: '大富翁开局了；轮到谁，谁会在截止前被叫醒。',
+      set_auto: args.on === true ? '这一局设成托管了。' : '取消托管了。',
+      roll: '掷骰完成。',
+      use_item: '道具用掉了。',
+      buy: '买下了。',
+      upgrade: '升级了。',
+      take_item: '补到了。',
+      pass: '这一手放弃了。',
+    };
+
+    try {
+      const result = await this.client.action(this.token, body);
+      const lines = [this.receipt(result, done[action] ?? '完成。')];
+      if (result.text) lines.push('', result.text);
+      return lines.join('\n');
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
   }
 
   private async tableRequest(body: ActionRequest, done: string): Promise<string | ToolOutcome> {

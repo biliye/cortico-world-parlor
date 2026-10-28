@@ -30,6 +30,8 @@ export interface ParlorServerOptions {
   mailFile?: string;
   /** 回放文件；不填时与 dataFile 同目录的 replay.jsonl。 */
   replayFile?: string;
+  /** 大富翁活动存档；不填时与 dataFile 同目录的 activity.json。 */
+  activityFile?: string;
 }
 
 export interface ParlorAddress {
@@ -219,6 +221,8 @@ export class ParlorServer {
       ledger: this.ledger,
       mail: this.mail,
       replay: this.replay,
+      activityFile: options.activityFile
+        ?? (options.dataFile ? join(dirname(options.dataFile), 'activity.json') : undefined),
     };
     const file = options.dataFile;
     if (!file || !existsSync(file)) return new RoomKernel(common);
@@ -367,6 +371,7 @@ export class ParlorServer {
     let seats: ActionResponse['seats'];
     let deadline: number | undefined;
     let turn: string | undefined;
+    let text: string | undefined;
     switch (body.type) {
       case 'say': this.kernel.say(seat, body.text); break;
       case 'whisper': delivered = this.kernel.whisper(seat, body.to, body.text).delivered; break;
@@ -395,6 +400,14 @@ export class ParlorServer {
         turn = receipt.turn;
         break;
       }
+      case 'monopoly': {
+        const receipt = this.kernel.monopolyAction(seat, body);
+        seats = receipt.seats;
+        deadline = receipt.deadline;
+        turn = receipt.turn;
+        text = receipt.text;
+        break;
+      }
       default: throw new HttpError(400, '未知动作');
     }
     const ts = this.kernel.nowMs();
@@ -406,6 +419,7 @@ export class ParlorServer {
       ...(seats ? { seats } : {}),
       ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
       ...(turn ? { turn } : {}),
+      ...(text ? { text } : {}),
     };
   }
 
