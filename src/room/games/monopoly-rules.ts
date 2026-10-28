@@ -87,7 +87,7 @@ export const cellAt = (index: number): Cell => BOARD[((index % BOARD_SIZE) + BOA
 
 /** 冻结的数值。改这里必须同时改 mapVersion，并在设计记录里写「改前 / 改后 / 模拟结果」。 */
 export const MONOPOLY_RULES = Object.freeze({
-  version: 1,
+  version: 2,
   mapVersion: 1,
   /** 两颗骰，走 2–12 格。 */
   diceCount: 2,
@@ -110,6 +110,16 @@ export const MONOPOLY_RULES = Object.freeze({
   /** 连续这么多整轮没有任何主动动作就提前结束。 */
   idleRoundsToEnd: 3,
 });
+
+/**
+ * 后手补偿：按轮序位次递增的起始现金，每位比上一位多这么多。
+ * 按人数分档（4 人 60、5 人 70、6 人 80），因为人越多，末位等得越久。
+ * 依据是配对反转模拟：四人 +60、六人 +80 能把首尾胜出份额压到 1.0 附近。
+ */
+export function seatCompensationStep(playerCount: number): number {
+  const count = Math.min(6, Math.max(2, Math.trunc(playerCount) || 2));
+  return 20 + 10 * count;
+}
 
 export type Phase = 'prepare' | 'buy' | 'upgrade' | 'workshop';
 
@@ -368,6 +378,10 @@ export class MonopolyGame {
         passThisTurn: false,
       };
     }
+    const step = seatCompensationStep(order.length);
+    order.forEach((seatId, index) => {
+      players[seatId]!.cash += step * index;
+    });
     const state: MonopolyState = {
       rulesVersion: MONOPOLY_RULES.version,
       mapVersion: MONOPOLY_RULES.mapVersion,

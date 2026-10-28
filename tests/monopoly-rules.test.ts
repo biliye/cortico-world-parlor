@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BOARD, BOARD_SIZE, GROUPS, ITEM_LABELS, MONOPOLY_RULES, MonopolyError, MonopolyGame, PROPERTY_INDICES,
-  cellAt, validateState, type ItemKind, type MonopolyState,
+  cellAt, seatCompensationStep, validateState, type ItemKind, type MonopolyState,
 } from '../src/room/games/monopoly-rules.ts';
 
 const SEATS = ['a', 'b', 'c', 'd'];
@@ -32,6 +32,11 @@ function at(game: MonopolyGame, seats: readonly string[], seatId: string, pos: n
 }
 
 const player = (game: MonopolyGame, seatId: string) => game.player(seatId);
+
+/** 按轮序位次算起始现金（含后手补偿）。 */
+const startCash = (index: number, count = 4): number => (
+  MONOPOLY_RULES.startingCash + seatCompensationStep(count) * index
+);
 
 const expectError = (run: () => unknown, code: string): void => {
   try {
@@ -65,17 +70,38 @@ describe('地图与数值', () => {
 });
 
 describe('开局', () => {
-  it('每人 1200、站在起点、三种道具各一张', () => {
+  it('按位次发起始现金（后手补偿）、站在起点、三种道具各一张', () => {
     const game = make();
-    for (const seatId of SEATS) {
+    for (const [index, seatId] of SEATS.entries()) {
       const seat = player(game, seatId);
-      expect(seat.cash).toBe(1200);
+      expect(seat.cash).toBe(startCash(index));
       expect(seat.pos).toBe(0);
       expect(seat.items).toEqual({ signpost: 1, pass: 1, repair: 1 });
       expect(seat.bankrupt).toBe(false);
     }
     expect(game.round).toBe(1);
     expect(game.currentSeatId).toBe('a');
+  });
+
+  it('后手补偿按人数分档：四人每位 +60，六人每位 +80', () => {
+    const four = make();
+    expect(SEATS.map((seatId) => player(four, seatId).cash)).toEqual([1200, 1260, 1320, 1380]);
+
+    const six = make(['a', 'b', 'c', 'd', 'e', 'f']);
+    expect(player(six, 'f').cash).toBe(1200 + 80 * 5);
+    expect(seatCompensationStep(4)).toBe(60);
+    expect(seatCompensationStep(5)).toBe(70);
+    expect(seatCompensationStep(6)).toBe(80);
+  });
+
+  it('补偿跟着轮序走，不跟报名顺序走', () => {
+    const game = MonopolyGame.start({
+      seats: SEATS.map((seatId) => ({ seatId, name: seatId.toUpperCase() })),
+      shuffle: (list) => [...list].reverse(),
+    });
+    expect(game.snapshot().order).toEqual(['d', 'c', 'b', 'a']);
+    expect(game.player('d').cash).toBe(1200);
+    expect(game.player('a').cash).toBe(1380);
   });
 
   it('同一个席位不能占两次，少于两人不能开局', () => {
@@ -136,7 +162,7 @@ describe('买地与租金', () => {
     });
     game.roll('a', [1, 1]);
     expect(player(game, 'a').cash).toBe(1200 - 40);
-    expect(player(game, 'b').cash).toBe(1200 + 40);
+    expect(player(game, 'b').cash).toBe(startCash(1) + 40);
   });
 
   it('升级翻倍、集齐同组再乘 1.5、通行卡减半后向上取整', () => {
@@ -174,7 +200,7 @@ describe('买地与租金', () => {
     halved.useItem('a', { item: 'pass' });
     halved.roll('a', [1, 1]);
     expect(1200 - player(halved, 'a').cash).toBe(40); // 80 × 0.5
-    expect(player(halved, 'b').cash).toBe(1240);
+    expect(player(halved, 'b').cash).toBe(startCash(1) + 40);
   });
 
   it('自己的地没升级就停在自己的地，不付钱', () => {
@@ -238,7 +264,7 @@ describe('强制付款与破产', () => {
     });
     game.roll('a', [1, 1]);
     expect(player(game, 'a').bankrupt).toBe(true);
-    expect(player(game, 'b').cash).toBe(1205);
+    expect(player(game, 'b').cash).toBe(startCash(1) + 5);
   });
 });
 

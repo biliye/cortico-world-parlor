@@ -12,7 +12,7 @@ import {
 } from '../table-engine.ts';
 import {
   BOARD, ITEM_KINDS, ITEM_LABELS, MONOPOLY_RULES, MonopolyError, MonopolyGame,
-  cellAt, isItemKind, phaseAction,
+  cellAt, isItemKind, phaseAction, seatCompensationStep,
   type ItemKind, type MonopolyEnd, type MonopolyState, type Outcome, type Phase,
 } from './monopoly-rules.ts';
 
@@ -277,10 +277,13 @@ export class MonopolyTable implements TableEngine {
     const me = state.players[seatId]!;
     const legal = this.engine.legal();
     const mine = state.properties.filter((property) => property.owner === seatId);
+    const seatIndex = state.order.indexOf(seatId);
     return {
       game: this.game,
       seat: seatId,
       name: seat.name,
+      seatIndex,
+      startBonus: seatCompensationStep(state.order.length) * seatIndex,
       status: this.status,
       round: state.round,
       rounds: MONOPOLY_RULES.rounds,
@@ -356,9 +359,12 @@ export class MonopolyTable implements TableEngine {
       : '还没有地';
     const held = ITEM_KINDS.filter((item) => me.items[item] > 0)
       .map((item) => `${ITEM_LABELS[item]}×${me.items[item]}`).join(' ') || '没有';
+    const seatIndex = state.order.indexOf(seatId);
+    const startBonus = seatCompensationStep(state.order.length) * seatIndex;
     const lines = [
       header,
-      `你：现金 ${me.cash}，在 ${cellAt(me.pos).name}（${me.pos} 号格）${me.bankrupt ? '，已破产' : ''}。地产 ${mine.length} 块：${owned}。道具：${held}。`,
+      `你：现金 ${me.cash}，在 ${cellAt(me.pos).name}（${me.pos} 号格）${me.bankrupt ? '，已破产' : ''}。地产 ${mine.length} 块：${owned}。道具：${held}。`
+        + (state.round === 1 && startBonus > 0 ? `（你是第 ${seatIndex + 1} 位起手，后手补偿 +${startBonus}。）` : ''),
     ];
 
     if (this.status === 'playing') {
@@ -546,6 +552,7 @@ export class MonopolyTable implements TableEngine {
     return {
       id: seatId,
       name: this.engine.nameOf(seatId),
+      seatIndex: state.order.indexOf(seatId),
       cash: player.cash,
       pos: player.pos,
       position: cellAt(player.pos).name,

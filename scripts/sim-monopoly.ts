@@ -10,7 +10,7 @@
  * 策略只影响买/升级，不用道具（道具另测）。
  */
 import { randomInt } from 'node:crypto';
-import { MONOPOLY_RULES, MonopolyGame, cellAt } from '../src/room/games/monopoly-rules.ts';
+import { MONOPOLY_RULES, MonopolyGame, cellAt, seatCompensationStep } from '../src/room/games/monopoly-rules.ts';
 
 interface Policy {
   name: string;
@@ -113,7 +113,10 @@ function report(size: number, games: number): void {
     console.log(`  平均买地：${mean(rows.map((row) => row.buys)).toFixed(1)} / 12 块，升级 ${mean(rows.map((row) => row.upgrades)).toFixed(1)} 块`);
     console.log(`  平均破产人数：${mean(rows.map((row) => row.bankrupt)).toFixed(2)} / ${size}`);
     console.log(`  并列：${pct(rows.filter((row) => row.tie).length, games)}；赢家资产 ${mean(rows.map((row) => row.winnerAssets)).toFixed(0)}；首尾差 ${mean(rows.map((row) => row.spread)).toFixed(0)}`);
-    console.log(`  场上现金合计：${mean(rows.map((row) => row.cashTotal)).toFixed(0)}（起始 ${MONOPOLY_RULES.startingCash * size}）`);
+    const startingTotal = Array.from({ length: size }, (_, index) => (
+      MONOPOLY_RULES.startingCash + seatCompensationStep(size) * index
+    )).reduce((sum, value) => sum + value, 0);
+    console.log(`  场上现金合计：${mean(rows.map((row) => row.cashTotal)).toFixed(0)}（起始 ${startingTotal}，含后手补偿）`);
   }
 }
 
