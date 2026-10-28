@@ -272,7 +272,20 @@ describe('网页玩家', () => {
       expect(text).not.toContain('净胜');
     }
     expect(js).toContain('牌桌 tab 只是过滤');
-    expect(js).toContain('0.12.0');
+    expect(js).toContain('0.13.0');
+  });
+
+  it('网页这版只开斗地主入口，骰子和大富翁收起，斗地主有结算手牌', () => {
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    const ddz = readFileSync(new URL('../src/web/games/ddz.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
+    expect(js).toContain("const ENABLED_GAMES = ['ddz']");
+    expect(js).toContain('骰子和大富翁先收起来了');
+    expect(js).toContain('开斗地主桌');
+    expect(js).toContain('endEvent');
+    expect(ddz).toContain('ddz-end');
+    expect(css).toContain('.ddz-end-seats');
+    expect(css).toContain('.ddz-guide');
   });
 
   it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {

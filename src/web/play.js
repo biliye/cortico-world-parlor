@@ -19,6 +19,10 @@ const RULES = {
   monopoly: '24 格外圈棋盘，买地、升级、道具与托管都在中间面板；回合超时自动托管。',
 };
 
+/** 这版先只做斗地主。骰子和大富翁的服务器能力还在，只是网页收起入口；
+ *  如果桌上已经有一局旧游戏，仍然渲染它，免得打到一半看不见。 */
+const ENABLED_GAMES = ['ddz'];
+
 const state = {
   cfg: readStore(),
   snap: null,
@@ -179,6 +183,13 @@ async function actAndGo(body, view = 'table') {
   }
 }
 
+/** 斗地主结算页的「再开一桌」：开一张新桌，回到等人的牌桌视图。 */
+function openNewDdz() {
+  act({ type: 'table_open', game: 'ddz' })
+    .then(() => setView('table'))
+    .catch(() => {});
+}
+
 /* —— 实时推送 —— */
 
 function connect() {
@@ -296,9 +307,15 @@ function pushLog(event, seed = false) {
   }
 
   if (!seed) {
-    if (state.tab !== 'room') state.unread.room += 1;
-    if (tableBucket && state.tab !== 'table') state.unread.table += 1;
-    renderChatBadges();
+    // 角标只数「聊天」类事件；牌桌的每一次出牌/托管都算未读会把 99+ 堆在底栏，反而没人看。
+    const type = event.type || '';
+    const conversational = type === 'parlor.say' || type === 'parlor.whisper'
+      || type === 'parlor.joined' || type === 'parlor.left' || type === 'parlor.ledger';
+    if (conversational) {
+      if (state.tab !== 'room') state.unread.room += 1;
+      if (tableBucket && state.tab !== 'table') state.unread.table += 1;
+      renderChatBadges();
+    }
   }
 }
 
@@ -512,6 +529,18 @@ function buildShell() {
   lobbyCopy.append(lobbyEyebrow, lobbyTitle, lobbySub);
   lobbyHead.append(lobbyCopy);
   const gameGrid = el('div', 'game-grid');
+  const guide = el('section', 'panel ddz-guide');
+  guide.append(el('h2', '', '斗地主 · 怎么玩'));
+  const guideList = el('ul', 'guide-list');
+  for (const line of [
+    '三人一桌；空位由脚本陪练补，一个人也能开。',
+    '叫地主 30 秒、出牌 60 秒；超时由服务器代打。',
+    '点牌选中，出牌 / 不要 / 提示；提示来自服务器，出的牌一定合法。',
+    '地主拿 3 张底牌；炸弹、王炸翻倍；春天 / 反春再翻。',
+  ]) guideList.append(el('li', '', line));
+  guide.append(guideList);
+  guide.append(el('p', 'guide-note', '骰子和大富翁先收起来了；等斗地主打磨好再加回来。'));
+  const lobbyNotice = el('div', 'lobby-notice');
   const members = el('section', 'panel members');
   const membersHead = el('div', 'panel-head');
   const membersTitle = el('h2', '', '房间里的人');
@@ -519,7 +548,7 @@ function buildShell() {
   membersHead.append(membersTitle, membersCount);
   const memberRow = el('div', 'member-row');
   members.append(membersHead, memberRow);
-  viewLobby.append(lobbyHead, gameGrid, members);
+  viewLobby.append(lobbyHead, gameGrid, guide, lobbyNotice, members);
   center.append(mobileSwitch, viewTable, viewLobby);
 
   /* 右栏：聊天 / 牌桌信息 */
@@ -629,7 +658,7 @@ function buildShell() {
     statChips, statWins, statGames, progressLeft, progressRight, progressFill,
     ledgerNet, split, ledgerList, tableList,
     viewTable, viewLobby, tableHead, mobileTicker, game, ticker,
-    lobbyEyebrow, lobbyTitle, lobbySub, gameGrid, membersCount, memberRow,
+    lobbyEyebrow, lobbyTitle, lobbySub, gameGrid, lobbyNotice, membersCount, memberRow,
     chatPanel, markRead, backRoom, tabRoom, tabTable, tabMail,
     logRoom, logTable, mailList, composer, scopeText, sayInput, sendBtn, mailNote,
     infoGame, infoStake, infoStatus, infoTurn, ruleNote, infoClock,
@@ -840,43 +869,56 @@ function renderTablesRail() {
   const table = snap.table;
   const signup = snap.monopoly && snap.monopoly.signup;
   clear(ui.tableList);
-  for (const game of ['dice', 'ddz', 'monopoly']) {
+  const games = [...ENABLED_GAMES];
+  if (table && table.status !== 'ended' && !games.includes(table.game)) games.unshift(table.game);
+  for (const game of games) {
     const row = el('li');
     const button = el('button', 'table-row');
     button.type = 'button';
-    const mine = table && table.game === game && table.status !== 'ended';
-    if (mine) button.classList.add('is-active');
+    const current = table && table.game === game;
+    const live = current && table.status !== 'ended';
+    const ended = current && table.status === 'ended';
+    const hidden = !ENABLED_GAMES.includes(game);
+    if (live) button.classList.add('is-active');
     const iconBox = el('span', 'table-icon');
     iconBox.append(icon(game === 'dice' ? 'dice' : game === 'ddz' ? 'cards' : 'board'));
     const copy = el('span', 'table-copy');
-    copy.append(el('strong', '', GAME_LABELS[game]));
+    copy.append(el('strong', '', GAME_LABELS[game] || game));
     const small = el('small');
     let stateText = '';
-    if (mine) {
+    if (live) {
       small.append(el('span', 'live-dot'));
-      small.append(document.createTextNode((STATUS_LABELS[table.status] || table.status) + ' · ' + (table.seats || []).length + ' 人'));
+      small.append(document.createTextNode(
+        (STATUS_LABELS[table.status] || table.status) + ' · ' + (table.seats || []).length + ' 人'
+        + (hidden ? ' · 已收起' : ''),
+      ));
       stateText = '在桌上';
-    } else if (game === 'monopoly' && signup) {
-      small.append(el('span', 'live-dot'));
-      small.append(document.createTextNode('报名中 · ' + signup.seats.length + '/' + signup.size));
-      stateText = '去牌桌';
+    } else if (ended) {
+      small.append(document.createTextNode('已结束 · 看结果' + (hidden ? ' · 已收起' : '')));
+      stateText = '看结果';
     } else if (table && table.status !== 'ended') {
       small.append(document.createTextNode('另一桌进行中'));
       stateText = '看那桌';
     } else {
       small.append(document.createTextNode('可开桌'));
-      stateText = game === 'monopoly' ? '去报名' : '去开桌';
+      stateText = '去开桌';
     }
     copy.append(small);
-    const stateEl = el('span', 'table-state' + (mine || stateText === '去牌桌' ? '' : ' muted'), stateText);
+    const stateEl = el('span', 'table-state' + (live || ended ? '' : ' muted'), stateText);
     button.append(iconBox, copy, stateEl);
     button.addEventListener('click', () => {
-      if (mine || stateText === '去牌桌' || (table && table.status !== 'ended')) setView('table');
+      if (live || ended || (table && table.status !== 'ended')) setView('table');
       else setView('lobby');
     });
     row.append(button);
     ui.tableList.append(row);
   }
+  let note = '';
+  if (signup) note = '大富翁已收起 · 报名 ' + signup.seats.length + '/' + signup.size;
+  else if (table && table.status !== 'ended' && !ENABLED_GAMES.includes(table.game)) {
+    note = (GAME_LABELS[table.game] || table.game) + ' 已收起，先把这局打完';
+  } else note = '骰子 / 大富翁已收起';
+  ui.tableList.append(el('li', 'rail-note', note));
 }
 
 function renderBanner() {
@@ -914,7 +956,8 @@ function tableTitle(table) {
   return table.game === 'dice' ? '骰子桌' : label;
 }
 
-function namesMap() {  const names = new Map((state.snap.seats || []).map((seat) => [seat.id, seat.name]));
+function namesMap() {
+  const names = new Map((state.snap.seats || []).map((seat) => [seat.id, seat.name]));
   for (const seat of ((state.snap.table && state.snap.table.seats) || [])) {
     if (!names.has(seat.id)) names.set(seat.id, seat.name);
   }
@@ -958,10 +1001,12 @@ function renderTableHead() {
   turnBox.append(turnCopy);
 
   const deadline = table.deadline || (priv && priv.deadline) || 0;
+  const turnSeat = (table.seats || []).find((seat) => seat.id === table.turn);
+  const botTurn = !!(turnSeat && turnSeat.bot) && !myTurn;
   const timer = el('div', 'timer');
   const timerText = el('span', '', '—');
   timer.append(timerText);
-  if (deadline) {
+  if (deadline && !botTurn) {
     // 一回合有多长，服务器没有单独给；第一次见到这个截止时刻时按剩余秒数记总长。
     // 骰子约 45 秒、斗地主 30/60 秒、大富翁 5/30 分钟，都能落在同一个环上。
     const key = table.game + ':' + deadline;
@@ -973,6 +1018,7 @@ function renderTableHead() {
     timer.dataset.total = String(state.timerTotal);
   } else {
     timer.classList.add('is-off');
+    if (botTurn) timerText.textContent = '脚本';
   }
   turnBox.append(timer);
   head.append(left, turnBox);
@@ -985,7 +1031,10 @@ function renderTableHead() {
 function renderGame() {
   const table = state.snap.table;
   const active = !!table && (table.status === 'bidding' || table.status === 'playing');
-  if (!active) {
+  // 斗地主打完后还要给一版结算（三家的手牌），所以 ended 的斗地主也留在渲染器里；
+  // 骰子/大富翁结束仍走通用结算卡。
+  const endedDdz = !!table && table.game === 'ddz' && table.status === 'ended';
+  if (!active && !endedDdz) {
     disposeGame();
     renderTableIdle();
     renderTicker();
@@ -1007,6 +1056,7 @@ function renderGame() {
       toast: showToast,
       serverNow,
       showLobby: () => setView('lobby'),
+      openDdz: openNewDdz,
     };
     state.mounted = { game: table.game, instance: factory(root, ctx) };
   }
@@ -1022,6 +1072,8 @@ function makeView() {
   ((snap.table && snap.table.seats) || []).forEach((seat, index) => {
     if (!classes.has(seat.id)) classes.set(seat.id, playerClass(index));
   });
+  const endEvent = [...state.log].reverse().find((event) => event.type === 'parlor.table.end'
+    && event.data && event.data.game === 'ddz' && Array.isArray(event.data.revealed)) || null;
   return {
     table: snap.table,
     priv: snap.tablePrivate,
@@ -1031,6 +1083,7 @@ function makeView() {
     classes,
     online: snap.online || [],
     now: serverNow(),
+    endEvent,
     recent: state.log
       .filter((event) => event.type !== 'parlor.table.turn'
         && (String(event.type || '').startsWith('parlor.table.') || String(event.type || '').startsWith('parlor.monopoly.')))
@@ -1085,22 +1138,42 @@ function renderTableIdle() {
   const table = snap.table;
   const panel = el('section', 'panel wait-card');
   if (fault) panel.append(el('p', 'warn', '大富翁故障：' + fault));
-  if (!signup && !table) {
-    panel.append(el('h2', '', '灯还亮着。'));
-    panel.append(el('p', 'muted', '现在没有牌桌。开一张，或者等她开。'));
-    panel.append(openButtons());
-  }
-  if (signup) {
-    panel.append(signupCard(signup, { tableActive: !!(table && table.status !== 'ended') }));
-    if (!table) {
-      panel.append(el('p', 'dim', '等报名的时候也可以先打别的：'));
-      panel.append(openButtons({ monopoly: false }));
+  if (table) {
+    panel.append(openTableCard(table));
+    if (!ENABLED_GAMES.includes(table.game)) {
+      panel.append(el('p', 'dim', '这版先做斗地主；骰子和大富翁的入口已收起，桌上这局还可以打完。'));
     }
+    ui.game.append(panel);
+    return;
   }
-  if (table) panel.append(openTableCard(table, { allowMonopoly: !signup }));
+  if (signup) panel.append(signupNotice(signup));
+  panel.append(el('h2', '', '先来一局斗地主。'));
+  panel.append(el('p', 'muted', '三人一桌，空位由脚本陪练补；一个人也能开。'));
+  panel.append(openButtons());
   ui.game.append(panel);
 }
 
+/** 大富翁先收起；已经挂着的报名表给一个收尾的口子。 */
+function signupNotice(signup) {
+  const me = state.snap.seat;
+  const box = el('div', 'signup-notice');
+  box.append(el('h3', '', '大富翁先收起了'));
+  box.append(el('p', 'muted', '现在还挂着一份报名表：' + signup.seats.length + '/' + signup.size
+    + ' 人；24 小时内没开局会自动过期。'));
+  const actions = el('div', 'actions');
+  if (signup.host === me.name) {
+    actions.append(btn('取消报名', () => actAndGo({ type: 'monopoly', action: 'cancel' }, null), {
+      danger: true,
+      small: true,
+    }));
+  } else if (signup.seats.includes(me.name)) {
+    actions.append(btn('退出报名', () => actAndGo({ type: 'monopoly', action: 'leave' }, null), { small: true }));
+  }
+  if (actions.children.length) box.append(actions);
+  return box;
+}
+
+/** 大富翁的完整报名卡先留着，入口重新打开时再用。 */
 function signupCard(signup, options = {}) {
   const me = state.snap.seat;
   const box = el('div', 'signup');
@@ -1133,11 +1206,13 @@ function signupCard(signup, options = {}) {
   return box;
 }
 
-function openTableCard(table, options = {}) {
+function openTableCard(table) {
   const me = state.snap.seat;
   const names = namesMap();
+  const hidden = !ENABLED_GAMES.includes(table.game);
   const box = el('div', 'open-table');
-  box.append(el('h3', '', tableTitle(table) + ' · ' + (STATUS_LABELS[table.status] || table.status)));
+  box.append(el('h3', '', tableTitle(table) + ' · ' + (STATUS_LABELS[table.status] || table.status)
+    + (hidden ? '（已收起）' : '')));
   if (table.status === 'ended') {
     box.append(el('p', 'muted', readable(table.text || '这局结束了。')));
     if (table.game === 'monopoly' && table.ended && Array.isArray(table.ended.ranking)) {
@@ -1151,10 +1226,13 @@ function openTableCard(table, options = {}) {
       });
       box.append(ranking);
     }
-    box.append(openButtons({ monopoly: options.allowMonopoly !== false }));
+    box.append(openButtons());
     return box;
   }
   box.append(el('p', 'muted', '桌上：' + (table.seats || []).map((seat) => names.get(seat.id) || seat.name).join('、')));
+  if (table.game === 'ddz') {
+    box.append(el('p', 'dim', '空位由脚本陪练补；一个人也可以开始。'));
+  }
   const seated = (table.seats || []).some((seat) => seat.id === me.id);
   const host = table.host === me.id;
   const actions = el('div', 'actions');
@@ -1166,7 +1244,7 @@ function openTableCard(table, options = {}) {
     actions.append(btn('开始', () => actAndGo({ type: 'table_start' }), {
       primary: true,
       disabled: !enough,
-      title: enough ? '' : '骰子桌至少两个人',
+      title: enough ? '' : '人数不够',
     }));
   } else {
     box.append(el('p', 'muted', '等 ' + (names.get(table.host) || '发起人') + ' 开局。'));
@@ -1175,37 +1253,18 @@ function openTableCard(table, options = {}) {
   return box;
 }
 
-function openButtons(options = {}) {
+function openButtons() {
   const box = el('div', 'open-buttons');
+  const table = state.snap.table;
+  const blocked = !!(table && table.status !== 'ended');
   const row = el('div', 'actions');
-  row.append(btn('开骰子桌', () => actAndGo({ type: 'table_open', game: 'dice' })));
-  row.append(btn('开斗地主桌', () => actAndGo({ type: 'table_open', game: 'ddz' })));
+  row.append(btn('开斗地主桌', () => actAndGo({ type: 'table_open', game: 'ddz' }), {
+    primary: true,
+    disabled: blocked,
+    title: blocked ? '先结束现在这桌' : '',
+  }));
   box.append(row);
-
-  if (options.monopoly === false) return box;
-  const mono = el('div', 'actions');
-  const size = el('select');
-  size.setAttribute('aria-label', '大富翁人数');
-  for (const value of [4, 6]) {
-    const option = el('option', '', value + ' 人');
-    option.value = String(value);
-    size.append(option);
-  }
-  const pace = el('select');
-  pace.setAttribute('aria-label', '大富翁节奏');
-  for (const [value, label] of [['standard', '标准 30 分钟/回合'], ['quick', '试玩 5 分钟/回合']]) {
-    const option = el('option', '', label);
-    option.value = value;
-    pace.append(option);
-  }
-  mono.append(size, pace, btn('开大富翁报名', () => actAndGo({
-    type: 'monopoly',
-    action: 'open',
-    size: Number(size.value),
-    pace: pace.value,
-  })));
-  box.append(mono);
-  box.append(el('p', 'dim', '大富翁至少要两个真人报名；空位最多补 2 个脚本。'));
+  box.append(el('p', 'dim', '斗地主三人一桌；空位由脚本陪练补。'));
   return box;
 }
 
@@ -1214,108 +1273,89 @@ function renderLobby() {
   const table = snap.table;
   const signup = snap.monopoly && snap.monopoly.signup;
   const seated = snap.seats.filter((seat) => seat.kind !== 'observer').length;
-  const tables = (table && table.status !== 'ended' ? 1 : 0) + (signup ? 1 : 0);
-  ui.lobbyEyebrow.textContent = '今晚 · ' + fmtClock(serverNow()).slice(0, 5) + ' · 服务器时间';
-  ui.lobbyTitle.textContent = tables > 0 ? '灯还亮着。' : '客厅还没开桌。';
-  ui.lobbySub.textContent = tables > 0
-    ? tables + ' 张桌，' + seated + ' 个人。想玩哪一桌？'
-    : seated + ' 个人在客厅。想开一桌吗？';
-
+  const ddz = table && table.game === 'ddz' ? table : null;
+  const legacy = table && table.game !== 'ddz' && table.status !== 'ended' ? table : null;
+  const names = namesMap();
+  ui.lobbyEyebrow.textContent = '今晚 · 斗地主 · ' + fmtClock(serverNow()).slice(0, 5) + ' · 服务器时间';
+  if (ddz) {
+    const on = (ddz.seats || []).map((seat) => names.get(seat.id) || seat.name).join('、');
+    ui.lobbyTitle.textContent = ddz.status === 'playing' || ddz.status === 'bidding'
+      ? '斗地主正打着。'
+      : ddz.status === 'ended' ? '这一局打完了。' : '斗地主桌还开着。';
+    ui.lobbySub.textContent = on ? '桌上：' + on + '。' : '三个人就能开。';
+  } else if (legacy) {
+    ui.lobbyTitle.textContent = '先把桌上这局打完。';
+    ui.lobbySub.textContent = (GAME_LABELS[legacy.game] || legacy.game) + ' 先收起了，但这局还能打完。';
+  } else {
+    ui.lobbyTitle.textContent = '灯还亮着。';
+    ui.lobbySub.textContent = seated + ' 个人在客厅。先来一局斗地主？';
+  }
   clear(ui.gameGrid);
-  const current = table && table.status !== 'ended' ? table.game : null;
-  const lead = current || (signup ? 'monopoly' : null);
-  const games = ['dice', 'ddz', 'monopoly'];
-  if (lead) games.sort((left, right) => (left === lead ? -1 : right === lead ? 1 : 0));
-  for (const game of games) ui.gameGrid.append(lobbyCard(game));
+  ui.gameGrid.append(lobbyCard('ddz'));
+  clear(ui.lobbyNotice);
+  if (legacy) ui.lobbyNotice.append(legacyNotice(legacy));
+  if (signup) ui.lobbyNotice.append(signupNotice(signup));
   renderMembers();
+}
+
+function legacyNotice(table) {
+  const box = el('div', 'legacy-notice');
+  const copy = el('div');
+  copy.append(el('strong', '', (GAME_LABELS[table.game] || table.game) + ' 已收起'));
+  copy.append(el('p', 'muted', '桌上还有一局没结束；先把这局打完，再回来开斗地主。'));
+  box.append(copy, btn('去牌桌', () => setView('table'), { small: true }));
+  return box;
 }
 
 function lobbyCard(game) {
   const snap = state.snap;
   const table = snap.table;
-  const signup = snap.monopoly && snap.monopoly.signup;
-  const mine = table && table.game === game && table.status !== 'ended';
-  const ended = table && table.game === game && table.status === 'ended';
-  const card = el('article', 'game-card' + (mine ? ' game-card-live' : ''));
-  const art = el('div', 'game-card-art art-' + (game === 'dice' ? 'dice' : game === 'ddz' ? 'cards' : 'board'));
+  const ddz = table && table.game === 'ddz' ? table : null;
+  const other = table && table.game !== 'ddz' && table.status !== 'ended' ? table : null;
+  const names = namesMap();
+  const card = el('article', 'game-card game-card-live game-card-hero');
+  const art = el('div', 'game-card-art art-' + (game === 'ddz' ? 'cards' : game === 'dice' ? 'dice' : 'board'));
   art.append(gameArt(game));
   const body = el('div', 'game-card-body');
   const kicker = el('div', 'game-card-kicker');
   let pill;
-  let statusText;
-  if (mine) {
-    statusText = STATUS_LABELS[table.status] || table.status;
-    pill = el('span', 'status-pill live');
-    pill.append(el('span', 'live-dot'), document.createTextNode(statusText));
-  } else if (game === 'monopoly' && signup) {
-    statusText = '报名中';
-    pill = el('span', 'status-pill warm', statusText);
-  } else if (ended) {
-    statusText = '已结束';
-    pill = el('span', 'status-pill quiet', statusText);
-  } else if (table && table.status !== 'ended') {
-    statusText = '另一桌进行中';
-    pill = el('span', 'status-pill quiet', statusText);
+  if (ddz) {
+    pill = el('span', 'status-pill ' + (ddz.status === 'ended' ? 'quiet' : 'live'));
+    if (ddz.status !== 'ended') pill.append(el('span', 'live-dot'));
+    pill.append(document.createTextNode(STATUS_LABELS[ddz.status] || ddz.status));
+  } else if (other) {
+    pill = el('span', 'status-pill quiet', '先结束桌上那局');
   } else {
-    statusText = '可开桌';
-    pill = el('span', 'status-pill quiet', statusText);
+    pill = el('span', 'status-pill quiet', '可开局');
   }
   kicker.append(pill);
-  if (mine) kicker.append(el('span', 'muted', (table.seats || []).length + ' 人'));
-  body.append(kicker);
-  body.append(el('h2', '', GAME_LABELS[game]));
+  if (ddz) kicker.append(el('span', 'muted', (ddz.seats || []).length + ' 人'));
+  body.append(kicker, el('h2', '', GAME_LABELS[game] || game));
   let sub;
-  if (game === 'dice') sub = '每人两颗暗骰，重掷或停牌，合计最高者赢。';
-  else if (game === 'ddz') sub = '三个人也能打，空位由脚本陪练补。';
-  else sub = signup
-    ? signup.seats.length + '/' + signup.size + ' 人已报名，还差 ' + signup.missing + ' 个真人。'
-    : '24 格外圈棋盘，买地、升级、补道具。';
+  if (ddz) {
+    sub = (ddz.seats || []).map((seat) => names.get(seat.id) || seat.name).join('、')
+      + ' 在桌上 · ' + (STATUS_LABELS[ddz.status] || ddz.status);
+  } else if (other) {
+    sub = (GAME_LABELS[other.game] || other.game) + ' 还在桌上；先打完再开斗地主。';
+  } else {
+    sub = '三人一桌，空位由脚本陪练补；一个人也能开。';
+  }
   body.append(el('p', '', sub));
 
   const foot = el('div', 'game-card-foot');
-  if (mine) {
+  if (ddz) {
     const avatars = el('div', 'mini-avatars');
-    for (const seat of (table.seats || []).slice(0, 4)) avatars.append(avatarNode(seat.id, 'avatar-xs', { online: false }));
+    for (const seat of (ddz.seats || []).slice(0, 3)) avatars.append(avatarNode(seat.id, 'avatar-xs', { online: false }));
     foot.append(avatars);
-    const go = btn('看牌桌', () => setView('table'), { primary: true, small: true });
+    const go = btn(ddz.status === 'ended' ? '看结果' : '看牌桌', () => setView('table'), { primary: true, small: true });
     go.append(icon('arrow'));
     foot.append(go);
-  } else if (game === 'monopoly' && signup) {
-    foot.append(el('span', 'muted', signup.host + ' 发起'));
-    foot.append(btn('去牌桌', () => setView('table'), { small: true }));
-  } else if (ended) {
-    foot.append(el('span', 'muted', '结果还留着'));
-    foot.append(btn('看结果', () => setView('table'), { small: true }));
-  } else if (table && table.status !== 'ended') {
-    foot.append(el('span', 'muted', '先打完那桌'));
+  } else if (other) {
+    foot.append(el('span', 'muted', '这版先做斗地主'));
     foot.append(btn('看那桌', () => setView('table'), { small: true }));
-  } else if (game === 'monopoly') {
-    const form = el('div', 'row');
-    const size = el('select');
-    size.setAttribute('aria-label', '大富翁人数');
-    for (const value of [4, 6]) {
-      const option = el('option', '', value + ' 人');
-      option.value = String(value);
-      size.append(option);
-    }
-    const pace = el('select');
-    pace.setAttribute('aria-label', '大富翁节奏');
-    for (const [value, label] of [['standard', '30 分钟/回合'], ['quick', '试玩 5 分钟/回合']]) {
-      const option = el('option', '', label);
-      option.value = value;
-      pace.append(option);
-    }
-    form.append(size, pace);
-    foot.append(form);
-    foot.append(btn('开报名', () => actAndGo({
-      type: 'monopoly',
-      action: 'open',
-      size: Number(size.value),
-      pace: pace.value,
-    }), { small: true }));
   } else {
-    foot.append(el('span', 'muted', game === 'dice' ? '两个人就能开' : '不够人时脚本补位'));
-    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game }), { small: true }));
+    foot.append(el('span', 'muted', '叫地主 · 出牌 · 脚本补位'));
+    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game: 'ddz' }), { primary: true, small: true }));
   }
   body.append(foot);
   card.append(art, body);
@@ -1397,7 +1437,7 @@ function renderChat() {
     ui.scopeText.textContent = '发到客厅 · 房间里的人都看得见';
     ui.sayInput.placeholder = '在客厅说点什么…';
   } else if (tab === 'table') {
-    ui.scopeText.textContent = '牌桌 tab 只是过滤 · 发送仍到客厅，客厅也看得见；真私聊在 0.12.0';
+    ui.scopeText.textContent = '牌桌 tab 只是过滤 · 发送仍到客厅，客厅也看得见；真私聊在 0.13.0';
     ui.sayInput.placeholder = '在客厅说点什么…（牌桌 tab 只过滤）';
   }
 }
@@ -1618,7 +1658,7 @@ function renderTableInfo() {
   ui.infoTurn.textContent = table && table.turn ? (names.get(table.turn) || '？') : '—';
   ui.ruleNote.textContent = table
     ? (RULES[table.game] || '')
-    : (signup ? '大富翁正在报名；人数够了由发起人开局。' : '现在没有牌桌。开一张，或者等她开。');
+    : (signup ? '大富翁正在报名；人数够了由发起人开局。' : '开一张斗地主桌，或者等 Coo 开。');
   ui.infoClock.textContent = '服务器时刻 ' + fmtClock(serverNow()).slice(0, 5) + '（UTC+8）';
 }
 

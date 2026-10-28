@@ -1388,38 +1388,237 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .booting { color: var(--muted); padding: 48px 8px; text-align: center; }
 .noscript { padding: 24px; }
 
-/* —— 斗地主 —— */
+/* —— 斗地主（这版主推） —— */
 .game-ddz { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
 .ddz-table {
+  position: relative;
+  padding: 10px;
+  border-radius: 24px;
+  background: var(--rail-bg);
+  box-shadow: var(--table-shadow);
+}
+.ddz-felt {
+  position: relative;
+  border-radius: 18px;
+  padding: 14px;
   background:
-    radial-gradient(600px 300px at 50% 30%, rgba(255, 255, 255, .5), transparent 65%),
+    radial-gradient(600px 320px at 50% 28%, rgba(255, 255, 255, .55), transparent 68%),
     var(--felt-gradient);
-  border: 1px solid var(--card-border);
-  border-radius: 14px; padding: 14px;
-  display: flex; flex-direction: column; gap: 12px;
   box-shadow: var(--felt-shadow);
+  overflow: hidden;
 }
-.ddz-opps { display: flex; gap: 10px; flex-wrap: wrap; }
-.ddz-opp {
-  flex: 1 1 150px; padding: 8px 10px; border-radius: 11px;
-  background: rgba(255, 250, 243, .8);
+.ddz-phase {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ddz-mult {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 600 9.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.ddz-lord-label { font-size: 10px; color: var(--muted); }
+.ddz-seats {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.ddz-seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 250, 243, .86);
   border: 1px solid var(--line-soft);
-  display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  box-shadow: 0 4px 12px rgba(160, 120, 100, .08);
+  transition: border-color .15s, box-shadow .15s;
 }
-.ddz-opp.turn { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
-.ddz-opp-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.ddz-opp-copy { min-width: 0; }
-.ddz-opp-copy strong { display: block; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ddz-opp .role { color: var(--muted); font-size: 9.5px; }
-.ddz-opp .left-count { color: var(--accent); font: 600 12px var(--font-mono); white-space: nowrap; }
-.ddz-center { min-height: 92px; display: grid; place-items: center; gap: 6px; text-align: center; }
-.ddz-last { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
-.ddz-note { color: var(--muted); font-size: 11px; }
+.ddz-seat.is-turn {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 6px 18px rgba(160, 120, 100, .12);
+}
+.ddz-seat.is-landlord { border-color: rgba(231, 169, 79, .35); }
+.ddz-seat .avatar {
+  width: 44px; height: 44px; font-size: 15px;
+  border: 2px solid #fff;
+  box-shadow: 0 5px 14px rgba(160, 120, 100, .18);
+}
+.ddz-seat.is-turn .avatar::after {
+  content: "";
+  position: absolute; inset: -5px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  animation: turnPulse 2s ease-out infinite;
+}
+.ddz-seat-copy { flex: 1; min-width: 0; }
+.ddz-seat-name {
+  display: flex; align-items: center; gap: 4px;
+  font: 600 12px var(--font-ui);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ddz-seat-meta {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+  margin-top: 2px;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.ddz-turn-note { color: var(--accent); }
+.ddz-left-bar {
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: rgba(120, 80, 60, .1);
+  overflow: hidden;
+}
+.ddz-left-bar i {
+  display: block; height: 100%; width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--warm));
+  transition: width .25s ease;
+}
+.ddz-seat.is-landlord .ddz-left-bar i { background: linear-gradient(90deg, var(--warm), var(--accent)); }
+
+.ddz-center {
+  position: relative;
+  z-index: 1;
+  min-height: 132px;
+  margin: 12px 0 10px;
+  padding: 10px 8px;
+  border-radius: 14px;
+  border: 1px dashed var(--stitch-soft);
+  background: rgba(255, 255, 255, .32);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  text-align: center;
+  overflow: hidden;
+}
+.ddz-mark {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font: 700 96px/1 var(--display);
+  color: var(--table-mark);
+  pointer-events: none;
+  user-select: none;
+}
+.ddz-center-label {
+  position: relative; z-index: 2;
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: .03em;
+}
+.ddz-last {
+  position: relative; z-index: 2;
+  display: flex; flex-wrap: wrap; gap: 4px; justify-content: center;
+}
+.ddz-last .pcard.small-card { width: 38px; height: 54px; font-size: 14px; padding-top: 5px; }
+.ddz-bottom {
+  position: relative; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 2px;
+}
+.ddz-bottom-label { font-size: 9px; color: var(--dim); }
+.ddz-bottom-cards { display: flex; gap: 3px; }
+.ddz-empty { font-size: 10.5px; color: var(--dim); }
+
+.ddz-me {
+  position: relative; z-index: 2;
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .55);
+  border: 1px solid var(--line-soft);
+}
+.ddz-me.is-turn {
+  border-color: var(--accent-border);
+  background: rgba(255, 250, 243, .92);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.ddz-me.is-landlord { border-color: rgba(231, 169, 79, .35); }
+.ddz-me .avatar {
+  width: 40px; height: 40px; font-size: 14px;
+  border: 2px solid #fff;
+  box-shadow: 0 4px 12px rgba(160, 120, 100, .16);
+}
+.ddz-me-copy { flex: 1; min-width: 0; }
+.ddz-me-name {
+  display: flex; align-items: center; gap: 5px;
+  font: 650 12px var(--font-ui);
+}
+.ddz-me-meta {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.ddz-me-turn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 600 10px var(--font-ui);
+  white-space: nowrap;
+}
+.ddz-me-turn .live-dot { background: #fff; box-shadow: none; }
+
 .ddz-hand {
-  display: flex; flex-wrap: nowrap; justify-content: center; align-items: flex-end;
-  gap: 0; padding: 18px 8px 4px; min-height: 104px;
+  position: relative; z-index: 2;
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 0;
+  min-height: 108px;
+  padding: 18px 8px 4px;
   overflow-x: auto;
+  scrollbar-width: thin;
 }
+.ddz-hand .pcard {
+  width: 56px; height: 80px;
+  padding-top: 8px;
+  font-size: 20px;
+  margin-left: var(--overlap, -14px);
+}
+.ddz-hand .pcard:first-child { margin-left: 0; }
+.ddz-hand-hint { display: none; text-align: center; font-size: 9px; color: var(--dim); margin-top: -2px; }
+
+.ddz-controls { display: flex; flex-direction: column; gap: 6px; }
+.ddz-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ddz-status-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 16px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.ddz-status-line .clock { color: var(--accent); font-variant-numeric: tabular-nums; }
+.ddz-selected { color: var(--accent); font-weight: 600; }
+.ddz-dot { color: var(--dim); }
+
+.tag-landlord {
+  gap: 3px;
+  color: var(--accent-ink);
+  border: 1px solid #d69a4a;
+  background: linear-gradient(180deg, #f6d79c, #e7a94f);
+}
+.tag-farmer { color: var(--good); border: 1px solid rgba(79, 174, 141, .3); background: var(--good-soft); }
+.tag .icon { width: 10px; height: 10px; }
+
 .pcard {
   width: 52px; height: 74px; border-radius: 8px;
   border: 1px solid #e0cdb4;
@@ -1444,10 +1643,95 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .pcard.small-card:hover { --lift: 0px; }
 .pcard.back { background: repeating-linear-gradient(45deg, #f3b3a8, #f3b3a8 4px, #ef8a7e 4px, #ef8a7e 8px); border-color: #e7a08f; }
 .pcard:disabled { cursor: default; opacity: 1; }
-.ddz-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.ddz-meta { color: var(--muted); font-size: 11px; display: flex; flex-wrap: wrap; gap: 12px; }
-.ddz-meta b { color: var(--text); }
 .result { margin: 2px 0 0; font-weight: 650; color: var(--accent); }
+
+/* —— 斗地主结算 —— */
+.ddz-end { display: flex; flex-direction: column; gap: 12px; }
+.ddz-end-banner {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--accent-border);
+  background: linear-gradient(180deg, rgba(239, 138, 126, .16), rgba(255, 250, 243, .6));
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.ddz-end-banner.farmers-win {
+  border-color: rgba(79, 174, 141, .3);
+  background: linear-gradient(180deg, rgba(79, 174, 141, .14), rgba(255, 250, 243, .6));
+}
+.ddz-end-kicker { font: 600 9.5px var(--font-ui); letter-spacing: .15em; color: var(--accent); }
+.ddz-end-banner h2 { margin: 4px 0 2px; font: 700 30px var(--display); letter-spacing: .02em; }
+.ddz-end-banner p { margin: 0; font-size: 11px; color: var(--muted); }
+.ddz-end-seats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ddz-end-seat {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 250, 243, .82);
+}
+.ddz-end-seat.is-winner { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ddz-end-seat.is-landlord { background: linear-gradient(160deg, rgba(231, 169, 79, .12), rgba(255, 250, 243, .82)); }
+.ddz-end-seat-head { display: flex; align-items: center; gap: 8px; }
+.ddz-end-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ddz-end-name { font: 600 11.5px var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ddz-end-win {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 700 9px var(--font-ui);
+}
+.ddz-end-cards {
+  display: flex; flex-wrap: wrap; gap: 3px;
+  min-height: 46px;
+  margin-top: 8px;
+  align-content: flex-start;
+}
+.ddz-end-cards .pcard.small-card { width: 30px; height: 42px; font-size: 11px; padding-top: 3px; margin-left: -2px; }
+.ddz-end-cards .pcard.small-card:first-child { margin-left: 0; }
+.ddz-end-empty { font-size: 10px; color: var(--dim); }
+
+/* —— 大厅：斗地主引导与收起说明 —— */
+.ddz-guide { padding: 15px 16px; }
+.ddz-guide h2 { margin: 0 0 8px; }
+.guide-list {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px;
+  font-size: 11.5px; color: var(--muted);
+}
+.guide-list li::before { content: "·"; color: var(--accent); margin-right: 6px; }
+.guide-note {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.lobby-notice { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.legacy-notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(231, 169, 79, .3);
+  background: rgba(231, 169, 79, .08);
+  font-size: 11.5px;
+}
+.legacy-notice strong { display: block; font-size: 12px; }
+.legacy-notice p { margin: 2px 0 0; color: var(--muted); font-size: 10.5px; }
+.signup-notice {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, .55);
+  font-size: 11.5px;
+}
+.signup-notice h3 { margin: 0 0 4px; font: 600 13px var(--font-ui); }
+.signup-notice p { margin: 0 0 6px; color: var(--muted); font-size: 10.5px; }
+.rail-note { padding: 6px 4px 0; font-size: 9.5px; line-height: 1.4; color: var(--dim); list-style: none; }
+.game-card-hero { min-height: 210px; }
+.game-card-hero .game-card-art { min-height: 190px; }
 
 /* —— 大富翁 —— */
 .game-mono { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
@@ -1784,8 +2068,29 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   .pcard { width: 44px; height: 64px; font-size: 16px; padding-top: 5px; margin-left: -16px; }
   .pcard.joker { font-size: 12px; }
   .pcard.small-card { width: 28px; height: 40px; font-size: 11px; margin-left: -5px; }
-  .ddz-hand { padding-left: 2px; padding-right: 2px; gap: 0; }
-  .ddz-table { padding: 10px; }
+  .ddz-table { padding: 7px; border-radius: 18px; }
+  .ddz-felt { padding: 10px; border-radius: 14px; }
+  .ddz-seats { gap: 7px; margin-top: 8px; }
+  .ddz-seat { padding: 6px 7px; gap: 7px; border-radius: 10px; }
+  .ddz-seat .avatar { width: 36px; height: 36px; font-size: 12px; }
+  .ddz-seat-name { font-size: 10.5px; }
+  .ddz-seat-meta { font-size: 8.5px; }
+  .ddz-center { min-height: 112px; margin: 9px 0 8px; padding: 8px 6px; }
+  .ddz-mark { font-size: 76px; }
+  .ddz-me { gap: 8px; padding: 6px 8px; }
+  .ddz-me .avatar { width: 34px; height: 34px; font-size: 12px; }
+  .ddz-me-meta { font-size: 9.5px; gap: 8px; }
+  .ddz-me-turn { font-size: 9px; padding: 3px 7px; }
+  .ddz-hand { padding: 14px 2px 4px; gap: 0; min-height: 92px; }
+  .ddz-hand .pcard { width: 46px; height: 66px; font-size: 16px; padding-top: 5px; margin-left: var(--overlap, -14px); }
+  .ddz-hand-hint { display: block; }
+  .guide-list { grid-template-columns: 1fr; gap: 4px; }
+  .ddz-end-seats { grid-template-columns: 1fr; gap: 8px; }
+  .ddz-end-banner { padding: 13px; }
+  .ddz-end-banner h2 { font-size: 26px; }
+  .game-card-hero { min-height: 0; }
+  .game-card-hero .game-card-art { min-height: 120px; }
+  .legacy-notice { align-items: flex-start; flex-direction: column; }
   .cell { padding: 3px; }
   .cell .cname { font-size: 9px; }
   .cell .cprice { display: none; }
@@ -1798,6 +2103,9 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 @media (max-width: 380px) {
   .tseat { width: 84px; }
   .tseat .avatar { width: 34px; height: 34px; font-size: 12px; }
+  .ddz-hand .pcard { width: 42px; height: 60px; font-size: 14px; margin-left: var(--overlap, -15px); }
+  .ddz-seat .avatar { width: 32px; height: 32px; font-size: 11px; }
+  .ddz-seat-name { font-size: 9.5px; }
   .game-id p { display: none; }
   .timer { width: 42px; height: 42px; }
   .action-bar .btn { font-size: 11px; }
