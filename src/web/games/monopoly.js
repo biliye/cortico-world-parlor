@@ -153,6 +153,7 @@ export function mountMonopoly(root, ctx) {
         });
         center.append(ranking);
       }
+      actions.append(btn('回大厅', () => ctx.showLobby(), { small: true }));
       center.append(actions);
       boardEl.append(center);
       box.append(boardEl);

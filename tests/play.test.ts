@@ -126,6 +126,9 @@ describe('网页玩家', () => {
     const css = await call('/play/assets/play.css');
     expect(css.status).toBe(200);
     expect(css.headers.get('content-type')).toContain('text/css');
+    const chip = await call('/play/assets/assets/coo-chip.png');
+    expect(chip.status).toBe(200);
+    expect(chip.headers.get('content-type')).toContain('image/png');
     expect((await call('/play/assets/nope.js')).status).toBe(404);
 
     const health = await call('/healthz');
@@ -255,6 +258,21 @@ describe('网页玩家', () => {
     const stand = await act(a, { type: 'table_action', action: 'stand' });
     expect(stand.status, stand.text).toBe(200);
     expect(stand.body.turn).toBe('B');
+  });
+
+  it('奶油客厅没有赌场文案，筹码图同源，聊天三 tab 的边界写清楚', () => {
+    const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../src/web/play.html', import.meta.url), 'utf8');
+    expect(css).toContain('assets/coo-chip.png');
+    expect(html).toContain('content="#fff8ee"');
+    for (const text of [css, js, html]) {
+      expect(text).not.toContain('底池');
+      expect(text).not.toContain('底注');
+      expect(text).not.toContain('净胜');
+    }
+    expect(js).toContain('牌桌 tab 只是过滤');
+    expect(js).toContain('0.12.0');
   });
 
   it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {

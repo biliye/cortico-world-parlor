@@ -1,10 +1,42 @@
-/** 网页客户端共用的小工具：建节点、时间、牌面、按钮。 */
+/** 网页客户端共用的小工具：建节点、图标、时间、牌面、按钮。 */
 
 export const el = (tag, cls = '', text = '') => {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
   if (text !== '') node.textContent = text;
   return node;
+};
+
+/** play.html 里那组 <symbol>：只建引用，不内联路径。 */
+export const icon = (name, cls = '') => {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'icon' + (cls ? ' ' + cls : ''));
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.append(use);
+  return svg;
+};
+
+/** 名字的第一个字（emoji 也按一个字符算）。 */
+export const initialOf = (name) => {
+  const chars = Array.from(String(name || '？').trim());
+  return chars[0] || '？';
+};
+
+/** 服务器有些旧文案还是「底池 / 底注 / 净胜」；网页统一换成奶油客厅的字。
+ *  只改显示，不改事件与账本本身。 */
+const RENAME = {
+  底池: '彩头',
+  底注: '每局',
+  今晚净胜: '今晚的小收获',
+  净胜: '小收获',
+};
+
+export const readable = (text) => {
+  let out = String(text ?? '');
+  for (const [from, to] of Object.entries(RENAME)) out = out.split(from).join(to);
+  return out;
 };
 
 export const clear = (node) => {

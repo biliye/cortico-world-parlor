@@ -1,6 +1,7 @@
-/** 斗地主：手牌、叫地主、出牌/不要/提示。规则全在服务器，这里只摆牌与按钮。 */
+/** 斗地主（奶油客厅）：手牌、叫地主、出牌/不要/提示。
+ *  规则全在服务器，这里只摆牌与按钮；提示也来自服务器的 hint。 */
 import {
-  el, clear, btn, cardButton, fmtClock, clockSpan, cardLabel,
+  el, clear, btn, cardButton, fmtClock, clockSpan, cardLabel, icon, initialOf, readable,
 } from '../common.js';
 
 export function mountDdz(root, ctx) {
@@ -32,33 +33,26 @@ export function mountDdz(root, ctx) {
     const priv = view.priv;
     const me = view.me;
     const names = view.names;
-    const seated = (table.seats || []).some((seat) => seat.id === me.id);
+    const seats = table.seats || [];
+    const seated = seats.some((seat) => seat.id === me.id);
     const myTurn = !!(priv && priv.yourTurn);
 
-    const head = el('div', 'game-head');
-    head.append(el('h2', '', '斗地主'));
-    head.append(el('span', 'meta', '三人一桌 · 空位由脚本陪练补 · 牌型与计分由服务器判'));
-    if (table.status === 'playing' || table.status === 'bidding') {
-      head.append(el('span', 'meta', '本回合截止 ' + fmtClock(table.deadline || 0)));
-    }
-    box.append(head);
-
-    if (!seated) box.append(el('p', 'muted', '你在旁观；这一局结束后可以坐下一桌。'));
-
-    const tableBox = el('div', 'ddz-table');
-
+    const surface = el('div', 'ddz-table');
     const opps = el('div', 'ddz-opps');
-    for (const seat of (table.seats || [])) {
+    for (const seat of seats) {
       if (seat.id === me.id) continue;
       const row = el('div', 'ddz-opp' + (seat.id === table.turn ? ' turn' : ''));
-      const left = el('div');
-      left.append(el('strong', '', (names.get(seat.id) || seat.name) + (seat.bot ? '（脚本）' : '')));
-      left.append(el('div', 'role', seat.role === 'landlord' ? '地主' : seat.role === 'farmer' ? '农民' : '还没定地主'));
-      row.append(left);
-      row.append(el('span', 'total', (seat.cardsLeft ?? 0) + ' 张'));
+      const main = el('div', 'ddz-opp-main');
+      main.append(seatAvatar(seat));
+      const copy = el('div', 'ddz-opp-copy');
+      const name = el('strong', '', (names.get(seat.id) || seat.name) + (seat.bot ? '（脚本）' : ''));
+      copy.append(name);
+      copy.append(el('div', 'role', seat.role === 'landlord' ? '地主' : seat.role === 'farmer' ? '农民' : '还没定地主'));
+      main.append(copy);
+      row.append(main, el('span', 'left-count', (seat.cardsLeft ?? 0) + ' 张'));
       opps.append(row);
     }
-    tableBox.append(opps);
+    if (opps.children.length) surface.append(opps);
 
     const center = el('div', 'ddz-center');
     if (table.lastPlay) {
@@ -80,32 +74,45 @@ export function mountDdz(root, ctx) {
       bottom.append(cards);
       center.append(bottom);
     }
-    tableBox.append(center);
+    surface.append(center);
 
     if (priv) {
       const meta = el('div', 'ddz-meta');
-      meta.append(el('span', '', '你是' + (priv.role === 'landlord' ? '地主' : priv.role === 'farmer' ? '农民' : '（还没定）')));
-      if (priv.landlord) meta.append(el('span', '', '地主：' + (names.get(priv.landlord) || priv.landlord)));
-      meta.append(el('span', '', '倍数 x' + (priv.multiplier || 1)));
-      tableBox.append(meta);
+      const role = priv.role === 'landlord' ? '地主' : priv.role === 'farmer' ? '农民' : '还没定';
+      meta.append(el('span', '', '你是 '), el('b', '', role));
+      if (priv.landlord) meta.append(el('span', '', ' · 地主 '), el('b', '', names.get(priv.landlord) || priv.landlord));
+      meta.append(el('span', '', ' · 倍数 '), el('b', '', 'x' + (priv.multiplier || 1)));
+      surface.append(meta);
 
       if (table.status !== 'ended' && Array.isArray(priv.hand) && priv.hand.length) {
         const hand = el('div', 'ddz-hand');
+        const count = priv.hand.length;
+        const mid = (count - 1) / 2;
+        const step = count <= 8 ? 3 : Math.min(2.2, 26 / count);
         priv.hand.forEach((card, index) => {
-          hand.append(cardButton(card, selection.has(index), myTurn ? () => {
+          const node = cardButton(card, selection.has(index), myTurn ? () => {
             if (selection.has(index)) selection.delete(index);
             else selection.add(index);
             render();
-          } : null));
+          } : null);
+          const deg = (index - mid) * step;
+          node.style.setProperty('--rot', deg.toFixed(2) + 'deg');
+          node.style.setProperty('--arc', (Math.abs(index - mid) * 0.7).toFixed(2) + 'px');
+          hand.append(node);
         });
-        tableBox.append(hand);
+        surface.append(hand);
       }
     }
 
-    box.append(tableBox);
+    box.append(surface);
 
     if (table.status === 'ended') {
-      box.append(el('p', 'result', table.text || table.result || '这局结束了。'));
+      const line = el('p', 'result');
+      line.textContent = readable(table.text || table.result || '这局结束了。');
+      box.append(line);
+      const actions = el('div', 'ddz-actions');
+      actions.append(btn('回大厅', () => ctx.showLobby(), { small: true }));
+      box.append(actions);
       return;
     }
 
@@ -122,11 +129,11 @@ export function mountDdz(root, ctx) {
         }));
         box.append(actions);
         if (priv && priv.hint && typeof priv.hint.bid === 'boolean') {
-          box.append(el('p', 'muted', '提示：这手牌建议' + (priv.hint.bid ? '叫地主' : '不叫') + '。'));
+          box.append(el('p', 'ddz-note', '提示：这手牌建议' + (priv.hint.bid ? '叫地主' : '不叫') + '。'));
         }
         box.append(deadlineLine(priv.deadline));
       } else {
-        box.append(el('p', 'muted', '等 ' + (names.get(table.turn) || '？') + ' 叫地主。'));
+        box.append(el('p', 'ddz-note', '等 ' + (names.get(table.turn) || '？') + ' 叫地主。'));
       }
       return;
     }
@@ -169,18 +176,33 @@ export function mountDdz(root, ctx) {
       box.append(actions);
       if (priv && priv.hint && Array.isArray(priv.hint.cards)) {
         const labels = priv.hint.cards.map((card) => cardLabel(card)).join(' ');
-        box.append(el('p', 'muted', '提示：可以出 ' + labels + (priv.hint.label ? '（' + priv.hint.label + '）' : '')));
+        box.append(el('p', 'ddz-note', '提示：可以出 ' + labels + (priv.hint.label ? '（' + priv.hint.label + '）' : '')));
       }
       box.append(deadlineLine(priv.deadline));
-    } else {
-      const line = el('p', 'muted', '等 ' + (names.get(table.turn) || '？') + ' 出牌。 ');
+    } else if (seated) {
+      const line = el('p', 'ddz-note', '等 ' + (names.get(table.turn) || '？') + ' 出牌。 ');
       if (table.deadline) line.append(clockSpan(table.deadline));
       box.append(line);
+    } else {
+      box.append(el('p', 'ddz-note', '你在旁观；这一局结束后可以坐下一桌。'));
     }
   }
 
+  function seatAvatar(seat) {
+    const info = (view.seats || []).find((entry) => entry.id === seat.id);
+    const isPet = !!(info && info.kind === 'pet');
+    const avatar = el('span', ['avatar', 'avatar-sm', isPet ? 'avatar-coo' : (view.classes.get(seat.id) || 's1')].join(' '),
+      initialOf(seat.name));
+    if (isPet) {
+      const badge = el('span', 'avatar-badge');
+      badge.append(icon('spark'));
+      avatar.append(badge);
+    }
+    return avatar;
+  }
+
   function deadlineLine(deadline) {
-    const line = el('p', 'muted', deadline ? '本回合截止 ' + fmtClock(deadline) + '，' : '');
+    const line = el('p', 'ddz-note', deadline ? '本回合截止 ' + fmtClock(deadline) + ' · ' : '');
     if (deadline) line.append(clockSpan(deadline));
     return line;
   }
