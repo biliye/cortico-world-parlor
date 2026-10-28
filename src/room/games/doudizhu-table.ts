@@ -183,6 +183,10 @@ export class DoudizhuTable implements TableEngine {
         ? { seat: this.lastPlay.seat, cards: [...this.lastPlay.move.cards], label: moveLabel(this.lastPlay.move) }
         : null,
       multiplier: 2 ** this.bombs,
+      /** 网页按钮的「提示」：复用脚本的最少合法牌，规则仍只在服务端算。 */
+      hint: this.hintFor(seat),
+      /** 有上一手才能过；自己领出时必须出牌。 */
+      canPass: this.status === 'playing' && this.turnId === seat.id && !!this.lastPlay,
     };
   }
 
@@ -480,6 +484,17 @@ export class DoudizhuTable implements TableEngine {
       lastPlayBy: last?.role ?? undefined,
       minOpponentLeft: Math.min(...opponents.map((entry) => entry.hand.length)),
     };
+  }
+
+  /** 轮到自己时给网页一个可点的建议；不轮到时没有。 */
+  private hintFor(seat: Seat): { bid?: boolean; cards?: Card[]; label?: string; pass?: boolean } | undefined {
+    if (this.status !== 'bidding' && this.status !== 'playing') return undefined;
+    if (this.turnId !== seat.id) return undefined;
+    if (this.status === 'bidding') return { bid: chooseBid(seat.hand) };
+    const cards = chooseMove(seat.hand, this.lastPlay?.move ?? null, this.botContext(seat));
+    if (!cards || cards.length === 0) return { pass: true };
+    const entry = parseMove(cards);
+    return { cards: [...cards], ...(entry ? { label: moveLabel(entry) } : {}) };
   }
 
   private cardsLeft(): Record<string, number> {

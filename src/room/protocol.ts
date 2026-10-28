@@ -53,6 +53,18 @@ export interface JoinResponse {
   maxSeats: number;
 }
 
+/**
+ * 网页玩家入场：席位是 `human`，账本身份由服务器现发一份（浏览器只存这一份）。
+ * 不返回 ownerToken：下场玩的人不需要看自己的家长页，也不需要能改自己的挡位。
+ */
+export interface PlayerJoinResponse {
+  room: string;
+  seat: Seat;
+  token: string;
+  maxSeats: number;
+  identity: { cooId: string; cooSecret: string };
+}
+
 export type ActionRequest =
   | { type: 'say'; text: string }
   | { type: 'whisper'; to: string; text: string }
@@ -147,6 +159,11 @@ export interface RoomSnapshot {
   mailUnread?: number;
   /** 大富翁：报名表或活动存档的故障。 */
   monopoly?: MonopolyInfo;
+  /**
+   * 只出现在家长页（owner 令牌）的快照里：桌上有真人席位，自家孩子的私视图
+   * 与私牌事件被服务端藏起来了。家长下场对打时靠它防偷看。
+   */
+  ownerPrivateHidden?: boolean;
 }
 
 /** 报名表：还没开局的大富翁。 */

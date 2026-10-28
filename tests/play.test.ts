@@ -1,0 +1,281 @@
+/**
+ * 网页客户端与家长下场：玩家入场、防作弊、公开棋盘、斗地主提示、静态资源。
+ * 这些测试不碰浏览器，只走 HTTP；页面本身由 state/tools 里的浏览器冒烟另行目击。
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ParlorServer } from '../src/room/server.ts';
+import type { PlayerJoinResponse, RoomSnapshot } from '../src/room/protocol.ts';
+
+type Json = Record<string, any>;
+
+interface Player {
+  token: string;
+  cooId: string;
+  cooSecret: string;
+  seat: { id: string; name: string; kind: string; tier: string };
+}
+
+interface Pet extends Player {
+  ownerToken: string;
+}
+
+const authHeaders = (auth: { token: string; cooId: string; cooSecret: string }): Record<string, string> => ({
+  authorization: 'Bearer ' + auth.token,
+  'x-parlor-coo': auth.cooId,
+  'x-parlor-coo-secret': auth.cooSecret,
+});
+
+describe('网页玩家', () => {
+  let scratch: string;
+  let server: ParlorServer;
+
+  beforeEach(async () => {
+    scratch = mkdtempSync(join(tmpdir(), 'parlor-play-'));
+    server = new ParlorServer({ id: 'lobby', inviteCode: 'inv', port: 0, dataFile: join(scratch, 'room.json') });
+    await server.listen();
+  });
+
+  afterEach(async () => {
+    await server.close();
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const call = async (path: string, init: RequestInit = {}) => {
+    const response = await fetch(server.url + path, init);
+    const text = await response.text();
+    let body: any = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = text;
+    }
+    return { status: response.status, body, text, headers: response.headers };
+  };
+
+  const joinBody = (name: string, invite = 'inv'): RequestInit => ({
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-parlor-invite': invite },
+    body: JSON.stringify({ name }),
+  });
+
+  const playerJoin = async (name: string): Promise<Player> => {
+    const response = await call('/v1/player/join', joinBody(name));
+    expect(response.status, response.text).toBe(200);
+    const body = response.body as PlayerJoinResponse;
+    return {
+      token: body.token,
+      cooId: body.identity.cooId,
+      cooSecret: body.identity.cooSecret,
+      seat: body.seat as unknown as Player['seat'],
+    };
+  };
+
+  const petJoin = async (name: string): Promise<Pet> => {
+    const cooId = randomUUID();
+    const cooSecret = randomBytes(32).toString('base64url');
+    const response = await call('/v1/join', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-parlor-invite': 'inv',
+        'x-parlor-coo': cooId,
+        'x-parlor-coo-secret': cooSecret,
+      },
+      body: JSON.stringify({ name }),
+    });
+    expect(response.status, response.text).toBe(200);
+    const body = response.body as Json;
+    return {
+      token: body.token,
+      ownerToken: body.ownerToken,
+      cooId,
+      cooSecret,
+      seat: body.seat,
+    };
+  };
+
+  const act = async (auth: Pick<Player, 'token' | 'cooId' | 'cooSecret'>, body: Json) => (
+    call('/v1/action', {
+      method: 'POST',
+      headers: { ...authHeaders(auth), 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  );
+
+  const snap = async (auth: Pick<Player, 'token' | 'cooId' | 'cooSecret'>, query = '?limit=50'): Promise<RoomSnapshot> => {
+    const response = await call('/v1/room' + query, { headers: authHeaders(auth) });
+    expect(response.status, response.text).toBe(200);
+    return response.body as RoomSnapshot;
+  };
+
+  it('网页入口与静态资源能从服务器拿到，healthz 报版本', async () => {
+    const page = await call('/play');
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(page.text).toContain('/play/assets/play.js');
+
+    const js = await call('/play/assets/play.js');
+    expect(js.status).toBe(200);
+    expect(js.headers.get('content-type')).toContain('text/javascript');
+    const css = await call('/play/assets/play.css');
+    expect(css.status).toBe(200);
+    expect(css.headers.get('content-type')).toContain('text/css');
+    expect((await call('/play/assets/nope.js')).status).toBe(404);
+
+    const health = await call('/healthz');
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+    expect(health.body.version).toBe(pkg.version);
+  });
+
+  it('家长用自己的席位与账本身份入场，不占用孩子的账本', async () => {
+    const papa = await playerJoin('Papa');
+    expect(papa.seat.kind).toBe('human');
+    expect(papa.seat.tier).toBe('off');
+    const snapshot = await snap(papa, '?limit=1');
+    expect(snapshot.seat.id).toBe(papa.seat.id);
+    expect(snapshot.ledger?.chips).toBe(1000);
+
+    const said = await act(papa, { type: 'say', text: '大家好' });
+    expect(said.status, said.text).toBe(200);
+
+    const duplicate = await call('/v1/player/join', joinBody('Papa'));
+    expect(duplicate.status).toBe(409);
+    const badInvite = await call('/v1/player/join', joinBody('Nobody', 'wrong'));
+    expect(badInvite.status).toBe(403);
+  });
+
+  it('桌上有真人时家长页看不到她的私视图与私牌事件，结束后恢复', async () => {
+    const coo = await petJoin('Coo');
+    const papa = await playerJoin('Papa');
+    expect((await act(coo, { type: 'table_open', game: 'dice' })).status).toBe(200);
+    expect((await act(papa, { type: 'table_join' })).status).toBe(200);
+    expect((await act(coo, { type: 'table_start' })).status).toBe(200);
+
+    const owner = await call('/v1/room?limit=50', { headers: { authorization: 'Bearer ' + coo.ownerToken } });
+    const ownerBody = owner.body as RoomSnapshot;
+    expect(ownerBody.ownerPrivateHidden).toBe(true);
+    expect(ownerBody.tablePrivate).toBeNull();
+    expect((ownerBody.events as Json[]).filter((event) => event.type === 'parlor.table.turn')).toHaveLength(0);
+
+    const pet = await snap(coo);
+    expect(pet.tablePrivate?.dice).toHaveLength(2);
+    expect((pet.events as Json[]).some((event) => event.type === 'parlor.table.turn')).toBe(true);
+
+    const history = await call('/v1/history?limit=100', { headers: { authorization: 'Bearer ' + coo.ownerToken } });
+    expect((history.body.events as Json[]).some((event) => event.type === 'parlor.table.turn')).toBe(false);
+    const replay = await call('/v1/replay?limit=100', { headers: { authorization: 'Bearer ' + coo.ownerToken } });
+    expect((replay.body.events as Json[]).some((event) => event.type === 'parlor.table.turn')).toBe(false);
+    const replayPet = await call('/v1/replay?limit=100', { headers: authHeaders(coo) });
+    expect((replayPet.body.events as Json[]).some((event) => event.type === 'parlor.table.turn')).toBe(true);
+
+    // 两边都停牌，这局结束；家长页恢复成能看私视图。
+    expect((await act(coo, { type: 'table_action', action: 'stand' })).status).toBe(200);
+    expect((await act(papa, { type: 'table_action', action: 'stand' })).status).toBe(200);
+    const after = await call('/v1/room?limit=50', { headers: { authorization: 'Bearer ' + coo.ownerToken } });
+    const afterBody = after.body as RoomSnapshot;
+    expect(afterBody.table?.status).toBe('ended');
+    expect(afterBody.ownerPrivateHidden).toBeUndefined();
+    expect(afterBody.tablePrivate).not.toBeNull();
+  });
+
+  it('大富翁把 24 格棋盘与规则公开，家长对打时同样隐藏', async () => {
+    const coo = await petJoin('Coo');
+    const papa = await playerJoin('Papa');
+    expect((await act(coo, { type: 'monopoly', action: 'open', size: 4, pace: 'quick' })).status).toBe(200);
+    expect((await act(papa, { type: 'monopoly', action: 'join' })).status).toBe(200);
+    const start = await act(coo, { type: 'monopoly', action: 'start' });
+    expect(start.status, start.text).toBe(200);
+
+    const snapshot = await snap(papa, '?limit=1');
+    const table = snapshot.table as unknown as Json;
+    expect(table.board).toHaveLength(24);
+    expect(table.rules.rounds).toBe(12);
+    expect((table.board as Json[]).find((cell) => cell.kind === 'property')?.price).toBeGreaterThan(0);
+    expect(table.players).toHaveLength(4);
+
+    const owner = await call('/v1/room?limit=50', { headers: { authorization: 'Bearer ' + coo.ownerToken } });
+    expect((owner.body as RoomSnapshot).ownerPrivateHidden).toBe(true);
+    expect((owner.body as RoomSnapshot).tablePrivate).toBeNull();
+    const mail = await call('/v1/mail?recent=1&limit=5', { headers: { authorization: 'Bearer ' + coo.ownerToken } });
+    expect(mail.body.ownerPrivateHidden).toBe(true);
+  });
+
+  it('斗地主提示与可过判断来自服务器，提示的牌真能出', async () => {
+    const a = await playerJoin('A');
+    const b = await playerJoin('B');
+    const c = await playerJoin('C');
+    expect((await act(a, { type: 'table_open', game: 'ddz' })).status).toBe(200);
+    expect((await act(b, { type: 'table_join' })).status).toBe(200);
+    expect((await act(c, { type: 'table_join' })).status).toBe(200);
+    const start = await act(a, { type: 'table_start' });
+    expect(start.status, start.text).toBe(200);
+
+    const bidding = await snap(a, '?limit=1');
+    expect(bidding.table?.status).toBe('bidding');
+    const priv = bidding.tablePrivate as unknown as Json;
+    expect(priv.yourTurn).toBe(true);
+    expect(typeof priv.hint.bid).toBe('boolean');
+    expect(priv.canPass).toBe(false);
+
+    const bid = await act(a, { type: 'ddz_action', move: 'bid', call: true });
+    expect(bid.status, bid.text).toBe(200);
+    const playing = await snap(a, '?limit=1');
+    const playingPriv = playing.tablePrivate as unknown as Json;
+    expect(playingPriv.role).toBe('landlord');
+    expect(playingPriv.canPass).toBe(false);
+    expect(playingPriv.hint).toBeTruthy();
+    const cards = playingPriv.hint.cards as string[];
+    expect(Array.isArray(cards)).toBe(true);
+    expect(cards.length).toBeGreaterThan(0);
+
+    const play = await act(a, { type: 'ddz_action', move: 'play', cards });
+    expect(play.status, play.text).toBe(200);
+    const after = await snap(a, '?limit=1');
+    expect((after.tablePrivate as unknown as Json).yourTurn).toBe(false);
+    expect((after.tablePrivate as unknown as Json).hint).toBeUndefined();
+  });
+
+  it('网页玩家能开桌、坐下、开局并行动', async () => {
+    const a = await playerJoin('A');
+    const b = await playerJoin('B');
+    expect((await act(a, { type: 'table_open', game: 'dice' })).status).toBe(200);
+    expect((await act(b, { type: 'table_join' })).status).toBe(200);
+    const start = await act(a, { type: 'table_start' });
+    expect(start.status, start.text).toBe(200);
+
+    const snapshot = await snap(a, '?limit=1');
+    expect(snapshot.table?.status).toBe('playing');
+    expect((snapshot.tablePrivate as unknown as Json).yourTurn).toBe(true);
+    const stand = await act(a, { type: 'table_action', action: 'stand' });
+    expect(stand.status, stand.text).toBe(200);
+    expect(stand.body.turn).toBe('B');
+  });
+
+  it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {
+    const files = [
+      'src/web/play.js',
+      'src/web/common.js',
+      'src/web/games/dice.js',
+      'src/web/games/ddz.js',
+      'src/web/games/monopoly.js',
+    ];
+    for (const rel of files) {
+      const file = fileURLToPath(new URL('../' + rel, import.meta.url));
+      const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+      expect(result.status, rel + '\n' + (result.stderr || '')).toBe(0);
+    }
+
+    const coo = await petJoin('Coo');
+    const page = await call('/v1/owner?token=' + encodeURIComponent(coo.ownerToken));
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('牌桌');
+    expect(page.text).toContain('href="/play"');
+    expect(page.text).toContain('防作弊');
+  });
+});

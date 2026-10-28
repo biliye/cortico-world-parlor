@@ -635,7 +635,12 @@ export class ParlorWorld implements World {
     const lines = [
       `客厅「${snapshot.id}」 · 会说话的席位 ${speakers.length}/${snapshot.maxSeats}`,
       `服务器时刻：${snapshot.at}（UTC+8）`,
-      ...snapshot.seats.map((seat) => `- ${seat.name}（${KIND_LABELS[seat.kind] ?? seat.kind}·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}${online.has(seat.id) ? '·在线' : ''}）`),
+      ...snapshot.seats.map((seat) => {
+        // 真人席位没有提醒挡位；写「人·离开」会让 Coo 误以为对方不在。
+        const kind = KIND_LABELS[seat.kind] ?? seat.kind;
+        const tier = seat.kind === 'human' ? '' : `·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}`;
+        return `- ${seat.name}（${kind}${tier}${online.has(seat.id) ? '·在线' : ''}）`;
+      }),
       `最新游标 ${snapshot.latest}`,
     ];
     if (snapshot.monopoly?.signup) {

@@ -2,6 +2,7 @@
  * 客厅服务器：房间状态、席位令牌、SSE 推送、家长页。
  * 只发某席位能看见的事件；可见性判断全部来自 RoomKernel。
  */
+import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -12,7 +13,9 @@ import { LedgerStore } from './ledger.ts';
 import { MailStore } from './mail.ts';
 import { REPLAY_RETENTION_DAYS, ReplayStore } from './replay.ts';
 import { serverClock } from './clock.ts';
-import type { ActionRequest, ActionResponse, JoinRequest, RoomEvent, RoomSnapshot } from './protocol.ts';
+import type {
+  ActionRequest, ActionResponse, JoinRequest, JoinResponse, PlayerJoinResponse, RoomEvent, RoomSnapshot,
+} from './protocol.ts';
 
 export interface ParlorServerOptions {
   id: string;
@@ -109,9 +112,41 @@ const identityOf = (req: IncomingMessage): CooIdentity | null => {
 
 const localUrlHost = (host: string): string => (host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host);
 
+/** 从包里读一次版本，给 `/healthz` 报，排障时不用再 SSH 翻 package.json。 */
+const PACKAGE_VERSION = ((): string => {
+  try {
+    const raw = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version?: unknown };
+    return typeof raw.version === 'string' ? raw.version : '';
+  } catch {
+    return '';
+  }
+})();
+
+const WEB_TYPES: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
+
+/** 网页客户端只从本站取脚本、样式与接口；没有内联脚本。 */
+const PLAY_CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
+
 interface Client {
   res: ServerResponse;
   seat: StoredSeat;
+  role: 'pet' | 'owner';
 }
 
 export class ParlorServer {
@@ -240,6 +275,7 @@ export class ParlorServer {
       json(res, 200, {
         ok: true,
         room: this.kernel.id,
+        version: PACKAGE_VERSION,
         seats: this.kernel.seatsPublic().length,
         maxSeats: this.kernel.maxSeats,
         latest: this.kernel.latest(),
@@ -247,6 +283,7 @@ export class ParlorServer {
       });
       return;
     }
+    if (req.method === 'GET' && this.serveWeb(url.pathname, res)) return;
     if (req.method === 'POST' && url.pathname === '/v1/join') {
       const body = await readJson(req);
       const invite = String(req.headers['x-parlor-invite'] ?? body.invite ?? '');
@@ -269,6 +306,34 @@ export class ParlorServer {
       }
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/v1/player/join') {
+      const body = await readJson(req);
+      const invite = headerValue(req, 'x-parlor-invite').trim() || String(body.invite ?? '');
+      if (!invite || invite !== this.options.inviteCode) throw new HttpError(403, '邀请码不对');
+      const name = typeof body.name === 'string' ? body.name : '';
+      const cooId = randomUUID();
+      const cooSecret = randomBytes(32).toString('base64url');
+      if (this.ledger.claimIdentity(cooId, cooSecret) !== 'ok') {
+        throw new HttpError(500, '给这位家长生成账本身份失败（身份表满了）');
+      }
+      let joined: JoinResponse;
+      try {
+        joined = this.kernel.join({ name, kind: 'human', tier: 'off' }, cooId);
+      } catch (error) {
+        if (error instanceof RoomError) throw new HttpError(roomStatus(error), error.message);
+        throw error;
+      }
+      this.schedulePersist();
+      const response: PlayerJoinResponse = {
+        room: joined.room,
+        seat: joined.seat,
+        token: joined.token,
+        maxSeats: joined.maxSeats,
+        identity: { cooId, cooSecret },
+      };
+      json(res, 200, response);
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/v1/stream') {
       this.stream(req, res, url);
       return;
@@ -277,10 +342,14 @@ export class ParlorServer {
       const auth = this.auth(req, url);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
+      const base = this.kernel.snapshot(auth.seat.id, since, limit);
+      const hidden = auth.role === 'owner' && this.ownerPrivateHidden();
       const snapshot: RoomSnapshot = {
-        ...this.kernel.snapshot(auth.seat.id, since, limit),
+        ...base,
+        ...(hidden ? { events: this.withoutPrivateTurns(base.events), tablePrivate: null } : {}),
         seat: publicSeatOf(auth.seat),
         online: this.onlineSeats(),
+        ...(hidden ? { ownerPrivateHidden: true } : {}),
       };
       json(res, 200, snapshot);
       return;
@@ -289,15 +358,31 @@ export class ParlorServer {
       const auth = this.auth(req, url);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      json(res, 200, { latest: this.kernel.latest(), events: this.kernel.history(auth.seat.id, since, limit) });
+      const events = this.kernel.history(auth.seat.id, since, limit);
+      const hidden = auth.role === 'owner' && this.ownerPrivateHidden();
+      json(res, 200, {
+        latest: this.kernel.latest(),
+        events: hidden ? this.withoutPrivateTurns(events) : events,
+      });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/mail') {
       const auth = this.auth(req, url);
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
       const unread = this.kernel.mailUnread(auth.seat);
+      const hidden = auth.role === 'owner' && this.ownerPrivateHidden();
+      if (auth.role === 'owner' && url.searchParams.get('recent') !== '1') {
+        throw new HttpError(403, '家长页只能看最近几封；读信是孩子自己的动作');
+      }
       if (url.searchParams.get('recent') === '1') {
-        json(res, 200, { unread, remaining: unread, items: this.kernel.mailRecent(auth.seat, limit), marked: false });
+        const items = this.kernel.mailRecent(auth.seat, limit);
+        json(res, 200, {
+          unread,
+          remaining: unread,
+          items: hidden ? items.filter((item) => item.action !== 'mail-turn') : items,
+          marked: false,
+          ...(hidden ? { ownerPrivateHidden: true } : {}),
+        });
         return;
       }
       const peek = url.searchParams.get('peek') === '1';
@@ -310,14 +395,16 @@ export class ParlorServer {
       const before = Number(url.searchParams.get('before') ?? 0) || 0;
       const page = this.replay.page(auth.seat.id, limit, before || undefined);
       const now = this.kernel.nowMs();
+      const hidden = auth.role === 'owner' && this.ownerPrivateHidden();
       json(res, 200, {
         room: this.kernel.id,
         latest: this.kernel.latest(),
         now,
         at: serverClock(now),
         retentionDays: REPLAY_RETENTION_DAYS,
-        events: page.events,
+        events: hidden ? this.withoutPrivateTurns(page.events) : page.events,
         older: page.older,
+        ...(hidden ? { ownerPrivateHidden: true } : {}),
       });
       return;
     }
@@ -364,6 +451,68 @@ export class ParlorServer {
       return;
     }
     if (this.kernel.bindCooId(seat, identity.cooId)) this.schedulePersist();
+  }
+
+  /**
+   * 家长下场玩时，家长页要只看公开桌面。
+   * 判据不用绑定「哪个真人是谁」：只要正在进行的桌上坐着任何真人席位，就藏。
+   * 这样朋友下场时也不会漏；代价是桌前没有真人时会照旧显示她的私视图。
+   */
+  private ownerPrivateHidden(): boolean {
+    const table = this.kernel.tablePublic();
+    if (!table || table.status === 'open' || table.status === 'ended') return false;
+    const raw = (table as { seats?: unknown }).seats;
+    if (!Array.isArray(raw)) return false;
+    const ids = new Set<string>();
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const id = (entry as { id?: unknown }).id;
+      if (typeof id === 'string') ids.add(id);
+    }
+    if (ids.size === 0) return false;
+    return this.kernel.seatsPublic().some((entry) => entry.kind === 'human' && ids.has(entry.id));
+  }
+
+  /** 私牌事件只给本人的私视图；家长页在对打期间连日志里也不给。 */
+  private withoutPrivateTurns<T extends { type: string }>(events: T[]): T[] {
+    return events.filter((event) => event.type !== 'parlor.table.turn');
+  }
+
+  /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
+  private serveWeb(pathname: string, res: ServerResponse): boolean {
+    if (pathname === '/play' || pathname === '/play/') {
+      this.sendWeb('play.html', res, true);
+      return true;
+    }
+    const prefix = '/play/assets/';
+    if (!pathname.startsWith(prefix)) return false;
+    const rel = pathname.slice(prefix.length);
+    if (!rel || rel.startsWith('/') || rel.includes('..') || rel.includes('\\')
+      || !/^[A-Za-z0-9._/-]+$/.test(rel)) {
+      throw new HttpError(404, '没有这个文件');
+    }
+    this.sendWeb(rel, res, false);
+    return true;
+  }
+
+  private sendWeb(rel: string, res: ServerResponse, page: boolean): void {
+    let body: Buffer;
+    try {
+      body = readFileSync(new URL(`../web/${rel}`, import.meta.url));
+    } catch {
+      throw new HttpError(404, '没有这个文件');
+    }
+    const dot = rel.lastIndexOf('.');
+    const type = dot >= 0 ? WEB_TYPES[rel.slice(dot).toLowerCase()] : undefined;
+    res.writeHead(200, {
+      'content-type': type ?? 'application/octet-stream',
+      'content-length': body.length,
+      'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      ...(page ? { 'content-security-policy': PLAY_CSP } : {}),
+    });
+    res.end(body);
   }
 
   private action(seat: StoredSeat, body: ActionRequest): Omit<ActionResponse, 'ok'> {
@@ -426,6 +575,7 @@ export class ParlorServer {
   private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {
     const auth = this.auth(req, url);
     const since = Number(url.searchParams.get('since') ?? 0) || 0;
+    const hidden = auth.role === 'owner' && this.ownerPrivateHidden();
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
@@ -434,8 +584,11 @@ export class ParlorServer {
     });
     res.flushHeaders?.();
     res.write('retry: 3000\n\n');
-    for (const event of this.kernel.history(auth.seat.id, since, 200)) this.writeEvent(res, event);
-    const client: Client = { res, seat: auth.seat };
+    for (const event of this.kernel.history(auth.seat.id, since, 200)) {
+      if (hidden && event.type === 'parlor.table.turn') continue;
+      this.writeEvent(res, event);
+    }
+    const client: Client = { res, seat: auth.seat, role: auth.role };
     this.clients.add(client);
     this.online.set(auth.seat.id, (this.online.get(auth.seat.id) ?? 0) + 1);
     req.on('close', () => {
@@ -449,6 +602,9 @@ export class ParlorServer {
   private broadcast(event: RoomEvent): void {
     for (const client of this.clients) {
       if (!this.kernel.visibleTo(event, client.seat.id)) continue;
+      if (client.role === 'owner' && event.type === 'parlor.table.turn' && this.ownerPrivateHidden()) {
+        continue;
+      }
       this.writeEvent(client.res, event);
     }
   }
@@ -544,13 +700,21 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   #log li.system { color: #9aa0a6; background: transparent; padding-left: 0; }
   #ledger .entry, #replay .entry { padding: 7px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; color: #c9ccd1; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
   #ledger .tier, #replay .tier { margin: 8px 0 4px; }
+  #table .entry, #table .tier, #table .title, #table .note { padding: 7px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; color: #c9ccd1; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  #table .title { color: #e7e8ea; font-weight: 600; }
+  #table .tier { background: transparent; color: #9aa0a6; padding: 0 2px; }
+  #table .note { background: #241f16; border: 1px solid #3d3320; color: #d9b979; }
+  #table .note.bad { background: #2a1a1c; border-color: #4a2528; color: #ff9a9a; }
+  #table pre.entry { margin: 0 0 6px; font: inherit; }
+  header .play { color: #79c0ff; text-decoration: none; }
+  header .play:hover { text-decoration: underline; }
   .bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   select, button { font: inherit; color: inherit; background: #22262c; border: 1px solid #363b43; border-radius: 7px; padding: 5px 8px; }
   button { cursor: pointer; }
   #error { color: #ff7b72; padding: 12px 20px; }
 </style></head>
 <body>
-<header><h1>客厅 · ${escapeHtml(room)}</h1><p class="sub">家长页：公开的事，和自家孩子（${escapeHtml(seatName)}）的私聊。</p></header>
+<header><h1>客厅 · ${escapeHtml(room)}</h1><p class="sub">家长页：公开的事，和自家孩子（${escapeHtml(seatName)}）的私聊与牌桌。<a class="play" href="/play" target="_blank" rel="noreferrer">下场玩 →</a></p></header>
 <div id="error" hidden></div>
 <main>
   <div>
@@ -559,6 +723,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
         <option value="full">热闹</option><option value="digest">摘要</option><option value="quiet">只 @</option><option value="off">离开</option>
       </select><button id="save">改</button></div>
     </section>
+    <section><h2>牌桌</h2><div id="table"></div></section>
     <section><h2>账本</h2><div id="ledger"></div></section>
     <section><h2>信箱</h2><div id="mail"></div></section>
     <section><h2>回放</h2><div id="replay"></div></section>
@@ -574,9 +739,12 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const ledger = document.getElementById('ledger');
   const mailBox = document.getElementById('mail');
   const replayBox = document.getElementById('replay');
+  const tableBox = document.getElementById('table');
   const tier = document.getElementById('tier');
-  let latest = 0, mine = null;
+  let latest = 0, mine = null, privateHidden = false;
   const showError = (text) => { error.hidden = false; error.textContent = text; };
+  const clockOf = (ts) => new Date(ts + 8 * 3600 * 1000).toISOString().slice(11, 19);
+  const dateTimeOf = (ts) => new Date(ts + 8 * 3600 * 1000).toISOString().slice(5, 16).replace('T', ' ');
   const line = (event) => {
     const li = document.createElement('li');
     if (event.type === 'parlor.whisper') li.className = 'whisper';
@@ -592,8 +760,12 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const addEvent = (event) => {
     if (event.seq <= latest) return;
     latest = event.seq;
-    log.append(line(event));
-    while (log.children.length > 300) log.firstElementChild.remove();
+    if (event.type !== 'parlor.table.turn') {
+      log.append(line(event));
+      while (log.children.length > 300) log.firstElementChild.remove();
+    }
+    if (event.type.startsWith('parlor.table.') || event.type.startsWith('parlor.monopoly.')) refreshTable();
+    if (event.type === 'parlor.table.turn') refreshMail();
     if (event.type === 'parlor.table.end' || event.type === 'parlor.ledger' || event.type === 'parlor.whisper') {
       refreshLedger();
       refreshMail();
@@ -648,11 +820,14 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const renderMail = (page) => {
     mailBox.textContent = '';
     mailBox.append(ledgerRow('未读 ' + (page.unread || 0) + ' 封', 'tier'));
-    const items = (page.items || []).slice(0, 3);
+    const items = (page.items || [])
+      .filter((item) => !(privateHidden && item.action === 'mail-turn'))
+      .slice(0, 3);
     if (!items.length) mailBox.append(ledgerRow('信箱是空的。'));
     for (const item of items) {
       mailBox.append(ledgerRow((item.fromName || '系统') + '：' + item.text));
     }
+    if (privateHidden) mailBox.append(ledgerRow('对打期间她的回合提示不在这里显示。', 'note'));
   };
   async function refreshMail() {
     const response = await fetch('/v1/mail?recent=1&limit=3', { headers });
@@ -678,21 +853,95 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
       const dot = document.createElement('span'); dot.className = 'dot' + (snapshot.online && snapshot.online.includes(seat.id) ? ' on' : '');
       const name = document.createElement('span'); name.className = 'name'; name.textContent = seat.name;
       const label = document.createElement('span'); label.className = 'tier';
-      label.textContent = ({ full: '热闹', digest: '摘要', quiet: '只 @', off: '离开' })[seat.tier] || seat.tier;
+      label.textContent = seat.kind === 'human'
+        ? '人'
+        : (({ full: '热闹', digest: '摘要', quiet: '只 @', off: '离开' })[seat.tier] || seat.tier);
       li.append(dot, name, label); seats.append(li);
       if (seat.id === snapshot.seat.id) { mine = seat; tier.value = seat.tier; }
     }
   };
+  const renderTable = (snapshot) => {
+    tableBox.textContent = '';
+    privateHidden = snapshot.ownerPrivateHidden === true;
+    const names = new Map((snapshot.seats || []).map((seat) => [seat.id, seat.name]));
+    const info = snapshot.monopoly || {};
+    if (info.fault) tableBox.append(ledgerRow('大富翁故障：' + info.fault, 'note bad'));
+    if (info.signup) {
+      const signup = info.signup;
+      tableBox.append(ledgerRow('大富翁报名 ' + signup.seats.length + '/' + signup.size + '：' + signup.seats.join('、'), 'entry'));
+      tableBox.append(ledgerRow((signup.pace === 'quick' ? '试玩 5 分钟/回合' : '标准 30 分钟/回合')
+        + '；还差 ' + signup.missing + ' 个真人（脚本最多补 2 个）；报名截止 ' + dateTimeOf(signup.deadlineAt), 'tier'));
+    }
+    const table = snapshot.table;
+    if (!table) {
+      if (!info.signup) tableBox.append(ledgerRow('现在没有牌桌。', 'tier'));
+      return;
+    }
+    const status = ({ open: '等人', bidding: '叫地主', playing: '进行中', ended: '已结束' })[table.status] || table.status;
+    let head = (table.label || table.game) + ' · ' + status;
+    if (table.round) head += ' · 第 ' + table.round + '/' + (table.rounds || '?') + ' 轮';
+    if (table.turn) head += ' · 轮到 ' + (names.get(table.turn) || table.turn);
+    tableBox.append(ledgerRow(head, 'title'));
+    if (table.deadline) tableBox.append(ledgerRow('本回合截止 ' + clockOf(table.deadline), 'tier'));
+    if (table.game === 'monopoly') {
+      const props = Array.isArray(table.properties) ? table.properties : [];
+      for (const player of (table.players || [])) {
+        const owned = props.filter((property) => property.owner === player.id);
+        const tags = [];
+        if (player.id === table.turn) tags.push('轮到');
+        if (player.auto) tags.push('托管');
+        if (player.bankrupt) tags.push('破产');
+        tableBox.append(ledgerRow(player.name + '：' + player.cash + ' 金 · ' + player.position + ' · ' + owned.length + ' 块地'
+          + (owned.length ? '（' + owned.map((property) => property.name + (property.level ? ' L' + property.level : '')).join('、') + '）' : '')
+          + (tags.length ? ' · ' + tags.join('·') : '')));
+      }
+    } else if (table.game === 'ddz') {
+      for (const seat of (table.seats || [])) {
+        tableBox.append(ledgerRow(seat.name + (seat.bot ? '（脚本）' : '') + '：' + seat.cardsLeft + ' 张'
+          + (seat.role === 'landlord' ? ' · 地主' : seat.role === 'farmer' ? ' · 农民' : '')));
+      }
+      if (table.lastPlay) {
+        tableBox.append(ledgerRow('上一手：' + (names.get(table.lastPlay.seat) || table.lastPlay.seat)
+          + ' 出 ' + table.lastPlay.cards.join(' ') + '（' + (table.lastPlay.label || '') + '）', 'tier'));
+      }
+    } else if (table.game === 'dice') {
+      for (const seat of (table.seats || [])) {
+        tableBox.append(ledgerRow(seat.name + (seat.stood ? ' · 已停' : ' · 还在')));
+      }
+      for (const entry of (table.revealed || [])) {
+        tableBox.append(ledgerRow(entry.name + '：' + entry.dice.join(' + ') + ' = ' + entry.total, 'tier'));
+      }
+    }
+    if (table.text) tableBox.append(ledgerRow(table.text));
+    if (snapshot.ownerPrivateHidden) {
+      tableBox.append(ledgerRow('桌上有真人席位，她的私视图与私牌事件暂时不显示（防作弊）。', 'note'));
+    } else if (snapshot.tablePrivate && snapshot.tablePrivate.text) {
+      tableBox.append(ledgerRow('她的私视图：\\n' + snapshot.tablePrivate.text, 'entry'));
+    }
+  };
+  async function refreshTable() {
+    const response = await fetch('/v1/room?limit=1', { headers });
+    if (response.ok) renderTable(await response.json());
+  }
+  async function seedLog() {
+    const response = await fetch('/v1/replay?limit=80', { headers });
+    if (!response.ok) return;
+    const page = await response.json();
+    log.textContent = '';
+    for (const event of (page.events || [])) log.append(line(event));
+    while (log.children.length > 300) log.firstElementChild.remove();
+  }
   async function load() {
-    const response = await fetch('/v1/room?limit=80', { headers });
+    const response = await fetch('/v1/room?limit=1', { headers });
     if (!response.ok) { showError('令牌无效，或房间已经重开。'); return; }
     const snapshot = await response.json();
     renderSeats(snapshot);
     renderLedger(snapshot);
+    renderTable(snapshot);
     refreshMail();
     refreshReplay();
+    await seedLog();
     latest = snapshot.latest;
-    for (const event of snapshot.events) addEvent(event);
     const source = new EventSource('/v1/stream?since=' + latest + '&token=' + encodeURIComponent(token));
     source.onmessage = (message) => { try { addEvent(JSON.parse(message.data)); } catch {} };
     source.onerror = () => { /* 浏览器自动重连 */ };
