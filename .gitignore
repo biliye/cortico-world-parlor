@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.log
+
+# 部署用的密钥，永远不进仓库
+.env
+local.env
+*.local.json
