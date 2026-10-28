@@ -245,18 +245,19 @@ describe('强制付款与破产', () => {
 describe('道具', () => {
   it('路标卡指定步数、不掷骰、照常触发落地', () => {
     let game = make();
-    game = at(game, SEATS, 'a', 20);
-    const out = game.useItem('a', { item: 'signpost', steps: 11 });
-    expect(player(game, 'a').pos).toBe(7);
-    expect(player(game, 'a').cash).toBe(1320);
+    game = at(game, SEATS, 'a', 0);
+    const out = game.useItem('a', { item: 'signpost', steps: 5 });
+    expect(player(game, 'a').pos).toBe(5);
+    expect(player(game, 'a').cash).toBe(1200);
+    expect(game.phase).toBe('buy');
     expect(player(game, 'a').items.signpost).toBe(0);
     expect(out.facts.join('\n')).toContain('用了路标卡');
   });
 
-  it('路标卡不能站住不走，也不能超过 12 格', () => {
+  it('路标卡不能站住不走，也不能超过 6 格', () => {
     let game = make();
     expectError(() => game.useItem('a', { item: 'signpost', steps: 0 }), 'bad_input');
-    expectError(() => game.useItem('a', { item: 'signpost', steps: 13 }), 'bad_input');
+    expectError(() => game.useItem('a', { item: 'signpost', steps: 7 }), 'bad_input');
     expect(player(game, 'a').items.signpost).toBe(1);
   });
 
@@ -357,6 +358,7 @@ describe('轮转、轮数与结局', () => {
     let game = make(['a', 'b', 'c']);
     game = patch(game, ['a', 'b', 'c'], (state) => {
       state.players.b!.bankrupt = true;
+      state.players.b!.cash = 0;
     });
     game.roll('a', [1, 1]);
     expect(game.phase).toBe('buy');

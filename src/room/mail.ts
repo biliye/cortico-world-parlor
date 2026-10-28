@@ -64,6 +64,14 @@ interface MailState {
   items: MailItem[];
 }
 
+/** 长局通知要的是「确认落盘」；写不进去必须让调用方知道。 */
+export class MailWriteError extends Error {
+  constructor(message = '信箱写盘失败') {
+    super(message);
+    this.name = 'MailWriteError';
+  }
+}
+
 const DEFAULT_LIMIT = 400;
 const KINDS: readonly MailKind[] = ['whisper', 'gift', 'promise', 'ledger'];
 
@@ -135,11 +143,25 @@ export class MailStore {
     return item;
   }
 
-  /** 幂等写：同一个 key 已经投过就返回旧的那封。 */
+  /**
+   * 幂等写：同一个 key 已经投过就返回旧的那封。
+   * 写盘失败会回滚并抛 `MailWriteError`，不假装已经留底。
+   */
   appendOnce(key: string, input: Omit<MailItem, 'id' | 'seq' | 'ts'>): MailItem {
     const existing = this.items.find((item) => item.key === key);
     if (existing) return existing;
-    return this.append({ ...input, key });
+    const before = this.seq;
+    const item: MailItem = { id: randomUUID(), seq: ++this.seq, ts: this.now(), ...input, key };
+    this.items.push(item);
+    if (!this.save()) {
+      this.items.pop();
+      this.seq = before;
+      throw new MailWriteError(`信箱写盘失败，key=${key} 没有确认`);
+    }
+    if (this.items.length > this.limit) {
+      this.items.splice(0, this.items.length - this.limit);
+    }
+    return item;
   }
 
   unreadCount(cooId: string, room: string): number {
@@ -180,8 +202,8 @@ export class MailStore {
     return this.items.length;
   }
 
-  private save(): void {
-    if (!this.file) return;
+  private save(): boolean {
+    if (!this.file) return true;
     try {
       mkdirSync(dirname(this.file), { recursive: true });
       const state: MailState = {
@@ -194,6 +216,9 @@ export class MailStore {
       writeFileSync(temp, `${JSON.stringify(state)}\n`, { encoding: 'utf8', mode: 0o600 });
       renameSync(temp, this.file);
       chmodSync(this.file, 0o600);
-    } catch { /* 信箱写不进去不阻断房间 */ }
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

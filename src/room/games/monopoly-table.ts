@@ -77,6 +77,44 @@ const shuffle = (list: readonly string[]): string[] => (
     .map((entry) => entry.value)
 );
 
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** 桌子这一层的自检：席位、时间、状态与局面必须对得上。 */
+function validateSnapshot(snapshot: MonopolyTableSnapshot): void {
+  if (!snapshot || typeof snapshot !== 'object') throw new TableError('bad_action', '桌子存档不是对象');
+  if (snapshot.version !== 1) throw new TableError('bad_action', '存档版本不认识');
+  if (!Array.isArray(snapshot.seats) || snapshot.seats.length < 2 || snapshot.seats.length > 6) {
+    throw new TableError('bad_action', '存档里的席位数不对');
+  }
+  const ids = snapshot.seats.map((seat) => (seat && typeof seat.id === 'string' ? seat.id : ''));
+  if (ids.some((id) => id.length === 0) || new Set(ids).size !== ids.length) {
+    throw new TableError('bad_action', '存档里的席位坏了');
+  }
+  if (!ids.includes(snapshot.host)) throw new TableError('bad_action', '存档里的发起人不在桌上');
+  if (snapshot.pace !== 'standard' && snapshot.pace !== 'quick') throw new TableError('bad_action', '存档里的节奏不认识');
+  if (snapshot.status !== 'playing' && snapshot.status !== 'ended') throw new TableError('bad_action', '存档里的桌子状态坏了');
+  if (!finite(snapshot.deadline) || !finite(snapshot.turnStartedAt)
+    || !finite(snapshot.startedAt) || !finite(snapshot.endsAt)) {
+    throw new TableError('bad_action', '存档里的时间字段坏了');
+  }
+  if (snapshot.endsAt <= snapshot.startedAt) throw new TableError('bad_action', '存档里的整局时限坏了');
+  if (!Array.isArray(snapshot.auto) || snapshot.auto.some((id) => !ids.includes(id))) {
+    throw new TableError('bad_action', '存档里的托管名单坏了');
+  }
+  if (!Array.isArray(snapshot.bots) || snapshot.bots.some((id) => !ids.includes(id))) {
+    throw new TableError('bad_action', '存档里的脚本名单坏了');
+  }
+  if (snapshot.status === 'ended' && !snapshot.ended) throw new TableError('bad_action', '存档说结束了却没有结局');
+  if (snapshot.status === 'playing' && snapshot.ended) throw new TableError('bad_action', '存档说还在玩却已有结局');
+  if (!snapshot.game || !Array.isArray(snapshot.game.order)) throw new TableError('bad_action', '存档里没有局面');
+  if (snapshot.game.order.length !== ids.length || snapshot.game.order.some((id) => !ids.includes(id))) {
+    throw new TableError('bad_action', '存档里的轮序和席位对不上');
+  }
+  if (!Array.isArray(snapshot.lastFacts) || snapshot.lastFacts.some((fact) => typeof fact !== 'string')) {
+    throw new TableError('bad_action', '存档里的最近事实坏了');
+  }
+}
+
 const mapError = (error: unknown): TableError => {
   if (error instanceof TableError) return error;
   if (error instanceof MonopolyError) {
@@ -156,7 +194,7 @@ export class MonopolyTable implements TableEngine {
   }
 
   static restore(snapshot: MonopolyTableSnapshot, options: MonopolyTableOptions): MonopolyTable {
-    if (snapshot.version !== 1) throw new TableError('bad_action', '存档版本不认识');
+    validateSnapshot(snapshot);
     return new MonopolyTable(options, snapshot);
   }
 
@@ -193,9 +231,12 @@ export class MonopolyTable implements TableEngine {
     const input = (action ?? {}) as Record<string, unknown>;
     const type = typeof input.type === 'string' ? input.type : '';
 
-    if (type === 'set_auto') return this.setAuto(seatId, input.on === true, now);
     if (this.status !== 'playing') throw new TableError('not_started', '这局已经结束了');
+    // 硬截止由动作入口自己判：tick 只是兜底，晚到的动作不能因为定时器还没跑就生效。
+    if (now >= this.endsAt) throw new TableError('expired', '整局时限已到，这局会按当前资产结算');
+    if (type === 'set_auto') return this.setAuto(seatId, input.on === true, now);
     if (this.engine.currentSeatId !== seatId) throw new TableError('not_turn', '还没轮到你');
+    if (now >= this.deadline) throw new TableError('expired', '这一回合已经截止，服务器会按默认动作托管');
 
     let out: Outcome;
     try {
@@ -216,13 +257,7 @@ export class MonopolyTable implements TableEngine {
 
   tick(now: number): TableStep | null {
     if (this.status !== 'playing') return null;
-    if (now >= this.endsAt) {
-      try {
-        return this.apply(this.engine.finish('time'), now);
-      } catch {
-        return null;
-      }
-    }
+    if (now >= this.endsAt) return this.apply(this.engine.finish('time'), now);
     const seatId = this.engine.currentSeatId;
     const bot = this.bots.has(seatId);
     const auto = this.auto.has(seatId);
@@ -399,13 +434,9 @@ export class MonopolyTable implements TableEngine {
     return { events: [event], views: [] };
   }
 
-  private timeout(now: number): TableStep | null {
-    try {
-      const out = this.engine.timeout(this.rng());
-      return this.apply(out, now, true);
-    } catch {
-      return null;
-    }
+  private timeout(now: number): TableStep {
+    const out = this.engine.timeout(this.rng());
+    return this.apply(out, now, true);
   }
 
   private apply(out: Outcome, now: number, managed = false): TableStep {
@@ -472,9 +503,12 @@ export class MonopolyTable implements TableEngine {
     const legal = this.engine.legal();
     if (phase === 'prepare') {
       const options: string[] = ['parlor_monopoly {action:"roll"} 掷骰'];
-      if (legal.items.includes('signpost')) options.push('{action:"use_item", item:"signpost", steps:1-12} 路标卡');
+      if (legal.items.includes('signpost')) options.push('{action:"use_item", item:"signpost", steps:1-6} 路标卡');
       if (legal.items.includes('pass')) options.push('{action:"use_item", item:"pass"} 通行卡');
-      if (legal.items.includes('repair')) options.push('{action:"use_item", item:"repair", target:格号} 修缮卡');
+      if (legal.items.includes('repair')) {
+        const targets = legal.repairTargets.map((target) => `${target.index} ${cellAt(target.index).name}(${target.cost})`).join('、');
+        options.push(`{action:"use_item", item:"repair", target:格号} 修缮卡，可修：${targets}`);
+      }
       return `${options.join('；')}。`;
     }
     if (phase === 'buy' && legal.pending !== null) {
@@ -498,8 +532,9 @@ export class MonopolyTable implements TableEngine {
     const label = ended.reason === 'last-standing' ? '只剩一名未破产玩家'
       : ended.reason === 'rounds' ? `走满 ${MONOPOLY_RULES.rounds} 轮`
         : ended.reason === 'time' ? '整局时限到' : `连续 ${MONOPOLY_RULES.idleRoundsToEnd} 轮没人主动动作`;
-    const top = ended.ranking.slice(0, 4).map((entry, index) => (
-      `${index + 1}. ${this.engine.nameOf(entry.seatId)} ${entry.assets}${entry.bankrupt ? '（破产）' : ''}`
+    const top = ended.ranking.map((entry, index) => (
+      `${index + 1}. ${this.engine.nameOf(entry.seatId)} ${entry.assets}`
+      + `（现金 ${entry.cash} + 地产 ${entry.propertyValue}）${entry.bankrupt ? '（破产）' : ''}`
     )).join('，');
     const winners = ended.winners.map((seatId) => this.engine.nameOf(seatId)).join('、');
     return `结束（${label}）。${ended.tie ? `并列第一：${winners}` : `赢家：${winners}`}。${top}。`;

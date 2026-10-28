@@ -199,29 +199,136 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 const isSeatId = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 
-/** 存档自检：缺一局要用的东西就整份拒绝，不拿半张桌子去跑。 */
+const isInt = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
+const isBool = (value: unknown): value is boolean => typeof value === 'boolean';
+const PHASES: readonly Phase[] = ['prepare', 'buy', 'upgrade', 'workshop'];
+const END_REASONS: readonly MonopolyEnd['reason'][] = ['last-standing', 'rounds', 'time', 'idle'];
+
+/**
+ * 存档自检：取值、边界和交叉关系都查，任何一条不对就整份拒绝。
+ * 这里宁可拒绝一局，也不拿半张桌子去跑——损坏状态比停局难查得多。
+ */
 export function validateState(raw: unknown): MonopolyState {
   if (!raw || typeof raw !== 'object') throw new MonopolyError('bad_input', '活动存档不是对象');
   const state = raw as Partial<MonopolyState>;
-  if (!Array.isArray(state.order) || state.order.length < 2 || !state.order.every(isSeatId)) {
+  if (state.rulesVersion !== MONOPOLY_RULES.version || state.mapVersion !== MONOPOLY_RULES.mapVersion) {
+    throw new MonopolyError('bad_input', '活动存档的规则版本和当前不一致');
+  }
+  if (!Array.isArray(state.order) || state.order.length < 2 || state.order.length > 6 || !state.order.every(isSeatId)) {
     throw new MonopolyError('bad_input', '活动存档的轮序坏了');
   }
-  if (new Set(state.order).size !== state.order.length) throw new MonopolyError('bad_input', '活动存档的轮序有重复席位');
+  const order = state.order;
+  if (new Set(order).size !== order.length) throw new MonopolyError('bad_input', '活动存档的轮序有重复席位');
   if (!state.players || typeof state.players !== 'object') throw new MonopolyError('bad_input', '活动存档缺少玩家');
-  for (const seatId of state.order) {
-    const player = (state.players as Record<string, PlayerState>)[seatId];
-    if (!player || typeof player.cash !== 'number' || typeof player.pos !== 'number') {
-      throw new MonopolyError('bad_input', `活动存档缺少席位 ${seatId}`);
+
+  const players = state.players as Record<string, PlayerState>;
+  const stranger = Object.keys(players).find((seatId) => !order.includes(seatId));
+  if (stranger) throw new MonopolyError('bad_input', '活动存档里有轮序之外的玩家');
+  for (const seatId of order) {
+    const player = players[seatId];
+    if (!player || player.seatId !== seatId) throw new MonopolyError('bad_input', `活动存档缺少席位 ${seatId}`);
+    if (!isInt(player.cash) || player.cash < 0) throw new MonopolyError('bad_input', `席位 ${seatId} 的现金坏了`);
+    if (!isInt(player.pos) || player.pos < 0 || player.pos >= BOARD_SIZE) {
+      throw new MonopolyError('bad_input', `席位 ${seatId} 的位置越界`);
     }
+    if (!player.items || typeof player.items !== 'object') throw new MonopolyError('bad_input', `席位 ${seatId} 缺道具`);
+    if (Object.keys(player.items).length !== ITEM_KINDS.length) {
+      throw new MonopolyError('bad_input', `席位 ${seatId} 的道具种类不对`);
+    }
+    for (const item of ITEM_KINDS) {
+      if (!isInt(player.items[item]) || player.items[item] < 0 || player.items[item] > MONOPOLY_RULES.itemsPerKind) {
+        throw new MonopolyError('bad_input', `席位 ${seatId} 的${ITEM_LABELS[item]}数量坏了`);
+      }
+    }
+    if (!isBool(player.bankrupt) || !isBool(player.passThisTurn)) {
+      throw new MonopolyError('bad_input', `席位 ${seatId} 的状态标记坏了`);
+    }
+    if (player.bankrupt && player.cash !== 0) throw new MonopolyError('bad_input', `席位 ${seatId} 已破产却还有现金`);
   }
+
   if (!Array.isArray(state.properties) || state.properties.length !== PROPERTY_INDICES.length) {
     throw new MonopolyError('bad_input', '活动存档的地产数量不对');
   }
-  if (!Number.isInteger(state.round) || !Number.isInteger(state.turnIndex)) {
+  const seen = new Set<number>();
+  for (const property of state.properties) {
+    if (!property || !PROPERTY_INDICES.includes(property.index)) {
+      throw new MonopolyError('bad_input', '活动存档里有不认识的地产编号');
+    }
+    if (seen.has(property.index)) throw new MonopolyError('bad_input', '活动存档里的地产编号重复');
+    seen.add(property.index);
+    if (property.owner !== null && !order.includes(property.owner)) {
+      throw new MonopolyError('bad_input', '活动存档里有轮序之外的地主');
+    }
+    if (property.level !== 0 && property.level !== 1) throw new MonopolyError('bad_input', '活动存档的升级等级坏了');
+    if (!isInt(property.upgradePaid) || property.upgradePaid < 0) {
+      throw new MonopolyError('bad_input', '活动存档的升级实付坏了');
+    }
+    if (property.level === 0 && property.upgradePaid !== 0) {
+      throw new MonopolyError('bad_input', '没升级的地却记着实付升级费');
+    }
+  }
+
+  if (!isInt(state.round) || state.round < 1 || state.round > MONOPOLY_RULES.rounds + 1) {
     throw new MonopolyError('bad_input', '活动存档的轮次坏了');
   }
-  if (state.phase !== 'prepare' && state.phase !== 'buy' && state.phase !== 'upgrade' && state.phase !== 'workshop') {
-    throw new MonopolyError('bad_input', '活动存档的相位坏了');
+  if (!isInt(state.turnIndex) || state.turnIndex < 0 || state.turnIndex >= order.length) {
+    throw new MonopolyError('bad_input', '活动存档的当前玩家下标越界');
+  }
+  if (!PHASES.includes(state.phase as Phase)) throw new MonopolyError('bad_input', '活动存档的相位坏了');
+  if (!isInt(state.turnSeq) || state.turnSeq < 1) throw new MonopolyError('bad_input', '活动存档的回合号坏了');
+  if (!isBool(state.itemUsed) || !isBool(state.voluntaryThisRound)) {
+    throw new MonopolyError('bad_input', '活动存档的状态标记坏了');
+  }
+  if (!isInt(state.idleRounds) || state.idleRounds < 0) throw new MonopolyError('bad_input', '活动存档的空转轮数坏了');
+  if (!isInt(state.turnsTaken) || state.turnsTaken < 0) throw new MonopolyError('bad_input', '活动存档的回合计数坏了');
+  if (!isInt(state.timeouts) || state.timeouts < 0) throw new MonopolyError('bad_input', '活动存档的托管计数坏了');
+
+  const current = players[order[state.turnIndex]!]!;
+  const pending = state.pending;
+  if (state.phase === 'prepare') {
+    if (pending !== null) throw new MonopolyError('bad_input', '准备阶段不该有等待中的地块');
+  } else if (!isInt(pending) || pending < 0 || pending >= BOARD_SIZE) {
+    throw new MonopolyError('bad_input', '等待中的地块编号不对');
+  } else if (state.phase === 'workshop') {
+    if (cellAt(pending).kind !== 'workshop') throw new MonopolyError('bad_input', '等待补卡的格子不是工坊');
+  } else {
+    const property = state.properties.find((entry) => entry.index === pending);
+    if (!property || cellAt(pending).kind !== 'property') {
+      throw new MonopolyError('bad_input', '等待选择的地块不是地产');
+    }
+    if (state.phase === 'buy' && property.owner !== null) {
+      throw new MonopolyError('bad_input', '等在买的地已经有主');
+    }
+    if (state.phase === 'upgrade' && (property.owner !== current.seatId || property.level > 0)) {
+      throw new MonopolyError('bad_input', '等在升级的地不属于当前玩家或已经升过');
+    }
+  }
+  if (state.ended === undefined) throw new MonopolyError('bad_input', '活动存档缺结局字段');
+  if (state.ended === null) {
+    if (current.bankrupt) throw new MonopolyError('bad_input', '轮到一位已破产的玩家');
+  } else {
+    if (!state.ended || typeof state.ended !== 'object') throw new MonopolyError('bad_input', '活动存档的结局坏了');
+    if (!END_REASONS.includes(state.ended.reason)) throw new MonopolyError('bad_input', '活动存档的结局原因不认识');
+    if (!Array.isArray(state.ended.winners) || state.ended.winners.length === 0
+      || !state.ended.winners.every((id) => order.includes(id))) {
+      throw new MonopolyError('bad_input', '活动存档的赢家名单坏了');
+    }
+    if (!isBool(state.ended.tie)) throw new MonopolyError('bad_input', '活动存档的并列标记坏了');
+    if (!Array.isArray(state.ended.ranking) || state.ended.ranking.length !== order.length) {
+      throw new MonopolyError('bad_input', '活动存档的排名不完整');
+    }
+    const ranked = new Set<string>();
+    for (const entry of state.ended.ranking) {
+      if (!entry || !order.includes(entry.seatId) || ranked.has(entry.seatId)) {
+        throw new MonopolyError('bad_input', '活动存档的排名里有陌生或重复的席位');
+      }
+      ranked.add(entry.seatId);
+      if (!isInt(entry.cash) || entry.cash < 0 || !isInt(entry.propertyValue) || entry.propertyValue < 0
+        || !isInt(entry.assets) || entry.assets < 0 || !isInt(entry.properties) || entry.properties < 0
+        || !isBool(entry.bankrupt)) {
+        throw new MonopolyError('bad_input', '活动存档的排名金额坏了');
+      }
+    }
   }
   return raw as MonopolyState;
 }
@@ -352,18 +459,29 @@ export class MonopolyGame {
     canUpgrade: boolean;
     workshop: ItemKind[];
     standing: string[];
+    /** 修缮卡此刻真正能修的地与费用；空 = 有卡也没用。 */
+    repairTargets: Array<{ index: number; cost: number }>;
   } {
     const seatId = this.currentSeatId;
     const player = this.player(seatId);
     const pending = this.state.pending;
     const property = pending === null ? null : this.property(pending);
+    const repairTargets = this.state.phase === 'prepare' && !this.state.itemUsed && player.items.repair > 0
+      ? this.state.properties
+        .filter((entry) => entry.owner === seatId && entry.level === 0)
+        .map((entry) => ({
+          index: entry.index,
+          cost: Math.floor((cellAt(entry.index).upgrade ?? 0) * MONOPOLY_RULES.repairDiscount),
+        }))
+        .filter((target) => player.cash >= target.cost)
+      : [];
     return {
       seatId,
       phase: this.state.phase,
       pending,
       canRoll: this.state.phase === 'prepare',
       items: this.state.phase === 'prepare' && !this.state.itemUsed
-        ? ITEM_KINDS.filter((item) => player.items[item] > 0)
+        ? ITEM_KINDS.filter((item) => player.items[item] > 0 && (item !== 'repair' || repairTargets.length > 0))
         : [],
       canBuy: this.state.phase === 'buy' && !!property && property.owner === null && player.cash >= (cellAt(property.index).price ?? 0),
       canUpgrade: this.state.phase === 'upgrade' && !!property && property.owner === seatId
@@ -372,6 +490,7 @@ export class MonopolyGame {
         ? ITEM_KINDS.filter((item) => player.items[item] < MONOPOLY_RULES.itemsPerKind)
         : [],
       standing: ITEM_KINDS.filter((item) => player.items[item] > 0),
+      repairTargets,
     };
   }
 
@@ -381,8 +500,10 @@ export class MonopolyGame {
   roll(seatId: string, dice: readonly number[]): Outcome {
     this.begin(seatId, 'prepare');
     const out = this.emptyOutcome();
+    const steps = this.diceSteps(dice);
     this.state.voluntaryThisRound = true;
-    const result = this.doRoll(dice, out);
+    out.facts.push(`${this.nameOf(seatId)} 掷出 ${dice.join(' + ')} = ${steps}。`);
+    const result = this.doMove(steps, out);
     if (result === 'ended') this.fillEnd(out);
     return out;
   }
@@ -395,13 +516,13 @@ export class MonopolyGame {
     const player = this.player(seatId);
     if (player.items[action.item] < 1) throw new MonopolyError('not_available', `你手上没有${ITEM_LABELS[action.item]}`);
     const out = this.emptyOutcome();
-    this.state.voluntaryThisRound = true;
 
     if (action.item === 'signpost') {
       const steps = action.steps;
-      if (typeof steps !== 'number' || !Number.isInteger(steps) || steps < 1 || steps > 12) {
-        throw new MonopolyError('bad_input', '路标卡要走 1 到 12 格');
+      if (typeof steps !== 'number' || !Number.isInteger(steps) || steps < 1 || steps > 6) {
+        throw new MonopolyError('bad_input', '路标卡要走 1 到 6 格');
       }
+      this.state.voluntaryThisRound = true;
       this.consumeItem(seatId, 'signpost');
       out.facts.push(`${this.nameOf(seatId)} 用了路标卡，指定向前 ${steps} 格。`);
       const result = this.doMove(steps, out);
@@ -410,6 +531,7 @@ export class MonopolyGame {
     }
 
     if (action.item === 'pass') {
+      this.state.voluntaryThisRound = true;
       this.consumeItem(seatId, 'pass');
       player.passThisTurn = true;
       out.facts.push(`${this.nameOf(seatId)} 用了通行卡：这一回合踩到别人的地产，租金减半。`);
@@ -428,6 +550,7 @@ export class MonopolyGame {
     if (property.level > 0) throw new MonopolyError('not_available', '那块地已经升过级了');
     const cost = Math.floor((cell.upgrade ?? 0) * MONOPOLY_RULES.repairDiscount);
     if (player.cash < cost) throw new MonopolyError('not_affordable', `修缮要 ${cost} 金币，你只有 ${player.cash}`);
+    this.state.voluntaryThisRound = true;
     this.consumeItem(seatId, 'repair');
     player.cash -= cost;
     property.level = 1;
@@ -548,13 +671,20 @@ export class MonopolyGame {
     this.state.itemUsed = true;
   }
 
-  /** 掷骰 → 移动 → 结算落地。返回是否换到下一位。 */
-  private doRoll(dice: readonly number[], out: Outcome): 'choice' | 'ended' {
-    if (dice.length !== MONOPOLY_RULES.diceCount) throw new MonopolyError('bad_input', '骰子数量不对');
+  /** 骰点校验；不合法就抛，任何状态都还没动。 */
+  private diceSteps(dice: readonly number[]): number {
+    if (!Array.isArray(dice) || dice.length !== MONOPOLY_RULES.diceCount) {
+      throw new MonopolyError('bad_input', '骰子数量不对');
+    }
     for (const die of dice) {
       if (!Number.isInteger(die) || die < 1 || die > 6) throw new MonopolyError('bad_input', '骰点只能是 1 到 6');
     }
-    const steps = dice.reduce((sum, die) => sum + die, 0);
+    return dice.reduce((sum, die) => sum + die, 0);
+  }
+
+  /** 掷骰 → 移动 → 结算落地。返回是否换到下一位。 */
+  private doRoll(dice: readonly number[], out: Outcome): 'choice' | 'ended' {
+    const steps = this.diceSteps(dice);
     const name = this.nameOf(this.currentSeatId);
     out.facts.push(`${name} 掷出 ${dice.join(' + ')} = ${steps}。`);
     return this.doMove(steps, out);

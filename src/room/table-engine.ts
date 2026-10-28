@@ -51,7 +51,9 @@ export interface TableEngine {
 
 export type TableErrorCode =
   | 'not_open' | 'not_started' | 'full' | 'seated' | 'not_seated'
-  | 'not_host' | 'not_turn' | 'bad_action' | 'no_rerolls' | 'wrong_game';
+  | 'not_host' | 'not_turn' | 'bad_action' | 'no_rerolls' | 'wrong_game'
+  /** 动作到得太晚：这一回合或整局已经截止。 */
+  | 'expired';
 
 export class TableError extends Error {
   readonly code: TableErrorCode;

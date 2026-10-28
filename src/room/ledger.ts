@@ -116,6 +116,14 @@ export interface LedgerStoreOptions {
 
 export type ClaimResult = 'ok' | 'mismatch' | 'invalid';
 
+/** 长局副作用要的是「确认落盘」；写不进去必须让调用方知道，不能只留内存。 */
+export class LedgerWriteError extends Error {
+  constructor(message = '账本写盘失败') {
+    super(message);
+    this.name = 'LedgerWriteError';
+  }
+}
+
 interface Identity {
   secretHash: string;
   createdAt: number;
@@ -295,11 +303,23 @@ export class LedgerStore {
     return entry;
   }
 
-  /** 幂等写：已经写过同一个 effectId 就原样返回旧的，不重复记账。 */
+  /**
+   * 幂等写：已经写过同一个 effectId 就原样返回旧的，不重复记账。
+   * 写盘失败会回滚这一条并抛 `LedgerWriteError`——不能返回一个只在内存里的「成功」。
+   */
   recordOnce(effectId: string, input: Omit<LedgerEntry, 'id' | 'ts'>): LedgerEntry {
     const existing = this.entries.find((entry) => entry.effectId === effectId);
     if (existing) return existing;
-    return this.record({ ...input, effectId });
+    const entry: LedgerEntry = { id: randomUUID(), ts: this.now(), ...input, effectId };
+    this.entries.push(entry);
+    if (!this.save()) {
+      this.entries.pop();
+      throw new LedgerWriteError(`账本写盘失败，effectId=${effectId} 没有确认`);
+    }
+    if (this.entries.length > this.entryLimit) {
+      this.entries.splice(0, this.entries.length - this.entryLimit);
+    }
+    return entry;
   }
 
   byId(id: string): LedgerEntry | undefined {
@@ -510,8 +530,8 @@ export class LedgerStore {
     this.save();
   }
 
-  private save(): void {
-    if (!this.file) return;
+  private save(): boolean {
+    if (!this.file) return true;
     try {
       mkdirSync(dirname(this.file), { recursive: true });
       const state: LedgerState = {
@@ -523,6 +543,10 @@ export class LedgerStore {
       writeFileSync(temp, `${JSON.stringify(state)}\n`, { encoding: 'utf8', mode: 0o600 });
       renameSync(temp, this.file);
       chmodSync(this.file, 0o600);
-    } catch { /* 账本写不进去不阻断牌局 */ }
+      return true;
+    } catch {
+      // 短期牌局沿用「写不进去不阻断」；长局副作用走 recordOnce，那里会抛。
+      return false;
+    }
   }
 }
