@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -277,5 +277,13 @@ describe('网页玩家', () => {
     expect(page.text).toContain('牌桌');
     expect(page.text).toContain('href="/play"');
     expect(page.text).toContain('防作弊');
+
+    // 家长页是内联脚本：抽出整段单独做语法检查，防止模板里的换行把 JS 截断。
+    const inline = page.text.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? '';
+    expect(inline.length).toBeGreaterThan(1000);
+    const inlineFile = join(scratch, 'owner-page.js');
+    writeFileSync(inlineFile, inline);
+    const check = spawnSync(process.execPath, ['--check', inlineFile], { encoding: 'utf8' });
+    expect(check.status, check.stderr || '').toBe(0);
   });
 });

@@ -877,6 +877,9 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
       if (!info.signup) tableBox.append(ledgerRow('现在没有牌桌。', 'tier'));
       return;
     }
+    for (const seat of (table.seats || [])) {
+      if (!names.has(seat.id)) names.set(seat.id, seat.name);
+    }
     const status = ({ open: '等人', bidding: '叫地主', playing: '进行中', ended: '已结束' })[table.status] || table.status;
     let head = (table.label || table.game) + ' · ' + status;
     if (table.round) head += ' · 第 ' + table.round + '/' + (table.rounds || '?') + ' 轮';
