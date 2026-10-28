@@ -50,6 +50,8 @@ export interface LedgerEntry {
   due?: number;
   /** 这条记录涉及的筹码转移；只在存盘/内核里用，视图不带。 */
   transfers?: ChipTransfer[];
+  /** 幂等键：同一个 effectId 只会写进账本一次（长局重放/崩溃恢复用）。 */
+  effectId?: string;
 }
 
 /** 发给 World / 家长页的条目：不带别人的 cooId，也不带转移明细。 */
@@ -291,6 +293,13 @@ export class LedgerStore {
     }
     this.save();
     return entry;
+  }
+
+  /** 幂等写：已经写过同一个 effectId 就原样返回旧的，不重复记账。 */
+  recordOnce(effectId: string, input: Omit<LedgerEntry, 'id' | 'ts'>): LedgerEntry {
+    const existing = this.entries.find((entry) => entry.effectId === effectId);
+    if (existing) return existing;
+    return this.record({ ...input, effectId });
   }
 
   byId(id: string): LedgerEntry | undefined {

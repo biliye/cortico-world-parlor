@@ -25,6 +25,8 @@ export interface MailItem {
   fromName: string;
   text: string;
   entryId?: string;
+  /** 幂等键：同一条通知只留一封。 */
+  key?: string;
 }
 
 /** 给 World / 家长页的信；不带收件人 cooId。 */
@@ -131,6 +133,13 @@ export class MailStore {
     }
     this.save();
     return item;
+  }
+
+  /** 幂等写：同一个 key 已经投过就返回旧的那封。 */
+  appendOnce(key: string, input: Omit<MailItem, 'id' | 'seq' | 'ts'>): MailItem {
+    const existing = this.items.find((item) => item.key === key);
+    if (existing) return existing;
+    return this.append({ ...input, key });
   }
 
   unreadCount(cooId: string, room: string): number {
