@@ -79,6 +79,10 @@ export class DoudizhuTable implements TableEngine {
   private deadline = 0;
   private lastPlay?: LastPlay;
   private passes = 0;
+  /** 这一轮每个席位最后打出的那手（过牌就清掉）；新一轮开始清空。 */
+  private roundPlays = new Map<string, LastPlay>();
+  /** 这一轮已经「不要」的席位。 */
+  private roundPasses = new Set<string>();
   private bombs = 0;
   private result = '';
 
@@ -220,6 +224,19 @@ export class DoudizhuTable implements TableEngine {
       multiplier: 2 ** this.bombs,
       bottom: landlord ? [...this.bottom] : undefined,
       bottomCards: landlord ? [...this.bottomCards] : undefined,
+      /** 这一轮每家打出并留在桌面上的牌；过牌的人不在里面，看 passed。 */
+      plays: this.seats
+        .filter((seat) => this.roundPlays.has(seat.id))
+        .map((seat) => {
+          const entry = this.roundPlays.get(seat.id)!;
+          return {
+            seat: seat.id,
+            cards: [...entry.move.cards],
+            playedCards: [...entry.cards],
+            label: moveLabel(entry.move),
+          };
+        }),
+      passed: this.seats.filter((seat) => this.roundPasses.has(seat.id)).map((seat) => seat.id),
       lastPlay: this.lastPlay
         ? {
           seat: this.lastPlay.seat,
@@ -304,6 +321,8 @@ export class DoudizhuTable implements TableEngine {
     this.turnId = this.seats[this.bidIndex].id;
     this.lastPlay = undefined;
     this.passes = 0;
+    this.roundPlays.clear();
+    this.roundPasses.clear();
     this.bombs = 0;
     this.result = '';
     this.turnId = this.seats[this.bidIndex].id;
@@ -373,6 +392,8 @@ export class DoudizhuTable implements TableEngine {
     this.turnId = seat.id;
     this.lastPlay = undefined;
     this.passes = 0;
+    this.roundPlays.clear();
+    this.roundPasses.clear();
   }
 
   private play(seatId: string, cards: readonly string[], now: number, auto: boolean): TableStep {
@@ -390,6 +411,7 @@ export class DoudizhuTable implements TableEngine {
     seat.plays += 1;
     if (entry.type === 'bomb' || entry.type === 'rocket') this.bombs += 1;
     this.lastPlay = { seat: seat.id, move: entry, cards: played };
+    this.roundPlays.set(seat.id, this.lastPlay);
     this.passes = 0;
     const events: TableEvent[] = [{
       type: 'parlor.table.action',
@@ -411,6 +433,8 @@ export class DoudizhuTable implements TableEngine {
     if (this.turnId !== seatId) throw new TableError('not_turn', '还没轮到你');
     if (!this.lastPlay) throw new TableError('bad_action', '这一轮你先出，必须出牌');
     this.passes += 1;
+    this.roundPasses.add(seat.id);
+    this.roundPlays.delete(seat.id);
     const last = this.lastPlay;
     const events: TableEvent[] = [{
       type: 'parlor.table.action',
@@ -422,6 +446,8 @@ export class DoudizhuTable implements TableEngine {
       const leader = this.seats.find((entry) => entry.id === last.seat)!;
       this.lastPlay = undefined;
       this.passes = 0;
+      this.roundPlays.clear();
+      this.roundPasses.clear();
       this.turnId = leader.id;
       events.push({
         type: 'parlor.table.action',

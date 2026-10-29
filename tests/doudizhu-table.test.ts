@@ -28,6 +28,8 @@ interface DdzPublic {
   bottom?: string[];
   bottomCards?: PhysCardView[];
   lastPlay?: { cards: string[]; playedCards: PhysCardView[] } | null;
+  plays?: { seat: string; cards: string[]; playedCards: PhysCardView[] }[];
+  passed?: string[];
   landlord?: string;
   multiplier: number;
   result?: string;
@@ -264,5 +266,52 @@ describe('斗地主桌的花色', () => {
     ));
     expect(after.handCards).toEqual(expect.arrayContaining(stillThere));
     expect(after.handCards).not.toContainEqual(played);
+  });
+});
+
+describe('桌面上的牌留到下一轮', () => {
+  it('过牌只清自己的那手；两家都不要就整桌清空', () => {
+    const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(9) });
+    table.join(GUEST);
+    table.join({ id: 'c', name: '阿满' });
+    table.start('a', 0);
+    table.act('a', { move: 'bid', call: true }, 0);
+
+    table.act('a', { move: 'play', cards: [viewOf(table, 'a').hand[0]] }, 0);
+    const afterPlay = publicOf(table);
+    expect(afterPlay.plays).toHaveLength(1);
+    expect(afterPlay.plays![0].seat).toBe('a');
+    expect(afterPlay.plays![0].playedCards).toHaveLength(1);
+    expect(afterPlay.passed).toEqual([]);
+
+    table.act('b', { move: 'pass' }, 0);
+    const afterPass = publicOf(table);
+    expect(afterPass.passed).toEqual(['b']);
+    expect(afterPass.plays!.map((play) => play.seat)).toEqual(['a']);
+
+    table.act('c', { move: 'pass' }, 0);
+    const fresh = publicOf(table);
+    expect(fresh.plays).toEqual([]);
+    expect(fresh.passed).toEqual([]);
+    expect(viewOf(table, 'a').yourTurn).toBe(true);
+  });
+
+  it('再出一手就盖掉自己上一手，别人的不动', () => {
+    const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(21) });
+    table.join(GUEST);
+    table.join({ id: 'c', name: '阿满' });
+    table.start('a', 0);
+    table.act('a', { move: 'bid', call: true }, 0);
+
+    const first = viewOf(table, 'a').hand[0];
+    table.act('a', { move: 'play', cards: [first] }, 0);
+    table.act('b', { move: 'pass' }, 0);
+    table.act('c', { move: 'pass' }, 0);
+
+    const [second] = viewOf(table, 'a').hand;
+    table.act('a', { move: 'play', cards: [second] }, 0);
+    const plays = publicOf(table).plays!;
+    expect(plays).toHaveLength(1);
+    expect(plays[0].cards).toEqual([second]);
   });
 });

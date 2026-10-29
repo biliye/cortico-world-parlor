@@ -53,13 +53,15 @@ export function mountDdz(root, ctx) {
 
     const board = el('div', 'ddz-board' + (myTurn ? ' is-my-turn' : ''));
     board.append(topBar(table, priv, myTurn));
+    board.append(bottomStrip(table));
 
     const grid = el('div', 'ddz-grid');
     const mine = seats.findIndex((seat) => seat.id === me.id);
+    const mySeat = mine >= 0 ? seats[mine] : null;
     const leftSeat = mine >= 0 ? seats[(mine + 1) % seats.length] : seats[1] || null;
     const rightSeat = mine >= 0 ? seats[(mine + seats.length - 1) % seats.length] : seats[2] || null;
     if (leftSeat) grid.append(seatColumn(leftSeat, table, 'left'));
-    grid.append(centerArea(table, priv, myTurn, view));
+    grid.append(centerArea(table, mySeat, leftSeat, rightSeat, myTurn));
     if (rightSeat) grid.append(seatColumn(rightSeat, table, 'right'));
 
     const handbar = el('div', 'ddz-handbar');
@@ -153,32 +155,13 @@ export function mountDdz(root, ctx) {
     return tag;
   }
 
-  /* —— 桌面中间：底牌 + 上一手 —— */
+  /* —— 底牌：置顶，叫地主时是三张牌背 —— */
 
-  function centerArea(table, priv, myTurn, view) {
-    const center = el('div', 'ddz-center');
-    center.append(bottomRow(table, false));
-
-    const last = table.lastPlay;
-    const play = el('div', 'ddz-last-row');
-    if (last && Array.isArray(last.cards) && last.cards.length) {
-      const who = view.names.get(last.seat) || last.seat;
-      play.append(el('div', 'ddz-last-label', who + ' 出了 ' + (last.label || '')));
-      play.append(cardRow(last.cards, last.playedCards, 'ddz-last-cards'));
-    } else if (table.status === 'playing') {
-      play.append(el('div', 'ddz-last-label quiet', myTurn ? '新一轮 · 你先出' : '新一轮 · 等别人先出'));
-    } else {
-      play.append(el('div', 'ddz-last-label quiet', '叫地主 · 底牌先扣着'));
-    }
-    center.append(play);
-    return center;
-  }
-
-  function bottomRow(table, backs) {
-    const row = el('div', 'ddz-bottom');
+  function bottomStrip(table) {
+    const row = el('div', 'ddz-bottoms');
     row.append(el('span', 'ddz-bottom-label', '底牌'));
     const cards = el('div', 'ddz-bottom-cards');
-    if (!backs && table.bottom && table.bottom.length) {
+    if (table.bottom && table.bottom.length) {
       const art = table.bottomCards || null;
       table.bottom.forEach((card, index) => {
         cards.append(cardButton(card, false, null, true, art ? art[index] : null));
@@ -188,6 +171,57 @@ export function mountDdz(root, ctx) {
     }
     row.append(cards);
     return row;
+  }
+
+  /* —— 桌面中间：每家这一轮打出的牌各留一处 —— */
+
+  function centerArea(table, mySeat, leftSeat, rightSeat, myTurn) {
+    const center = el('div', 'ddz-center');
+    const entries = new Map();
+    for (const entry of Array.isArray(table.plays) ? table.plays : []) entries.set(entry.seat, entry);
+    const passed = new Set(Array.isArray(table.passed) ? table.passed : []);
+    // 老服务器/老回放没有 plays：退回只显示最后一手。
+    if (!entries.size && !passed.size && table.lastPlay) entries.set(table.lastPlay.seat, table.lastPlay);
+
+    // 叫地主阶段桌上还没有牌，三格空着只是噪音。
+    if (table.status !== 'bidding') {
+      const plays = el('div', 'ddz-plays');
+      plays.append(playSlot(leftSeat, 'left', entries, passed, table, myTurn));
+      plays.append(playSlot(mySeat, 'me', entries, passed, table, myTurn));
+      plays.append(playSlot(rightSeat, 'right', entries, passed, table, myTurn));
+      center.append(plays);
+    }
+
+    if (table.status === 'bidding') {
+      center.append(el('div', 'ddz-center-note', '叫地主 · 底牌先扣着'));
+    }
+    return center;
+  }
+
+  function playSlot(seat, side, entries, passed, table, myTurn) {
+    const slot = el('div', 'ddz-play ddz-play-' + side);
+    if (!seat) return slot;
+    const entry = entries.get(seat.id);
+    const name = el('span', 'ddz-play-name');
+    name.append(document.createTextNode(view.names.get(seat.id) || seat.name));
+    if (entry && entry.label) name.append(document.createTextNode(' · ' + entry.label));
+    slot.append(name);
+    const cards = el('div', 'ddz-play-cards');
+    if (entry && Array.isArray(entry.cards) && entry.cards.length) {
+      entry.cards.forEach((card, index) => {
+        cards.append(cardButton(card, false, null, true,
+          entry.playedCards ? entry.playedCards[index] : null));
+      });
+    } else if (passed.has(seat.id)) {
+      cards.append(el('span', 'ddz-play-pass', '不要'));
+    } else if (table.turn === seat.id && table.status !== 'ended') {
+      cards.append(el('span', 'ddz-play-quiet',
+        (table.status === 'bidding' ? '叫地主' : '在想') + '…'));
+    } else {
+      cards.append(el('span', 'ddz-play-quiet', '—'));
+    }
+    slot.append(cards);
+    return slot;
   }
 
   function cardRow(cards, art, cls) {
