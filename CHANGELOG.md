@@ -1,3 +1,16 @@
+## 0.17.2
+
+修「面板里的家长链接一直是旧的」：
+
+- 新网关的加入响应里，`ownerKey` 在 `ownerKey` 字段，`ownerToken` 是空串。`world.ts` 存 secret 时
+  存的是 `joined.ownerToken`，于是第一次建家长账户拿到的 key 根本没落盘——面板那条
+  `/parent#key=...` 一直是 0.13 时代的旧 ownerToken，`/v1/parent/session` 不认它（只有旧
+  `/v1/owner?token=` 还认，因为它被迁移成 `legacy_owner_token_hash`）。
+- 改成存 `this.ownerToken`（= `joined.ownerKey ?? joined.ownerToken`），新旧两种服务器都对。
+- 新增 1 条测试：首次加入后 `PARLOR_OWNER_TOKEN` 能换出家长会话，且面板链接里带的就是它。
+- 只动 `src/world.ts`；**要她的 World 重启后才生效**。已经丢掉的那把 key 找不回来，需要轮换一次
+  （轮换不动任何数据，只换哈希 + 让旧会话失效）。
+
 ## 0.17.1
 
 修「点网页牌桌，卡在加入页进不去」：

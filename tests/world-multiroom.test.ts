@@ -55,7 +55,9 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
   return typeof result === 'string' ? result : result.text;
 };
 
-const startWorld = async (): Promise<{ host: FakeHost; friend: ParlorClient; friendToken: string }> => {
+const startWorld = async (): Promise<{
+  host: FakeHost; friend: ParlorClient; friendToken: string; secrets: Record<string, string>;
+}> => {
   server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
   await server.listen();
   const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
@@ -70,10 +72,54 @@ const startWorld = async (): Promise<{ host: FakeHost; friend: ParlorClient; fri
     cooSecret: 'friend-secret-0123456789',
   });
   const joined = await friend.join('inv', { name: '阿岚' });
-  return { host, friend, friendToken: joined.token };
+  return { host, friend, friendToken: joined.token, secrets };
 };
 
 describe('World 多客厅', () => {
+  it('首次加入存的是 ownerKey（不是空的 ownerToken），面板家长链接能换会话', async () => {
+    const { secrets } = await startWorld();
+    const key = secrets.PARLOR_OWNER_TOKEN;
+    expect(key).toBeTruthy();
+    const session = await fetch(server!.url + '/v1/parent/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    expect(session.status).toBe(200);
+    const link = (world!.webUi?.().links ?? []).find((entry) => entry.href.includes('/parent#key='));
+    expect(link?.href).toContain(encodeURIComponent(key));
+  });
+
+  it('已有账户再次加入不会把 .env 里的 ownerKey 冲掉', async () => {
+    server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    await server.listen();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx1 = makeContext(secrets);
+    ctx1.cfg.serverUrl = server.url;
+    ctx1.cfg.seatName = '小满';
+    const first = PARLOR.create(ctx1);
+    await first.start(new FakeHost());
+    const saved = secrets.PARLOR_OWNER_TOKEN;
+    expect(saved).toBeTruthy();
+    await first.stop();
+
+    // 席位令牌丢了、人也先离座：重新加入时服务器不会再发 ownerKey，这时不能拿空串覆盖。
+    const seat = secrets.PARLOR_SEAT_TOKEN;
+    const left = await fetch(server.url + '/v1/rooms/lobby/leave', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + seat, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(left.status).toBe(200);
+    delete secrets.PARLOR_SEAT_TOKEN;
+    const ctx2 = makeContext(secrets);
+    ctx2.cfg.serverUrl = server.url;
+    ctx2.cfg.seatName = '小满';
+    world = PARLOR.create(ctx2);
+    await world.start(new FakeHost());
+    expect(secrets.PARLOR_OWNER_TOKEN).toBe(saved);
+  });
+
   it('开客厅 → 串门 → 回大厅 → 再回去；旧席位当场释放', async () => {
     const { friend, friendToken } = await startWorld();
     const links = world!.webUi?.().links ?? [];

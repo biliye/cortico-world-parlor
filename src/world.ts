@@ -544,11 +544,13 @@ export class ParlorWorld implements World {
     }, this.roomArg());
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
-    this.ownerToken = joined.ownerKey ?? joined.ownerToken;
+    // 已有账户再次加入不会发新钥匙：这时要留住 .env 里那把，别拿空串覆盖。
+    const issued = (joined.ownerKey ?? joined.ownerToken ?? '').trim();
+    this.ownerToken = issued || this.ctx.secret(OWNER_SECRET).trim();
     this.seat = joined.seat;
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
-      this.ctx.storeSecret(OWNER_SECRET, joined.ownerToken);
+      if (this.ownerToken) this.ctx.storeSecret(OWNER_SECRET, this.ownerToken);
       this.ctx.storeSecret(CURRENT_ROOM_SECRET, this.currentRoom);
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
