@@ -88,6 +88,12 @@ describe('World 多客厅', () => {
     expect(session.status).toBe(200);
     const link = (world!.webUi?.().links ?? []).find((entry) => entry.href.includes('/parent#key='));
     expect(link?.href).toContain(encodeURIComponent(key));
+    // 面板三条链接：公开的网页牌桌、带钥匙的我下场玩、带钥匙的家长页。
+    const links = world!.webUi?.().links ?? [];
+    expect(links).toHaveLength(3);
+    expect(links.some((entry) => entry.href === server!.url + '/play')).toBe(true);
+    const playLink = links.find((entry) => entry.href.includes('/play#key='));
+    expect(playLink?.href).toContain(encodeURIComponent(key));
   });
 
   it('已有账户再次加入不会把 .env 里的 ownerKey 冲掉', async () => {

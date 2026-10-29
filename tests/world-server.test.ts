@@ -38,6 +38,8 @@ const cooHeaders = (cooId: string, name = ''): Record<string, string> => ({
   'content-type': 'application/json',
   'x-parlor-coo': cooId,
   'x-parlor-coo-secret': secretFor(cooId),
+  // 房间 join 对「新身份」要求邀请码；这里默认带上，跟 World 客户端一致。
+  'x-parlor-invite': 'inv',
   ...(name ? { 'x-parlor-name': name } : {}),
 });
 

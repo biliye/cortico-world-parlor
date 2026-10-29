@@ -53,6 +53,11 @@ boot();
 /* —— 起步 —— */
 
 async function boot() {
+  // 带钥匙的「我下场玩」链接：钥匙只用来换会话，换完立刻从地址栏抹掉。
+  const key = takeKeyFromHash();
+  if (!state.cfg && (key || await hasParentSession())) {
+    await tryParentEntry(key);
+  }
   if (!state.cfg) {
     renderJoin();
     return;
@@ -71,10 +76,68 @@ async function boot() {
     connect();
   } catch (error) {
     if (error && error.status === 401) {
-      handleExpiredSeat(state.cfg ? state.cfg.token : '');
+      await handleExpiredSeat(state.cfg ? state.cfg.token : '');
       return;
     }
     renderOffline(error && error.message ? error.message : String(error));
+  }
+}
+
+/** 从 #key=… 取一次性钥匙；取到就从地址栏抹掉（不进历史，也不会被复制外发）。 */
+function takeKeyFromHash() {
+  const raw = location.hash.replace(/^#/, '');
+  if (!raw) return '';
+  const key = (new URLSearchParams(raw).get('key') || '').trim();
+  if (key) history.replaceState(null, '', location.pathname + location.search);
+  return key;
+}
+
+async function hasParentSession() {
+  try {
+    return (await fetch('/v1/parent/me')).ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 家长入场：钥匙或这台浏览器已有的家长会话，都直接以家长身份下场。
+ * 只在「没有席位」时走这里；席位真的失效（401）时不自动重入——一个家长身份只有
+ * 一个席位，两台设备都自动重入会来回顶。
+ */
+async function tryParentEntry(key = '') {
+  try {
+    if (key) {
+      const session = await fetch('/v1/parent/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      if (!session.ok) {
+        const body = await session.json().catch(() => ({}));
+        showToast(body.error || '这个家长链接不对，或已经失效了', 'bad');
+        return false;
+      }
+    }
+    const played = await fetch('/v1/parent/play', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const body = await played.json().catch(() => ({}));
+    if (!played.ok) throw new Error(body.error || '现在下不了场');
+    writeStore({
+      room: body.room,
+      seatId: body.seat.id,
+      name: body.seat.name,
+      token: body.token,
+      cooId: body.identity.cooId,
+      cooSecret: body.identity.cooSecret,
+    });
+    return true;
+  } catch (error) {
+    showToast(error.message || '现在下不了场', 'bad');
+    return false;
   }
 }
 
@@ -84,7 +147,7 @@ async function boot() {
  * - 存着的已经换了（另一个标签页换过客厅/换过席位）：这个标签页只是旧了，
  *   重新读一次就好——不能把别的标签页刚写进去的新令牌一起删掉，否则看起来像「被登出」。
  */
-function handleExpiredSeat(token) {
+async function handleExpiredSeat(token) {
   const stored = readStore();
   if (stored && token && stored.token !== token) {
     location.reload();
@@ -97,7 +160,11 @@ function handleExpiredSeat(token) {
     state.stream = null;
   }
   clearStore();
-  renderJoin('这个席位的令牌已经失效，请重新加入。');
+  if (await hasParentSession()) {
+    renderJoin('这台设备上的席位已经失效（可能被另一台设备顶掉了）。点下面的「以家长身份下场」重新进来。');
+  } else {
+    renderJoin('这个席位的令牌已经失效，请重新加入。');
+  }
 }
 
 function readStore() {
@@ -203,7 +270,7 @@ function scheduleRefresh() {
       render();
     } catch (error) {
       if (error && error.status === 401) {
-        handleExpiredSeat(state.cfg ? state.cfg.token : '');
+        void handleExpiredSeat(state.cfg ? state.cfg.token : '');
       }
     }
   }, 120);

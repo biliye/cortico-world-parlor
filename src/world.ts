@@ -419,10 +419,18 @@ export class ParlorWorld implements World {
   webUi(): WorldWebUiDecl {
     const links = this.baseUrl
       ? [
-        { label: '客厅 · 网页牌桌', href: `${this.baseUrl}/play`, inheritTheme: true },
+        { label: '客厅 · 网页牌桌（可发给群友）', href: `${this.baseUrl}/play`, inheritTheme: true },
+        // 带钥匙的那条只给自己：点开就换家长会话并下场，不能转发。
+        ...(this.multiRoom && this.ownerToken
+          ? [{
+            label: '客厅 · 我下场玩（带钥匙，勿转发）',
+            href: `${this.baseUrl}/play#key=${encodeURIComponent(this.ownerToken)}`,
+            inheritTheme: true,
+          }]
+          : []),
         ...(this.ownerToken
           ? [{
-            label: '客厅 · 家长页',
+            label: '客厅 · 家长页（只读，带钥匙）',
             href: this.multiRoom
               ? `${this.baseUrl}/parent#key=${encodeURIComponent(this.ownerToken)}`
               : `${this.baseUrl}/v1/owner?token=${encodeURIComponent(this.ownerToken)}`,

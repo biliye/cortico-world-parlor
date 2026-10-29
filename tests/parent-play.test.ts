@@ -61,7 +61,7 @@ describe('家长下场', () => {
   it('同一链接固定一个玩家身份；孩子席位与账本不受影响', async () => {
     const app = await start();
     // 孩子：一个 Coo 进默认客厅，第一次进会拿到 ownerKey。
-    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, cooHeaders(COO));
+    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, { ...cooHeaders(COO), 'x-parlor-invite': 'inv' });
     expect(joined.status).toBe(200);
     const ownerKey = joined.body.ownerKey as string;
     expect(ownerKey).toBeTruthy();
@@ -88,6 +88,8 @@ describe('家长下场', () => {
     const playerCooId = (first.body.identity as { cooId: string }).cooId;
     const playerSeat = first.body.seat as { id: string; kind: string; name: string };
     expect(playerSeat.kind).toBe('human');
+    // 默认名跟着孩子走：「<孩子名>家的家长」。
+    expect(playerSeat.name).toBe('小满家的家长');
     expect(first.body.player).toBe(true);
     const firstToken = first.body.token as string;
     const snap = await getWith(app.url, '/v1/room', { authorization: `Bearer ${firstToken}` });
@@ -118,7 +120,7 @@ describe('家长下场', () => {
 
   it('家长换客厅：同一个玩家身份原子切过去', async () => {
     const app = await start();
-    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, cooHeaders(COO));
+    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, { ...cooHeaders(COO), 'x-parlor-invite': 'inv' });
     const ownerKey = joined.body.ownerKey as string;
     const session = await fetch(`${app.url}/v1/parent/session`, {
       method: 'POST',
@@ -141,5 +143,17 @@ describe('家长下场', () => {
     const snap = await getWith(app.url, `/v1/rooms/${roomId}/room`, { authorization: `Bearer ${token}` });
     expect(snap.status).toBe(200);
     expect((snap.body.seat as { id: string }).id).toBe((moved.body.seat as { id: string }).id);
+  });
+
+  it('房间 join 不再能绕过邀请码：新身份要码，已有身份不用', async () => {
+    const app = await start();
+    const stranger = cooHeaders('coo-newguest001');
+    const denied = await post(app.url, '/v1/rooms/lobby/join', { name: '路人' }, stranger);
+    expect(denied.status).toBe(403);
+    const allowed = await post(app.url, '/v1/rooms/lobby/join', { name: '路人' }, { ...stranger, 'x-parlor-invite': 'inv' });
+    expect(allowed.status).toBe(200);
+    // 已经有身份的人再进不带码也认（这里撞上「已经在客厅里」，说明邀请码这关过了）。
+    const again = await post(app.url, '/v1/rooms/lobby/join', { name: '路人' }, stranger);
+    expect(again.status).toBe(409);
   });
 });

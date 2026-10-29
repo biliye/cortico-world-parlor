@@ -684,6 +684,9 @@ export class WorldServer {
     if (action === 'join' && method === 'POST') {
       const body = await readJson(req);
       const name = typeof body.name === 'string' ? body.name : '';
+      // 这个接口原来不校验邀请码：知道房间 id 就能用一个新身份进来（lobby 这种 id 猜得到）。
+      // 已有身份（cookies 里的 cooId+secret 认得出来）换房不受影响；新身份必须带邀请码。
+      if (this.identify(req) === null) this.checkInvite(req, body);
       const cooId = this.cooAuth(req, name);
       const host = this.host(roomId);
       const joined = host.join(cooId, {
@@ -1008,21 +1011,23 @@ export class WorldServer {
     const secret = randomBytes(32).toString('base64url');
     const existing = this.coo.playerCooOf(account.id);
     if (existing) {
-      const name = this.coo.cooDisplayName(existing)
-        || (account.displayName ? `${account.displayName}（家长）` : '家长');
+      const name = this.coo.cooDisplayName(existing) || this.defaultPlayerName(account);
       this.coo.rotateSecret(existing, secret);
       return { cooId: existing, secret, name: name.slice(0, 24) };
     }
-    // 默认名字带「（家长）」：家长账户的显示名可能就是孩子的名字，直接用会撞席位名。
-    const fallback = account.displayName && account.displayName !== '家长'
-      ? `${account.displayName}（家长）`
-      : '家长';
-    const name = (requested.trim() || fallback).slice(0, 24);
+    const name = (requested.trim() || this.defaultPlayerName(account)).slice(0, 24);
     const cooId = randomUUID();
     const created = this.coo.registerCoo(cooId, secret, 'human', name);
     if (created !== 'ok') throw new HttpError(500, '建不了家长的游戏身份');
     this.coo.bindPlayerCoo(account.id, cooId);
     return { cooId, secret, name };
+  }
+
+  /** 家长玩家的默认名「<孩子名>家的家长」；孩子不在座就退回孩子的显示名，最后退回「家长」。 */
+  private defaultPlayerName(account: ParentAccount): string {
+    const seat = activeSeatForCoo(this.db, account.cooId);
+    const child = (seat?.name || this.coo.cooDisplayName(account.cooId) || '').trim();
+    return child ? `${child}家的家长` : '家长';
   }
 
   /** 家长只读视图：跟孩子当前席位走，可见范围与孩子自己完全一致。 */
