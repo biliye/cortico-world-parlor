@@ -1514,21 +1514,26 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .ddz-bottom-cards { display: flex; gap: 3px; }
 .ddz-bottom-cards .pcard.small-card { --cw: 30px; }
 
-/* 中间：每家这一轮打出的牌各留一处，出下一手/过牌才换 */
+/* 中间：每家这一轮打出的牌各留一处，出下一手/过牌才换。
+   两家在上、我在下，凑成一个对称的倒三角；我那一手贴着我的手牌。 */
 .ddz-center {
-  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
   gap: 10px;
   min-height: 168px;
-  padding: 14px 4px 4px;
+  padding: 12px 4px 2px;
   border-radius: 14px;
   background: radial-gradient(62% 54% at 50% 46%, rgba(255, 226, 180, .1), transparent 72%);
 }
 .ddz-plays {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "left right"
+    "me me";
+  align-content: space-between;
+  flex: 1 1 auto;
+  gap: 12px 10px;
   width: 100%;
-  align-items: start;
 }
 .ddz-play { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ddz-play-name {
@@ -1537,16 +1542,16 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 }
 .ddz-play-cards { display: flex; flex-wrap: wrap; gap: 2px; align-items: flex-start; }
 .ddz-play-cards .pcard.small-card { --cw: 34px; }
-.ddz-play-left { align-items: flex-start; }
+.ddz-play-left { grid-area: left; align-items: flex-start; }
 .ddz-play-left .ddz-play-cards { justify-content: flex-start; }
-.ddz-play-me { align-items: center; }
+.ddz-play-me { grid-area: me; align-items: center; }
 .ddz-play-me .ddz-play-cards { justify-content: center; }
-.ddz-play-right { align-items: flex-end; }
+.ddz-play-right { grid-area: right; align-items: flex-end; }
 .ddz-play-right .ddz-play-cards { justify-content: flex-end; }
 .ddz-play-right .ddz-play-name { text-align: right; }
 .ddz-play-pass { font-size: 10px; color: #a98d6c; }
 .ddz-play-quiet { font-size: 10px; color: #8c6f52; }
-.ddz-center-note { font-size: 10px; color: #b99b78; }
+.ddz-center-note { font-size: 10px; color: #b99b78; text-align: center; }
 
 /* 我的手牌：扇形铺在桌沿 */
 .ddz-handbar { display: flex; justify-content: center; padding-top: 2px; }
@@ -2101,7 +2106,7 @@ html.no-card-art .pcard.back { border: 0; }
   .ddz-side-meta { font-size: 8.5px; }
   .ddz-side-info .tag, .ddz-bot-mark { display: none; }
   .ddz-center { min-height: 112px; gap: 8px; }
-  .ddz-play-cards .pcard.small-card { --cw: 28px; }
+  .ddz-play-cards .pcard.small-card { --cw: 24px; }
   .ddz-hand { padding: 16px 4px 2px; }
   .ddz-hand .pcard { --cw: 48px; margin-left: var(--overlap, -24px); }
   .ddz-actionbar { flex-wrap: wrap; gap: 6px; }

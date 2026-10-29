@@ -203,7 +203,9 @@ export function mountDdz(root, ctx) {
     if (!seat) return slot;
     const entry = entries.get(seat.id);
     const name = el('span', 'ddz-play-name');
-    name.append(document.createTextNode(view.names.get(seat.id) || seat.name));
+    name.append(document.createTextNode(side === 'me'
+      ? '你'
+      : (view.names.get(seat.id) || seat.name)));
     if (entry && entry.label) name.append(document.createTextNode(' · ' + entry.label));
     slot.append(name);
     const cards = el('div', 'ddz-play-cards');
