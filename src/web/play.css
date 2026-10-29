@@ -1517,7 +1517,8 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .ddz-bottom { display: flex; align-items: center; gap: 7px; }
 .ddz-bottom-label { font-size: 9px; letter-spacing: .18em; color: #c6a683; }
 .ddz-bottom-cards { display: flex; gap: 4px; }
-.ddz-bottom-cards .pcard.small-card, .ddz-last-cards .pcard.small-card { --cw: 44px; }
+.ddz-bottom-cards .pcard.small-card { --cw: 44px; }
+.ddz-last-cards .pcard.small-card { --cw: 40px; }
 .ddz-last-row {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   min-height: 84px; justify-content: center;
