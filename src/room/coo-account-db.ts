@@ -58,6 +58,17 @@ export interface CooRecord {
   hasSecret: boolean;
 }
 
+/** 家长门户的会话：只存 token 哈希，明文只在 Set-Cookie 时出现一次。 */
+export interface ParentSession {
+  id: string;
+  accountId: string;
+  token: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
+
 export interface CooAccountDbOptions {
   now?: () => number;
   limit?: number;
@@ -356,6 +367,57 @@ export class CooAccountDb {
     const rows = this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts ORDER BY created_at, id`)
       .all() as unknown as AccountRow[];
     return rows.map(toParentAccount);
+  }
+
+  /** 给家长门户开一个会话；调用方先用 verifyOwnerKey 认过人。 */
+  createSession(accountId: string, ttlMs = SESSION_TTL_MS): ParentSession | null {
+    const account = this.byId(accountId);
+    if (!account || account.status !== 'active') return null;
+    const token = randomBytes(32).toString('base64url');
+    const id = randomUUID();
+    const now = this.now();
+    const expiresAt = now + Math.max(60_000, ttlMs);
+    this.db.prepare(
+      `INSERT INTO account_sessions(id, account_id, token_hash, session_version, created_at, last_seen_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, accountId, hashKey(token), account.sessionVersion, now, now, expiresAt);
+    return { id, accountId, token, createdAt: now, expiresAt };
+  }
+
+  /** 认会话：过期、被撤销、版本变了（轮换 key/退出所有设备）都不认。 */
+  verifySession(token: string): { account: ParentAccount; sessionId: string; expiresAt: number } | null {
+    if (typeof token !== 'string' || token.length < 16 || token.length > 128) return null;
+    const row = this.db.prepare(
+      `SELECT s.id AS session_id, s.session_version AS session_version, s.expires_at AS expires_at,
+              ${ACCOUNT_COLUMNS_A}
+         FROM account_sessions s
+         JOIN accounts a ON a.id = s.account_id
+         JOIN coos c ON c.id = a.coo_id
+        WHERE s.token_hash = ? AND s.revoked_at IS NULL
+          AND s.expires_at > ?
+          AND a.status = 'active' AND c.status = 'active'`,
+    ).get(hashKey(token), this.now()) as (AccountRow & {
+      session_id: string; session_version: number; expires_at: number;
+    }) | undefined;
+    if (!row) return null;
+    const account = toParentAccount(row);
+    if (Number(row.session_version) !== account.sessionVersion) return null;
+    this.db.prepare('UPDATE account_sessions SET last_seen_at = ? WHERE id = ?')
+      .run(this.now(), row.session_id);
+    return { account, sessionId: row.session_id, expiresAt: Number(row.expires_at) };
+  }
+
+  revokeSession(token: string): boolean {
+    const result = this.db.prepare(
+      'UPDATE account_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL',
+    ).run(this.now(), hashKey(token));
+    return Number(result.changes) > 0;
+  }
+
+  /** 轮换 key / 退出所有设备时顺手撤掉所有会话。 */
+  revokeAllSessions(accountId: string): void {
+    this.db.prepare('UPDATE account_sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL')
+      .run(this.now(), accountId);
   }
 
   private cooRow(cooId: string): CooRow | undefined {

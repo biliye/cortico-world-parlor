@@ -88,8 +88,11 @@ export interface JoinResponse {
   room: string;
   seat: Seat;
   token: string;
+  /** 旧单厅服务器的家长令牌；新网关恒为空串。 */
   ownerToken: string;
   maxSeats: number;
+  /** 新网关首次建家长账户时给一次的全局 ownerKey；之后只能从部署 .env 拿或轮换。 */
+  ownerKey?: string;
 }
 
 /**

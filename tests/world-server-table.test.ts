@@ -277,3 +277,111 @@ describe('WorldServer 社交与回放', () => {
     expect(cTexts).not.toContain('只给你看');
   });
 });
+
+describe('家长门户', () => {
+  it('ownerKey 换 HttpOnly 会话；只读视图跟着孩子当前席位走', async () => {
+    const app = await start();
+    const joined = await post(app.url, '/v1/join', { name: '阿岚' }, {
+      ...cooHeaders(A),
+      'x-parlor-invite': 'inv',
+    });
+    expect(joined.status).toBe(200);
+    const ownerKey = joined.body.ownerKey as string;
+    expect(ownerKey).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const token = joined.body.token as string;
+    await post(app.url, '/v1/action', { type: 'say', text: '家长也能看到' }, {
+      authorization: `Bearer ${token}`,
+    });
+
+    const opened = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ownerKey }),
+    });
+    expect(opened.status).toBe(200);
+    const setCookie = opened.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain('parlor_parent=');
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Strict');
+    const cookie = setCookie.split(';')[0];
+
+    const me = await fetch(`${app.url}/v1/parent/me`, { headers: { cookie } });
+    expect(me.status).toBe(200);
+    const meBody = await me.json() as { account: { cooId: string }; seat: { name: string } };
+    expect(meBody.account.cooId).toBe(A);
+    expect(meBody.seat.name).toBe('阿岚');
+
+    const view = await fetch(`${app.url}/v1/parent/view?limit=50`, { headers: { cookie } });
+    expect(view.status).toBe(200);
+    const body = await view.json() as {
+      room: { id: string }; seat: { name: string }; events: { text: string }[];
+    };
+    expect(body.room.id).toBe('lobby');
+    expect(body.seat.name).toBe('阿岚');
+    expect(body.events.map((event) => event.text)).toContain('家长也能看到');
+
+    // 会话不能当席位令牌用；反过来也不行。
+    expect((await get(app.url, '/v1/room', cookie)).status).toBe(401);
+
+    // 同一个 Coo 再加入不会再给 ownerKey。
+    const again = await post(app.url, '/v1/join', { name: '阿岚' }, {
+      ...cooHeaders(A),
+      'x-parlor-invite': 'inv',
+    });
+    expect(again.status).toBe(200);
+    expect(again.body.ownerKey).toBeUndefined();
+  });
+
+  it('错 key 401；轮换 key 后旧 key 与旧会话都失效', async () => {
+    const app = await start();
+    const joined = await post(app.url, '/v1/join', { name: '阿岚' }, {
+      ...cooHeaders(A),
+      'x-parlor-invite': 'inv',
+    });
+    const ownerKey = joined.body.ownerKey as string;
+
+    const wrong = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'A'.repeat(32) }),
+    });
+    expect(wrong.status).toBe(401);
+
+    const opened = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ownerKey }),
+    });
+    const cookie = (opened.headers.get('set-cookie') ?? '').split(';')[0];
+
+    const rotated = await post(app.url, '/v1/me/owner-key/rotate', {}, cooHeaders(A));
+    expect(rotated.status).toBe(200);
+    const nextKey = rotated.body.ownerKey as string;
+    expect(nextKey).not.toBe(ownerKey);
+
+    expect((await fetch(`${app.url}/v1/parent/me`, { headers: { cookie } })).status).toBe(401);
+    const oldKey = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ownerKey }),
+    });
+    expect(oldKey.status).toBe(401);
+    const newKey = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: nextKey }),
+    });
+    expect(newKey.status).toBe(200);
+  });
+
+  it('/parent 页面由这台服务器给', async () => {
+    const app = await start();
+    const page = await fetch(`${app.url}/parent`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(await page.text()).toContain('<script type="module" src="/parent/assets/parent.js">');
+    const script = await fetch(`${app.url}/parent/assets/parent.js`);
+    expect(script.status).toBe(200);
+  });
+});

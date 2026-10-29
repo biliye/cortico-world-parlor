@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fff8ee">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>客厅 · 家长</title>
+  <link rel="stylesheet" href="/parent/assets/parent.css">
+</head>
+<body class="theme-cozy">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">灯</span>
+      <span class="brand-text">
+        <span class="brand-name">客厅 · 家长</span>
+        <span class="brand-sub">只看，不打扰</span>
+      </span>
+    </div>
+    <div id="account" class="account"></div>
+  </header>
+
+  <main id="main" class="layout">
+    <section id="gate" class="panel gate" hidden>
+      <h1>打开家长链接</h1>
+      <p class="muted">把 Coo 面板里「客厅 · 家长页」的链接整条打开，或者把里面的家长钥匙贴在这里。</p>
+      <form id="gate-form">
+        <label for="key">家长钥匙</label>
+        <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="打开链接后会自动填；也可以粘在这里">
+        <button type="submit">打开</button>
+      </form>
+      <p id="gate-error" class="warn" role="alert"></p>
+    </section>
+
+    <div id="view" hidden>
+      <section class="panel room-panel">
+        <div class="room-head">
+          <div>
+            <span class="eyebrow">现在在</span>
+            <h1 id="room-name">—</h1>
+            <p id="room-seat" class="muted">—</p>
+          </div>
+          <span id="room-live" class="pill">—</span>
+        </div>
+        <ul id="room-people" class="people"></ul>
+      </section>
+
+      <div class="columns">
+        <section class="panel">
+          <div class="panel-head"><h2>牌桌</h2><span id="table-status" class="muted">—</span></div>
+          <p id="table-text" class="muted">现在没有桌子。</p>
+          <pre id="table-private" class="private" hidden></pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>账本</h2><span id="chips" class="muted">—</span></div>
+          <p id="ledger-line" class="muted">还没有战绩。</p>
+          <ul id="ledger-room" class="ledger"></ul>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head"><h2>孩子看得到的消息</h2><span id="latest" class="muted"></span></div>
+        <div id="log" class="log"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>信箱</h2><span id="mail-unread" class="muted"></span></div>
+        <ul id="mail" class="mail"></ul>
+      </section>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/parent/assets/parent.js"></script>
+</body>
+</html>

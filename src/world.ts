@@ -445,7 +445,13 @@ export class ParlorWorld implements World {
       ? [
         { label: '客厅 · 网页牌桌', href: `${this.baseUrl}/play`, inheritTheme: true },
         ...(this.ownerToken
-          ? [{ label: '客厅 · 家长页', href: `${this.baseUrl}/v1/owner?token=${encodeURIComponent(this.ownerToken)}`, inheritTheme: true }]
+          ? [{
+            label: '客厅 · 家长页',
+            href: this.multiRoom
+              ? `${this.baseUrl}/parent#key=${encodeURIComponent(this.ownerToken)}`
+              : `${this.baseUrl}/v1/owner?token=${encodeURIComponent(this.ownerToken)}`,
+            inheritTheme: true,
+          }]
           : []),
       ]
       : undefined;
@@ -561,7 +567,8 @@ export class ParlorWorld implements World {
       tier: cfg.wakeTier,
     }, this.roomArg());
     this.token = joined.token;
-    this.ownerToken = joined.ownerToken;
+    // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
+    this.ownerToken = joined.ownerKey ?? joined.ownerToken;
     this.seat = joined.seat;
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);

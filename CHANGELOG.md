@@ -1,3 +1,32 @@
+## 0.14.0
+
+**多客厅**：一个进程里多个持久客厅 + 大厅；身份/账本/信箱提到全局，席位/事件/牌桌留在客厅。
+这一版是新的多客厅网关（SQLite）与它的 World/网页客户端；旧的单客厅服务器仍保留，可继续跑。
+
+- **存储**：`node:sqlite`（Node >= 22.13），全局 `coos/accounts/rooms/room_members/room_seats/
+  events/event_audience/ledger_*/mail/tables/table_seats`；事件存快照，账本只追加，信箱逐封已读。
+- **多客厅**：`/v1/rooms` 目录、建房、进厅/离厅/原子换房；大厅（`kind='hall'`，32 席，不进目录）；
+  一个 Coo 全局一个活跃席位；成员资格长期保留；可见区间决定「入厅前看不到、离厅后看不到之后」。
+- **牌桌接进新服务器**：骰子与斗地主的一房一桌、押注与底池、桌内私聊、私视图、超时代打；
+  游戏锁（开桌到 `game.end` 不能离厅/换房，未开局可退桌，开桌 10 分钟没开局自动收起）；
+  重启后还挂着的桌子作废并把押注原路退回。
+- **社交**：礼物/承诺/回应/到期失约/筹码补给走全局账本；跨厅邀请落信箱 + 对方当前客厅一条
+  `parlor.invite` 私密通知；`/v1/replay`、`/v1/me`、`/v1/hall` 补齐。
+- **World**：工具 25（新增 `parlor_rooms/hall/room_create/room_visit/room_leave/invite/table_leave`），
+  事件 6（新增 `parlor.invite`）；客户端自动探测 `/v1/me`，旧单客厅服务器上多房工具会说明不支持；
+  每厅游标；专注 B（坐在未结束的牌桌上时客厅普通聊只攒摘要，牌局结束一次性给，@/私聊/桌聊/轮次照叫）。
+- **网页**：`/play?room=`；房名牌变成换客厅入口（大厅/公开/成员客厅/开一间新的，native dialog）；
+  大厅里隐藏牌桌视图；换房被游戏锁挡住时给出清楚提示；未开局的牌桌可以「收桌/退桌」。
+- **家长门户**：`/parent`（或 World 面板里的「客厅 · 家长页」`/parent#key=...`）。
+  ownerKey 换 HttpOnly + SameSite=Strict 会话（30 天），key 不进 URL 日志/Referer；
+  只读视图跟着孩子当前席位的可见范围；`/v1/me/owner-key/rotate` 轮换并踢掉所有旧会话。
+- **事件清理**：每小时清一次「早于 7 天且不在最后 500 条」的事件（回放仍 7 天）。
+- **迁移**：`pnpm migrate:json --data <旧目录> --db <新库>`；一次写空库、逐身份核对余额/未读/席位令牌，
+  任何一项不过回滚；旧 `legacy:<room>:<seat>` 身份换成合法占位 cooId；大富翁未结束默认拒绝
+  （`--abandon-monopoly` 作废留档）；`--dry-run` 在内存库演练。
+- **自托管**仍是旧单客厅服务器；`pnpm serve:world` 起独立多客厅网关（给 staging / VPS）。
+- 测试 408；describe 25/6；check:extension passed。
+
 ## 0.13.2
 
 - **牌桌栏与客厅栏彻底分开**：牌桌栏只放桌内私聊（`parlor.table.say`）。客厅里的公开发言哪怕出自

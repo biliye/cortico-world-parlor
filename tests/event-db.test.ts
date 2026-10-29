@@ -122,3 +122,23 @@ describe('客厅事件流', () => {
     expect(events.count('lobby')).toBe(1);
   });
 });
+
+describe('事件清理', () => {
+  it('删掉超过保留期的事件，最后 500 条永远留着', () => {
+    // 601 条：seq 1 很旧，seq 2..601 都是新的。
+    for (let index = 0; index < 601; index += 1) {
+      events.append('lobby', {
+        type: 'parlor.say',
+        ts: index === 0 ? 1 : 10_000,
+        from: 's1',
+        scope: { kind: 'room' },
+        text: `第 ${index + 1} 条`,
+      });
+    }
+    expect(events.prune('lobby', 10_000 + 1, 500)).toBe(100);
+    const left = events.recent('lobby', { cooId: A, limit: 200 });
+    expect(left).toHaveLength(200);
+    expect(left[0].seq).toBe(402);
+    expect(left.at(-1)?.seq).toBe(601);
+  });
+});

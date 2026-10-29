@@ -76,6 +76,8 @@ const startWorld = async (): Promise<{ host: FakeHost; friend: ParlorClient; fri
 describe('World 多客厅', () => {
   it('开客厅 → 串门 → 回大厅 → 再回去；旧席位当场释放', async () => {
     const { friend, friendToken } = await startWorld();
+    const links = world!.webUi?.().links ?? [];
+    expect(links.some((link) => link.href.includes('/parent#key='))).toBe(true);
     const created = await call('parlor_room_create', { name: '可可厅', visibility: 'public' });
     expect(created).toContain('可可厅');
     const roomId = /（(r-[A-Za-z0-9_-]+)）/.exec(created)?.[1];

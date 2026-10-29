@@ -192,6 +192,20 @@ export class EventDb {
   }
 
   /**
+   * 清理：删掉早于 beforeTs、且不在最后 keep 条里的事件。
+   * 回放是 7 天，所以保留期与「最后 keep 条」两个条件同时满足才删。
+   */
+  prune(roomId: string, beforeTs: number, keep = 500): number {
+    const result = this.db.prepare(
+      `DELETE FROM events
+        WHERE room_id = ?
+          AND ts < ?
+          AND seq < (SELECT COALESCE(MAX(seq), 0) - ? FROM events WHERE room_id = ?)`,
+    ).run(roomId, beforeTs, keep, roomId);
+    return Number(result.changes);
+  }
+
+  /**
    * 回放：这个客厅里某个 coo 历来有权看的全部事件（不受某一次席位的可见区间限制）。
    * 公开事件人人可见；私聊/桌聊按 append 时写下的 event_audience 授权。
    * `before` 之前的最后 N 条，按旧到新返回。

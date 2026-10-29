@@ -509,6 +509,11 @@ export class RoomHost {
     return this.tableHost.private(seatId);
   }
 
+  /** 清理超过保留期的事件（回放 7 天；最后 500 条永远留着）。 */
+  pruneEvents(beforeTs: number, keep = 500): number {
+    return this.events.prune(this.roomId, beforeTs, keep);
+  }
+
   /** 网关每秒调一次：开桌超时、牌局超时代打、承诺到期、余额补给。 */
   tickClock(now = this.now()): void {
     this.tableHost.tick();

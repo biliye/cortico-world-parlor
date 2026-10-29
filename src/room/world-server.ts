@@ -116,6 +116,15 @@ const readJson = async (req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 };
 
+const cookieOf = (req: IncomingMessage, name: string): string => {
+  const raw = req.headers.cookie ?? '';
+  for (const part of raw.split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return decodeURIComponent(rest.join('='));
+  }
+  return '';
+};
+
 const bearer = (req: IncomingMessage): string => {
   const header = req.headers.authorization ?? '';
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
@@ -179,6 +188,10 @@ export class WorldServer {
   private readonly hosts = new Map<string, RoomHost>();
   /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
   private readonly inviteTimes = new Map<string, number[]>();
+  /** 家长链接试错限频：每个 IP 一小时最多 10 次。 */
+  private readonly parentKeyTimes = new Map<string, number[]>();
+  /** 事件清理：每小时一次，超过 7 天且不在最后 500 条的删掉。 */
+  private lastPrune = 0;
 
   constructor(options: WorldServerOptions = {}) {
     this.db = openDb(options.dbFile ?? ':memory:');
@@ -307,6 +320,10 @@ export class WorldServer {
           console.error('parlor: 客厅时钟出错', error);
         }
       }
+      if (now - this.lastPrune >= 3_600_000) {
+        this.lastPrune = now;
+        this.pruneEvents(now);
+      }
     } catch (error) {
       console.error('parlor: 时钟扫描失败', error);
     }
@@ -379,6 +396,59 @@ export class WorldServer {
         rooms: listRooms(this.db, { kind: 'room' }).length,
         seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,
       });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/parent/session') {
+      const body = await readJson(req);
+      const key = typeof body.key === 'string' ? body.key.trim() : '';
+      this.checkParentKeyRate(req);
+      const account = key ? this.coo.verifyOwnerKey(key) : null;
+      if (!account) throw new HttpError(401, '这个家长链接不对，或已经失效了');
+      const session = this.coo.createSession(account.id);
+      if (!session) throw new HttpError(403, '这个家长账户被停用了');
+      res.setHeader('set-cookie', this.parentCookie(session.token, req));
+      json(res, 200, {
+        account: { id: account.id, cooId: account.cooId, displayName: account.displayName },
+        expiresAt: session.expiresAt,
+      });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/parent/me') {
+      const session = this.parentSession(req);
+      json(res, 200, {
+        account: { id: session.account.id, cooId: session.account.cooId, displayName: session.account.displayName },
+        expiresAt: session.expiresAt,
+        seat: this.parentSeatView(session.account.cooId),
+      });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/parent/view') {
+      const session = this.parentSession(req);
+      const since = Number(url.searchParams.get('since') ?? 0) || 0;
+      const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
+      json(res, 200, this.parentView(session.account.cooId, since, limit));
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/parent/logout') {
+      const token = cookieOf(req, 'parlor_parent');
+      if (token) this.coo.revokeSession(token);
+      res.setHeader('set-cookie', this.clearParentCookie(req));
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/me/owner-key/rotate') {
+      const cooId = this.cooAuth(req);
+      const account = this.coo.byCooId(cooId);
+      if (!account) throw new HttpError(404, '这个 Coo 还没有家长账户');
+      const key = this.coo.rotateOwnerKey(cooId);
+      if (!key) throw new HttpError(409, '轮换失败；稍后再试');
+      this.coo.revokeAllSessions(account.id);
+      json(res, 200, { ownerKey: key });
       return;
     }
 
@@ -817,6 +887,98 @@ export class WorldServer {
     });
   }
 
+  private checkParentKeyRate(req: IncomingMessage): void {
+    const ip = (headerValue(req, 'x-forwarded-for').split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
+    const now = this.now();
+    const cutoff = now - 3_600_000;
+    const times = (this.parentKeyTimes.get(ip) ?? []).filter((at) => at >= cutoff);
+    if (times.length >= 10) throw new HttpError(429, '试得太多了，过一会儿再试');
+    times.push(now);
+    this.parentKeyTimes.set(ip, times);
+  }
+
+  private parentCookie(token: string, req: IncomingMessage): string {
+    const secure = headerValue(req, 'x-forwarded-proto') === 'https' ? '; Secure' : '';
+    return `parlor_parent=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(30 * 24 * 3600)}${secure}`;
+  }
+
+  private clearParentCookie(req: IncomingMessage): string {
+    const secure = headerValue(req, 'x-forwarded-proto') === 'https' ? '; Secure' : '';
+    return `parlor_parent=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}`;
+  }
+
+  private parentSession(req: IncomingMessage) {
+    const token = cookieOf(req, 'parlor_parent');
+    const session = token ? this.coo.verifySession(token) : null;
+    if (!session) throw new HttpError(401, '家长会话已失效，请重新打开家长链接');
+    return session;
+  }
+
+  private parentSeatView(cooId: string) {
+    const seat = activeSeatForCoo(this.db, cooId);
+    if (!seat) return null;
+    const room = getRoom(this.db, seat.roomId);
+    return {
+      room: seat.roomId,
+      roomName: room?.name ?? seat.roomId,
+      id: seat.id,
+      name: seat.name,
+      kind: seat.kind,
+      tier: seat.tier,
+    };
+  }
+
+  /** 家长只读视图：跟孩子当前席位走，可见范围与孩子自己完全一致。 */
+  private parentView(cooId: string, since: number, limit: number): Record<string, unknown> {
+    const now = this.now();
+    const seat = activeSeatForCoo(this.db, cooId);
+    const mail = new MailDb(this.db, { now: this.now });
+    if (!seat) {
+      return {
+        seat: null,
+        room: null,
+        latest: 0,
+        now,
+        at: serverClock(now),
+        events: [],
+        tablePrivate: null,
+        mail: [],
+        mailUnread: mail.unreadCount(cooId),
+      };
+    }
+    const room = getRoom(this.db, seat.roomId);
+    const host = this.host(seat.roomId);
+    const snapshot = host.snapshot(cooId, { since, limit });
+    return {
+      seat: snapshot.seat,
+      room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },
+      latest: snapshot.latest,
+      now: snapshot.now,
+      at: snapshot.at,
+      events: snapshot.events,
+      ...(snapshot.table ? { table: snapshot.table } : {}),
+      tablePrivate: snapshot.tablePrivate ?? null,
+      ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
+      ledgerRoom: snapshot.ledgerRoom ?? [],
+      mailUnread: snapshot.mailUnread ?? 0,
+      mail: mail.recent(cooId, undefined, 5),
+      ownerPrivateHidden: false,
+    };
+  }
+
+  /** 回放是 7 天；事件表只增不减会一直长，所以每小时清一次。 */
+  private pruneEvents(now: number): void {
+    const before = now - 7 * 24 * 60 * 60_000;
+    const rooms = this.db.prepare('SELECT id FROM rooms').all() as { id: string }[];
+    for (const room of rooms) {
+      try {
+        this.host(room.id).pruneEvents(before, 500);
+      } catch (error) {
+        console.error(`parlor: 清理事件失败（${room.id}）`, error);
+      }
+    }
+  }
+
   /** 有推送连接的席位（快照里的在线标记）。 */
   private onlineSeatIds(roomId: string): string[] {
     const clients = this.sse.get(roomId);
@@ -839,7 +1001,11 @@ export class WorldServer {
       this.sendWeb('play.html', res, true);
       return true;
     }
-    const prefix = '/play/assets/';
+    if (pathname === '/parent' || pathname === '/parent/') {
+      this.sendWeb('parent.html', res, true);
+      return true;
+    }
+    const prefix = pathname.startsWith('/parent/assets/') ? '/parent/assets/' : '/play/assets/';
     if (!pathname.startsWith(prefix)) return false;
     const rel = pathname.slice(prefix.length);
     if (!rel || rel.startsWith('/') || rel.includes('..') || rel.includes('\\')
