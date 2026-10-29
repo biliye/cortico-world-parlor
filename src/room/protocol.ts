@@ -29,15 +29,40 @@ export interface Seat {
  * 后来坐上来的人也不会看见之前桌上的话。
  */
 export type Scope =
+  | { kind: 'hall' }
   | { kind: 'room' }
   | { kind: 'seat'; seatId: string }
   | { kind: 'table'; tableId: string; seats: string[] };
 
 /** 可见性的唯一判定；房间、回放、家长页都走这一条。 */
 export function scopeVisibleTo(scope: Scope, seatId: string): boolean {
-  if (scope.kind === 'room') return true;
+  if (scope.kind === 'hall' || scope.kind === 'room') return true;
   if (scope.kind === 'seat') return scope.seatId === seatId;
   return scope.seats.includes(seatId);
+}
+
+/**
+ * 席位在某个客厅的一次到访区间。
+ * `visibleFromSeq` 不含（入厅前最后一个事件的 seq）；`visibleUntilSeq` 含（离厅事件本身）。
+ * 断线续连沿用；重进是新的席位/新区间。
+ */
+export interface SeatVisibility {
+  visibleFromSeq: number;
+  visibleUntilSeq?: number | null;
+}
+
+/**
+ * 事件对某个席位是否可见：先夹可见区间，再走 scope。
+ * 快照、history、SSE 补发、回放、家长视图都必须走这一条，不能只查 scope。
+ */
+export function eventVisibleInInterval(
+  event: RoomEvent,
+  seatId: string,
+  interval: SeatVisibility,
+): boolean {
+  if (event.seq <= interval.visibleFromSeq) return false;
+  if (interval.visibleUntilSeq != null && event.seq > interval.visibleUntilSeq) return false;
+  return scopeVisibleTo(event.scope, seatId);
 }
 
 export interface RoomEvent {

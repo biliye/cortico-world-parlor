@@ -44,7 +44,7 @@ export interface ReplayStoreOptions {
 const isScope = (value: unknown): value is Scope => {
   if (!value || typeof value !== 'object') return false;
   const scope = value as Partial<Scope>;
-  if (scope.kind === 'room') return true;
+  if (scope.kind === 'room' || scope.kind === 'hall') return true;
   if (scope.kind === 'seat') return typeof (scope as { seatId?: unknown }).seatId === 'string';
   if (scope.kind === 'table') {
     const table = scope as { tableId?: unknown; seats?: unknown };
