@@ -1219,6 +1219,15 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   scroll-behavior: smooth;
 }
 .chat-log[hidden] { display: none; }
+/* 牌桌栏只放桌内私聊，没人说话时给一句去处提示，免得看着像坏了。 */
+.chat-empty {
+  margin: auto 0;
+  padding: 18px 14px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--dim);
+}
 .msg { display: flex; align-items: flex-start; gap: 8px; }
 .msg-body { flex: 1; min-width: 0; }
 .msg-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; font-size: 8.5px; color: var(--dim); }

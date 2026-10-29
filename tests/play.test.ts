@@ -279,6 +279,9 @@ describe('网页玩家', () => {
     // 出牌/过牌这类牌桌动作不进聊天栏，只留人说的话。
     expect(js).toContain("type.startsWith('parlor.table.') && type !== 'parlor.table.say'");
     expect(js).toContain("type.startsWith('parlor.monopoly.')");
+    // 牌桌栏只放桌内私聊：客厅的公开发言（哪怕出自桌上席位）只在客厅栏。
+    expect(js).toContain("return (event.type || '') === 'parlor.table.say';");
+    expect(js).toContain('客厅的聊天在「客厅」那一栏');
   });
 
   it('网页这版只开斗地主入口，骰子和大富翁收起，斗地主有结算手牌', () => {

@@ -283,11 +283,12 @@ function tableSeatIds() {
   return ids;
 }
 
+/**
+ * 牌桌栏只放桌内私聊。客厅的公开发言哪怕出自桌上的席位，也只在客厅栏——
+ * 两栏内容不重复，想看客厅就切回去（他 2026-10-29 中午提的）。
+ */
 function isTableBucket(event) {
-  const type = event.type || '';
-  if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')) return true;
-  if (type === 'parlor.say' && event.from !== 'system') return tableSeatIds().has(event.from);
-  return false;
+  return (event.type || '') === 'parlor.table.say';
 }
 
 function pushLog(event, seed = false) {
@@ -317,6 +318,8 @@ function pushLog(event, seed = false) {
 
   if (tableNode) {
     const tableBottom = isNearBottom(ui.logTable);
+    const empty = ui.logTable.querySelector('.chat-empty');
+    if (empty) empty.remove();
     ui.logTable.append(tableNode);
     while (ui.logTable.children.length > 300) ui.logTable.firstElementChild.remove();
     if (!seed && tableBottom) ui.logTable.scrollTop = ui.logTable.scrollHeight;
@@ -609,6 +612,7 @@ function buildShell() {
   const logTable = el('div', 'chat-log');
   logTable.dataset.chatPanel = 'table';
   logTable.hidden = true;
+  logTable.append(el('div', 'chat-empty', '牌桌上还没人说话。客厅的聊天在「客厅」那一栏。'));
   const mailList = el('div', 'mail-list');
   mailList.dataset.chatPanel = 'mail';
   mailList.hidden = true;
