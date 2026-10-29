@@ -206,7 +206,12 @@ export interface MonopolyInfo {
 export interface WakeDecision {
   wake: boolean;
   addressed: boolean;
-  reason: 'mention' | 'whisper' | 'table' | 'room' | 'quiet' | 'off' | 'observer';
+  reason: 'mention' | 'whisper' | 'table' | 'room' | 'quiet' | 'off' | 'observer' | 'focus';
+}
+
+export interface WakeOptions {
+  /** 专注 B：坐在未结束的牌桌上时，客厅普通聊不直接叫醒（@/私聊/牌桌/轮次照叫）。 */
+  focus?: boolean;
 }
 
 /** 事件是否直接指向这个席位（私聊、桌上说的话、或被 @）。 */
@@ -220,8 +225,9 @@ export function isAddressed(event: RoomEvent, seatId: string): boolean {
  * 单条事件要不要立刻叫醒这个席位。
  * `digest` 的公开闲聊返回 false，由 World 攒成周期摘要；`quiet` 连摘要也不叫。
  * 桌上说的话算「对着同桌说的」：同桌的 Coo 一律叫醒（「离开」挡位仍不叫）。
+ * `focus` 是专注 B：上桌后客厅普通聊不直接叫醒，@/私聊/牌桌/轮次仍叫。
  */
-export function decideWake(event: RoomEvent, seat: Seat): WakeDecision {
+export function decideWake(event: RoomEvent, seat: Seat, options: WakeOptions = {}): WakeDecision {
   if (seat.kind === 'observer') return { wake: false, addressed: false, reason: 'observer' };
   if (seat.tier === 'off') return { wake: false, addressed: false, reason: 'off' };
   const addressed = isAddressed(event, seat.id);
@@ -231,6 +237,9 @@ export function decideWake(event: RoomEvent, seat: Seat): WakeDecision {
       addressed: true,
       reason: event.scope.kind === 'seat' ? 'whisper' : event.scope.kind === 'table' ? 'table' : 'mention',
     };
+  }
+  if (options.focus && event.scope.kind === 'room') {
+    return { wake: false, addressed: false, reason: 'focus' };
   }
   if (seat.tier === 'full') return { wake: true, addressed: false, reason: 'room' };
   return { wake: false, addressed: false, reason: seat.tier === 'quiet' ? 'quiet' : 'room' };
