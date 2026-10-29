@@ -151,7 +151,7 @@ a { color: var(--accent-2); }
   z-index: 2;
   max-width: 2400px;
   margin: 0 auto;
-  padding: 0 24px 40px;
+  padding: 0 24px 16px;
 }
 .room-light {
   position: fixed;
@@ -1851,6 +1851,27 @@ html.no-card-art .pcard.back { border: 0; }
 }
 
 /* —— 响应式 —— */
+/* 宽屏下让牌桌吃掉竖直方向剩下的高度：手牌贴着窗口底部，下面不再留一大片。
+   只在桌面宽度生效（手机是按内容排的，一屏本来就装不下）。 */
+@media (min-width: 821px) {
+  .layout {
+    min-height: calc(100vh - 170px);
+    min-height: calc(100dvh - 170px);
+    align-items: stretch;
+  }
+  .center { display: flex; flex-direction: column; min-height: 0; }
+  .view-table { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .game { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .game-root, .game-ddz { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .ddz-board { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .ddz-grid { flex: 1 1 auto; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+  .ddz-side { justify-content: space-between; }
+  .ddz-stack { max-height: 300px; }
+  /* 桌子拉高以后，三手牌别跟着铺满，给它一块固定大小的三角放在中间。 */
+  .ddz-plays { max-height: 340px; margin: auto 0; }
+  .ddz-center { justify-content: flex-start; }
+}
+
 @media (max-width: 1100px) {
   .app { padding: 0 18px 32px; }
   .layout { grid-template-columns: 244px minmax(0, 1fr) 322px; gap: 14px; }
