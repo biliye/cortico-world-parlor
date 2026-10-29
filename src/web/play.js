@@ -71,12 +71,31 @@ async function boot() {
     connect();
   } catch (error) {
     if (error && error.status === 401) {
-      clearStore();
-      renderJoin('这个席位的令牌已经失效，请重新加入。');
+      handleExpiredSeat(state.cfg ? state.cfg.token : '');
       return;
     }
     renderOffline(error && error.message ? error.message : String(error));
   }
+}
+
+/**
+ * 席位令牌失效（401）要分两种：
+ * - 存着的令牌就是刚失败的那一个：真的失效了，清掉、回加入页；
+ * - 存着的已经换了（另一个标签页换过客厅/换过席位）：这个标签页只是旧了，
+ *   重新读一次就好——不能把别的标签页刚写进去的新令牌一起删掉，否则看起来像「被登出」。
+ */
+function handleExpiredSeat(token) {
+  const stored = readStore();
+  if (stored && token && stored.token !== token) {
+    location.reload();
+    return;
+  }
+  if (state.stream) {
+    state.stream.close();
+    state.stream = null;
+  }
+  clearStore();
+  renderJoin('这个席位的令牌已经失效，请重新加入。');
 }
 
 function readStore() {
@@ -180,8 +199,7 @@ function scheduleRefresh() {
       render();
     } catch (error) {
       if (error && error.status === 401) {
-        clearStore();
-        renderJoin('这个席位的令牌已经失效，请重新加入。');
+        handleExpiredSeat(state.cfg ? state.cfg.token : '');
       }
     }
   }, 120);

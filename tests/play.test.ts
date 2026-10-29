@@ -296,6 +296,9 @@ describe('网页玩家', () => {
     }
     expect(css).toContain('.view-hall');
     expect(css).toContain('.hall-create');
+    // 旧标签页的 401 不能删掉别的标签页刚写进去的新令牌（否则像被登出）。
+    expect(js).toContain('function handleExpiredSeat');
+    expect(js).toContain('stored.token !== token');
   });
 
   it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {
