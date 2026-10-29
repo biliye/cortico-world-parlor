@@ -512,6 +512,9 @@ export class RoomKernel {
     if (!promise || (promise.kind !== 'promise' && promise.kind !== 'debt')) {
       throw new RoomError('not_found', '找不到这条承诺；用 parlor_ledger 看未了结里的 id');
     }
+    if (promise.room !== this.id) {
+      throw new RoomError('not_found', '这条承诺不在这个客厅；回原来的客厅再回应');
+    }
     const me = this.cooIdOf(seat);
     const status = this.ledger.promiseStatus(promise);
     const counterpartCoo = promise.from === me ? promise.to : promise.from;
@@ -543,9 +546,9 @@ export class RoomKernel {
     return this.transferPromise(seat, promise, action, counterpart, otherName);
   }
 
-  /** 到期没结的承诺：由服务器追加 default，并通知双方。 */
+  /** 到期没结的承诺：由服务器追加 default，并通知双方；只扫本客厅的承诺。 */
   expireLedger(now = this.now()): LedgerEntry[] {
-    const created = this.ledger.expire(now);
+    const created = this.ledger.expire(now, this.id);
     for (const entry of created) {
       const [debtorCoo, creditorCoo] = entry.participants ?? [];
       const debtor = debtorCoo ? this.seatByCoo(debtorCoo) : undefined;

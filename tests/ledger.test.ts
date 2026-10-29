@@ -159,10 +159,10 @@ describe('账本', () => {
 describe('账本：承诺状态与筹码', () => {
   const promise = (
     store: LedgerStore,
-    options: { from?: string; to?: string; due?: number; chips?: number } = {},
+    options: { from?: string; to?: string; due?: number; chips?: number; room?: string } = {},
   ): LedgerEntry => store.record({
     kind: 'promise',
-    room: 'lobby',
+    room: options.room ?? 'lobby',
     from: options.from ?? A,
     to: options.to ?? B,
     text: '一杯奶茶',
@@ -226,6 +226,21 @@ describe('账本：承诺状态与筹码', () => {
     expect(store.promiseStatus(pending)).toBe('pending');
     expect(store.promiseStatus(future)).toBe('accepted');
     expect(store.expire(3000)).toHaveLength(0);
+  });
+
+  it('到期扫描可以只扫一个客厅，不替别的客厅写失约', () => {
+    const store = new LedgerStore({ now: () => 1000 });
+    const inA = promise(store, { due: 2000, room: 'a' });
+    const inB = promise(store, { due: 2000, room: 'b' });
+    store.record({ kind: 'accept', ref: inA.id, room: 'a', from: B, to: A, text: '', visibility: 'private' });
+    store.record({ kind: 'accept', ref: inB.id, room: 'b', from: B, to: A, text: '', visibility: 'private' });
+
+    expect(store.expire(3000, 'a').map((entry) => entry.ref)).toEqual([inA.id]);
+    expect(store.promiseStatus(inA)).toBe('defaulted');
+    expect(store.promiseStatus(inB)).toBe('accepted');
+
+    expect(store.expire(3000, 'b').map((entry) => entry.ref)).toEqual([inB.id]);
+    expect(store.promiseStatus(inB)).toBe('defaulted');
   });
 
   it('按完整 id 或唯一前缀都找得到', () => {

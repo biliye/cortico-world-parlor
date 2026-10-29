@@ -430,8 +430,11 @@ export class LedgerStore {
     });
   }
 
-  /** 到期没结的承诺由服务器追加一条 default；已经有 default 的不会再写。 */
-  expire(now = this.now()): LedgerEntry[] {
+  /**
+   * 到期没结的承诺由服务器追加一条 default；已经有 default 的不会再写。
+   * 多客厅时按 room 扫，免得 A 厅的扫描替 B 厅写失约、通知还落在 A 厅。
+   */
+  expire(now = this.now(), room?: string): LedgerEntry[] {
     // 已经收尾的（了结/拒绝/撤回/失约）不再看；到期扫描每秒都会跑，别重复翻旧账。
     const closed = new Set<string>();
     for (const entry of this.entries) {
@@ -444,6 +447,7 @@ export class LedgerStore {
       && typeof entry.due === 'number'
       && entry.due <= now
       && !closed.has(entry.id)
+      && (room === undefined || entry.room === room)
     ));
     const created: LedgerEntry[] = [];
     for (const promise of due) {
