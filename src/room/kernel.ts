@@ -5,7 +5,7 @@
 import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
-  DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS,
+  DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS, scopeVisibleTo,
   type ActionRequest, type DeliveryReceipt, type JoinRequest, type JoinResponse, type MonopolyInfo, type MonopolySignupView,
   type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
@@ -197,6 +197,8 @@ export class RoomKernel {
   private seq = 0;
   private seatSeq = 0;
   private table?: TableEngine;
+  /** 当前这张桌子的编号：开桌时按事件序号生成，桌内发言的事件带上它。 */
+  private tableId = '';
   /** 当前桌子的押注（每人开局押多少筹码）；0 = 不押。 */
   private tableStake = 0;
   private epochValue: string;
@@ -354,10 +356,7 @@ export class RoomKernel {
 
   say(seat: StoredSeat, text: string): RoomEvent {
     const body = cleanText(text);
-    const last = this.lastSay.get(seat.id) ?? 0;
-    const now = this.now();
-    if (now - last < SAY_GAP_MS) throw new RoomError('invalid', '说得太快了，等一下再说');
-    this.lastSay.set(seat.id, now);
+    this.checkSayGap(seat);
     return this.record({
       type: 'parlor.say',
       from: seat.id,
@@ -366,6 +365,41 @@ export class RoomKernel {
       mentions: this.mentions(body),
       data: { name: seat.name },
     });
+  }
+
+  /**
+   * 牌桌上说的话：只给那一刻坐在这一桌的人（和他们的家长页）看，客厅里看不见。
+   * 桌散了、或者换了人开新桌，新坐上来的人也看不到这一桌之前的话。
+   */
+  tableSay(seat: StoredSeat, text: string): RoomEvent {
+    const body = cleanText(text);
+    const table = this.table;
+    if (!table || table.status === 'ended') throw new RoomError('invalid', '现在没有牌桌，回客厅说吧');
+    if (!table.has(seat.id)) throw new RoomError('invalid', '你不在这一桌，回客厅说吧');
+    this.checkSayGap(seat);
+    return this.record({
+      type: 'parlor.table.say',
+      from: seat.id,
+      scope: { kind: 'table', tableId: this.tableId, seats: this.tableChatSeats() },
+      text: body,
+      mentions: this.mentions(body),
+      data: { name: seat.name, tableId: this.tableId },
+    });
+  }
+
+  /** 桌上发言与客厅发言共用同一个间隔，防止交替发绕过限速。 */
+  private checkSayGap(seat: StoredSeat): void {
+    const last = this.lastSay.get(seat.id) ?? 0;
+    const now = this.now();
+    if (now - last < SAY_GAP_MS) throw new RoomError('invalid', '说得太快了，等一下再说');
+    this.lastSay.set(seat.id, now);
+  }
+
+  /** 桌上能看见这些话的席位：只算真席位，脚本陪练不是房间席位。 */
+  private tableChatSeats(): string[] {
+    const table = this.table;
+    if (!table) return [];
+    return table.seatIds().filter((seatId) => !!this.seatById(seatId));
   }
 
   whisper(seat: StoredSeat, to: string, text: string): DeliveredEvent {
@@ -679,12 +713,14 @@ export class RoomKernel {
       throw new RoomError('invalid', '不认识的桌子：只能开 dice（骰子）或 ddz（斗地主）');
     }
     this.tableStake = ante;
+    // 桌号按开桌那条事件的序号生成：重启后序号接着走，不会和上一张桌撞号。
+    this.tableId = `t${this.seq + 1}`;
     this.record({
       type: 'parlor.table.open',
       from: 'system',
       scope: { kind: 'room' },
       text: `${seat.name} 开了一张${game === 'ddz' ? '斗地主' : '骰子'}桌${ante > 0 ? `（每人押 ${ante} 枚筹码）` : ''}。`,
-      data: { game, stake: ante },
+      data: { game, stake: ante, tableId: this.tableId },
     });
   }
 
@@ -976,7 +1012,7 @@ export class RoomKernel {
   }
 
   visibleTo(event: RoomEvent, seatId: string): boolean {
-    return event.scope.kind === 'room' || event.scope.seatId === seatId;
+    return scopeVisibleTo(event.scope, seatId);
   }
 
   history(seatId: string, since: number, limit = 30): RoomEvent[] {

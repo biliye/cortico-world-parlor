@@ -4,12 +4,13 @@
  * 房间日志（room.json）只留最近 500 条，会被滚掉；回放单独落一个
  * `replay.jsonl`（每行一条 JSON，0600），只追加、按 seq 去重。
  * 读的时候仍然按可见性过滤：公开事件谁都能看，seat 事件只有那个席位
- * （和它的家长页）能看。运营者能直接读服务器上的文件。
+ * （和它的家长页）能看，table 事件只有当时坐在那一桌的人能看。
+ * 运营者能直接读服务器上的文件。
  */
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { serverClock } from './clock.ts';
-import type { RoomEvent, Scope } from './protocol.ts';
+import { scopeVisibleTo, type RoomEvent, type Scope } from './protocol.ts';
 
 /** 回放留 7 天；另外留一个安全上限，防止有人在 7 天里刷出无限多条。 */
 export const REPLAY_RETENTION_DAYS = 7;
@@ -43,8 +44,15 @@ export interface ReplayStoreOptions {
 const isScope = (value: unknown): value is Scope => {
   if (!value || typeof value !== 'object') return false;
   const scope = value as Partial<Scope>;
-  return scope.kind === 'room'
-    || (scope.kind === 'seat' && typeof (scope as { seatId?: unknown }).seatId === 'string');
+  if (scope.kind === 'room') return true;
+  if (scope.kind === 'seat') return typeof (scope as { seatId?: unknown }).seatId === 'string';
+  if (scope.kind === 'table') {
+    const table = scope as { tableId?: unknown; seats?: unknown };
+    return typeof table.tableId === 'string'
+      && Array.isArray(table.seats)
+      && table.seats.every((seatId) => typeof seatId === 'string');
+  }
+  return false;
 };
 
 const isRecord = (value: unknown): value is RoomEvent => {
@@ -131,13 +139,12 @@ export class ReplayStore {
     }
   }
 
-  /** 某个席位能看的回放：公开 + 自己的私密；按 seq 升序，`before` 之前的部分。 */
+  /** 某个席位能看的回放：公开 + 自己的私密 + 自己在桌时的桌上发言；按 seq 升序，`before` 之前的部分。 */
   page(seatId: string, limit = 100, before?: number): ReplayPage {
     const count = Math.max(1, Math.min(500, Math.trunc(limit) || 100));
     const upto = before && before > 0 ? before : Number.POSITIVE_INFINITY;
     const visible = this.records.filter((event) => (
-      event.seq < upto
-      && (event.scope.kind === 'room' || event.scope.seatId === seatId)
+      event.seq < upto && scopeVisibleTo(event.scope, seatId)
     ));
     const picked = visible.slice(-count);
     return {

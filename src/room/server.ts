@@ -526,6 +526,7 @@ export class ParlorServer {
     let text: string | undefined;
     switch (body.type) {
       case 'say': this.kernel.say(seat, body.text); break;
+      case 'table_say': this.kernel.tableSay(seat, body.text); break;
       case 'whisper': delivered = this.kernel.whisper(seat, body.to, body.text).delivered; break;
       case 'set_tier': this.kernel.setTier(seat, body.tier); break;
       case 'gift': delivered = this.kernel.gift(seat, body.to, body.text, body.chips).delivered; break;
@@ -700,6 +701,8 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   #log li { padding: 8px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
   #log li .who { color: #79c0ff; }
   #log li.whisper { background: #241f16; border: 1px solid #3d3320; }
+  #log li.table-talk { background: #1a2320; border: 1px solid #24382e; }
+  #log li .tag { color: #9aa0a6; font-size: 12px; }
   #log li.system { color: #9aa0a6; background: transparent; padding-left: 0; }
   #ledger .entry, #replay .entry { padding: 7px 10px; border-radius: 8px; background: #1b1e23; margin-bottom: 6px; color: #c9ccd1; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
   #ledger .tier, #replay .tier { margin: 8px 0 4px; }
@@ -751,11 +754,16 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
   const line = (event) => {
     const li = document.createElement('li');
     if (event.type === 'parlor.whisper') li.className = 'whisper';
+    if (event.type === 'parlor.table.say') li.className = 'table-talk';
     if (event.from === 'system') li.className = 'system';
     if (event.type !== 'parlor.whisper' && event.from !== 'system') {
       const who = document.createElement('span'); who.className = 'who';
       who.textContent = (event.data && event.data.name ? event.data.name : event.from) + '：';
       li.append(who);
+    }
+    if (event.type === 'parlor.table.say') {
+      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = '牌桌 · ';
+      li.append(tag);
     }
     li.append(document.createTextNode(event.text));
     return li;

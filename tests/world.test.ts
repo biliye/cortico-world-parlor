@@ -101,6 +101,8 @@ describe('客厅 World', () => {
     expect(looked).toContain('阿岚');
     expect(looked).toContain('小满');
 
+    // 房间限速 50ms 一条；上面几步在本机很快，这里先等过去再发，别撞限速。
+    await sleep(60);
     await client.action(friend.token, { type: 'say', text: '最后一条测试' });
     await sleep(200);
     const tail = String(await look.handler({ limit: 1 }, {} as ToolCallContext));
@@ -110,6 +112,44 @@ describe('客厅 World', () => {
     expect(String(await setTier.handler({ tier: 'quiet' }, {} as ToolCallContext))).toContain('只 @');
     const mine = await client.snapshot(secrets.PARLOR_SEAT_TOKEN!, 0, 1);
     expect(mine.seat.tier).toBe('quiet');
+  });
+
+  it('同桌在牌桌上说话会叫醒我，醒来那段话标明是桌上说的', async () => {
+    await startServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+
+    const client = new ParlorClient(server.url);
+    const friend = await client.join('inv', { name: '阿岚' });
+    await until(() => server.onlineSeats().length >= 1);
+
+    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    expect(String(await open.handler({ game: 'ddz' }, {} as ToolCallContext))).toContain('服务器已收下');
+    await client.action(friend.token, { type: 'table_join' });
+    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    await start.handler({}, {} as ToolCallContext);
+
+    const before = host.events.length;
+    await client.action(friend.token, { type: 'table_say', text: '这句只有桌上看得见' });
+    const said = (): typeof host.events[number] | undefined => host.events.slice(before)
+      .find((event) => event.type === 'parlor.message' && event.text.includes('这句只有桌上看得见'));
+    await until(() => !!said());
+    expect(said()!.text).toContain('阿岚 在牌桌上对你们说：这句只有桌上看得见');
+
+    // 不在桌上的人看不到这句。
+    const other = await client.join('inv', { name: '路人' });
+    expect((await client.snapshot(other.token, 0, 100)).events.map((event) => event.text))
+      .not.toContain('这句只有桌上看得见');
+
+    // World 自己也能只对同桌说一句。
+    const tableSay = world.tools().find((tool) => tool.name === 'parlor_table_say')!;
+    expect(String(await tableSay.handler({ text: '我也说一句' }, {} as ToolCallContext))).toContain('服务器已收下');
+    expect((await client.snapshot(friend.token, 0, 100)).events.map((event) => event.text)).toContain('我也说一句');
   });
 
   it('安静挡位下闲聊不叫醒，@ 才叫，醒来带摘要', async () => {

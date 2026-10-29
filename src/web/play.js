@@ -1,6 +1,6 @@
 /** 客厅网页客户端：家长自己的席位，和 Coo 同桌玩。
  *  布局是三维（我的席位 / 牌桌 / 聊天），牌桌与聊天都接真实快照与 SSE；
- *  牌桌 tab 只是过滤，发送仍是房间公开的 parlor_say。 */
+ *  牌桌 tab 发的是桌内私聊（只有同桌看得见），客厅 tab 才是全房间公开。 */
 import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
   isNearBottom, readable, probeCardArt, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
@@ -107,6 +107,18 @@ function serverNow() {
 function hasLiveTable() {
   const table = state.snap && state.snap.table;
   return !!table && (table.status === 'bidding' || table.status === 'playing');
+}
+
+/**
+ * 现在能不能「只对同桌说」：桌子还在（没散）而且我就坐在这桌上。
+ * 不在桌上时输入框是停用的——宁可让人切到客厅，也不把以为是私密的话发成全房间可见。
+ */
+function tableChatOpen() {
+  const snap = state.snap;
+  const table = snap && snap.table;
+  if (!table || table.status === 'ended') return false;
+  const me = snap.seat && snap.seat.id;
+  return (table.seats || []).some((seat) => seat && seat.id === me);
 }
 
 /* —— 网络 —— */
@@ -236,7 +248,7 @@ function handleEvent(event) {
   state.latest = Math.max(state.latest, event.seq);
   pushLog(event);
   const type = event.type || '';
-  if (type === 'parlor.say') return;
+  if (type === 'parlor.say' || type === 'parlor.table.say') return;
   if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')
     || type === 'parlor.joined' || type === 'parlor.left'
     || type === 'parlor.ledger' || type === 'parlor.whisper') {
@@ -293,12 +305,15 @@ function pushLog(event, seed = false) {
   const tableBucket = isTableBucket(event);
   const roomNode = lineOf(event, false);
   const tableNode = tableBucket ? lineOf(event, true) : null;
-  if (!roomNode) return;
+  // 桌上说的话只进牌桌栏：客厅那栏看不见它，所以 roomNode 是 null。
+  if (!roomNode && !tableNode) return;
 
-  const roomBottom = isNearBottom(ui.logRoom);
-  ui.logRoom.append(roomNode);
-  while (ui.logRoom.children.length > 300) ui.logRoom.firstElementChild.remove();
-  if (!seed && roomBottom) ui.logRoom.scrollTop = ui.logRoom.scrollHeight;
+  if (roomNode) {
+    const roomBottom = isNearBottom(ui.logRoom);
+    ui.logRoom.append(roomNode);
+    while (ui.logRoom.children.length > 300) ui.logRoom.firstElementChild.remove();
+    if (!seed && roomBottom) ui.logRoom.scrollTop = ui.logRoom.scrollHeight;
+  }
 
   if (tableNode) {
     const tableBottom = isNearBottom(ui.logTable);
@@ -311,9 +326,11 @@ function pushLog(event, seed = false) {
     // 角标只数「聊天」类事件；牌桌的每一次出牌/托管都算未读会把 99+ 堆在底栏，反而没人看。
     const type = event.type || '';
     const conversational = type === 'parlor.say' || type === 'parlor.whisper'
+      || type === 'parlor.table.say'
       || type === 'parlor.joined' || type === 'parlor.left' || type === 'parlor.ledger';
     if (conversational) {
-      if (state.tab !== 'room') state.unread.room += 1;
+      // 桌内发言不会出现在客厅栏里，自然也不算客厅的未读。
+      if (type !== 'parlor.table.say' && state.tab !== 'room') state.unread.room += 1;
       if (tableBucket && state.tab !== 'table') state.unread.table += 1;
       renderChatBadges();
     }
@@ -323,6 +340,8 @@ function pushLog(event, seed = false) {
 function lineOf(event, tableBucket) {
   const type = event.type || '';
   if (type === 'parlor.table.turn' || type === 'parlor.digest') return null;
+  // 桌内发言只属于牌桌栏；桌子散了它也不该混进客厅。
+  if (type === 'parlor.table.say' && !tableBucket) return null;
   const time = el('time', '', fmtClock(event.ts).slice(0, 5));
   if (event.from === 'system') {
     const node = el('div', 'system-line');
@@ -340,16 +359,18 @@ function lineOf(event, tableBucket) {
     || (seat ? seat.name : '')
     || event.from;
   const whisper = type === 'parlor.whisper';
+  const tableTalk = type === 'parlor.table.say';
   const node = el('article', 'msg' + (tableBucket ? ' is-table' : '') + (whisper ? ' is-whisper' : ''));
   node.append(avatarNode(event.from, 'avatar-sm'));
   const body = el('div', 'msg-body');
   const meta = el('div', 'msg-meta');
   meta.append(el('span', 'msg-name', name));
   meta.append(el('span', 'tag ' + (whisper ? 'tag-whisper' : tableBucket ? 'tag-table' : 'tag-room'),
-    whisper ? '私聊' : tableBucket ? '牌桌' : '客厅'));
+    whisper ? '私聊' : tableTalk ? '牌桌私聊' : tableBucket ? '牌桌' : '客厅'));
   meta.append(time);
   body.append(meta);
-  body.append(el('p', '', (whisper ? '（只有你们看得见）' : '') + readable(event.text || '')));
+  body.append(el('p', '',
+    (whisper ? '（只有你们看得见）' : tableTalk ? '（只有同桌看得见）' : '') + readable(event.text || '')));
   node.append(body);
   return node;
 }
@@ -1434,12 +1455,20 @@ function renderChat() {
   ui.composer.hidden = tab === 'mail';
   ui.mailNote.hidden = tab !== 'mail';
   ui.markRead.hidden = tab !== 'mail' || ((state.snap && state.snap.mailUnread) || 0) <= 0;
+  const canTableTalk = tableChatOpen();
+  ui.sayInput.disabled = tab === 'table' && !canTableTalk;
+  ui.sendBtn.disabled = ui.sayInput.disabled;
   if (tab === 'room') {
     ui.scopeText.textContent = '发到客厅 · 房间里的人都看得见';
     ui.sayInput.placeholder = '在客厅说点什么…';
   } else if (tab === 'table') {
-    ui.scopeText.textContent = '牌桌 tab 只是过滤 · 发送仍到客厅，客厅也看得见；真私聊在 0.13.0';
-    ui.sayInput.placeholder = '在客厅说点什么…（牌桌 tab 只过滤）';
+    if (canTableTalk) {
+      ui.scopeText.textContent = '只发到这一桌 · 客厅和不在桌上的人看不见';
+      ui.sayInput.placeholder = '对同桌说点什么…';
+    } else {
+      ui.scopeText.textContent = '你不在这一桌 · 想去客厅说就切到「客厅」';
+      ui.sayInput.placeholder = '不在这桌上，说不了…';
+    }
   }
 }
 
@@ -1616,9 +1645,15 @@ function syncSheet() {
 async function sendSay() {
   const text = ui.sayInput.value.trim();
   if (!text) return;
+  // 牌桌 tab 发的是桌内私聊（只有同桌看得见）；客厅 tab 仍是全房间公开。
+  const toTable = state.tab === 'table';
+  if (toTable && !tableChatOpen()) {
+    showToast('你不在这一桌；想去客厅说就切到「客厅」。');
+    return;
+  }
   ui.sayInput.value = '';
   try {
-    await act({ type: 'say', text });
+    await act(toTable ? { type: 'table_say', text } : { type: 'say', text });
   } catch {
     ui.sayInput.value = text;
   }

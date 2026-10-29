@@ -1300,6 +1300,14 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .send-btn:hover { filter: brightness(1.03); }
 .send-btn:active { transform: translateY(1px); }
 .send-btn .icon { width: 16px; height: 16px; }
+/* 不在这一桌时牌桌 tab 的输入框停用：宁可让人切到客厅，也不把话发成全房间可见。 */
+.composer-row input:disabled {
+  color: var(--dim);
+  background: rgba(255, 255, 255, .46);
+  cursor: not-allowed;
+}
+.send-btn:disabled { opacity: .42; box-shadow: none; cursor: not-allowed; filter: none; }
+.send-btn:disabled:active { transform: none; }
 .mail-note {
   display: flex; align-items: center; gap: 6px;
   padding: 12px 14px 16px;

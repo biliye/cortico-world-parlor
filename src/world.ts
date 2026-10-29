@@ -229,6 +229,19 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
+    name: 'parlor_table_say',
+    description: 'Say something only the people sitting at your table can see — the rest of the parlor cannot. You must be seated at a live table (open, bidding or playing). Everyone at the table is woken by it, so keep it short and occasional.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        text: { type: 'string', description: 'What to say, at most 400 characters.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
     name: 'parlor_ddz_action',
     description: 'On your turn at 斗地主: bid for landlord (move "bid" with call true/false), play cards (move "play" with cards), or pass. Card names are 3,4,5,6,7,8,9,10,J,Q,K,A,2,SJ (small joker),BJ (big joker); there are no suits. The server judges every move and says why an illegal one was refused.',
     tags: ['write'],
@@ -333,6 +346,7 @@ export class ParlorWorld implements World {
       tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '桌子开始了；轮到你时会被叫醒。')),
       tool('parlor_table_action', (args) => this.tableAct(args)),
       tool('parlor_table_view', () => this.tableView()),
+      tool('parlor_table_say', (args) => this.tableSay(args)),
       tool('parlor_ddz_action', (args) => this.ddzAct(args)),
       tool('parlor_monopoly', (args) => this.monopolyAct(args)),
     ];
@@ -574,6 +588,7 @@ export class ParlorWorld implements World {
       const name = typeof event.data?.name === 'string' ? event.data.name : event.from;
       switch (event.type) {
         case 'parlor.say': lines.push(`${name}：${event.text}`); break;
+        case 'parlor.table.say': lines.push(`${name} 在牌桌上对你们说：${event.text}`); break;
         case 'parlor.whisper': lines.push(`${name} 悄悄对你说：${event.text}`); break;
         case 'parlor.joined':
         case 'parlor.left':
@@ -675,6 +690,17 @@ export class ParlorWorld implements World {
     try {
       const result = await this.client.action(this.token, { type: 'say', text: String(args.text ?? '') });
       return this.receipt(result, '已经说给全房间。');
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  /** 只给同桌的人说的话；不在桌上时服务器会拒绝，不悄悄改成全房间可见。 */
+  private async tableSay(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      const result = await this.client.action(this.token, { type: 'table_say', text: String(args.text ?? '') });
+      return this.receipt(result, '同桌的人都收到了。');
     } catch (error) {
       return this.failed(messageOf(error));
     }

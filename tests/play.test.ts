@@ -271,8 +271,11 @@ describe('网页玩家', () => {
       expect(text).not.toContain('底注');
       expect(text).not.toContain('净胜');
     }
-    expect(js).toContain('牌桌 tab 只是过滤');
-    expect(js).toContain('0.13.0');
+    // 牌桌 tab 现在发的是桌内私聊；这句话是给玩家看的边界说明。
+    expect(js).toContain('只发到这一桌');
+    expect(js).toContain('客厅和不在桌上的人看不见');
+    expect(js).toContain('你不在这一桌');
+    expect(js).toContain("type: 'table_say'");
   });
 
   it('网页这版只开斗地主入口，骰子和大富翁收起，斗地主有结算手牌', () => {

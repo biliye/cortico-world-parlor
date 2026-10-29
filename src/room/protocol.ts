@@ -23,8 +23,22 @@ export interface Seat {
   joinedAt: number;
 }
 
-/** 一条事件能被谁看见。房间公开、或只给某一个席位。 */
-export type Scope = { kind: 'room' } | { kind: 'seat'; seatId: string };
+/**
+ * 一条事件能被谁看见。房间公开、只给某一个席位、或只给某一桌当时坐着的人。
+ * `table` 带的是说话那一刻的同桌席位快照：桌子散了、或者换了人开新桌，
+ * 后来坐上来的人也不会看见之前桌上的话。
+ */
+export type Scope =
+  | { kind: 'room' }
+  | { kind: 'seat'; seatId: string }
+  | { kind: 'table'; tableId: string; seats: string[] };
+
+/** 可见性的唯一判定；房间、回放、家长页都走这一条。 */
+export function scopeVisibleTo(scope: Scope, seatId: string): boolean {
+  if (scope.kind === 'room') return true;
+  if (scope.kind === 'seat') return scope.seatId === seatId;
+  return scope.seats.includes(seatId);
+}
 
 export interface RoomEvent {
   /** 房间内单调递增的游标，用来补看与断线重连。 */
@@ -67,6 +81,7 @@ export interface PlayerJoinResponse {
 
 export type ActionRequest =
   | { type: 'say'; text: string }
+  | { type: 'table_say'; text: string }
   | { type: 'whisper'; to: string; text: string }
   | { type: 'set_tier'; tier: WakeTier }
   | { type: 'gift'; to: string; text: string; chips?: number }
@@ -191,25 +206,31 @@ export interface MonopolyInfo {
 export interface WakeDecision {
   wake: boolean;
   addressed: boolean;
-  reason: 'mention' | 'whisper' | 'room' | 'quiet' | 'off' | 'observer';
+  reason: 'mention' | 'whisper' | 'table' | 'room' | 'quiet' | 'off' | 'observer';
 }
 
-/** 事件是否直接指向这个席位（私聊、或被 @）。 */
+/** 事件是否直接指向这个席位（私聊、桌上说的话、或被 @）。 */
 export function isAddressed(event: RoomEvent, seatId: string): boolean {
   if (event.scope.kind === 'seat') return event.scope.seatId === seatId;
+  if (event.scope.kind === 'table') return event.scope.seats.includes(seatId);
   return event.mentions?.includes(seatId) ?? false;
 }
 
 /**
  * 单条事件要不要立刻叫醒这个席位。
  * `digest` 的公开闲聊返回 false，由 World 攒成周期摘要；`quiet` 连摘要也不叫。
+ * 桌上说的话算「对着同桌说的」：同桌的 Coo 一律叫醒（「离开」挡位仍不叫）。
  */
 export function decideWake(event: RoomEvent, seat: Seat): WakeDecision {
   if (seat.kind === 'observer') return { wake: false, addressed: false, reason: 'observer' };
   if (seat.tier === 'off') return { wake: false, addressed: false, reason: 'off' };
   const addressed = isAddressed(event, seat.id);
   if (addressed) {
-    return { wake: true, addressed: true, reason: event.scope.kind === 'seat' ? 'whisper' : 'mention' };
+    return {
+      wake: true,
+      addressed: true,
+      reason: event.scope.kind === 'seat' ? 'whisper' : event.scope.kind === 'table' ? 'table' : 'mention',
+    };
   }
   if (seat.tier === 'full') return { wake: true, addressed: false, reason: 'room' };
   return { wake: false, addressed: false, reason: seat.tier === 'quiet' ? 'quiet' : 'room' };
