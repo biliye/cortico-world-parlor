@@ -22,6 +22,41 @@ const rankName = (rank: number): string => RANKS[rank] ?? '?';
 
 export const sortCards = (cards: readonly Card[]): Card[] => [...cards].sort((a, b) => indexOf(a) - indexOf(b));
 
+/**
+ * 花色只决定网页上画哪张牌面；规则、牌型、计分一律只看点数。
+ * 但一张桌上的四张 7 必须是四种不同的花，所以发牌时就把整副实体牌洗好，
+ * 之后出牌按点数从手里抽走，花色跟着一起走。
+ */
+export const SUITS = ['S', 'H', 'C', 'D'] as const;
+export type Suit = (typeof SUITS)[number];
+
+export interface PhysCard {
+  rank: Card;
+  /** 大小王没有花色。 */
+  suit: Suit | null;
+}
+
+export const PHYSICAL_DECK: readonly PhysCard[] = RANKS.flatMap((rank): PhysCard[] => (
+  rank === 'SJ' || rank === 'BJ'
+    ? [{ rank, suit: null }]
+    : SUITS.map((suit) => ({ rank, suit }))
+));
+
+const shuffle = <T>(items: T[], rng: () => number): T[] => {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+};
+
+/** 按点数排；同点数保持原顺序，与 sortCards(点数列表) 逐张对齐。 */
+export const sortPhys = (cards: readonly PhysCard[]): PhysCard[] => cards
+  .map((card, index) => ({ card, index }))
+  .sort((a, b) => indexOf(a.card.rank) - indexOf(b.card.rank) || a.index - b.index)
+  .map((entry) => entry.card);
+
+
 export const formatCards = (cards: readonly Card[]): string => sortCards(cards).join(' ');
 
 export type MoveType =
@@ -220,15 +255,25 @@ export function scoreRound(input: {
   return { landlordWon: input.landlordWon, spring, antiSpring, multiplier };
 }
 
-export function deal(rng: () => number = Math.random): { hands: [Card[], Card[], Card[]]; bottom: Card[] } {
-  const deck = [...DECK];
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
+export function deal(rng: () => number = Math.random): {
+  hands: [Card[], Card[], Card[]];
+  bottom: Card[];
+  /** 与 hands 逐张对齐的花色（只给网页看；规则一律只看 points）。 */
+  handCards: [PhysCard[], PhysCard[], PhysCard[]];
+  bottomCards: PhysCard[];
+} {
+  const deck = shuffle([...PHYSICAL_DECK], rng);
+  const handsPhys: [PhysCard[], PhysCard[], PhysCard[]] = [
+    deck.slice(0, 17), deck.slice(17, 34), deck.slice(34, 51),
+  ];
+  const bottomPhys = deck.slice(51);
+  const ranks = (cards: readonly PhysCard[]): Card[] => cards.map((card) => card.rank);
   return {
-    hands: [deck.slice(0, 17), deck.slice(17, 34), deck.slice(34, 51)],
-    bottom: deck.slice(51),
+    hands: [ranks(handsPhys[0]), ranks(handsPhys[1]), ranks(handsPhys[2])],
+    bottom: ranks(bottomPhys),
+    handCards: [sortPhys(handsPhys[0]), sortPhys(handsPhys[1]), sortPhys(handsPhys[2])],
+    // 底牌保持发牌顺序，跟 bottom 逐张对齐（那三张本来也不排序）。
+    bottomCards: bottomPhys,
   };
 }
 

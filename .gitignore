@@ -6,3 +6,6 @@ dist/
 .env
 local.env
 *.local.json
+
+# 牌面雪碧图：源素材写明不许二次分发，公开仓库不带它（见 src/web/assets/cards/README.md）
+src/web/assets/cards/cards.webp

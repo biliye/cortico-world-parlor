@@ -1388,227 +1388,194 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .booting { color: var(--muted); padding: 48px 8px; text-align: center; }
 .noscript { padding: 24px; }
 
-/* —— 斗地主（这版主推） —— */
-.game-ddz { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
-.ddz-table {
+/* —— 斗地主：一张木头小牌桌（左右是对手的牌堆，中间底牌与刚出的那手） —— */
+.game-ddz { padding: 12px; }
+.ddz-board {
   position: relative;
-  padding: 10px;
-  border-radius: 24px;
-  background: var(--rail-bg);
-  box-shadow: var(--table-shadow);
-}
-.ddz-felt {
-  position: relative;
-  border-radius: 18px;
-  padding: 14px;
+  border-radius: 22px;
+  padding: 12px 14px 14px;
+  color: #f7e7cd;
+  /* 第一层是可选的大背景图（src/web/assets/table-bg.webp）；没有图就落到下面这几层木纹。 */
   background:
-    radial-gradient(600px 320px at 50% 28%, rgba(255, 255, 255, .55), transparent 68%),
-    var(--felt-gradient);
-  box-shadow: var(--felt-shadow);
-  overflow: hidden;
+    url(assets/table-bg.webp) center / cover no-repeat,
+    radial-gradient(120% 85% at 50% 2%, rgba(255, 226, 180, .22), transparent 62%),
+    radial-gradient(95% 70% at 50% 108%, rgba(0, 0, 0, .5), transparent 62%),
+    repeating-linear-gradient(92deg, rgba(255, 255, 255, .035) 0 2px, rgba(0, 0, 0, 0) 2px 7px),
+    linear-gradient(180deg, #7d4b2a 0%, #6a3c20 42%, #522d18 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 214, 150, .22),
+    inset 0 0 0 6px rgba(112, 66, 32, .55),
+    inset 0 0 0 7px rgba(240, 200, 140, .3),
+    inset 0 22px 54px rgba(0, 0, 0, .34),
+    0 18px 38px rgba(90, 50, 30, .28);
 }
-.ddz-phase {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+.ddz-board.is-my-turn {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 214, 150, .3),
+    inset 0 0 0 6px rgba(112, 66, 32, .55),
+    inset 0 0 0 7px rgba(255, 214, 150, .45),
+    inset 0 22px 54px rgba(0, 0, 0, .34),
+    0 18px 38px rgba(90, 50, 30, .28), 0 0 0 3px rgba(239, 138, 126, .22);
 }
-.ddz-mult {
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font: 600 9.5px var(--font-mono);
+
+.ddz-topbar { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; font-size: 10.5px; }
+.ddz-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  background: rgba(0, 0, 0, .28);
+  border: 1px solid rgba(255, 214, 150, .26);
+  color: #f6e3c6; font-weight: 600;
+}
+.ddz-pill.live {
+  background: linear-gradient(180deg, #ffe0a2, #e3a64d);
+  border-color: #b8822f; color: #43260e;
+  box-shadow: 0 2px 0 rgba(120, 78, 26, .55);
+}
+.ddz-pill .live-dot { background: #6b3d12; box-shadow: none; }
+.ddz-chip {
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid rgba(255, 214, 150, .16);
+  color: #e9d3b4; font-variant-numeric: tabular-nums;
+}
+.ddz-chip.gold { color: #ffe0a6; border-color: rgba(231, 169, 79, .45); }
+.ddz-seat-mine { margin-left: auto; color: #d3b793; }
+
+.ddz-grid {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr) 116px;
+  grid-template-areas:
+    "left center right"
+    "hand hand hand";
+  gap: 10px 12px;
+  align-items: stretch;
+}
+.ddz-side-left { grid-area: left; }
+.ddz-side-right { grid-area: right; }
+.ddz-center { grid-area: center; }
+.ddz-handbar { grid-area: hand; }
+
+/* 对手：一叠牌背 + 一张小名片 */
+.ddz-side {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  min-width: 0;
+}
+.ddz-side-right { flex-direction: column; }
+.ddz-stack {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; gap: 2px;
+  width: 62px; min-height: 150px;
+  padding: 5px;
+  border-radius: 11px;
+  background: rgba(0, 0, 0, .18);
+  border: 1px solid rgba(255, 214, 150, .12);
+}
+.ddz-stack.is-turn { border-color: rgba(255, 205, 120, .5); box-shadow: 0 0 18px rgba(255, 196, 120, .22); }
+.ddz-back {
+  flex: 1 1 0; min-height: 3px;
+  border-radius: 4px;
+  background:
+    repeating-linear-gradient(45deg, rgba(122, 74, 34, .16) 0 2px, rgba(122, 74, 34, 0) 2px 5px),
+    linear-gradient(180deg, #f0d4a4, #cf9a56);
+  box-shadow: inset 0 0 0 1px rgba(255, 246, 224, .7);
+}
+.ddz-side-info {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  width: 100%;
+  padding: 7px 6px;
+  border-radius: 12px;
+  background: rgba(28, 15, 7, .44);
+  border: 1px solid rgba(255, 214, 150, .16);
+  text-align: center;
+}
+.ddz-side-info.is-turn { border-color: rgba(255, 205, 120, .55); background: rgba(62, 33, 12, .58); }
+.ddz-side-info.is-landlord { border-color: rgba(231, 169, 79, .5); }
+.ddz-side .avatar {
+  width: 44px; height: 44px; font-size: 15px;
+  border: 2px solid rgba(255, 226, 180, .85);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .35);
+}
+.ddz-side-name {
+  font: 600 11px var(--font-ui); color: #f7e7cd;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ddz-side-meta { display: flex; gap: 6px; font-size: 9.5px; color: #c6a683; }
+.ddz-think { color: #ffd18a; }
+.ddz-bot-mark { font-size: 8.5px; color: #b1926d; letter-spacing: .08em; }
+.ddz-side-info .tag { font-size: 8.5px; padding: 1px 5px; }
+.ddz-left-count { font-variant-numeric: tabular-nums; }
+
+/* 中间：底牌在上，刚出的那手在中间 */
+.ddz-center {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px;
+  min-height: 196px;
+  padding: 4px;
+  border-radius: 14px;
+  background: radial-gradient(62% 54% at 50% 46%, rgba(255, 226, 180, .1), transparent 72%);
+}
+.ddz-bottom { display: flex; align-items: center; gap: 7px; }
+.ddz-bottom-label { font-size: 9px; letter-spacing: .18em; color: #c6a683; }
+.ddz-bottom-cards { display: flex; gap: 4px; }
+.ddz-bottom-cards .pcard.small-card, .ddz-last-cards .pcard.small-card { --cw: 44px; }
+.ddz-last-row {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  min-height: 84px; justify-content: center;
+}
+.ddz-last-label { font-size: 10px; color: #e8d1ac; }
+.ddz-last-label.quiet { color: #b99b78; }
+.ddz-last-cards { display: flex; gap: 3px; flex-wrap: wrap; justify-content: center; }
+
+/* 我的手牌：扇形铺在桌沿 */
+.ddz-handbar { display: flex; justify-content: center; padding-top: 2px; }
+.ddz-handbar-inner { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.ddz-hand {
+  display: flex; justify-content: center; align-items: flex-end;
+  width: 100%;
+  padding: 14px 8px 0;
+}
+.ddz-hand .pcard { --cw: 76px; margin-left: var(--overlap, -34px); }
+.ddz-hand .pcard:first-child { margin-left: 0; }
+.ddz-hand-empty { color: #c6a683; font-size: 11px; padding: 18px 0; }
+
+.ddz-actionbar {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed rgba(255, 214, 150, .2);
+}
+.ddz-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ddz-board .btn {
+  background: rgba(0, 0, 0, .3);
+  color: #f4e2c6;
+  border: 1px solid rgba(255, 214, 150, .26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1);
+}
+.ddz-board .btn:hover:not(:disabled) { background: rgba(0, 0, 0, .44); }
+.ddz-board .btn.ghost { background: rgba(0, 0, 0, .16); }
+.ddz-board .btn.primary {
+  background: linear-gradient(180deg, #ffe6ab 0%, #eeb85d 52%, #cf8f31 100%);
+  color: #43260e; border-color: #b8822f; font-weight: 700;
+  box-shadow: 0 2px 0 #8d5f1c, 0 8px 18px rgba(0, 0, 0, .3), inset 0 1px 0 rgba(255, 255, 255, .75);
+}
+.ddz-board .btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
+.ddz-board .btn.primary:disabled {
+  background: linear-gradient(180deg, #e6d2ad, #c4a87d);
+  color: #7d6647; border-color: #9c7f52; box-shadow: none;
+}
+.ddz-wait { font-size: 10.5px; color: #e0c8a6; }
+.ddz-selected { font-size: 10px; color: #ffd18a; font-weight: 600; }
+.ddz-clock {
+  margin-left: auto;
+  font-size: 10px; color: #e0c8a6; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.ddz-lord-label { font-size: 10px; color: var(--muted); }
-.ddz-seats {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 10px;
-}
-.ddz-seat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: rgba(255, 250, 243, .86);
-  border: 1px solid var(--line-soft);
-  box-shadow: 0 4px 12px rgba(160, 120, 100, .08);
-  transition: border-color .15s, box-shadow .15s;
-}
-.ddz-seat.is-turn {
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 2px var(--accent-soft), 0 6px 18px rgba(160, 120, 100, .12);
-}
-.ddz-seat.is-landlord { border-color: rgba(231, 169, 79, .35); }
-.ddz-seat .avatar {
-  width: 44px; height: 44px; font-size: 15px;
-  border: 2px solid #fff;
-  box-shadow: 0 5px 14px rgba(160, 120, 100, .18);
-}
-.ddz-seat.is-turn .avatar::after {
-  content: "";
-  position: absolute; inset: -5px;
-  border-radius: 50%;
-  border: 1px solid var(--accent);
-  animation: turnPulse 2s ease-out infinite;
-}
-.ddz-seat-copy { flex: 1; min-width: 0; }
-.ddz-seat-name {
-  display: flex; align-items: center; gap: 4px;
-  font: 600 12px var(--font-ui);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.ddz-seat-meta {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
-  margin-top: 2px;
-  font-size: 9.5px;
-  color: var(--muted);
-}
-.ddz-turn-note { color: var(--accent); }
-.ddz-left-bar {
-  height: 4px;
-  margin-top: 4px;
-  border-radius: 999px;
-  background: rgba(120, 80, 60, .1);
-  overflow: hidden;
-}
-.ddz-left-bar i {
-  display: block; height: 100%; width: 0;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--warm));
-  transition: width .25s ease;
-}
-.ddz-seat.is-landlord .ddz-left-bar i { background: linear-gradient(90deg, var(--warm), var(--accent)); }
-
-.ddz-center {
-  position: relative;
-  z-index: 1;
-  min-height: 132px;
-  margin: 12px 0 10px;
-  padding: 10px 8px;
-  border-radius: 14px;
-  border: 1px dashed var(--stitch-soft);
-  background: rgba(255, 255, 255, .32);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  text-align: center;
-  overflow: hidden;
-}
-.ddz-mark {
-  position: absolute; inset: 0;
-  display: grid; place-items: center;
-  font: 700 96px/1 var(--display);
-  color: var(--table-mark);
-  pointer-events: none;
-  user-select: none;
-}
-.ddz-center-label {
-  position: relative; z-index: 2;
-  font-size: 10.5px;
-  color: var(--muted);
-  letter-spacing: .03em;
-}
-.ddz-last {
-  position: relative; z-index: 2;
-  display: flex; flex-wrap: wrap; gap: 4px; justify-content: center;
-}
-.ddz-last .pcard.small-card { width: 38px; height: 54px; font-size: 14px; padding-top: 5px; }
-.ddz-bottom {
-  position: relative; z-index: 2;
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 2px;
-}
-.ddz-bottom-label { font-size: 9px; color: var(--dim); }
-.ddz-bottom-cards { display: flex; gap: 3px; }
-.ddz-empty { font-size: 10.5px; color: var(--dim); }
-
-.ddz-me {
-  position: relative; z-index: 2;
-  display: flex; align-items: center; gap: 10px;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, .55);
-  border: 1px solid var(--line-soft);
-}
-.ddz-me.is-turn {
-  border-color: var(--accent-border);
-  background: rgba(255, 250, 243, .92);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-.ddz-me.is-landlord { border-color: rgba(231, 169, 79, .35); }
-.ddz-me .avatar {
-  width: 40px; height: 40px; font-size: 14px;
-  border: 2px solid #fff;
-  box-shadow: 0 4px 12px rgba(160, 120, 100, .16);
-}
-.ddz-me-copy { flex: 1; min-width: 0; }
-.ddz-me-name {
-  display: flex; align-items: center; gap: 5px;
-  font: 650 12px var(--font-ui);
-}
-.ddz-me-meta {
-  display: flex; flex-wrap: wrap; gap: 10px;
-  margin-top: 2px;
-  font-size: 10px;
-  color: var(--muted);
-}
-.ddz-me-turn {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font: 600 10px var(--font-ui);
-  white-space: nowrap;
-}
-.ddz-me-turn .live-dot { background: #fff; box-shadow: none; }
-
-.ddz-hand {
-  position: relative; z-index: 2;
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: center;
-  align-items: flex-end;
-  gap: 0;
-  min-height: 108px;
-  padding: 18px 8px 4px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.ddz-hand .pcard {
-  width: 56px; height: 80px;
-  padding-top: 8px;
-  font-size: 20px;
-  margin-left: var(--overlap, -14px);
-}
-.ddz-hand .pcard:first-child { margin-left: 0; }
-.ddz-hand-hint { display: none; text-align: center; font-size: 9px; color: var(--dim); margin-top: -2px; }
-
-.ddz-controls { display: flex; flex-direction: column; gap: 6px; }
-.ddz-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ddz-clock .clock { color: #ffd18a; }
+.ddz-clock.quiet { color: #b99b78; }
 .ddz-status-line {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  min-height: 16px;
-  font-size: 10.5px;
-  color: var(--muted);
+  min-height: 16px; margin-top: 9px;
+  font-size: 10.5px; color: var(--muted);
 }
-.ddz-status-line .clock { color: var(--accent); font-variant-numeric: tabular-nums; }
-.ddz-selected { color: var(--accent); font-weight: 600; }
-.ddz-dot { color: var(--dim); }
 
 .tag-landlord {
   gap: 3px;
@@ -1619,30 +1586,55 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .tag-farmer { color: var(--good); border: 1px solid rgba(79, 174, 141, .3); background: var(--good-soft); }
 .tag .icon { width: 10px; height: 10px; }
 
+/* 牌：默认是牌面雪碧图，图缺了退回只有点数 */
 .pcard {
-  width: 52px; height: 74px; border-radius: 8px;
-  border: 1px solid #e0cdb4;
-  background: linear-gradient(170deg, #fffdf8, #f7eddd);
+  --cw: 52px;
+  position: relative;
+  width: var(--cw);
+  aspect-ratio: 200 / 279;
+  border: 0;
+  border-radius: calc(var(--cw) * .05);
+  background: linear-gradient(170deg, #fffdf8, #f6ecdc);
   color: var(--paper-ink);
-  display: flex; align-items: flex-start; justify-content: center; padding-top: 7px;
-  font-weight: 750; font-size: 19px; cursor: pointer; user-select: none;
-  transition: transform .1s ease, box-shadow .1s ease, border-color .1s ease;
-  box-shadow: 0 2px 0 rgba(160, 120, 100, .2), 0 4px 10px rgba(160, 120, 100, .1);
-  flex: 0 0 auto;
-  margin-left: -13px;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: calc(var(--cw) * .1);
+  font: 750 calc(var(--cw) * .42)/1 var(--font-ui);
+  cursor: pointer; user-select: none; flex: 0 0 auto;
+  box-shadow: 0 1px 2px rgba(60, 30, 10, .35), 0 6px 14px rgba(40, 20, 8, .26);
   transform: rotate(var(--rot, 0deg)) translateY(calc(var(--lift, 0px) + var(--arc, 0px)));
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
 }
-.pcard:first-child { margin-left: 0; }
-.pcard:hover { --lift: -6px; z-index: 2; }
-.pcard.sel { --lift: -16px; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), 0 10px 18px rgba(160, 120, 100, .2); z-index: 3; }
-.pcard.sel:hover { --lift: -16px; }
+.pcard.has-art {
+  background-image: url(assets/cards/cards.webp);
+  background-size: 1300% 500%;
+  background-position: calc(var(--c) * 100% / 12) calc(var(--r) * 100% / 4);
+  color: transparent;
+}
+.pcard:hover { --lift: -8px; z-index: 2; }
+.pcard.sel {
+  --lift: -20px; z-index: 3;
+  box-shadow: 0 0 0 2px #ffd58a, 0 0 26px rgba(255, 196, 120, .45), 0 12px 22px rgba(0, 0, 0, .4);
+}
+.pcard.sel:hover { --lift: -20px; }
 .pcard.red { color: var(--paper-red); }
-.pcard.joker { color: var(--violet); font-size: 15px; }
-.pcard.small-card { width: 34px; height: 48px; font-size: 13px; padding-top: 4px; cursor: default; margin-left: -4px; }
-.pcard.small-card:first-child { margin-left: 0; }
+.pcard.joker { color: var(--violet); font: 750 calc(var(--cw) * .26)/1.15 var(--font-ui); }
+.pcard.small-card { --cw: 34px; cursor: default; }
 .pcard.small-card:hover { --lift: 0px; }
-.pcard.back { background: repeating-linear-gradient(45deg, #f3b3a8, #f3b3a8 4px, #ef8a7e 4px, #ef8a7e 8px); border-color: #e7a08f; }
+.pcard.back {
+  background:
+    repeating-linear-gradient(45deg, rgba(122, 74, 34, .16) 0 3px, rgba(122, 74, 34, 0) 3px 7px),
+    repeating-linear-gradient(-45deg, rgba(122, 74, 34, .16) 0 3px, rgba(122, 74, 34, 0) 3px 7px),
+    radial-gradient(circle at 50% 42%, #f6dcaf 0%, #dcae6c 58%, #b8813f 100%);
+  box-shadow: inset 0 0 0 2px rgba(255, 246, 224, .75), inset 0 0 0 3px rgba(150, 96, 44, .55),
+    0 1px 2px rgba(60, 30, 10, .35), 0 6px 14px rgba(40, 20, 8, .26);
+}
 .pcard:disabled { cursor: default; opacity: 1; }
+html.no-card-art .pcard { border: 1px solid #e0cdb4; }
+html.no-card-art .pcard.has-art { background-image: none; color: inherit; }
+html.no-card-art .pcard.has-art.red { color: var(--paper-red); }
+html.no-card-art .pcard.has-art.joker { color: var(--violet); }
+html.no-card-art .pcard.back { border: 0; }
+
 .result { margin: 2px 0 0; font-weight: 650; color: var(--accent); }
 
 /* —— 斗地主结算 —— */
@@ -1689,7 +1681,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   margin-top: 8px;
   align-content: flex-start;
 }
-.ddz-end-cards .pcard.small-card { width: 30px; height: 42px; font-size: 11px; padding-top: 3px; margin-left: -2px; }
+.ddz-end-cards .pcard.small-card { --cw: 30px; margin-left: -1px; }
 .ddz-end-cards .pcard.small-card:first-child { margin-left: 0; }
 .ddz-end-empty { font-size: 10px; color: var(--dim); }
 
@@ -2065,25 +2057,32 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   .toast { bottom: calc(78px + env(safe-area-inset-bottom)); width: calc(100% - 28px); text-align: center; }
   .join { min-height: 100dvh; padding: 16px; }
   .join .panel { padding: 20px; }
-  .pcard { width: 44px; height: 64px; font-size: 16px; padding-top: 5px; margin-left: -16px; }
-  .pcard.joker { font-size: 12px; }
-  .pcard.small-card { width: 28px; height: 40px; font-size: 11px; margin-left: -5px; }
-  .ddz-table { padding: 7px; border-radius: 18px; }
-  .ddz-felt { padding: 10px; border-radius: 14px; }
-  .ddz-seats { gap: 7px; margin-top: 8px; }
-  .ddz-seat { padding: 6px 7px; gap: 7px; border-radius: 10px; }
-  .ddz-seat .avatar { width: 36px; height: 36px; font-size: 12px; }
-  .ddz-seat-name { font-size: 10.5px; }
-  .ddz-seat-meta { font-size: 8.5px; }
-  .ddz-center { min-height: 112px; margin: 9px 0 8px; padding: 8px 6px; }
-  .ddz-mark { font-size: 76px; }
-  .ddz-me { gap: 8px; padding: 6px 8px; }
-  .ddz-me .avatar { width: 34px; height: 34px; font-size: 12px; }
-  .ddz-me-meta { font-size: 9.5px; gap: 8px; }
-  .ddz-me-turn { font-size: 9px; padding: 3px 7px; }
-  .ddz-hand { padding: 14px 2px 4px; gap: 0; min-height: 92px; }
-  .ddz-hand .pcard { width: 46px; height: 66px; font-size: 16px; padding-top: 5px; margin-left: var(--overlap, -14px); }
-  .ddz-hand-hint { display: block; }
+  .pcard { --cw: 42px; }
+  .pcard.small-card { --cw: 26px; }
+  .ddz-board { padding: 10px 10px 11px; border-radius: 18px; }
+  .ddz-topbar { flex-wrap: wrap; gap: 6px; }
+  .ddz-seat-mine { margin-left: 0; width: 100%; }
+  .ddz-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "left right"
+      "center center"
+      "hand hand";
+    gap: 8px;
+  }
+  .ddz-side { flex: 1 1 0; flex-direction: row; align-items: center; gap: 6px; }
+  .ddz-stack { display: none; }
+  .ddz-side-info { width: 100%; flex-direction: column; gap: 2px; padding: 6px 6px; }
+  .ddz-think { display: none; }
+  .ddz-side .avatar { width: 32px; height: 32px; font-size: 11px; }
+  .ddz-side-name { font-size: 10px; }
+  .ddz-side-meta { font-size: 8.5px; }
+  .ddz-side-info .tag, .ddz-bot-mark { display: none; }
+  .ddz-center { min-height: 122px; gap: 8px; }
+  .ddz-hand { padding: 16px 4px 2px; }
+  .ddz-hand .pcard { --cw: 48px; margin-left: var(--overlap, -24px); }
+  .ddz-actionbar { flex-wrap: wrap; gap: 6px; }
+  .ddz-clock { margin-left: 0; width: 100%; }
   .guide-list { grid-template-columns: 1fr; gap: 4px; }
   .ddz-end-seats { grid-template-columns: 1fr; gap: 8px; }
   .ddz-end-banner { padding: 13px; }
@@ -2103,13 +2102,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 @media (max-width: 380px) {
   .tseat { width: 84px; }
   .tseat .avatar { width: 34px; height: 34px; font-size: 12px; }
-  .ddz-hand .pcard { width: 42px; height: 60px; font-size: 14px; margin-left: var(--overlap, -15px); }
-  .ddz-seat .avatar { width: 32px; height: 32px; font-size: 11px; }
-  .ddz-seat-name { font-size: 9.5px; }
+  .ddz-hand .pcard { --cw: 44px; }
   .game-id p { display: none; }
   .timer { width: 42px; height: 42px; }
   .action-bar .btn { font-size: 11px; }
-  .pcard { width: 40px; height: 58px; font-size: 14px; margin-left: -18px; }
+  .pcard { --cw: 38px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

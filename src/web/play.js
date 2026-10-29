@@ -3,7 +3,7 @@
  *  牌桌 tab 只是过滤，发送仍是房间公开的 parlor_say。 */
 import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
-  isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
+  isNearBottom, readable, probeCardArt, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
 import { mountDice } from './games/dice.js';
 import { mountDdz } from './games/ddz.js';
@@ -49,6 +49,7 @@ const ui = {};
 let toastTimer = 0;
 let mailTimer = 0;
 
+probeCardArt();
 boot();
 
 /* —— 起步 —— */

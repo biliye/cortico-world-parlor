@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DECK, canBeat, deal, formatCards, handStrength, moveLabel, parseMove, scoreRound, suggestMove,
+  DECK, PHYSICAL_DECK, canBeat, deal, formatCards, handStrength, moveLabel, parseMove, scoreRound,
+  sortCards, suggestMove,
 } from '../src/room/games/doudizhu.ts';
 
 const seeded = (seed: number): (() => number) => () => {
@@ -116,5 +117,31 @@ describe('斗地主规则', () => {
     expect(formatCards(['5', '3', '3'])).toBe('3 3 5');
     expect(moveLabel(move(['3', '4', '5', '6', '7']))).toContain('顺子');
     expect(moveLabel(move(['SJ', 'BJ']))).toBe('王炸');
+  });
+});
+
+describe('实体牌（花色只给网页画牌面）', () => {
+  const seeded = (seed: number): (() => number) => () => {
+    seed = (seed * 1_664_525 + 1_013_904_223) % 4_294_967_296;
+    return seed / 4_294_967_296;
+  };
+
+  it('整副 54 张不重样；王没有花色', () => {
+    expect(PHYSICAL_DECK).toHaveLength(54);
+    expect(new Set(PHYSICAL_DECK.map((card) => card.rank + (card.suit ?? ''))).size).toBe(54);
+    expect(PHYSICAL_DECK.filter((card) => card.suit === null).map((card) => card.rank).sort())
+      .toEqual(['BJ', 'SJ']);
+  });
+
+  it('发完之后三家手牌加底牌正好 54 张，点数与花色逐张对齐', () => {
+    const dealt = deal(seeded(21));
+    const all = [...dealt.handCards[0], ...dealt.handCards[1], ...dealt.handCards[2], ...dealt.bottomCards];
+    expect(all).toHaveLength(54);
+    expect(new Set(all.map((card) => card.rank + (card.suit ?? ''))).size).toBe(54);
+    for (let index = 0; index < 3; index++) {
+      expect(dealt.handCards[index].map((card) => card.rank))
+        .toEqual(sortCards(dealt.hands[index]));
+    }
+    expect(dealt.bottomCards.map((card) => card.rank)).toEqual(dealt.bottom);
   });
 });

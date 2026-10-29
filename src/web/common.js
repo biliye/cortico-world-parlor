@@ -118,10 +118,33 @@ export const btn = (label, onClick, options = {}) => {
   return node;
 };
 
-export const cardButton = (card, selected, onClick, small = false) => {
+/** 牌面雪碧图的格子：13 列（A 2 3 … K）× 5 行（♠ ♥ ♣ ♦，最后一行左大王、右小王）。 */
+const SPRITE_COLS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const SPRITE_ROWS = { S: 0, H: 1, C: 2, D: 3 };
+
+/** 给一张牌画上真牌面；服务器没给花色（老回放、或没装图）就只留文字。 */
+export const paintCard = (node, rank, suit) => {
+  const row = suit && SPRITE_ROWS[suit] !== undefined ? SPRITE_ROWS[suit] : 4;
+  const col = row === 4 ? (rank === 'BJ' ? 0 : 1) : SPRITE_COLS.indexOf(rank);
+  if (col < 0) return node;
+  node.classList.add('has-art');
+  node.style.setProperty('--c', String(col));
+  node.style.setProperty('--r', String(row));
+  return node;
+};
+
+/** 牌面图缺了就在 <html> 上挂 no-card-art，CSS 退回纯文字，桌子照常。 */
+export const probeCardArt = () => {
+  const img = new Image();
+  img.addEventListener('error', () => document.documentElement.classList.add('no-card-art'));
+  img.src = '/play/assets/assets/cards/cards.webp';
+};
+
+export const cardButton = (card, selected, onClick, small = false, art = null) => {
   const node = el('button', 'pcard' + cardClass(card) + (selected ? ' sel' : '') + (small ? ' small-card' : ''));
   node.type = 'button';
   node.textContent = cardLabel(card);
+  if (art) paintCard(node, art.rank ?? card, art.suit ?? null);
   node.disabled = !onClick;
   if (onClick) node.addEventListener('click', onClick);
   return node;

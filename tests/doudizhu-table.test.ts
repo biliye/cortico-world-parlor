@@ -9,13 +9,16 @@ const seeded = (seed: number): (() => number) => () => {
   return seed / 4_294_967_296;
 };
 
+interface PhysCardView { rank: string; suit: 'S' | 'H' | 'C' | 'D' | null }
+
 interface DdzView {
   hand: string[];
+  handCards: PhysCardView[];
   role: 'landlord' | 'farmer' | null;
   yourTurn: boolean;
   cardsLeft: Record<string, number>;
   multiplier: number;
-  lastPlay: { cards: string[] } | null;
+  lastPlay: { cards: string[]; playedCards: PhysCardView[] } | null;
 }
 
 interface DdzPublic {
@@ -23,6 +26,8 @@ interface DdzPublic {
   status: string;
   seats: { id: string; name: string; bot: boolean; cardsLeft: number; role: string | null }[];
   bottom?: string[];
+  bottomCards?: PhysCardView[];
+  lastPlay?: { cards: string[]; playedCards: PhysCardView[] } | null;
   landlord?: string;
   multiplier: number;
   result?: string;
@@ -214,5 +219,50 @@ describe('客厅内核里的斗地主', () => {
     const text = room.kernel.history(room.a.id, 0, 100).map((event) => event.text).join('\n');
     expect(text).toContain('阿岚 不叫（超时）');
     expect((room.kernel.snapshot(room.b.id, 0, 1).tablePrivate as unknown as DdzView).yourTurn).toBe(true);
+  });
+});
+
+describe('斗地主桌的花色', () => {
+  it('叫地主后手里的实体牌与点数逐张对齐，同点数花色不重样', () => {
+    const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(9) });
+    table.join(GUEST);
+    table.join({ id: 'c', name: '阿满' });
+    table.start('a', 0);
+    table.act('a', { move: 'bid', call: true }, 0);
+
+    const view = viewOf(table, 'a');
+    expect(view.handCards).toHaveLength(20);
+    expect(view.handCards.map((card) => card.rank)).toEqual(view.hand);
+    const byRank = new Map<string, string[]>();
+    for (const card of view.handCards) {
+      const suits = byRank.get(card.rank) ?? [];
+      suits.push(String(card.suit));
+      byRank.set(card.rank, suits);
+    }
+    for (const [, suits] of byRank) expect(new Set(suits).size).toBe(suits.length);
+    expect(publicOf(table).bottomCards?.map((card) => card.rank)).toEqual(publicOf(table).bottom);
+  });
+
+  it('出掉的牌花色跟着走：公开的那手与手里的都少掉同一张', () => {
+    const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(9) });
+    table.join(GUEST);
+    table.join({ id: 'c', name: '阿满' });
+    table.start('a', 0);
+    table.act('a', { move: 'bid', call: true }, 0);
+
+    const before = viewOf(table, 'a');
+    const played = before.handCards[0];
+    table.act('a', { move: 'play', cards: [played.rank] }, 0);
+    const after = viewOf(table, 'a');
+    const last = publicOf(table).lastPlay!;
+    expect(last.cards).toEqual([played.rank]);
+    expect(last.playedCards).toEqual([played]);
+    expect(after.handCards.map((card) => card.rank)).toEqual(after.hand);
+    expect(after.handCards).toHaveLength(19);
+    const stillThere = before.handCards.filter((card) => (
+      card.rank !== played.rank || card.suit !== played.suit
+    ));
+    expect(after.handCards).toEqual(expect.arrayContaining(stillThere));
+    expect(after.handCards).not.toContainEqual(played);
   });
 });

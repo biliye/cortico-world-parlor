@@ -1,4 +1,5 @@
-/** 斗地主（奶油客厅主推）：三席小牌桌、底牌/地主/倍数、扇形手牌、结算手牌。
+/** 斗地主（奶油客厅主推）：一张木头小牌桌。
+ *  左边/右边是对手的牌堆，中间是底牌与刚出的那手，最下面是我的扇形手牌。
  *  规则、牌型、提示、计分全在服务器；这里只摆牌、按钮和结果。 */
 import {
   el, clear, btn, cardButton, fmtClock, clockSpan, cardLabel, icon, initialOf, readable,
@@ -10,6 +11,13 @@ export function mountDdz(root, ctx) {
   let view = null;
   let selection = new Set();
   let signature = '';
+
+  // 窗口一变宽变窄，手牌要重新收一遍，不然会顶出桌沿。
+  const onResize = () => {
+    const hand = box.querySelector('.ddz-hand');
+    if (hand) fitHand(hand, hand.children.length);
+  };
+  window.addEventListener('resize', onResize);
 
   return {
     update(next) {
@@ -24,6 +32,7 @@ export function mountDdz(root, ctx) {
       render();
     },
     destroy() {
+      window.removeEventListener('resize', onResize);
       box.remove();
     },
   };
@@ -37,77 +46,88 @@ export function mountDdz(root, ctx) {
     }
     const priv = view.priv;
     const me = view.me;
-    const names = view.names;
     const seats = table.seats || [];
     const seated = seats.some((seat) => seat.id === me.id);
     const myTurn = !!(priv && priv.yourTurn);
+    const handCards = (priv && Array.isArray(priv.handCards)) ? priv.handCards : null;
 
-    const surface = el('div', 'ddz-table');
-    const felt = el('div', 'ddz-felt');
+    const board = el('div', 'ddz-board' + (myTurn ? ' is-my-turn' : ''));
+    board.append(topBar(table, priv, myTurn));
 
-    const phase = el('div', 'ddz-phase');
-    const pill = el('span', 'status-pill ' + (myTurn ? 'live' : table.status === 'bidding' ? 'warm' : 'quiet'));
-    if (myTurn) pill.append(el('span', 'live-dot'));
-    pill.append(document.createTextNode(myTurn
-      ? (table.status === 'bidding' ? '轮到你叫地主' : '轮到你出牌')
-      : (table.status === 'bidding' ? '叫地主' : '出牌')));
-    phase.append(pill);
-    if (table.multiplier) phase.append(el('span', 'ddz-mult', '倍数 x' + table.multiplier));
-    if (table.status === 'playing' && table.landlord) {
-      phase.append(el('span', 'ddz-lord-label', '地主 ' + (names.get(table.landlord) || table.landlord)));
-    }
-    felt.append(phase);
+    const grid = el('div', 'ddz-grid');
+    const mine = seats.findIndex((seat) => seat.id === me.id);
+    const leftSeat = mine >= 0 ? seats[(mine + 1) % seats.length] : seats[1] || null;
+    const rightSeat = mine >= 0 ? seats[(mine + seats.length - 1) % seats.length] : seats[2] || null;
+    if (leftSeat) grid.append(seatColumn(leftSeat, table, 'left'));
+    grid.append(centerArea(table, priv, myTurn, view));
+    if (rightSeat) grid.append(seatColumn(rightSeat, table, 'right'));
 
-    const opps = el('div', 'ddz-seats');
-    for (const seat of seats) {
-      if (seat.id === me.id) continue;
-      opps.append(seatCard(seat, table, view));
-    }
-    if (opps.children.length) felt.append(opps);
+    const handbar = el('div', 'ddz-handbar');
+    const hand = handArea(priv, handCards, myTurn);
+    if (hand) handbar.append(hand);
+    grid.append(handbar);
+    board.append(grid);
 
-    felt.append(centerArea(table, priv, myTurn, view));
-
-    const mySeat = seats.find((seat) => seat.id === me.id);
-    if (mySeat) felt.append(meBar(mySeat, table, priv, myTurn, view));
-
-    if (priv && Array.isArray(priv.hand) && priv.hand.length) {
-      felt.append(handArea(priv, myTurn));
-      if (priv.hand.length > 12) felt.append(el('div', 'ddz-hand-hint', '左右滑动手牌'));
-    }
-
-    surface.append(felt);
-    box.append(surface);
-    box.append(controlArea(table, priv, myTurn, seated, view));
+    board.append(actionBar(table, priv, myTurn, seated, view));
+    box.append(board);
+    if (hand) fitHand(hand, (priv && priv.hand ? priv.hand.length : 0));
+    appendStatus(table, priv, myTurn, seated, view);
   }
 
-  /* —— 对手席 —— */
+  /* —— 桌头：状态、倍数、地主 —— */
 
-  function seatCard(seat, table, view) {
-    const role = seat.role;
+  function topBar(table, priv, myTurn) {
+    const bar = el('div', 'ddz-topbar');
+    const pill = el('span', 'ddz-pill' + (myTurn ? ' live' : ''));
+    if (myTurn) pill.append(el('span', 'live-dot'));
+    pill.append(document.createTextNode(
+      table.status === 'bidding'
+        ? (myTurn ? '轮到你叫' : '叫地主')
+        : (myTurn ? '轮到你出' : '出牌'),
+    ));
+    bar.append(pill);
+    if (table.multiplier) bar.append(el('span', 'ddz-chip', '倍数 ×' + table.multiplier));
+    if (table.status === 'playing' && table.landlord) {
+      bar.append(el('span', 'ddz-chip gold',
+        '地主 ' + (view.names.get(table.landlord) || table.landlord)));
+    }
+    const left = el('span', 'ddz-seat-mine');
+    left.append(document.createTextNode(
+      (view.names.get(view.me.id) || view.me.name)
+      + (priv && Array.isArray(priv.hand) ? ' · 手牌 ' + priv.hand.length + ' 张' : ''),
+    ));
+    bar.append(left);
+    return bar;
+  }
+
+  /* —— 对手：牌堆 + 头像 —— */
+
+  function seatColumn(seat, table, side) {
+    const column = el('div', 'ddz-side ddz-side-' + side);
     const turn = seat.id === table.turn && (table.status === 'bidding' || table.status === 'playing');
-    const node = el('div', 'ddz-seat'
-      + (turn ? ' is-turn' : '')
-      + (role === 'landlord' ? ' is-landlord' : ''));
-    node.append(seatAvatar(seat, view, 'avatar'));
-    const copy = el('div', 'ddz-seat-copy');
-    const name = el('div', 'ddz-seat-name');
-    name.append(document.createTextNode((view.names.get(seat.id) || seat.name) + (seat.bot ? '（脚本）' : '')));
-    const tag = roleTag(role);
-    if (tag) name.append(tag);
-    copy.append(name);
-    const max = role === 'landlord' ? 20 : 17;
+    const role = seat.role;
     const count = Math.max(0, Number(seat.cardsLeft) || 0);
-    const meta = el('div', 'ddz-seat-meta');
-    meta.append(el('span', 'ddz-count', '剩 ' + count + ' 张'));
-    if (turn) meta.append(el('span', 'ddz-turn-note', table.status === 'bidding' ? '正在叫' : '正在想'));
-    copy.append(meta);
-    const bar = el('div', 'ddz-left-bar');
-    const fill = el('i');
-    fill.style.setProperty('width', Math.max(0, Math.min(100, (count / max) * 100)) + '%');
-    bar.append(fill);
-    copy.append(bar);
-    node.append(copy);
-    return node;
+
+    const stack = el('div', 'ddz-stack' + (turn ? ' is-turn' : ''));
+    stack.setAttribute('aria-hidden', 'true');
+    const slots = Math.max(1, Math.min(count, 20));
+    for (let index = 0; index < slots; index += 1) stack.append(el('i', 'ddz-back'));
+    column.append(stack);
+
+    const info = el('div', 'ddz-side-info' + (turn ? ' is-turn' : '') + (role === 'landlord' ? ' is-landlord' : ''));
+    info.append(seatAvatar(seat, view, 'avatar'));
+    const name = el('div', 'ddz-side-name');
+    name.append(document.createTextNode(view.names.get(seat.id) || seat.name));
+    const tag = roleTag(role);
+    if (tag) info.append(tag);
+    info.append(name);
+    const meta = el('div', 'ddz-side-meta');
+    meta.append(el('span', 'ddz-left-count', count + ' 张'));
+    if (turn) meta.append(el('span', 'ddz-think', table.status === 'bidding' ? '正在叫…' : '正在想…'));
+    info.append(meta);
+    if (seat.bot) info.append(el('span', 'ddz-bot-mark', '脚本'));
+    column.append(info);
+    return column;
   }
 
   function seatAvatar(seat, view, size) {
@@ -133,29 +153,24 @@ export function mountDdz(root, ctx) {
     return tag;
   }
 
-  /* —— 桌面中间 —— */
+  /* —— 桌面中间：底牌 + 上一手 —— */
 
   function centerArea(table, priv, myTurn, view) {
     const center = el('div', 'ddz-center');
-    center.append(el('div', 'ddz-mark ddz-mark-center', '斗'));
-    if (table.status === 'bidding') {
-      center.append(el('div', 'ddz-center-label', '底牌 3 张 · 叫地主后亮出'));
-      center.append(bottomRow(table, true));
-      return center;
-    }
-    const last = table.lastPlay;
-    const label = last
-      ? '上一手 · ' + (view.names.get(last.seat) || last.seat) + ' 出了 ' + (last.label || '')
-      : (myTurn ? '新一轮 · 你先出' : '新一轮 · 等 ' + (view.names.get(table.turn) || '？'));
-    center.append(el('div', 'ddz-center-label', label));
-    if (last) {
-      const row = el('div', 'ddz-last');
-      for (const card of (last.cards || [])) row.append(cardButton(card, false, null, true));
-      center.append(row);
-    } else {
-      center.append(el('div', 'ddz-empty', '还没人出牌'));
-    }
     center.append(bottomRow(table, false));
+
+    const last = table.lastPlay;
+    const play = el('div', 'ddz-last-row');
+    if (last && Array.isArray(last.cards) && last.cards.length) {
+      const who = view.names.get(last.seat) || last.seat;
+      play.append(el('div', 'ddz-last-label', who + ' 出了 ' + (last.label || '')));
+      play.append(cardRow(last.cards, last.playedCards, 'ddz-last-cards'));
+    } else if (table.status === 'playing') {
+      play.append(el('div', 'ddz-last-label quiet', myTurn ? '新一轮 · 你先出' : '新一轮 · 等别人先出'));
+    } else {
+      play.append(el('div', 'ddz-last-label quiet', '叫地主 · 底牌先扣着'));
+    }
+    center.append(play);
     return center;
   }
 
@@ -164,75 +179,65 @@ export function mountDdz(root, ctx) {
     row.append(el('span', 'ddz-bottom-label', '底牌'));
     const cards = el('div', 'ddz-bottom-cards');
     if (!backs && table.bottom && table.bottom.length) {
-      for (const card of table.bottom) cards.append(cardButton(card, false, null, true));
+      const art = table.bottomCards || null;
+      table.bottom.forEach((card, index) => {
+        cards.append(cardButton(card, false, null, true, art ? art[index] : null));
+      });
     } else {
-      for (let index = 0; index < 3; index += 1) {
-        const back = el('div', 'pcard back small-card');
-        back.setAttribute('aria-hidden', 'true');
-        cards.append(back);
-      }
+      for (let index = 0; index < 3; index += 1) cards.append(backCard('small-card'));
     }
     row.append(cards);
     return row;
   }
 
-  /* —— 我的席位与手牌 —— */
-
-  function meBar(seat, table, priv, myTurn, view) {
-    const landlord = seat.role === 'landlord';
-    const bar = el('div', 'ddz-me' + (myTurn ? ' is-turn' : '') + (landlord ? ' is-landlord' : ''));
-    bar.append(seatAvatar(seat, view, 'avatar'));
-    const copy = el('div', 'ddz-me-copy');
-    const name = el('div', 'ddz-me-name');
-    name.append(document.createTextNode(seat.name + '（你）'));
-    const tag = roleTag(seat.role);
-    if (tag) name.append(tag);
-    copy.append(name);
-    const meta = el('div', 'ddz-me-meta');
-    const count = priv && Array.isArray(priv.hand) ? priv.hand.length : 0;
-    meta.append(el('span', '', '手牌 ' + count + ' 张'));
-    if (priv && priv.landlord && priv.landlord !== seat.id) {
-      meta.append(el('span', '', '地主 ' + (view.names.get(priv.landlord) || '')));
-    }
-    if (table.multiplier) meta.append(el('span', '', '倍数 x' + table.multiplier));
-    copy.append(meta);
-    bar.append(copy);
-    if (myTurn) {
-      const turn = el('span', 'ddz-me-turn');
-      turn.append(el('span', 'live-dot'), document.createTextNode('轮到你'));
-      bar.append(turn);
-    }
-    return bar;
+  function cardRow(cards, art, cls) {
+    const row = el('div', cls || '');
+    cards.forEach((card, index) => {
+      row.append(cardButton(card, false, null, true, art ? art[index] : null));
+    });
+    return row;
   }
 
-  function handArea(priv, myTurn) {
+  function backCard(extra) {
+    const back = el('div', 'pcard back' + (extra ? ' ' + extra : ''));
+    back.setAttribute('aria-hidden', 'true');
+    return back;
+  }
+
+  /* —— 我的手牌 —— */
+
+  function handArea(priv, handCards, myTurn) {
+    const count = priv && Array.isArray(priv.hand) ? priv.hand.length : 0;
+    if (!count) return el('div', 'ddz-hand-empty', '你在旁观；这一局结束后可以坐下一桌。');
     const hand = el('div', 'ddz-hand');
-    const count = priv.hand.length;
-    // 手牌多了就叠紧一点，17/20 张在桌面端也能一眼看全；手机仍然可以左右滑。
-    const overlap = count <= 12 ? 14 : count <= 17 ? 21 : 27;
-    hand.style.setProperty('--overlap', '-' + overlap + 'px');
-    const mid = (count - 1) / 2;
-    const step = count <= 8 ? 3 : Math.min(2.2, 26 / count);
     priv.hand.forEach((card, index) => {
       const node = cardButton(card, selection.has(index), myTurn ? () => {
         if (selection.has(index)) selection.delete(index);
         else selection.add(index);
         render();
-      } : null);
-      const deg = (index - mid) * step;
-      node.style.setProperty('--rot', deg.toFixed(2) + 'deg');
-      node.style.setProperty('--arc', (Math.abs(index - mid) * 0.7).toFixed(2) + 'px');
+      } : null, false, handCards ? handCards[index] : null);
       hand.append(node);
     });
     return hand;
   }
 
-  /* —— 动作与提示 —— */
+  /** 摆完量一次：20 张也刚好收在桌子宽度里，不用横向滚动。 */
+  function fitHand(hand, count) {
+    if (!hand.isConnected || count < 2) return;
+    const card = hand.firstElementChild;
+    if (!card) return;
+    const cardWidth = card.offsetWidth;
+    const available = hand.clientWidth - 12;
+    if (!cardWidth || available <= 0) return;
+    const step = Math.min(cardWidth * 0.66, Math.max(13, (available - cardWidth) / (count - 1)));
+    hand.style.setProperty('--overlap', (step - cardWidth).toFixed(1) + 'px');
+  }
 
-  function controlArea(table, priv, myTurn, seated, view) {
-    const wrap = el('div', 'ddz-controls');
+  /* —— 按钮 —— */
+
+  function actionBar(table, priv, myTurn, seated, view) {
+    const wrap = el('div', 'ddz-actionbar');
     const actions = el('div', 'ddz-actions');
-    const status = el('div', 'ddz-status-line');
     const names = view.names;
 
     if (table.status === 'bidding') {
@@ -245,13 +250,10 @@ export function mountDdz(root, ctx) {
           selection = new Set();
           ctx.act({ type: 'ddz_action', move: 'bid', call: false }).catch(() => {});
         }));
-        if (priv && priv.hint && typeof priv.hint.bid === 'boolean') {
-          status.append(el('span', '', '提示：这手牌建议' + (priv.hint.bid ? '叫地主' : '不叫') + '。'));
-        }
       } else if (seated) {
-        status.append(el('span', '', '等 ' + (names.get(table.turn) || '？') + ' 叫地主。'));
+        actions.append(el('span', 'ddz-wait', '等 ' + (names.get(table.turn) || '？') + ' 叫地主'));
       } else {
-        status.append(el('span', '', '你在旁观；这一局结束后可以坐下一桌。'));
+        actions.append(el('span', 'ddz-wait', '旁观中'));
       }
     } else if (myTurn) {
       actions.append(btn('出牌', () => {
@@ -294,31 +296,46 @@ export function mountDdz(root, ctx) {
         selection = new Set();
         render();
       }, { ghost: true, small: true, disabled: selection.size === 0 }));
-      if (selection.size) status.append(el('span', 'ddz-selected', '已选 ' + selection.size + ' 张'));
-      if (priv && priv.hint && Array.isArray(priv.hint.cards)) {
-        const labels = priv.hint.cards.map((card) => cardLabel(card)).join(' ');
-        status.append(el('span', '', '提示：可以出 ' + labels + (priv.hint.label ? '（' + priv.hint.label + '）' : '')));
-      }
+      if (selection.size) actions.append(el('span', 'ddz-selected', '已选 ' + selection.size + ' 张'));
     } else if (seated) {
-      status.append(el('span', '', '等 ' + (names.get(table.turn) || '？') + ' 出牌。'));
+      actions.append(el('span', 'ddz-wait', '等 ' + (names.get(table.turn) || '？') + ' 出牌'));
     } else {
-      status.append(el('span', '', '你在旁观；这一局结束后可以坐下一桌。'));
+      actions.append(el('span', 'ddz-wait', '旁观中'));
     }
+    wrap.append(actions);
 
     const deadline = (priv && priv.deadline) || table.deadline;
     const turnSeat = (table.seats || []).find((seat) => seat.id === table.turn);
     const botTurn = !!(turnSeat && turnSeat.bot) && !myTurn;
     if (deadline && !botTurn) {
-      if (status.children.length) status.append(el('span', 'ddz-dot', '·'));
-      status.append(el('span', '', '本回合截止 ' + fmtClock(deadline)));
-      status.append(clockSpan(deadline, 'clock'));
+      const clock = el('span', 'ddz-clock');
+      clock.append(document.createTextNode('本回合 ' + fmtClock(deadline) + ' · '));
+      clock.append(clockSpan(deadline, 'clock'));
+      wrap.append(clock);
     } else if (botTurn) {
-      if (status.children.length) status.append(el('span', 'ddz-dot', '·'));
-      status.append(el('span', '', '脚本在想…'));
+      wrap.append(el('span', 'ddz-clock quiet', '脚本在想…'));
     }
-    if (actions.children.length) wrap.append(actions);
-    if (status.children.length) wrap.append(status);
     return wrap;
+  }
+
+  /* —— 桌子下面那行小字：提示与剩余时间 —— */
+
+  function appendStatus(table, priv, myTurn, seated, view) {
+    const line = el('div', 'ddz-status-line');
+    const names = view.names;
+    if (table.status === 'bidding') {
+      if (priv && priv.hint && typeof priv.hint.bid === 'boolean' && myTurn) {
+        line.append(el('span', '', '提示：这手牌建议' + (priv.hint.bid ? '叫地主' : '不叫') + '。'));
+      }
+    } else if (myTurn && priv) {
+      if (priv.hint && Array.isArray(priv.hint.cards)) {
+        const labels = priv.hint.cards.map((card) => cardLabel(card)).join(' ');
+        line.append(el('span', '', '提示：可以出 ' + labels + (priv.hint.label ? '（' + priv.hint.label + '）' : '')));
+      }
+    } else if (seated && table.turn) {
+      line.append(el('span', '', '等 ' + (names.get(table.turn) || '？') + (table.status === 'bidding' ? ' 叫地主' : ' 出牌') + '。'));
+    }
+    if (line.children.length) box.append(line);
   }
 
   /* —— 结算：三家剩牌 —— */
@@ -344,7 +361,7 @@ export function mountDdz(root, ctx) {
     banner.append(el('span', 'ddz-end-kicker', '斗地主 · 已结束'));
     banner.append(el('h2', '', side + extra));
     const sub = el('p');
-    sub.append(document.createTextNode('倍数 x' + (data.multiplier || (view.priv && view.priv.multiplier) || 1)));
+    sub.append(document.createTextNode('倍数 ×' + (data.multiplier || (view.priv && view.priv.multiplier) || 1)));
     if (winners.length) {
       sub.append(document.createTextNode(' · 赢家 ' + winners.map((id) => names.get(id) || id).join('、')));
     }
@@ -369,7 +386,7 @@ export function mountDdz(root, ctx) {
       node.append(head);
       const cards = el('div', 'ddz-end-cards');
       if (row && Array.isArray(row.cards) && row.cards.length) {
-        for (const card of row.cards) cards.append(cardButton(card, false, null, true));
+        cards.append(cardRow(row.cards, row.handCards || null, ''));
       } else if (!row && (seat.cardsLeft ?? 0) > 0) {
         cards.append(el('span', 'ddz-end-empty', '剩 ' + seat.cardsLeft + ' 张'));
       } else {

@@ -10,8 +10,8 @@ import {
   type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep,
 } from '../table-engine.ts';
 import {
-  canBeat, deal, formatCards, moveLabel, parseMove, scoreRound, sortCards,
-  type Card, type Move,
+  canBeat, deal, formatCards, moveLabel, parseMove, scoreRound, sortCards, sortPhys,
+  type Card, type Move, type PhysCard,
 } from './doudizhu.ts';
 import { chooseBid, chooseMove, type BotContext } from './doudizhu-bot.ts';
 
@@ -36,6 +36,8 @@ interface Seat {
   name: string;
   bot: boolean;
   hand: Card[];
+  /** 与 hand 逐张对齐的花色，只给网页画牌面用。 */
+  cards: PhysCard[];
   role: Role | null;
   plays: number;
 }
@@ -43,6 +45,8 @@ interface Seat {
 interface LastPlay {
   seat: string;
   move: Move;
+  /** 这手实际打出去的牌（带花色）。 */
+  cards: PhysCard[];
 }
 
 const SEAT_COUNT = 3;
@@ -64,7 +68,9 @@ export class DoudizhuTable implements TableEngine {
   private readonly rng: () => number;
   private readonly seats: Seat[] = [];
   private hands: [Card[], Card[], Card[]] = [[], [], []];
+  private handCards: [PhysCard[], PhysCard[], PhysCard[]] = [[], [], []];
   private bottom: Card[] = [];
+  private bottomCards: PhysCard[] = [];
   private dealer = 0;
   private bidIndex = 0;
   private bids = 0;
@@ -82,7 +88,9 @@ export class DoudizhuTable implements TableEngine {
     this.bidMs = options.bidMs ?? DEFAULT_BID_MS;
     this.botDelayMs = options.botDelayMs ?? DEFAULT_BOT_DELAY_MS;
     this.rng = options.rng ?? (() => randomInt(0, 2 ** 31) / 2 ** 31);
-    this.seats.push({ id: options.host.id, name: options.host.name, bot: false, hand: [], role: null, plays: 0 });
+    this.seats.push({
+      id: options.host.id, name: options.host.name, bot: false, hand: [], cards: [], role: null, plays: 0,
+    });
   }
 
   has(seatId: string): boolean {
@@ -97,7 +105,7 @@ export class DoudizhuTable implements TableEngine {
     if (this.status !== 'open') throw new TableError('not_open', '这张桌子已经开始了');
     if (this.has(seat.id)) throw new TableError('seated', '你已经在桌上了');
     if (this.seats.length >= SEAT_COUNT) throw new TableError('full', '斗地主最多 3 个人');
-    this.seats.push({ id: seat.id, name: seat.name, bot: false, hand: [], role: null, plays: 0 });
+    this.seats.push({ id: seat.id, name: seat.name, bot: false, hand: [], cards: [], role: null, plays: 0 });
     return {
       type: 'parlor.table.join',
       scope: { kind: 'room' },
@@ -116,6 +124,7 @@ export class DoudizhuTable implements TableEngine {
         name: BOT_NAMES[index] ?? `陪练${index + 1}`,
         bot: true,
         hand: [],
+        cards: [],
         role: null,
         plays: 0,
       });
@@ -174,13 +183,19 @@ export class DoudizhuTable implements TableEngine {
       status: this.status,
       role: seat.role,
       hand: sortCards(seat.hand),
+      handCards: [...seat.cards],
       cardsLeft: this.cardsLeft(),
       yourTurn: this.status !== 'ended' && this.turnId === seat.id,
       turn: this.turnId,
       deadline: this.deadline || undefined,
       landlord: this.landlord()?.id,
       lastPlay: this.lastPlay
-        ? { seat: this.lastPlay.seat, cards: [...this.lastPlay.move.cards], label: moveLabel(this.lastPlay.move) }
+        ? {
+          seat: this.lastPlay.seat,
+          cards: [...this.lastPlay.move.cards],
+          playedCards: [...this.lastPlay.cards],
+          label: moveLabel(this.lastPlay.move),
+        }
         : null,
       multiplier: 2 ** this.bombs,
       /** 网页按钮的「提示」：复用脚本的最少合法牌，规则仍只在服务端算。 */
@@ -204,8 +219,14 @@ export class DoudizhuTable implements TableEngine {
       landlord: landlord?.id,
       multiplier: 2 ** this.bombs,
       bottom: landlord ? [...this.bottom] : undefined,
+      bottomCards: landlord ? [...this.bottomCards] : undefined,
       lastPlay: this.lastPlay
-        ? { seat: this.lastPlay.seat, cards: [...this.lastPlay.move.cards], label: moveLabel(this.lastPlay.move) }
+        ? {
+          seat: this.lastPlay.seat,
+          cards: [...this.lastPlay.move.cards],
+          playedCards: [...this.lastPlay.cards],
+          label: moveLabel(this.lastPlay.move),
+        }
         : null,
       result: this.result || undefined,
     };
@@ -268,9 +289,12 @@ export class DoudizhuTable implements TableEngine {
   private dealRound(): void {
     const dealt = deal(this.rng);
     this.hands = dealt.hands;
+    this.handCards = dealt.handCards;
     this.bottom = dealt.bottom;
+    this.bottomCards = dealt.bottomCards;
     this.seats.forEach((seat, index) => {
       seat.hand = sortCards(this.hands[index] ?? []);
+      seat.cards = this.handCards[index] ?? [];
       seat.role = null;
       seat.plays = 0;
     });
@@ -344,6 +368,7 @@ export class DoudizhuTable implements TableEngine {
     const seat = this.seats[index];
     for (const entry of this.seats) entry.role = entry.id === seat.id ? 'landlord' : 'farmer';
     seat.hand = sortCards([...seat.hand, ...this.bottom]);
+    seat.cards = sortPhys([...seat.cards, ...this.bottomCards]);
     this.status = 'playing';
     this.turnId = seat.id;
     this.lastPlay = undefined;
@@ -361,10 +386,10 @@ export class DoudizhuTable implements TableEngine {
     if (!canBeat(entry, this.lastPlay?.move ?? null)) {
       throw new TableError('bad_action', '这手牌压不过上一手');
     }
-    this.discard(seat, entry.cards);
+    const played = this.discard(seat, entry.cards);
     seat.plays += 1;
     if (entry.type === 'bomb' || entry.type === 'rocket') this.bombs += 1;
-    this.lastPlay = { seat: seat.id, move: entry };
+    this.lastPlay = { seat: seat.id, move: entry, cards: played };
     this.passes = 0;
     const events: TableEvent[] = [{
       type: 'parlor.table.action',
@@ -444,7 +469,9 @@ export class DoudizhuTable implements TableEngine {
         multiplier: score.multiplier,
         spring: score.spring,
         antiSpring: score.antiSpring,
-        revealed: this.seats.map((seat) => ({ id: seat.id, name: seat.name, cards: [...seat.hand] })),
+        revealed: this.seats.map((seat) => ({
+          id: seat.id, name: seat.name, cards: [...seat.hand], handCards: [...seat.cards],
+        })),
       },
     });
   }
@@ -459,11 +486,17 @@ export class DoudizhuTable implements TableEngine {
     }
   }
 
-  private discard(seat: Seat, cards: readonly Card[]): void {
+  /** 抽走这手牌。hand 与 cards 逐张对齐，所以同一个下标在两处一起删；返回删掉的实体牌。 */
+  private discard(seat: Seat, cards: readonly Card[]): PhysCard[] {
+    const played: PhysCard[] = [];
     for (const card of cards) {
       const index = seat.hand.indexOf(card);
-      if (index >= 0) seat.hand.splice(index, 1);
+      if (index < 0) continue;
+      seat.hand.splice(index, 1);
+      const [removed] = seat.cards.splice(index, 1);
+      if (removed) played.push(removed);
     }
+    return played;
   }
 
   private currentSeat(): Seat | undefined {
