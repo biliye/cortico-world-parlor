@@ -371,42 +371,6 @@
       }
     },
     {
-      "name": "parlor_table_action",
-      "description": "On your turn at the dice table: reroll one hidden die or stand. Highest total wins; the table reveals all dice at the end.",
-      "parameters": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "action": {
-            "type": "string",
-            "enum": [
-              "roll",
-              "stand"
-            ],
-            "description": "roll = reroll one die, stand = keep your total."
-          },
-          "die": {
-            "type": "integer",
-            "enum": [
-              0,
-              1
-            ],
-            "description": "Which die to reroll when action is roll."
-          }
-        },
-        "required": [
-          "action"
-        ]
-      },
-      "tags": [
-        "write"
-      ],
-      "summary": {
-        "zh": "骰子桌轮到你时重掷一颗或停牌。",
-        "en": "Rerolls a die or stands on your dice-table turn."
-      }
-    },
-    {
       "name": "parlor_table_view",
       "description": "Read the current table and your own hidden cards. Does not act and does not wake anyone.",
       "parameters": {
@@ -441,6 +405,42 @@
       "tags": [
         "write"
       ]
+    },
+    {
+      "name": "parlor_table_action",
+      "description": "On your turn at the dice table: reroll one hidden die or stand. Highest total wins; the table reveals all dice at the end.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "roll",
+              "stand"
+            ],
+            "description": "roll = reroll one die, stand = keep your total."
+          },
+          "die": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ],
+            "description": "Which die to reroll when action is roll."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "骰子桌轮到你时重掷一颗或停牌。",
+        "en": "Rerolls a die or stands on your dice-table turn."
+      }
     },
     {
       "name": "parlor_ddz_action",

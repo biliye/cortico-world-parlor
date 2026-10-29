@@ -4,7 +4,8 @@
  */
 
 export type TableStatus = 'open' | 'bidding' | 'playing' | 'ended';
-export type TableGame = 'dice' | 'ddz';
+/** 游戏 id 是注册表里的字符串（见 `games/registry.ts`）；旧单厅服务器只认 dice/ddz。 */
+export type TableGame = string;
 
 export type TableEventScope = { kind: 'room' } | { kind: 'seat'; seatId: string };
 

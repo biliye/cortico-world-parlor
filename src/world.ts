@@ -21,7 +21,7 @@ import {
   type ActionRequest, type ActionResponse, type HallView, type MeView, type RoomEvent, type RoomSnapshot,
   type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
-import { RANKS } from './room/games/doudizhu.ts';
+import { GAME_LIST, gameById, gameIds, type GameDefinition } from './room/games/registry.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
@@ -53,6 +53,14 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 });
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** 注册表里的每张桌子各出一个动作工具；顺序与 GAME_LIST 一致。 */
+const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.map((game) => ({
+  name: game.tool.name,
+  description: game.tool.description,
+  tags: ['write'],
+  parameters: game.tool.parameters,
+}));
 
 /** 全部工具的声明；定义里的 describe 与 `tools()` 都取它。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
@@ -194,7 +202,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        game: { type: 'string', enum: ['dice', 'ddz'], description: 'Which game: dice (default) or ddz (斗地主).' },
+        game: { type: 'string', enum: gameIds(), description: 'Which game: dice (default) or ddz (斗地主).' },
         stake: { type: 'integer', minimum: 0, maximum: 1000000, description: 'Chips each real player antes; 0 or omit for no stakes.' },
       },
     },
@@ -218,20 +226,6 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
-    name: 'parlor_table_action',
-    description: 'On your turn at the dice table: reroll one hidden die or stand. Highest total wins; the table reveals all dice at the end.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        action: { type: 'string', enum: ['roll', 'stand'], description: 'roll = reroll one die, stand = keep your total.' },
-        die: { type: 'integer', enum: [0, 1], description: 'Which die to reroll when action is roll.' },
-      },
-      required: ['action'],
-    },
-  },
-  {
     name: 'parlor_table_view',
     description: 'Read the current table and your own hidden cards. Does not act and does not wake anyone.',
     tags: ['read'],
@@ -250,25 +244,8 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       required: ['text'],
     },
   },
-  {
-    name: 'parlor_ddz_action',
-    description: 'On your turn at 斗地主: bid for landlord (move "bid" with call true/false), play cards (move "play" with cards), or pass. Card names are 3,4,5,6,7,8,9,10,J,Q,K,A,2,SJ (small joker),BJ (big joker); there are no suits. The server judges every move and says why an illegal one was refused.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        move: { type: 'string', enum: ['bid', 'play', 'pass'], description: 'bid = call or decline landlord; play = put down cards; pass = skip.' },
-        call: { type: 'boolean', description: 'When move is bid: true = become landlord, false = decline.' },
-        cards: {
-          type: 'array',
-          items: { type: 'string', enum: [...RANKS] },
-          description: 'When move is play: the exact cards from your hand, e.g. ["3","3"] or ["3","4","5","6","7"].',
-        },
-      },
-      required: ['move'],
-    },
-  },
+  // 每张桌子自己的动作工具：名字、说明与参数都在 games/registry.ts 里，这里只登记出去。
+  ...GAME_TOOL_DECLS,
   {
     name: 'parlor_monopoly',
     description: '大富翁：4–6 人的异步长局。open 开报名（24 小时窗口），join 报名，start 开局（空位可由脚本陪练补），之后按绝对截止走回合。每个回合：先用至多一张道具，再 roll；落地后用 buy / upgrade / take_item 做选择，或 pass 放弃。过了截止服务器按「不买、不升级、不补卡」托管。turnId 不用你填，服务器会带；重复提交同一次动作请复用同一个 requestId。',
@@ -426,10 +403,9 @@ export class ParlorWorld implements World {
       tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
       tool('parlor_table_leave', () => this.tableRequest({ type: 'table_leave' }, '离开牌桌了（开桌的人离开等于把桌子收起来）。')),
       tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '桌子开始了；轮到你时会被叫醒。')),
-      tool('parlor_table_action', (args) => this.tableAct(args)),
       tool('parlor_table_view', () => this.tableView()),
       tool('parlor_table_say', (args) => this.tableSay(args)),
-      tool('parlor_ddz_action', (args) => this.ddzAct(args)),
+      ...GAME_LIST.map((game) => tool(game.tool.name, (args) => this.gameAct(game, args))),
       tool('parlor_monopoly', (args) => this.monopolyAct(args)),
       tool('parlor_rooms', () => this.rooms()),
       tool('parlor_hall', () => this.goHall()),
@@ -1272,37 +1248,28 @@ export class ParlorWorld implements World {
   }
 
   private async openTable(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    if (args.game !== undefined && args.game !== 'dice' && args.game !== 'ddz') {
-      return this.failed('game 只能是 dice（骰子）或 ddz（斗地主）');
+    const id = args.game === undefined || args.game === '' ? 'dice' : String(args.game);
+    const def = gameById(id);
+    if (!def) {
+      return this.failed(`game 只能是 ${GAME_LIST.map((game) => `${game.id}（${game.label}）`).join(' 或 ')}`);
     }
     const stake = args.stake === undefined ? 0 : Number(args.stake);
     if (!Number.isSafeInteger(stake) || stake < 0) return this.failed('stake 要是 0 或正整数（每人押多少筹码）');
-    const game = args.game === 'ddz' ? 'ddz' : 'dice';
     return this.tableRequest(
-      { type: 'table_open', game, ...(stake ? { stake } : {}) },
-      `${game === 'ddz' ? '斗地主桌开了（3 席，空位由脚本陪练补）' : '骰子桌开了'}${stake ? `，每人押 ${stake} 枚筹码` : ''}。${game === 'ddz' ? '用 parlor_table_start 开始；叫地主时会叫你。' : '等人坐下后用 parlor_table_start 开始。'}`,
+      { type: 'table_open', game: def.id, ...(stake ? { stake } : {}) },
+      `${def.label}桌开了${stake ? `，每人押 ${stake} 枚筹码` : ''}。${def.openHint}`,
     );
   }
 
-  private async ddzAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    const move = String(args.move ?? '');
-    if (move === 'bid') {
-      const call = args.call === true;
-      return this.tableRequest(
-        { type: 'ddz_action', move: 'bid', call },
-        call ? '叫了地主。' : '不叫。',
-      );
+  /** 注册表里的动作工具共用这一条路：校验参数在 game.tool.toBody 里，动作类型在 game.actionType 里。 */
+  private async gameAct(game: GameDefinition, args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    let body: Record<string, unknown>;
+    try {
+      body = game.tool.toBody(args);
+    } catch (error) {
+      return this.failed(messageOf(error));
     }
-    if (move === 'play') {
-      const cards = Array.isArray(args.cards) ? args.cards.map((card) => String(card)) : [];
-      if (cards.length === 0) return this.failed('出牌要给 cards，例如 ["3","3"]');
-      return this.tableRequest(
-        { type: 'ddz_action', move: 'play', cards },
-        `出了 ${cards.join(' ')}。`,
-      );
-    }
-    if (move === 'pass') return this.tableRequest({ type: 'ddz_action', move: 'pass' }, '过了。');
-    return this.failed('move 只能是 bid、play 或 pass');
+    return this.tableRequest(body as ActionRequest, game.tool.done(body));
   }
 
   private async monopolyAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -1377,17 +1344,6 @@ export class ParlorWorld implements World {
     } catch (error) {
       return this.failed(messageOf(error));
     }
-  }
-
-  private async tableAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    const action = String(args.action ?? '');
-    if (action !== 'roll' && action !== 'stand') return this.failed('action 只能是 roll 或 stand');
-    const die = action === 'roll' ? Number(args.die ?? 0) : undefined;
-    if (die !== undefined && die !== 0 && die !== 1) return this.failed('die 只能是 0 或 1');
-    return this.tableRequest(
-      { type: 'table_action', action, die },
-      action === 'roll' ? '重掷了一颗骰子。' : '停牌了。',
-    );
   }
 
   private async tableView(): Promise<string | ToolOutcome> {

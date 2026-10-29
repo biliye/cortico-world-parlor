@@ -18,13 +18,11 @@ import { HostError } from './host-error.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MAX_CHIPS, type LedgerEntry } from './ledger.ts';
 import { MailDb } from './mail-db.ts';
-import { DiceTable } from './table.ts';
-import { DoudizhuTable } from './games/doudizhu-table.ts';
+import { gameById, gameIds, gameLabelOf } from './games/registry.ts';
 import {
   TableError,
   type TableEngine,
   type TableEvent,
-  type TableGame,
   type TablePrivateSummary,
   type TableStatus,
   type TableStep,
@@ -55,7 +53,7 @@ export interface TableSeatLookup {
 
 interface LiveTable {
   id: string;
-  game: 'dice' | 'ddz';
+  game: string;
   engine: TableEngine;
   hostSeatId: string;
   stake: number;
@@ -200,25 +198,24 @@ export class TableHost {
     if (this.live && this.live.engine.status !== 'ended') {
       throw new HostError('conflict', '已经有一张桌子了');
     }
-    const game = input.game ?? 'dice';
-    if (game !== 'dice' && game !== 'ddz') {
-      throw new HostError('invalid', '不认识的桌子：只能开 dice（骰子）或 ddz（斗地主）');
+    const id = input.game ?? 'dice';
+    const def = gameById(id);
+    if (!def) {
+      throw new HostError('invalid', `不认识的桌子：现在有 ${gameIds().join(' / ')}`);
     }
     const stake = stakeOf(input.stake);
     if (stake > 0 && this.ledger.balanceOf(cooId) < stake) {
       throw new HostError('invalid', `你只有 ${this.ledger.balanceOf(cooId)} 枚筹码，押不起 ${stake} 枚`);
     }
     const now = this.now();
-    const engine = game === 'dice'
-      ? new DiceTable({
-        host: { id: seat.id, name: seat.name },
-        now,
-        ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
-      })
-      : new DoudizhuTable({ host: { id: seat.id, name: seat.name }, now });
+    const engine = def.create({
+      host: { id: seat.id, name: seat.name },
+      now,
+      ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
+    });
     const table: LiveTable = {
       id: `t-${randomUUID()}`,
-      game,
+      game: def.id,
       engine,
       hostSeatId: seat.id,
       stake,
@@ -234,8 +231,8 @@ export class TableHost {
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${seat.name} 开了一张${game === 'ddz' ? '斗地主' : '骰子'}桌${stake > 0 ? `（每人押 ${stake} 枚筹码）` : ''}。`,
-        data: { game, stake, tableId: table.id },
+        text: `${seat.name} 开了一张${def.label}桌${stake > 0 ? `（每人押 ${stake} 枚筹码）` : ''}。`,
+        data: { game: def.id, stake, tableId: table.id },
       });
       return appended;
     });
@@ -786,7 +783,7 @@ export class TableHost {
               id: row.id,
               game: row.game,
               stake: row.stake,
-              engine: { label: row.game === 'ddz' ? '斗地主' : '骰子' } as TableEngine,
+              engine: { label: gameLabelOf(row.game) } as TableEngine,
             };
             this.refund(stub, 'restart', now);
           }

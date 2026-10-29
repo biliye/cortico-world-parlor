@@ -14,6 +14,7 @@ import { serverClock } from './clock.ts';
 import { CooAccountDb } from './coo-account-db.ts';
 import { migrate, openDb, type Db } from './db.ts';
 import { MailDb } from './mail-db.ts';
+import { gameByActionType } from './games/registry.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken, listRooms, memberOf,
@@ -806,22 +807,21 @@ export class WorldServer {
         seats = receipt.seats;
         deadline = receipt.deadline;
         turn = receipt.turn;
-      } else if (type === 'table_action') {
-        if (host.tablePublic()?.game !== 'dice') {
-          throw new HttpError(400, '这张桌子不是骰子桌；斗地主用 ddz_action');
-        }
-        const receipt = host.tableAction(seat.cooId, { type: body.action, die: body.die });
-        deadline = receipt.deadline;
-        turn = receipt.turn;
-      } else if (type === 'ddz_action') {
-        if (host.tablePublic()?.game !== 'ddz') throw new HttpError(400, '这张桌子不是斗地主桌');
-        const receipt = host.tableAction(seat.cooId, { move: body.move, call: body.call, cards: body.cards });
-        deadline = receipt.deadline;
-        turn = receipt.turn;
-      } else if (type === 'monopoly') {
-        throw new HttpError(400, '这台服务器只跑骰子与斗地主；大富翁请用旧服务器');
       } else {
-        throw new HttpError(400, '未知动作');
+        // 牌桌动作按注册表分发：加一个游戏不用再改这里，只要它在 games/registry.ts 里登记过。
+        const game = gameByActionType(type);
+        if (game) {
+          if (host.tablePublic()?.game !== game.id) {
+            throw new HttpError(400, `这张桌子不是${game.label}桌`);
+          }
+          const receipt = host.tableAction(seat.cooId, game.toAction(body));
+          deadline = receipt.deadline;
+          turn = receipt.turn;
+        } else if (type === 'monopoly') {
+          throw new HttpError(400, '这台服务器只跑骰子与斗地主；大富翁请用旧服务器');
+        } else {
+          throw new HttpError(400, '未知动作');
+        }
       }
 
       const ts = this.now();

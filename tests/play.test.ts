@@ -284,13 +284,22 @@ describe('网页玩家', () => {
     expect(js).toContain('客厅的聊天在「客厅」那一栏');
   });
 
-  it('网页这版只开斗地主入口，骰子和大富翁收起，斗地主有结算手牌', () => {
+  it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    const reg = readFileSync(new URL('../src/web/games/registry.js', import.meta.url), 'utf8');
     const ddz = readFileSync(new URL('../src/web/games/ddz.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
-    expect(js).toContain("const ENABLED_GAMES = ['ddz']");
-    expect(js).toContain('骰子和大富翁先收起来了');
-    expect(js).toContain('开斗地主桌');
+    // 入口清单只在注册表里；play.js 不再写死游戏名单。
+    expect(js).toContain("from './games/registry.js'");
+    expect(js).not.toContain("const ENABLED_GAMES = ['ddz']");
+    for (const line of ["label: '斗地主'", "label: '骰子'", "label: '大富翁'", 'enabled: true', 'enabled: false', 'guide: [']) {
+      expect(reg).toContain(line);
+    }
+    expect(reg).toContain('先收起来了');
+    // 只启用了斗地主：大厅卡片、开桌按钮与玩法说明都从注册表取。
+    expect(reg).toMatch(/ddz: \{[\s\S]*enabled: true/);
+    expect(js).toContain('gameLabel(hero)');
+    expect(js).toContain('renderGuides');
     expect(js).toContain('endEvent');
     expect(ddz).toContain('ddz-end');
     expect(css).toContain('.ddz-end-seats');
