@@ -144,6 +144,10 @@ export const cardButton = (card, selected, onClick, small = false, art = null) =
   const node = el('button', 'pcard' + cardClass(card) + (selected ? ' sel' : '') + (small ? ' small-card' : ''));
   node.type = 'button';
   node.textContent = cardLabel(card);
+  if (onClick) {
+    node.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    node.setAttribute('aria-label', cardLabel(card));
+  }
   if (art) paintCard(node, art.rank ?? card, art.suit ?? null);
   node.disabled = !onClick;
   if (onClick) node.addEventListener('click', onClick);

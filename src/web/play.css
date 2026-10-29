@@ -1572,14 +1572,21 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .ddz-play-quiet { font-size: 10px; color: #8c6f52; }
 .ddz-center-note { font-size: 10px; color: #b99b78; text-align: center; }
 
-/* 我的手牌：扇形铺在桌沿 */
+/* 我的手牌：扇形铺在桌沿。放不下时横向滑动，不再把每张压得只剩一条缝。 */
 .ddz-handbar { display: flex; justify-content: center; padding-top: 2px; }
 .ddz-handbar-inner { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .ddz-hand {
-  display: flex; justify-content: center; align-items: flex-end;
+  display: flex; align-items: flex-end;
+  justify-content: center;
+  justify-content: safe center;
   width: 100%;
-  padding: 14px 8px 0;
+  /* 上面留出选中抬起（-20px）与光晕的位置；下面裁掉横向滚动带来的竖向溢出。 */
+  padding: 30px 8px 4px;
+  overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
 }
+.ddz-hand::-webkit-scrollbar { display: none; }
 .ddz-hand .pcard { --cw: 76px; margin-left: var(--overlap, -34px); }
 .ddz-hand .pcard:first-child { margin-left: 0; }
 .ddz-hand-empty { color: #c6a683; font-size: 11px; padding: 18px 0; }
@@ -2147,7 +2154,7 @@ html.no-card-art .pcard.back { border: 0; }
   .ddz-side-info .tag, .ddz-bot-mark { display: none; }
   .ddz-center { min-height: 112px; gap: 8px; }
   .ddz-play-cards .pcard.small-card { --cw: 24px; }
-  .ddz-hand { padding: 16px 4px 2px; }
+  .ddz-hand { padding: 28px 4px 2px; }
   .ddz-hand .pcard { --cw: 48px; margin-left: var(--overlap, -24px); }
   .ddz-actionbar { flex-wrap: wrap; gap: 6px; }
   .ddz-clock { margin-left: 0; width: 100%; }

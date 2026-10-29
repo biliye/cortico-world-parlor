@@ -354,11 +354,21 @@ function pushLog(event, seed = false) {
       || type === 'parlor.joined' || type === 'parlor.left' || type === 'parlor.ledger';
     if (conversational) {
       // 桌内发言不会出现在客厅栏里，自然也不算客厅的未读。
-      if (type !== 'parlor.table.say' && state.tab !== 'room') state.unread.room += 1;
-      if (tableBucket && state.tab !== 'table') state.unread.table += 1;
+      if (type !== 'parlor.table.say' && !chatVisible('room')) state.unread.room += 1;
+      if (tableBucket && !chatVisible('table')) state.unread.table += 1;
       renderChatBadges();
     }
   }
+}
+
+/**
+ * 「现在真的看得见这一栏吗」。桌面上聊天常驻，切到哪个 tab 就算看着哪个；
+ * 手机上聊天是一个抽屉，抽屉没拉开时哪怕 tab 停在客厅，新消息也得算未读。
+ */
+function chatVisible(tab) {
+  if (state.tab !== tab) return false;
+  if (window.matchMedia('(min-width: 821px)').matches) return true;
+  return state.sheet === 'chat';
 }
 
 function lineOf(event, tableBucket) {
@@ -666,6 +676,9 @@ function buildShell() {
   sayInput.setAttribute('aria-label', '在客厅说话');
   sayInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
+      // 中文输入法里回车是确认候选词，不该顺手把半句话发出去。确认那一下有的浏览器
+      // isComposing 已是 false，只剩 keyCode 229，所以两个记号都看。
+      if (event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       sendSay();
     }
@@ -1684,7 +1697,12 @@ function openMailTab() {
 function openSheet(which) {
   state.sheet = which;
   syncSheet();
-  if (which === 'chat' && state.tab === 'mail') loadMail();
+  if (which === 'chat') {
+    // 抽屉拉开了，当前频道就算看过了；信封里的未读另有它自己的标记。
+    if (state.tab === 'room' || state.tab === 'table') state.unread[state.tab] = 0;
+    renderChatBadges();
+    if (state.tab === 'mail') loadMail();
+  }
 }
 
 function closeSheet() {

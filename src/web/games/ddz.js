@@ -11,6 +11,10 @@ export function mountDdz(root, ctx) {
   let view = null;
   let selection = new Set();
   let signature = '';
+  let handNodes = [];
+  let playBtn = null;
+  let clearBtn = null;
+  let selectedLabel = null;
 
   // 窗口一变宽变窄，手牌要重新收一遍，不然会顶出桌沿。
   const onResize = () => {
@@ -38,6 +42,15 @@ export function mountDdz(root, ctx) {
   };
 
   function render() {
+    // 选牌不再走这里；但服务器快照会重绘。手牌滑到哪、焦点在哪张牌，
+    // 只要那张牌还在就按原样还回去。
+    const prevHand = box.querySelector('.ddz-hand');
+    const prevScroll = prevHand ? prevHand.scrollLeft : 0;
+    const prevIndex = prevHand ? [...prevHand.children].indexOf(document.activeElement) : -1;
+    handNodes = [];
+    playBtn = null;
+    clearBtn = null;
+    selectedLabel = null;
     clear(box);
     const table = view.table;
     if (table.status === 'ended') {
@@ -72,7 +85,13 @@ export function mountDdz(root, ctx) {
 
     board.append(actionBar(table, priv, myTurn, seated, view));
     box.append(board);
-    if (hand) fitHand(hand, (priv && priv.hand ? priv.hand.length : 0));
+    if (hand && hand.classList.contains('ddz-hand')) {
+      fitHand(hand, (priv && priv.hand ? priv.hand.length : 0));
+      if (prevScroll) hand.scrollLeft = prevScroll;
+      if (prevIndex >= 0 && hand.children[prevIndex]) {
+        hand.children[prevIndex].focus({ preventScroll: true });
+      }
+    }
     appendStatus(table, priv, myTurn, seated, view);
   }
 
@@ -239,25 +258,51 @@ export function mountDdz(root, ctx) {
     if (!count) return el('div', 'ddz-hand-empty', '你在旁观；这一局结束后可以坐下一桌。');
     const hand = el('div', 'ddz-hand');
     priv.hand.forEach((card, index) => {
-      const node = cardButton(card, selection.has(index), myTurn ? () => {
-        if (selection.has(index)) selection.delete(index);
-        else selection.add(index);
-        render();
-      } : null, false, handCards ? handCards[index] : null);
+      const node = cardButton(card, selection.has(index),
+        myTurn ? () => toggleCard(index) : null, false, handCards ? handCards[index] : null);
+      handNodes.push(node);
       hand.append(node);
     });
     return hand;
   }
 
-  /** 摆完量一次：20 张也刚好收在桌子宽度里，不用横向滚动。 */
+  /** 点一张牌只改这张牌和几个按钮，不重画牌桌——重画会把焦点和手牌的滑动位置一起冲掉。 */
+  function toggleCard(index) {
+    if (selection.has(index)) selection.delete(index);
+    else selection.add(index);
+    paintSelection();
+  }
+
+  function paintSelection() {
+    handNodes.forEach((node, index) => {
+      const on = selection.has(index);
+      node.classList.toggle('sel', on);
+      node.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    if (selectedLabel) {
+      selectedLabel.textContent = '已选 ' + selection.size + ' 张';
+      selectedLabel.hidden = selection.size === 0;
+    }
+    if (playBtn) playBtn.disabled = selection.size === 0;
+    if (clearBtn) clearBtn.disabled = selection.size === 0;
+  }
+
+  /**
+   * 摆完量一次：桌上放得下就居中；放不下时每张牌至少露出能读点数的宽度，
+   * 手牌改成横向可以滑到头尾（CSS 里 overflow-x:auto + safe center）。
+   */
   function fitHand(hand, count) {
     if (!hand.isConnected || count < 2) return;
     const card = hand.firstElementChild;
     if (!card) return;
     const cardWidth = card.offsetWidth;
-    const available = hand.clientWidth - 12;
+    const available = hand.clientWidth - 24;
     if (!cardWidth || available <= 0) return;
-    const step = Math.min(cardWidth * 0.66, Math.max(13, (available - cardWidth) / (count - 1)));
+    const maxStep = cardWidth * 0.66;
+    const fitStep = (available - cardWidth) / (count - 1);
+    // 大牌只要露出 18px 就能读点数；手机的小牌要露出四成多，不然两张数字会被盖住。
+    const readable = cardWidth >= 60 ? 18 : Math.max(20, cardWidth * 0.42);
+    const step = Math.max(Math.min(readable, maxStep), Math.min(maxStep, fitStep));
     hand.style.setProperty('--overlap', (step - cardWidth).toFixed(1) + 'px');
   }
 
@@ -284,17 +329,21 @@ export function mountDdz(root, ctx) {
         actions.append(el('span', 'ddz-wait', '旁观中'));
       }
     } else if (myTurn) {
-      actions.append(btn('出牌', () => {
+      const play = btn('出牌', () => {
         const cards = [...selection].sort((left, right) => left - right).map((index) => priv.hand[index]);
         if (!cards.length) {
           ctx.toast('先点几张牌');
           return;
         }
         selection = new Set();
+        paintSelection();
         ctx.act({ type: 'ddz_action', move: 'play', cards }).catch(() => {});
-      }, { primary: true, disabled: selection.size === 0 }));
+      }, { primary: true, disabled: selection.size === 0 });
+      playBtn = play;
+      actions.append(play);
       actions.append(btn('不要', () => {
         selection = new Set();
+        paintSelection();
         ctx.act({ type: 'ddz_action', move: 'pass' }).catch(() => {});
       }, {
         disabled: priv ? priv.canPass !== true : true,
@@ -317,14 +366,19 @@ export function mountDdz(root, ctx) {
               used.add(index);
             }
           }
-          render();
+          paintSelection();
         }
       }, { small: true }));
-      actions.append(btn('清空', () => {
+      const clear = btn('清空', () => {
         selection = new Set();
-        render();
-      }, { ghost: true, small: true, disabled: selection.size === 0 }));
-      if (selection.size) actions.append(el('span', 'ddz-selected', '已选 ' + selection.size + ' 张'));
+        paintSelection();
+      }, { ghost: true, small: true, disabled: selection.size === 0 });
+      clearBtn = clear;
+      actions.append(clear);
+      const count = el('span', 'ddz-selected', '已选 ' + selection.size + ' 张');
+      count.hidden = selection.size === 0;
+      selectedLabel = count;
+      actions.append(count);
     } else if (seated) {
       actions.append(el('span', 'ddz-wait', '等 ' + (names.get(table.turn) || '？') + ' 出牌'));
     } else {
