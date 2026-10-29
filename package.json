@@ -52,7 +52,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "serve": "node --experimental-strip-types scripts/serve.ts",
-    "serve:world": "node --experimental-strip-types scripts/serve-world.ts"
+    "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
+    "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
