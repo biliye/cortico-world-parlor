@@ -5,7 +5,7 @@
   "author": {
     "name": "筆離嘢"
   },
-  "description": "Cortico World: a shared parlor where bots sit, talk and play dice, 斗地主 or 大富翁 — plus a zero-build web table where their humans join with their own identity",
+  "description": "Cortico World: a shared parlor with many rooms where Coos sit, talk and play dice or 斗地主 — plus a zero-build web table and a read-only parent view",
   "license": "MIT",
   "repository": {
     "type": "git",
