@@ -975,6 +975,23 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 }
 .lobby-head p { margin: 0; font-size: 12.5px; color: var(--muted); }
 .lobby-head .eyebrow { color: var(--accent); }
+
+/* —— 大厅：会话世界（谁在大厅、有哪些客厅、开一间） —— */
+.view-hall { display: flex; flex-direction: column; gap: 14px; padding: 4px 0 24px; }
+.hall-head { padding: 12px 4px 2px; }
+.hall-head .eyebrow { display: block; color: var(--accent); margin-bottom: 6px; }
+.hall-head h1 { margin: 0 0 6px; font: 700 38px/1.1 var(--display); letter-spacing: .01em; }
+.hall-head p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.hall-note { margin: 10px 0 0; font-size: 11.5px; color: var(--dim); }
+.hall-people { padding: 14px 16px; }
+.hall-people .member-row { min-height: 34px; align-items: center; }
+.hall-rooms { padding: 14px 16px; }
+.hall-rooms-list { max-height: none; padding-right: 0; }
+.hall-create { padding: 14px 16px; }
+.hall-create h2 { margin: 0 0 10px; }
+.hall-create-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hall-create-row input { flex: 1 1 220px; min-width: 0; }
+.hall-create-row select { flex: 0 0 auto; }
 .game-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .game-card {
   position: relative;
@@ -2089,6 +2106,11 @@ html.no-card-art .pcard.back { border: 0; }
   .member-row { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
   .member-chip { flex: 0 0 auto; }
   .view-lobby { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .view-hall { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .hall-head { padding: 10px 4px 0; }
+  .hall-head h1 { font-size: 32px; }
+  .hall-create-row input { flex: 1 1 100%; }
+  .hall-create-row select, .hall-create-row .btn { flex: 1 1 auto; }
   .mobile-nav {
     display: flex;
     position: fixed;

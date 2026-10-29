@@ -284,6 +284,20 @@ describe('网页玩家', () => {
     expect(js).toContain('客厅的聊天在「客厅」那一栏');
   });
 
+  it('大厅是一个真页面：在线的人、客厅目录、开一间、离开客厅', () => {
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
+    // 大厅是服务器上的位置，不是本地一张空页面：离开客厅要过 /switch。
+    for (const line of [
+      'view-hall', 'function loadHall', '离开客厅', "api('/v1/hall')", "api('/v1/rooms?all=1')",
+      "navButton('hall'", "viewButton('大厅', 'hall')", 'createHallRoom', '先在大厅挑一间客厅进去',
+    ]) {
+      expect(js).toContain(line);
+    }
+    expect(css).toContain('.view-hall');
+    expect(css).toContain('.hall-create');
+  });
+
   it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const reg = readFileSync(new URL('../src/web/games/registry.js', import.meta.url), 'utf8');

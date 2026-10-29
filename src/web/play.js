@@ -38,6 +38,8 @@ const state = {
   mail: null,
   mailLoading: false,
   sheet: null,
+  hallData: null,
+  hallLoading: false,
   timerKey: '',
   timerTotal: 0,
 };
@@ -58,13 +60,14 @@ async function boot() {
   try {
     await refreshSnapshot();
     state.latest = state.snap.latest;
-    state.view = hasLiveTable() ? 'table' : 'lobby';
+    state.view = inHall() ? 'hall' : hasLiveTable() ? 'table' : 'lobby';
     state.tab = hasLiveTable() ? 'table' : 'room';
     buildShell();
     render();
     await seedLog();
     await refreshSnapshot();
     render();
+    if (state.view === 'hall') void loadHall(true);
     connect();
   } catch (error) {
     if (error && error.status === 401) {
@@ -271,6 +274,9 @@ function handleEvent(event) {
     || type === 'parlor.ledger' || type === 'parlor.whisper') {
     scheduleRefresh();
   }
+  if (state.view === 'hall' && (type === 'parlor.joined' || type === 'parlor.left')) {
+    void loadHall(true);
+  }
   if (state.tab === 'mail'
     && (type === 'parlor.whisper' || type === 'parlor.ledger' || type === 'parlor.table.turn')) {
     loadMail(true);
@@ -451,10 +457,11 @@ function buildShell() {
 
   const viewSwitch = el('div', 'view-switch');
   viewSwitch.setAttribute('role', 'tablist');
-  viewSwitch.setAttribute('aria-label', '切换大厅与牌桌');
-  const topLobby = viewButton('大厅', 'lobby');
+  viewSwitch.setAttribute('aria-label', '切换大厅、客厅与牌桌');
+  const topHall = viewButton('大厅', 'hall');
+  const topRoom = viewButton('客厅', 'lobby');
   const topTable = viewButton('牌桌', 'table');
-  viewSwitch.append(topLobby, topTable);
+  viewSwitch.append(topHall, topRoom, topTable);
 
   const topRight = el('div', 'top-right');
   const conn = el('span', 'conn');
@@ -570,18 +577,14 @@ function buildShell() {
   roomSwitch.addEventListener('click', () => { void openRooms(); });
   roomHead.append(roomTitle, roomSwitch);
   const roomNote = el('p', 'room-note muted', '');
-  roomCard.append(roomHead, roomNote);
+  const roomLeave = btn('离开客厅', () => { void goRoom('hall'); }, { ghost: true, small: true });
+  roomLeave.title = '回到大厅（牌局进行中时会被拦住）';
+  roomCard.append(roomHead, roomNote, roomLeave);
   leftRail.append(roomCard);
 
-  /* 中间：牌桌 / 大厅 */
+  /* 中间：牌桌 / 客厅 / 大厅 */
   const center = el('section', 'center');
-  center.setAttribute('aria-label', '牌桌与大厅');
-  const mobileSwitch = el('div', 'mobile-view-switch');
-  mobileSwitch.setAttribute('role', 'tablist');
-  mobileSwitch.setAttribute('aria-label', '切换大厅与牌桌');
-  const mobLobby = viewButton('大厅', 'lobby');
-  const mobTable = viewButton('牌桌', 'table');
-  mobileSwitch.append(mobLobby, mobTable);
+  center.setAttribute('aria-label', '牌桌、客厅与大厅');
 
   const viewTable = el('div', 'view view-table');
   const tableHead = el('div', 'table-head-host');
@@ -610,7 +613,49 @@ function buildShell() {
   const memberRow = el('div', 'member-row');
   members.append(membersHead, memberRow);
   viewLobby.append(lobbyHead, gameGrid, guide, lobbyNotice, members);
-  center.append(mobileSwitch, viewTable, viewLobby);
+
+  /* 中间：大厅（会话世界）——谁在大厅、有哪些客厅、开一间 */
+  const viewHall = el('div', 'view view-hall');
+  const hallHead = el('div', 'hall-head');
+  hallHead.append(
+    el('span', 'eyebrow', '会话世界 · 大厅'),
+    el('h1', '', '大厅'),
+    el('p', 'muted', '谁在这里、有哪些客厅。挑一间进去，或者自己开一间。'),
+  );
+  const hallPeople = el('section', 'panel hall-people');
+  const hallPeopleHead = el('div', 'panel-head');
+  const hallPeopleCount = el('span', 'muted');
+  hallPeopleHead.append(el('h2', '', '大厅里'), hallPeopleCount);
+  const hallPeopleRow = el('div', 'member-row');
+  hallPeople.append(hallPeopleHead, hallPeopleRow,
+    el('p', 'muted hall-note', '在别的客厅里的人不在这里显示。'));
+  const hallRooms = el('section', 'panel hall-rooms');
+  const hallRoomsHead = el('div', 'panel-head');
+  const hallRefresh = el('button', 'link', '刷新');
+  hallRefresh.type = 'button';
+  hallRefresh.addEventListener('click', () => { void loadHall(true); });
+  hallRoomsHead.append(el('h2', '', '客厅'), hallRefresh);
+  const hallRoomsList = el('div', 'rooms-list hall-rooms-list');
+  hallRooms.append(hallRoomsHead, hallRoomsList,
+    el('p', 'muted hall-note', '公开客厅谁都能进；不公开的要先被邀请。'));
+  const hallCreate = el('section', 'panel hall-create');
+  const hallCreateName = el('input');
+  hallCreateName.type = 'text';
+  hallCreateName.maxLength = 32;
+  hallCreateName.placeholder = '客厅名字（2–32 个字）';
+  const hallCreateVis = el('select');
+  for (const [value, label] of [['public', '公开'], ['unlisted', '不公开'], ['private', '私密']]) {
+    const option = el('option', '', label);
+    option.value = value;
+    hallCreateVis.append(option);
+  }
+  const hallCreateBtn = btn('开一间', () => { void createHallRoom(); }, { primary: true, small: true });
+  const hallCreateRow = el('div', 'hall-create-row');
+  hallCreateRow.append(hallCreateName, hallCreateVis, hallCreateBtn);
+  hallCreate.append(el('h2', '', '开一间新的'), hallCreateRow,
+    el('p', 'muted hall-note', '公开的客厅会出现在别人的目录里；不公开的只有成员看得到。'));
+  viewHall.append(hallHead, hallPeople, hallRooms, hallCreate);
+  center.append(viewTable, viewLobby, viewHall);
 
   /* 右栏：聊天 / 牌桌信息 */
   const rightRail = el('aside', 'right-rail');
@@ -620,7 +665,8 @@ function buildShell() {
   chatPanel.append(sheetGrip());
   const chatHead = el('div', 'chat-head');
   const chatCopy = el('div');
-  chatCopy.append(el('span', 'eyebrow', '客厅 · 牌桌'), el('h2', '', '聊天'));
+  const chatEyebrow = el('span', 'eyebrow', '客厅 · 牌桌');
+  chatCopy.append(chatEyebrow, el('h2', '', '聊天'));
   const chatActions = el('div', 'chat-head-actions');
   const backRoom = el('button', 'link', '切回客厅');
   backRoom.type = 'button';
@@ -701,11 +747,11 @@ function buildShell() {
   /* 手机底栏与抽屉背景 */
   const nav = el('nav', 'mobile-nav');
   nav.setAttribute('aria-label', '主导航');
+  const navHall = navButton('hall', '大厅', 'lamp');
+  const navRoom = navButton('room', '客厅', 'users');
   const navTable = navButton('table', '牌桌', 'dice');
   const navChat = navButton('chat', '聊天', 'chat');
-  const navMail = navButton('mail', '信箱', 'mail');
-  const navMe = navButton('me', '我', 'user');
-  nav.append(navTable.btn, navChat.btn, navMail.btn, navMe.btn);
+  nav.append(navHall.btn, navRoom.btn, navTable.btn, navChat.btn);
 
   const backdrop = el('div', 'sheet-backdrop');
   backdrop.hidden = true;
@@ -717,17 +763,19 @@ function buildShell() {
   Object.assign(ui, {
     top, conn, connText, mailBtn, mailBadge, banner, bannerText, bannerGo,
     roomPillText: pillText, roomPillSub: pillSub,
-    viewButtons: [topLobby, topTable, mobLobby, mobTable],
+    viewButtons: [topHall, topRoom, topTable],
     topAvatar, topName, topSub, chipsText,
     leftRail, seatAvatar, seatName, seatSub,
     statChips, statWins, statGames, progressLeft, progressRight, progressFill,
-    ledgerNet, split, ledgerList, tableList, roomTitle, roomNote,
-    viewTable, viewLobby, tableHead, mobileTicker, game, ticker,
+    ledgerNet, split, ledgerList, tableList, roomTitle, roomNote, roomLeave,
+    tablesCard, roomCard, chatEyebrow,
+    viewTable, viewLobby, viewHall, tableHead, mobileTicker, game, ticker,
     lobbyEyebrow, lobbyTitle, lobbySub, gameGrid, guide, lobbyNotice, membersCount, memberRow,
+    hallPeopleCount, hallPeopleRow, hallRoomsList, hallCreateName, hallCreateVis, hallCreateBtn,
     chatPanel, markRead, backRoom, tabRoom, tabTable, tabMail,
     logRoom, logTable, mailList, composer, scopeText, sayInput, sendBtn, mailNote,
     infoGame, infoStake, infoStatus, infoTurn, ruleNote, infoClock,
-    navTable, navChat, navMail, navMe, backdrop,
+    navHall, navRoom, navTable, navChat, backdrop,
   });
   syncViewButtons();
   syncSheet();
@@ -806,6 +854,16 @@ function navButton(kind, label, iconName) {
   badge.hidden = true;
   node.append(badge);
   node.addEventListener('click', () => {
+    if (kind === 'hall') {
+      closeSheet();
+      setView('hall');
+      return;
+    }
+    if (kind === 'room') {
+      closeSheet();
+      setView('lobby');
+      return;
+    }
     if (kind === 'table') {
       closeSheet();
       setView('table');
@@ -853,12 +911,21 @@ function renderTopbar() {
     + (pets.length === 0 ? ' · 还没有 Coo' : coos > 0 ? ` · ${coos} 位 Coo 在线` : ` · ${pets.length} 位 Coo 离线`);
   ui.roomTitle.textContent = hall ? '大厅' : '客厅';
   ui.roomNote.textContent = hall
-    ? '大厅是入口；用「换」去一个客厅坐坐。'
+    ? '大厅是入口；挑一间客厅进去坐坐。'
     : '用「换」去大厅或别的客厅；串门会释放这里的席位。';
   for (const node of ui.viewButtons) {
-    if (node.dataset.view === 'table') node.hidden = hall;
+    const view = node.dataset.view;
+    if (view === 'table' || view === 'lobby') node.hidden = hall;
   }
-  if (hall && state.view === 'table') setView('lobby');
+  ui.roomLeave.hidden = hall;
+  // 大厅里没有客厅/牌桌这两张卡，留着只会让人点进空页面。
+  ui.tablesCard.hidden = hall;
+  ui.roomCard.hidden = hall;
+  if (hall && state.view !== 'hall') {
+    // 人在大厅就没有客厅/牌桌可看；快照说了算。
+    state.view = 'hall';
+    syncViewButtons();
+  }
   ui.topAvatar.replaceChildren(avatarNode(snap.seat.id, 'avatar', { online: false }));
   ui.topName.textContent = snap.seat.name;
   const online = (snap.online || []).includes(snap.seat.id);
@@ -1018,9 +1085,13 @@ function renderBanner() {
 function renderCenter() {
   ui.viewTable.hidden = state.view !== 'table';
   ui.viewLobby.hidden = state.view !== 'lobby';
+  ui.viewHall.hidden = state.view !== 'hall';
   if (state.view === 'table') {
     renderTableHead();
     renderGame();
+  } else if (state.view === 'hall') {
+    ui.tableHead.hidden = true;
+    renderHall();
   } else {
     ui.tableHead.hidden = true;
     renderLobby();
@@ -1359,6 +1430,118 @@ function openButtons() {
   return box;
 }
 
+/* —— 大厅（会话世界） —— */
+
+/**
+ * 大厅的数据：谁在大厅（`/v1/hall` 的 seats）与有哪些客厅（目录）。
+ * 只有人在大厅时才看这个页面；换客厅走 goRoom——那是服务器上的原子切换，
+ * 牌局进行中会被服务器拦住（不是前端藏按钮）。
+ */
+async function loadHall(force = false) {
+  if (!state.shell || state.hallLoading) return;
+  if (!force && state.hallData && Date.now() - state.hallData.at < 8000) return;
+  state.hallLoading = true;
+  try {
+    const [payload, directory] = await Promise.all([api('/v1/hall'), api('/v1/rooms?all=1')]);
+    state.hallData = { hall: payload.hall, rooms: directory.rooms || [], at: Date.now(), error: null };
+  } catch (error) {
+    state.hallData = {
+      ...(state.hallData || {}),
+      at: Date.now(),
+      error: error.message || String(error),
+    };
+  } finally {
+    state.hallLoading = false;
+    if (state.view === 'hall') renderHall();
+  }
+}
+
+function renderHall() {
+  if (!ui.hallRoomsList) return;
+  const data = state.hallData;
+  const hall = data && data.hall;
+  clear(ui.hallPeopleRow);
+  clear(ui.hallRoomsList);
+  if (data && data.error && !hall) {
+    ui.hallPeopleCount.textContent = '';
+    ui.hallRoomsList.append(el('p', 'warn', '取不到大厅：' + data.error));
+    return;
+  }
+  if (!hall) {
+    ui.hallPeopleCount.textContent = '';
+    ui.hallPeopleRow.append(el('p', 'muted', '正在打开大厅…'));
+    return;
+  }
+  const seats = hall.seats || [];
+  ui.hallPeopleCount.textContent = seats.length + ' 人';
+  if (!seats.length) ui.hallPeopleRow.append(el('p', 'muted', '大厅里现在没人。'));
+  for (const seat of seats) ui.hallPeopleRow.append(hallSeatChip(seat));
+  const rooms = (data.rooms || []).filter((room) => !room.archived);
+  if (!rooms.length) {
+    ui.hallRoomsList.append(el('p', 'muted', '还没有公开的客厅；开一间吧。'));
+  }
+  for (const room of rooms) ui.hallRoomsList.append(hallRoomRow(room));
+  if (data.error) ui.hallRoomsList.append(el('p', 'warn', '刷新失败：' + data.error));
+}
+
+function hallSeatChip(seat) {
+  const chip = el('span', 'member-chip');
+  chip.append(avatarNode(seat.id, 'avatar-xs', { name: seat.name, online: true }));
+  const copy = el('span');
+  copy.append(
+    el('strong', '', seat.name + (state.snap && seat.id === state.snap.seat.id ? '（你）' : '')),
+    el('small', '', KIND_LABELS[seat.kind] || seat.kind),
+  );
+  chip.append(copy);
+  if (seat.kind === 'pet') chip.append(el('span', 'tag tag-coo', 'Coo'));
+  return chip;
+}
+
+function hallRoomRow(room) {
+  const row = el('button', 'rooms-row');
+  row.type = 'button';
+  const text = el('span', 'rooms-row-text');
+  const visibility = room.visibility === 'public' ? '公开'
+    : room.visibility === 'unlisted' ? '不公开' : '私密';
+  text.append(
+    el('strong', '', room.name),
+    el('small', '', `${room.seats}/${room.capacity} 人 · ${visibility}${room.topic ? ' · ' + room.topic : ''}`),
+  );
+  row.append(text);
+  if (room.id === currentRoom()) {
+    row.classList.add('is-here');
+    row.append(el('span', 'rooms-here', '这里'));
+  } else {
+    row.append(icon('arrow'));
+  }
+  row.addEventListener('click', () => {
+    if (room.id !== currentRoom()) void goRoom(room.id);
+  });
+  return row;
+}
+
+async function createHallRoom() {
+  const name = ui.hallCreateName.value.trim();
+  if (name.length < 2) {
+    showToast('客厅名字至少两个字', 'bad');
+    return;
+  }
+  ui.hallCreateBtn.disabled = true;
+  try {
+    const created = await api('/v1/rooms', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, visibility: ui.hallCreateVis.value }),
+    });
+    ui.hallCreateName.value = '';
+    await goRoom(created.room.id);
+  } catch (error) {
+    showToast(error.message || '开不了这间客厅', 'bad');
+  } finally {
+    ui.hallCreateBtn.disabled = false;
+  }
+}
+
 function renderLobby() {
   const snap = state.snap;
   const table = snap.table;
@@ -1551,6 +1734,7 @@ function renderChat() {
   renderChatBadges();
   syncChatTabs();
   const tab = state.tab;
+  if (ui.chatEyebrow) ui.chatEyebrow.textContent = inHall() ? '大厅' : '客厅 · 牌桌';
   ui.composer.hidden = tab === 'mail';
   ui.mailNote.hidden = tab !== 'mail';
   ui.markRead.hidden = tab !== 'mail' || ((state.snap && state.snap.mailUnread) || 0) <= 0;
@@ -1558,8 +1742,10 @@ function renderChat() {
   ui.sayInput.disabled = tab === 'table' && !canTableTalk;
   ui.sendBtn.disabled = ui.sayInput.disabled;
   if (tab === 'room') {
-    ui.scopeText.textContent = '发到客厅 · 房间里的人都看得见';
-    ui.sayInput.placeholder = '在客厅说点什么…';
+    ui.scopeText.textContent = inHall()
+      ? '发到大厅 · 大厅里的人都看得见'
+      : '发到客厅 · 房间里的人都看得见';
+    ui.sayInput.placeholder = inHall() ? '在大厅说点什么…' : '在客厅说点什么…';
   } else if (tab === 'table') {
     if (canTableTalk) {
       ui.scopeText.textContent = '只发到这一桌 · 客厅和不在桌上的人看不见';
@@ -1595,11 +1781,9 @@ function renderChatBadges() {
   ui.tabTable.badge.hidden = counts.table <= 0;
   ui.tabMail.badge.textContent = String(counts.mail);
   ui.tabMail.badge.hidden = counts.mail <= 0;
-  const chatCount = counts.room + counts.table;
+  const chatCount = counts.room + counts.table + counts.mail;
   ui.navChat.badge.textContent = String(chatCount);
   ui.navChat.badge.hidden = chatCount <= 0;
-  ui.navMail.badge.textContent = String(counts.mail);
-  ui.navMail.badge.hidden = counts.mail <= 0;
   if (ui.mailBadge) {
     ui.mailBadge.textContent = String(counts.mail);
     ui.mailBadge.hidden = counts.mail <= 0;
@@ -1618,9 +1802,19 @@ function setTab(tab) {
 }
 
 function setView(view) {
+  if (view === 'hall' && !inHall()) {
+    // 大厅是服务器上的一个位置，不是本地一张页面：离开客厅要过服务器（牌局进行中会被拦住）。
+    void goRoom('hall');
+    return;
+  }
+  if ((view === 'lobby' || view === 'table') && inHall()) {
+    showToast('先在大厅挑一间客厅进去。');
+    return;
+  }
   state.view = view;
   syncViewButtons();
   closeSheet();
+  if (view === 'hall') void loadHall();
   render();
 }
 
@@ -1634,11 +1828,15 @@ function syncViewButtons() {
 
 function syncNav() {
   let active = null;
-  if (state.sheet === 'me') active = 'me';
-  else if (state.sheet === 'chat') active = state.tab === 'mail' ? 'mail' : 'chat';
+  if (state.sheet === 'chat') active = 'chat';
+  else if (state.sheet === 'me') active = null;
+  else if (state.view === 'hall') active = 'hall';
+  else if (state.view === 'lobby') active = 'room';
   else if (state.view === 'table') active = 'table';
-  for (const [key, node] of [['table', ui.navTable], ['chat', ui.navChat], ['mail', ui.navMail], ['me', ui.navMe]]) {
-    node.btn.classList.toggle('is-active', key === active);
+  for (const [key, node] of [
+    ['hall', ui.navHall], ['room', ui.navRoom], ['table', ui.navTable], ['chat', ui.navChat],
+  ]) {
+    if (node) node.btn.classList.toggle('is-active', key === active);
   }
 }
 
@@ -2062,6 +2260,11 @@ setInterval(() => {
 setInterval(() => {
   if (ui.infoClock && state.snap) renderTableInfo();
 }, 30000);
+
+// 大厅里的人数与目录会变：停在大厅时每 20 秒悄悄刷一次。
+setInterval(() => {
+  if (state.shell && state.view === 'hall' && !document.hidden) void loadHall(true);
+}, 20000);
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) scheduleRefresh();
