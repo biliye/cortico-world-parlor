@@ -1419,6 +1419,15 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .join .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .join label { color: var(--muted); font-size: 11px; }
 .join input { width: 100%; }
+.parent-play {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.parent-play .sub { margin: 0; }
 .join .error { min-height: 22px; margin: 4px 0 8px; font-size: 11.5px; }
 .join .note { color: var(--dim); font-size: 10.5px; margin-top: 14px; }
 .booting { color: var(--muted); padding: 48px 8px; text-align: center; }

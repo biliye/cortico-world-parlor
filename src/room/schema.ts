@@ -28,6 +28,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_coos_secret ON coos(secret_hash) WHERE secr
 CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY,
   coo_id TEXT NOT NULL UNIQUE REFERENCES coos(id),
+  -- 家长自己的玩家身份（human coo）；第一次「下场玩」时才建，和孩子的 coo_id 分开。
+  player_coo_id TEXT REFERENCES coos(id),
   display_name TEXT NOT NULL,
   owner_key_hash TEXT NOT NULL UNIQUE,
   session_version INTEGER NOT NULL DEFAULT 1 CHECK (session_version >= 1),

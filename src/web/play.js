@@ -2196,6 +2196,7 @@ function renderJoin(message = '') {
   join.append(panel);
   app.append(join);
   nameInput.focus();
+  void offerParentPlay(panel);
 
   async function submitJoin() {
     const name = nameInput.value.trim();
@@ -2257,6 +2258,51 @@ function renderOffline(message) {
   panel.append(actions);
   join.append(panel);
   app.append(join);
+}
+
+/**
+ * 加入页发现这台浏览器有家长会话时，给一个「以家长身份下场」的入口。
+ * 家长身份固定在服务器那边，不受这里清 localStorage 影响；每次下场会换一张新令牌。
+ */
+async function offerParentPlay(panel) {
+  try {
+    const response = await fetch('/v1/parent/me');
+    if (!response.ok) return;
+    const body = await response.json().catch(() => null);
+    const account = body && body.account;
+    if (!account) return;
+    const box = el('div', 'parent-play');
+    box.append(
+      el('p', 'sub', '这台浏览器有「' + (account.displayName || '家长') + '」的家长会话，可以直接以家长身份下场。'),
+      btn('以家长身份下场', () => { void parentPlay(); }, { primary: true }),
+    );
+    panel.append(box);
+  } catch {
+    /* 没有家长会话就当普通加入页 */
+  }
+}
+
+async function parentPlay() {
+  try {
+    const response = await fetch('/v1/parent/play', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || '现在下不了场');
+    writeStore({
+      room: body.room,
+      seatId: body.seat.id,
+      name: body.seat.name,
+      token: body.token,
+      cooId: body.identity.cooId,
+      cooSecret: body.identity.cooSecret,
+    });
+    location.href = '/play?room=' + encodeURIComponent(body.room);
+  } catch (error) {
+    showToast(error.message || '现在下不了场', 'bad');
+  }
 }
 
 /* —— 时钟 —— */

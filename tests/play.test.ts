@@ -299,6 +299,12 @@ describe('网页玩家', () => {
     // 旧标签页的 401 不能删掉别的标签页刚写进去的新令牌（否则像被登出）。
     expect(js).toContain('function handleExpiredSeat');
     expect(js).toContain('stored.token !== token');
+    // 家长页能下场；加入页在有家长会话时给「以家长身份下场」。
+    expect(js).toContain('offerParentPlay');
+    expect(js).toContain("'/v1/parent/play'");
+    const parent = readFileSync(new URL('../src/web/parent.js', import.meta.url), 'utf8');
+    expect(parent).toContain('playAsParent');
+    expect(parent).toContain("localStorage.setItem('parlor-play-v1'");
   });
 
   it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {

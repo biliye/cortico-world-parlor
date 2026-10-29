@@ -53,6 +53,18 @@ body {
 .brand-name { font-weight: 700; letter-spacing: .06em; }
 .brand-sub { color: var(--dim); font-size: 11px; letter-spacing: .12em; }
 .account { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; }
+.account .btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: linear-gradient(180deg, #f7a79d, var(--accent));
+  color: #fff;
+  font: 600 12px var(--font);
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(239, 138, 126, .28);
+}
+.account .btn:hover:not(:disabled) { filter: brightness(1.04); }
+.account .btn:disabled { opacity: .6; cursor: default; }
 
 .layout {
   display: grid; gap: 14px;

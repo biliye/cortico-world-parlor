@@ -25,10 +25,17 @@ export const openDb = (file = ':memory:'): Db => {
 /** 建表/补表；可重复执行。 */
 export const migrate = (db: Db): void => {
   db.exec(SCHEMA_SQL);
+  // CREATE TABLE IF NOT EXISTS 不会给老库加列；新列在这里补。
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(accounts)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!columns.has('player_coo_id')) {
+    db.exec('ALTER TABLE accounts ADD COLUMN player_coo_id TEXT REFERENCES coos(id)');
+  }
   const stmt = db.prepare(
     'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   );
-  stmt.run('schema_version', '1');
+  stmt.run('schema_version', '2');
   stmt.run('storage_mode', 'sqlite');
 };
 

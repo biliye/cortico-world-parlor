@@ -76,6 +76,11 @@ function showView(account) {
   ui.view.hidden = false;
   clear(ui.account);
   ui.account.append(el('span', '', account.displayName || '家长'));
+  const play = el('button', 'btn primary small', '下场玩');
+  play.type = 'button';
+  play.title = '以家长身份进客厅；和孩子的账本分开';
+  play.addEventListener('click', () => { void playAsParent(play); });
+  ui.account.append(play);
   const logout = el('button', 'link', '退出');
   logout.type = 'button';
   logout.addEventListener('click', async () => {
@@ -83,6 +88,31 @@ function showView(account) {
     showGate('已经退出。');
   });
   ui.account.append(logout);
+}
+
+/** 家长下场：借家长会话领一个 human 席位，把席位令牌写进 localStorage，再去 /play。 */
+async function playAsParent(button) {
+  button.disabled = true;
+  try {
+    const result = await api('/v1/parent/play', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    localStorage.setItem('parlor-play-v1', JSON.stringify({
+      room: result.room,
+      seatId: result.seat.id,
+      name: result.seat.name,
+      token: result.token,
+      cooId: result.identity.cooId,
+      cooSecret: result.identity.cooSecret,
+    }));
+    location.href = '/play?room=' + encodeURIComponent(result.room);
+  } catch (error) {
+    toast(error.message || '现在下不了场');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function openWithKey(key) {

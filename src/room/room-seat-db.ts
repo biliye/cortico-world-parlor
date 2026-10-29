@@ -592,6 +592,12 @@ export const seatByTokenHash = (db: Db, tokenHash: string): SeatRow | null => {
   return row ? toSeat(row) : null;
 };
 
+/** 给同一个席位换一枚新令牌（家长在同一间客厅再次下场时用）；旧令牌立即失效。 */
+export const updateSeatToken = (db: Db, roomId: string, seatId: string, tokenHash: string): void => {
+  db.prepare('UPDATE room_seats SET token_hash = ? WHERE room_id = ? AND id = ?')
+    .run(tokenHash, roomId, seatId);
+};
+
 /** 可见区间查询；scope 过滤不在这里做。席位不存在返回 null。 */
 export const seatInterval = (db: Db, roomId: string, seatId: string): SeatInterval | null => {
   const row = db.prepare(

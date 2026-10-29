@@ -14,7 +14,7 @@ import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, getRoom, hashSeatToken, joinSeat, releaseSeat,
-  seatByTokenHash, type RoomRow, type SeatRow,
+  seatByTokenHash, updateSeatToken, type RoomRow, type SeatRow,
 } from './room-seat-db.ts';
 import { serverClock } from './clock.ts';
 import { HostError, type HostErrorCode } from './host-error.ts';
@@ -194,6 +194,15 @@ export class RoomHost {
     const seat = seatByTokenHash(this.db, hashSeatToken(token));
     if (!seat || seat.roomId !== this.roomId) throw new HostError('forbidden', '席位令牌无效或已经离开');
     return seat;
+  }
+
+  /** 同一个席位换一枚新令牌（家长再次下场）：席位、可见区间、账本都不动。 */
+  reissueSeatToken(cooId: string): { seat: SeatRow; token: string } {
+    const seat = this.seatOf(cooId);
+    if (!seat) throw new HostError('not_found', '你不在这个客厅里');
+    const token = this.makeToken();
+    updateSeatToken(this.db, this.roomId, seat.id, hashSeatToken(token));
+    return { seat, token };
   }
 
   join(cooId: string, input: { name?: string; kind?: SeatKind; tier?: WakeTier } = {}): JoinResult {

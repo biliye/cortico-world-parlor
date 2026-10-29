@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
-import { CooAccountDb } from './coo-account-db.ts';
+import { CooAccountDb, type ParentAccount } from './coo-account-db.ts';
 import { migrate, openDb, type Db } from './db.ts';
 import { MailDb } from './mail-db.ts';
 import { gameByActionType } from './games/registry.ts';
@@ -431,6 +431,13 @@ export class WorldServer {
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
       json(res, 200, this.parentView(session.account.cooId, since, limit));
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/parent/play') {
+      const session = this.parentSession(req);
+      const body = await readJson(req);
+      json(res, 200, this.parentPlay(session.account, body));
       return;
     }
 
@@ -953,6 +960,69 @@ export class WorldServer {
       kind: seat.kind,
       tier: seat.tier,
     };
+  }
+
+  /**
+   * 家长下场：用家长会话给自己领一个 human 席位。
+   * 玩家身份固定在 `accounts.player_coo_id` 上——同一个家长链接在任何浏览器都是同一个人；
+   * 账本/筹码与孩子那份分开（孩子是 Coo 的 cooId，家长玩家是另一个 human coo）。
+   */
+  private parentPlay(account: ParentAccount, body: Record<string, unknown>): Record<string, unknown> {
+    const requested = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : '';
+    const childSeat = activeSeatForCoo(this.db, account.cooId);
+    const wanted = requested || childSeat?.roomId || this.defaultRoomId;
+    const target = getRoom(this.db, wanted) ?? resolveRoom(this.db, wanted);
+    if (!target) throw new HttpError(404, `客厅不存在：${wanted}`);
+    if (target.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
+
+    const player = this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
+    let seat = activeSeatForCoo(this.db, player.cooId);
+    let token: string;
+    if (!seat) {
+      const joined = this.host(target.id).join(player.cooId, {
+        name: player.name, kind: 'human', tier: 'off',
+      });
+      seat = joined.seat;
+      token = joined.token;
+    } else if (seat.roomId === target.id) {
+      const reissued = this.host(target.id).reissueSeatToken(player.cooId);
+      seat = reissued.seat;
+      token = reissued.token;
+    } else {
+      const moved = this.host(seat.roomId).switchTo(player.cooId, target.id, { name: player.name });
+      seat = moved.seat;
+      token = moved.token;
+    }
+    return {
+      room: target.id,
+      roomName: target.name,
+      seat: seatOfRow(target.id, seat),
+      token,
+      identity: { cooId: player.cooId, cooSecret: player.secret },
+      player: true,
+    };
+  }
+
+  /** 家长玩家的固定 human 身份；每次下场换一枚新 secret（库里只存哈希）。 */
+  private ensurePlayerCoo(account: ParentAccount, requested = ''): { cooId: string; secret: string; name: string } {
+    const secret = randomBytes(32).toString('base64url');
+    const existing = this.coo.playerCooOf(account.id);
+    if (existing) {
+      const name = this.coo.cooDisplayName(existing)
+        || (account.displayName ? `${account.displayName}（家长）` : '家长');
+      this.coo.rotateSecret(existing, secret);
+      return { cooId: existing, secret, name: name.slice(0, 24) };
+    }
+    // 默认名字带「（家长）」：家长账户的显示名可能就是孩子的名字，直接用会撞席位名。
+    const fallback = account.displayName && account.displayName !== '家长'
+      ? `${account.displayName}（家长）`
+      : '家长';
+    const name = (requested.trim() || fallback).slice(0, 24);
+    const cooId = randomUUID();
+    const created = this.coo.registerCoo(cooId, secret, 'human', name);
+    if (created !== 'ok') throw new HttpError(500, '建不了家长的游戏身份');
+    this.coo.bindPlayerCoo(account.id, cooId);
+    return { cooId, secret, name };
   }
 
   /** 家长只读视图：跟孩子当前席位走，可见范围与孩子自己完全一致。 */

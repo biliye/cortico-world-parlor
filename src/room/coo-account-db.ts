@@ -193,8 +193,7 @@ export class CooAccountDb {
    * 已存在且 secret 对得上返回 ok（只更新 last_seen_at），对不上返回 mismatch。
    * 同一个 secret 不能绑到第二个 coo（secret_hash 的唯一索引兜底）。
    */
-  registerCoo(cooId: string, secret: string, kind: CooKind = 'pet', displayName = ''): ClaimResult {
-    if (!isCooId(cooId) || !isCooSecret(secret) || !isCooKind(kind)) return 'invalid';
+  registerCoo(cooId: string, secret: string, kind: CooKind = 'pet', displayName = ''): ClaimResult {    if (!isCooId(cooId) || !isCooSecret(secret) || !isCooKind(kind)) return 'invalid';
     const hash = hashKey(secret);
     return atomically(this.db, () => {
       const row = this.cooRow(cooId);
@@ -240,6 +239,34 @@ export class CooAccountDb {
       this.db.prepare('UPDATE coos SET last_seen_at = ? WHERE id = ?').run(this.now(), cooId);
       return 'ok';
     });
+  }
+
+  /** 家长自己下场用的固定玩家身份（human coo）；第一次下场时才建。 */
+  playerCooOf(accountId: string): string | null {
+    const row = this.db.prepare('SELECT player_coo_id FROM accounts WHERE id = ?')
+      .get(accountId) as { player_coo_id: string | null } | undefined;
+    return row?.player_coo_id ?? null;
+  }
+
+  /** 这个 coo 的显示名（家长玩家席位沿用它，换房不丢名字）。 */
+  cooDisplayName(cooId: string): string {
+    const row = this.cooRow(cooId);
+    return row ? row.display_name : '';
+  }
+
+  bindPlayerCoo(accountId: string, cooId: string): void {
+    this.db.prepare('UPDATE accounts SET player_coo_id = ? WHERE id = ?').run(cooId, accountId);
+  }
+
+  /**
+   * 给已存在的 coo 换一个新 secret（旧 secret 立即失效）。
+   * 家长每次下场玩都会拿一枚新的；数据库仍然只存哈希。
+   */
+  rotateSecret(cooId: string, secret: string): void {
+    const row = this.cooRow(cooId);
+    if (!row) throw new Error('这个 Coo 身份不存在');
+    this.db.prepare('UPDATE coos SET secret_hash = ?, last_seen_at = ? WHERE id = ?')
+      .run(hashKey(secret), this.now(), cooId);
   }
 
   /**
