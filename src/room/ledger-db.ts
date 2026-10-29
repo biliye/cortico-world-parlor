@@ -16,9 +16,13 @@ import {
   REFILL_GAP_MS,
   REFILL_TO,
   START_CHIPS,
+  gameOf,
   type ChipTransfer,
+  type GameTally,
   type LedgerEntry,
+  type LedgerEntryView,
   type LedgerKind,
+  type LedgerSummary,
   type LedgerVisibility,
   type OpenLedgerItem,
   type PromiseStatus,
@@ -33,16 +37,8 @@ export interface LedgerDbOptions {
   now?: () => number;
 }
 
-/** 先做最小的一份：局数/胜负平/余额/未了结；byGame/recent 以后再加。 */
-export interface LedgerSummaryLite {
-  cooId: string;
-  games: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  chips: number;
-  open: OpenLedgerItem[];
-}
+/** 给旧版 World/网页用的完整摘要；字段与旧 LedgerStore.summaryFor 一致。 */
+export type LedgerSummaryLite = LedgerSummary;
 
 const STATUS_BY_KIND: Partial<Record<LedgerKind, PromiseStatus>> = {
   accept: 'accepted',
@@ -110,9 +106,40 @@ interface OpenRow {
 
 interface GameRow {
   id: string;
+  game: string | null;
   data_json: string | null;
   won: number;
 }
+
+const labelOf = (game: string, data: Record<string, unknown> | undefined): string => {
+  const label = data?.gameLabel;
+  if (typeof label === 'string' && label.length > 0) return label;
+  return game === 'unknown' ? '其他' : game;
+};
+
+/** 这条记录让某个 cooId 增减了多少筹码。 */
+const netOf = (entry: LedgerEntry, cooId: string): number => {
+  let net = 0;
+  for (const transfer of entry.transfers ?? []) {
+    if (transfer.to === cooId) net += transfer.amount;
+    if (transfer.from === cooId) net -= transfer.amount;
+  }
+  return net;
+};
+
+const viewOf = (entry: LedgerEntry, cooId?: string): LedgerEntryView => {
+  const net = cooId ? netOf(entry, cooId) : 0;
+  return {
+    id: entry.id,
+    ts: entry.ts,
+    room: entry.room,
+    kind: entry.kind,
+    text: entry.text,
+    ...(entry.data ? { data: entry.data } : {}),
+    ...(entry.kind === 'game' ? { game: gameOf(entry) } : {}),
+    ...(net !== 0 ? { chips: net } : {}),
+  };
+};
 
 export class LedgerDb {
   readonly db: Db;
@@ -359,10 +386,13 @@ export class LedgerDb {
     });
   }
 
-  /** 最小摘要：局数/胜负平/余额/未了结。平局只算赢的人平，没赢的人算负。 */
-  summaryFor(cooId: string): LedgerSummaryLite {
+  /**
+   * 局数/胜负平/余额/未了结 + 按游戏拆分 + 最近 5 条。
+   * 平局只算赢的人平，没赢的人算负；与旧 LedgerStore.summaryFor 一致。
+   */
+  summaryFor(cooId: string): LedgerSummary {
     const rows = this.db.prepare(
-      `SELECT e.id, e.data_json,
+      `SELECT e.id, e.game, e.data_json,
          EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id = e.id AND w.coo_id = ?) AS won
        FROM ledger_entries e
        WHERE e.kind = 'game'
@@ -378,25 +408,69 @@ export class LedgerDb {
     let wins = 0;
     let losses = 0;
     let draws = 0;
+    const byGame = new Map<string, GameTally>();
     for (const row of rows) {
       games += 1;
-      const tie = parseData(row.data_json)?.tie === true;
-      if (row.won) {
-        if (tie) draws += 1;
-        else wins += 1;
-      } else {
+      const data = parseData(row.data_json);
+      const game = typeof row.game === 'string' && row.game.length > 0
+        ? row.game
+        : typeof data?.game === 'string' && data.game.length > 0 ? data.game : 'unknown';
+      let tally = byGame.get(game);
+      if (!tally) {
+        tally = { game, label: labelOf(game, data), games: 0, wins: 0, losses: 0, draws: 0 };
+        byGame.set(game, tally);
+      } else if (tally.label === game || tally.label === '其他') {
+        tally.label = labelOf(game, data);
+      }
+      tally.games += 1;
+      if (!row.won) {
         losses += 1;
+        tally.losses += 1;
+      } else if (data?.tie === true) {
+        draws += 1;
+        tally.draws += 1;
+      } else {
+        wins += 1;
+        tally.wins += 1;
       }
     }
+
+    const recent = (this.db.prepare(
+      `SELECT id FROM ledger_entries e
+        WHERE e.from_coo_id = ? OR e.to_coo_id = ?
+          OR EXISTS(SELECT 1 FROM ledger_participants p WHERE p.entry_id = e.id AND p.coo_id = ?)
+          OR EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id = e.id AND w.coo_id = ?)
+        ORDER BY e.ord DESC LIMIT 5`,
+    ).all(cooId, cooId, cooId, cooId) as { id: string }[])
+      .map((row) => this.byId(row.id))
+      .filter((entry): entry is LedgerEntry => !!entry)
+      .map((entry) => viewOf(entry, cooId));
+
     return {
       cooId,
       games,
       wins,
       losses,
       draws,
+      byGame: [...byGame.values()].sort((left, right) => (
+        right.games - left.games || left.game.localeCompare(right.game)
+      )),
       chips: this.balanceOf(cooId),
       open: this.openFor(cooId),
+      recent,
     };
+  }
+
+  /** 本房最近的公开条目，给房间里的所有人看；不含别人的 cooId。 */
+  publicInRoom(room: string, limit = 5): LedgerEntryView[] {
+    return (this.db.prepare(
+      `SELECT id FROM ledger_entries
+        WHERE room_id = ? AND visibility = 'room'
+        ORDER BY ord DESC LIMIT ?`,
+    ).all(room, Math.max(1, Math.trunc(limit))) as { id: string }[])
+      .map((row) => this.byId(row.id))
+      .filter((entry): entry is LedgerEntry => !!entry)
+      .map((entry) => viewOf(entry));
   }
 
   count(): number {

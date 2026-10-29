@@ -114,6 +114,7 @@ export type ActionRequest =
   | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
   | { type: 'table_open'; game?: TableGame; stake?: number }
   | { type: 'table_join' }
+  | { type: 'table_leave' }
   | { type: 'table_start' }
   | { type: 'table_action'; action: 'roll' | 'stand'; die?: number }
   | { type: 'ddz_action'; move: 'bid' | 'play' | 'pass'; call?: boolean; cards?: string[] }

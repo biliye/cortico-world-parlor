@@ -237,6 +237,12 @@ export class MonopolyTable implements TableEngine {
     throw new TableError('not_open', '大富翁开局后不能再加人；要加人请下一局');
   }
 
+  /** 大富翁开局后没有中途离桌；淘汰/托管算结束，届时整桌收场。 */
+  leave(seatId: string): TableEvent {
+    if (!this.has(seatId)) throw new TableError('not_seated', '你不在这一局里');
+    throw new TableError('not_open', '大富翁开局后不能中途离开');
+  }
+
   start(by: string, now: number): TableStep {
     void by;
     void now;

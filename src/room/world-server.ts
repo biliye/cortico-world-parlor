@@ -148,6 +148,9 @@ export class WorldServer {
   private baseUrl = '';
   private readonly sse = new Map<string, Set<SseClient>>();
   private pumpTimer?: NodeJS.Timeout;
+  private clockTimer?: NodeJS.Timeout;
+  /** 每厅一个 RoomHost：牌桌引擎在内存里，必须跨请求共用同一个实例。 */
+  private readonly hosts = new Map<string, RoomHost>();
 
   constructor(options: WorldServerOptions = {}) {
     this.db = openDb(options.dbFile ?? ':memory:');
@@ -189,12 +192,17 @@ export class WorldServer {
     this.baseUrl = `http://${host}:${address.port}`;
     this.pumpTimer = setInterval(() => this.pump(), 400);
     this.pumpTimer.unref?.();
+    this.clockTimer = setInterval(() => this.tickClock(), 1000);
+    this.clockTimer.unref?.();
     return { url: this.baseUrl, host: this.hostName, port: address.port };
   }
 
   async close(): Promise<void> {
     if (this.pumpTimer) clearInterval(this.pumpTimer);
     this.pumpTimer = undefined;
+    if (this.clockTimer) clearInterval(this.clockTimer);
+    this.clockTimer = undefined;
+    this.hosts.clear();
     for (const clients of this.sse.values()) {
       for (const client of clients) {
         try { client.res.end(); } catch { /* 已断开 */ }
@@ -226,7 +234,36 @@ export class WorldServer {
   }
 
   private host(roomId: string): RoomHost {
-    return new RoomHost(this.db, roomId, { now: this.now });
+    const existing = this.hosts.get(roomId);
+    if (existing) return existing;
+    const host = new RoomHost(this.db, roomId, { now: this.now });
+    this.hosts.set(roomId, host);
+    return host;
+  }
+
+  /**
+   * 每秒：牌桌超时、承诺到期、余额补给。
+   * 没人访问的客厅也要走到：先按「有活跃席位 / 有到期承诺」把 host 建出来。
+   */
+  private tickClock(): void {
+    const now = this.now();
+    try {
+      const occupied = this.db.prepare(
+        'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
+      ).all() as { room_id: string }[];
+      const due = this.db.prepare(
+        `SELECT DISTINCT room_id FROM ledger_entries
+          WHERE kind = 'promise' AND due_at IS NOT NULL AND due_at <= ? AND room_id IS NOT NULL`,
+      ).all(now) as { room_id: string }[];
+      for (const row of [...occupied, ...due]) this.host(row.room_id);
+      for (const host of this.hosts.values()) {
+        try { host.tickClock(now); } catch (error) {
+          console.error('parlor: 客厅时钟出错', error);
+        }
+      }
+    } catch (error) {
+      console.error('parlor: 时钟扫描失败', error);
+    }
   }
 
   /** Coo 身份：缺行就自动注册；secret 不匹配拒绝。 */
@@ -326,7 +363,7 @@ export class WorldServer {
       return;
     }
 
-    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream)$/);
+    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream|replay)$/);
     if (route) {
       const roomId = route[1];
       const action = route[2];
@@ -377,7 +414,7 @@ export class WorldServer {
       return;
     }
 
-    const alias = url.pathname.match(/^\/v1\/(room|history|action|mail|stream)$/);
+    const alias = url.pathname.match(/^\/v1\/(room|history|action|mail|stream|replay)$/);
     if (alias) {
       await this.roomRoute(req, res, url, this.defaultRoomId, alias[1], method);
       return;
@@ -471,27 +508,120 @@ export class WorldServer {
       const body = await readJson(req);
       const type = typeof body.type === 'string' ? body.type : '';
       const host = this.host(roomId);
-      let seq = host.latest();
-      let ts = this.now();
+      let delivered: unknown;
+      let seats: unknown;
+      let deadline: number | undefined;
+      let turn: string | undefined;
+      let text: string | undefined;
+
       if (type === 'say') {
-        const result = host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
-        seq = result.event.seq;
-        ts = result.event.ts;
+        host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
+      } else if (type === 'table_say') {
+        host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '');
       } else if (type === 'whisper') {
         const result = host.whisper(
           seat.cooId,
           typeof body.to === 'string' ? body.to : '',
           typeof body.text === 'string' ? body.text : '',
         );
-        seq = result.event.seq;
-        ts = result.event.ts;
+        delivered = result.delivered;
       } else if (type === 'set_tier') {
         if (typeof body.tier !== 'string') throw new HttpError(400, '挡位不对');
         host.setTier(seat.cooId, body.tier as WakeTier);
+      } else if (type === 'gift') {
+        const result = host.gift(
+          seat.cooId,
+          typeof body.to === 'string' ? body.to : '',
+          typeof body.text === 'string' ? body.text : '',
+          body.chips,
+        );
+        delivered = result.delivered;
+      } else if (type === 'promise') {
+        const result = host.promise(
+          seat.cooId,
+          typeof body.to === 'string' ? body.to : '',
+          typeof body.text === 'string' ? body.text : '',
+          body.due,
+          body.chips,
+        );
+        delivered = result.delivered;
+      } else if (type === 'respond') {
+        const actionName = body.action;
+        if (actionName !== 'accept' && actionName !== 'decline' && actionName !== 'done' && actionName !== 'cancel') {
+          throw new HttpError(400, '回应只能是 accept / decline / done / cancel');
+        }
+        const result = host.respond(seat.cooId, typeof body.id === 'string' ? body.id : '', actionName);
+        delivered = result.delivered;
+      } else if (type === 'table_open') {
+        host.openTable(seat.cooId, {
+          game: typeof body.game === 'string' ? body.game : undefined,
+          stake: body.stake,
+        });
+      } else if (type === 'table_join') {
+        host.joinTable(seat.cooId);
+      } else if (type === 'table_leave') {
+        host.leaveTable(seat.cooId);
+      } else if (type === 'table_start') {
+        const receipt = host.startTable(seat.cooId);
+        seats = receipt.seats;
+        deadline = receipt.deadline;
+        turn = receipt.turn;
+      } else if (type === 'table_action') {
+        if (host.tablePublic()?.game !== 'dice') {
+          throw new HttpError(400, '这张桌子不是骰子桌；斗地主用 ddz_action');
+        }
+        const receipt = host.tableAction(seat.cooId, { type: body.action, die: body.die });
+        deadline = receipt.deadline;
+        turn = receipt.turn;
+      } else if (type === 'ddz_action') {
+        if (host.tablePublic()?.game !== 'ddz') throw new HttpError(400, '这张桌子不是斗地主桌');
+        const receipt = host.tableAction(seat.cooId, { move: body.move, call: body.call, cards: body.cards });
+        deadline = receipt.deadline;
+        turn = receipt.turn;
+      } else if (type === 'monopoly') {
+        throw new HttpError(400, '这台服务器只跑骰子与斗地主；大富翁请用旧服务器');
       } else {
-        throw new HttpError(400, '聊天切片暂不支持这个动作');
+        throw new HttpError(400, '未知动作');
       }
-      json(res, 200, { ok: true, seq, ts, at: serverClock(ts) });
+
+      const ts = this.now();
+      json(res, 200, {
+        ok: true,
+        seq: host.latest(),
+        ts,
+        at: serverClock(ts),
+        ...(delivered && Array.isArray(delivered) && delivered.length > 0 ? { delivered } : {}),
+        ...(seats ? { seats } : {}),
+        ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
+        ...(turn ? { turn } : {}),
+        ...(text ? { text } : {}),
+      });
+      return;
+    }
+
+    if (action === 'replay' && method === 'GET') {
+      const seat = this.seatAuth(req, roomId);
+      const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
+      const before = Number(url.searchParams.get('before') ?? 0) || undefined;
+      const host = this.host(roomId);
+      const page = host.replay(seat.cooId, { limit, ...(before ? { before } : {}) });
+      json(res, 200, {
+        room: roomId,
+        latest: host.latest(),
+        now: this.now(),
+        at: serverClock(this.now()),
+        retentionDays: 7,
+        events: page.events.map((event) => ({
+          seq: event.seq,
+          ts: event.ts,
+          at: serverClock(event.ts),
+          type: event.type,
+          from: event.from,
+          text: event.text,
+          ...(event.data ? { data: event.data } : {}),
+        })),
+        older: page.older,
+      });
       return;
     }
 

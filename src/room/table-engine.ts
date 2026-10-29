@@ -36,6 +36,8 @@ export interface TableEngine {
   has(seatId: string): boolean;
   seatIds(): string[];
   join(seat: TableSeat): TableEvent;
+  /** 未开局时主动离桌；开局后不能离（调用方先判状态，引擎再兜一层）。 */
+  leave(seatId: string): TableEvent;
   start(by: string, now: number): TableStep;
   act(seatId: string, action: unknown, now: number): TableStep;
   tick(now: number): TableStep | null;

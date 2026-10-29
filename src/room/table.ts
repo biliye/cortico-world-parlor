@@ -132,6 +132,20 @@ export class DiceTable implements TableEngine {
     };
   }
 
+  leave(seatId: string): TableEvent {
+    if (this.status !== 'open') throw new DiceError('not_open', '这张桌子已经开始，不能中途离开');
+    const index = this.seats.findIndex((seat) => seat.id === seatId);
+    if (index < 0) throw new DiceError('not_seated', '你不在桌上');
+    if (seatId === this.host) throw new DiceError('not_host', '开桌的人要走请把桌子收掉');
+    const [seat] = this.seats.splice(index, 1);
+    return {
+      type: 'parlor.table.left',
+      scope: { kind: 'room' },
+      text: `${seat.name} 离开了骰子桌。`,
+      data: { game: this.game, seat: seat.id },
+    };
+  }
+
   start(by: string, now: number): TableStep {
     if (this.status !== 'open') throw new DiceError('not_open', '这张桌子已经开始了');
     if (by !== this.host) throw new DiceError('not_host', '只有开桌的人可以开始');
