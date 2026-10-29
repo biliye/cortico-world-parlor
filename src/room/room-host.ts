@@ -348,6 +348,22 @@ export class RoomHost {
     return this.mail.unreadCount(cooId, this.roomId);
   }
 
+  /** SSE 补看/轮询：从 since 之后、该 coo 可见的事件。 */
+  eventsSince(cooId: string, since: number, limit = 200): RoomEvent[] {
+    const interval = this.latestInterval(cooId);
+    if (!interval) return [];
+    return this.events.history(this.roomId, { cooId, interval, since, limit });
+  }
+
+  /** 改当前活跃席位的唤醒挡位。 */
+  setTier(cooId: string, tier: WakeTier): void {
+    const seat = this.seatOf(cooId);
+    if (!seat) throw new HostError('not_found', '你不在这个客厅里');
+    this.db.prepare(
+      'UPDATE room_seats SET tier = ? WHERE room_id = ? AND id = ? AND released_at IS NULL',
+    ).run(tier, this.roomId, seat.id);
+  }
+
   readMail(cooId: string, limit = 10, markRead = true) {
     return this.mail.list(cooId, this.roomId, limit, markRead);
   }
