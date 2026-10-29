@@ -32,18 +32,47 @@ export const migrate = (db: Db): void => {
   stmt.run('storage_mode', 'sqlite');
 };
 
+const transactionDepth = new WeakMap<Db, number>();
+let savepointSeq = 0;
+
 /**
- * 写事务：BEGIN IMMEDIATE，成功 COMMIT，失败 ROLLBACK。
+ * 写事务：最外层 BEGIN IMMEDIATE，嵌套用 SAVEPOINT。
+ * 这样 RoomHost 可以把「事件 + 席位 + 信箱」包在一个事务里，而 store 内部
+ * 仍然可以各自调用 withTransaction，不用知道外层有没有事务。
  * 事务里不要 await 网络/文件；提交后再广播事件。
  */
 export const withTransaction = <T>(db: Db, fn: () => T): T => {
-  db.exec('BEGIN IMMEDIATE');
+  const depth = transactionDepth.get(db) ?? 0;
+  if (depth === 0) {
+    db.exec('BEGIN IMMEDIATE');
+    transactionDepth.set(db, 1);
+    try {
+      const result = fn();
+      db.exec('COMMIT');
+      transactionDepth.set(db, 0);
+      return result;
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* 已经回滚/连接坏了 */ }
+      transactionDepth.set(db, 0);
+      throw error;
+    }
+  }
+
+  const name = `sp_${savepointSeq}`;
+  savepointSeq += 1;
+  db.exec(`SAVEPOINT ${name}`);
+  transactionDepth.set(db, depth + 1);
   try {
     const result = fn();
-    db.exec('COMMIT');
+    db.exec(`RELEASE ${name}`);
+    transactionDepth.set(db, depth);
     return result;
   } catch (error) {
-    try { db.exec('ROLLBACK'); } catch { /* 已经回滚/连接坏了 */ }
+    try {
+      db.exec(`ROLLBACK TO ${name}`);
+      db.exec(`RELEASE ${name}`);
+    } catch { /* 外层可能已经回滚 */ }
+    transactionDepth.set(db, depth);
     throw error;
   }
 };

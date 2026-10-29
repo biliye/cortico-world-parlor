@@ -105,6 +105,29 @@ describe('SQLite 地基', () => {
     expect((db.prepare('SELECT COUNT(*) AS n FROM rooms').get() as { n: number }).n).toBe(1);
   });
 
+  it('嵌套事务：内层失败只回滚内层，外层继续提交', () => {
+    coo('coo-aaaaaaaa');
+    withTransaction(db, () => {
+      room('lobby', 'coo-aaaaaaaa');
+      expect(() => withTransaction(db, () => {
+        room('inner', 'coo-aaaaaaaa');
+        throw new Error('inner');
+      })).toThrow('inner');
+      room('outer2', 'coo-aaaaaaaa');
+    });
+    const ids = (db.prepare('SELECT id FROM rooms ORDER BY id').all() as { id: string }[]).map((row) => row.id);
+    expect(ids).toEqual(['lobby', 'outer2']);
+  });
+
+  it('嵌套事务：外层失败时内层成功也一起回滚', () => {
+    coo('coo-aaaaaaaa');
+    expect(() => withTransaction(db, () => {
+      withTransaction(db, () => { room('lobby', 'coo-aaaaaaaa'); });
+      throw new Error('outer');
+    })).toThrow('outer');
+    expect((db.prepare('SELECT COUNT(*) AS n FROM rooms').get() as { n: number }).n).toBe(0);
+  });
+
   it('信箱逐封 read_at：未读只数 read_at IS NULL', () => {
     coo('coo-aaaaaaaa');
     room('lobby', 'coo-aaaaaaaa');
