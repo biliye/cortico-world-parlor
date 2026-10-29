@@ -171,6 +171,11 @@ export class RoomHost {
     return this.requireRoom();
   }
 
+  /** 这块地方叫什么：大厅是特殊客厅，事件文案别把大厅写成客厅。 */
+  private placeOf(roomId: string): string {
+    return getRoom(this.db, roomId)?.kind === 'hall' ? '大厅' : '客厅';
+  }
+
   latest(): number {
     return this.events.latest(this.roomId);
   }
@@ -228,7 +233,7 @@ export class RoomHost {
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${name} 进了客厅。`,
+        text: `${name} 进了${this.placeOf(this.roomId)}。`,
         data: { seatId: seat.id, name },
       });
       return { seat, token, event };
@@ -248,7 +253,7 @@ export class RoomHost {
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: `${seat.name} 离开了客厅。`,
+        text: `${seat.name} 离开了${this.placeOf(this.roomId)}。`,
         data: { seatId: seat.id, name: seat.name },
       });
       let released: SeatRow | null;
@@ -282,7 +287,7 @@ export class RoomHost {
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: `${seat.name} 离开了客厅，去「${target.name}」。`,
+        text: `${seat.name} 离开了${this.placeOf(this.roomId)}，去「${target.name}」。`,
         data: { seatId: seat.id, name: seat.name, to: targetRoomId },
       });
       let released: SeatRow | null;
@@ -311,7 +316,7 @@ export class RoomHost {
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${name} 进了客厅。`,
+        text: `${name} 进了${this.placeOf(targetRoomId)}。`,
         data: { seatId: joined.id, name, from: source.id },
       });
       return { released, seat: joined, token, leaveEvent, joinEvent };

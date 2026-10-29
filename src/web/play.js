@@ -389,7 +389,11 @@ function lineOf(event, tableBucket) {
       : type.startsWith('parlor.monopoly.') ? '大富翁'
         : type === 'parlor.ledger' ? '账本' : '';
     if (tag) node.append(el('span', 'tag tag-table', tag));
-    node.append(el('span', '', readable(event.text || '')), time);
+    // 服务器的事件文案是按「客厅」写的；人在大厅时显示成大厅（只换进/离开这两个说法，
+    // 不去动「去「默认客厅」」这种真正的客厅名字）。
+    let text = event.text || '';
+    if (inHall()) text = text.replace(/进了客厅/g, '进了大厅').replace(/离开了客厅/g, '离开了大厅');
+    node.append(el('span', '', readable(text)), time);
     return node;
   }
   const snap = state.snap;
@@ -406,7 +410,7 @@ function lineOf(event, tableBucket) {
   const meta = el('div', 'msg-meta');
   meta.append(el('span', 'msg-name', name));
   meta.append(el('span', 'tag ' + (whisper ? 'tag-whisper' : tableBucket ? 'tag-table' : 'tag-room'),
-    whisper ? '私聊' : tableTalk ? '牌桌私聊' : tableBucket ? '牌桌' : '客厅'));
+    whisper ? '私聊' : tableTalk ? '牌桌私聊' : tableBucket ? '牌桌' : inHall() ? '大厅' : '客厅'));
   meta.append(time);
   body.append(meta);
   body.append(el('p', '',
@@ -670,6 +674,7 @@ function buildShell() {
   const chatActions = el('div', 'chat-head-actions');
   const backRoom = el('button', 'link', '切回客厅');
   backRoom.type = 'button';
+  backRoom.title = '只切聊天栏的频道，不换客厅';
   backRoom.addEventListener('click', () => setTab('room'));
   const markRead = btn('都看过了', () => markMailRead(), { ghost: true, small: true });
   markRead.hidden = true;
@@ -837,12 +842,13 @@ function chatTab(tab, label, iconName) {
   node.type = 'button';
   node.dataset.chatTab = tab;
   node.setAttribute('role', 'tab');
-  node.append(icon(iconName), document.createTextNode(label));
+  const labelNode = el('span', 'chat-tab-label', label);
+  node.append(icon(iconName), labelNode);
   const badge = el('span', 'tab-count', '0');
   badge.hidden = true;
   node.append(badge);
   node.addEventListener('click', () => setTab(tab));
-  return { btn: node, badge };
+  return { btn: node, badge, labelNode };
 }
 
 function navButton(kind, label, iconName) {
@@ -1735,6 +1741,14 @@ function renderChat() {
   syncChatTabs();
   const tab = state.tab;
   if (ui.chatEyebrow) ui.chatEyebrow.textContent = inHall() ? '大厅' : '客厅 · 牌桌';
+  if (ui.tabRoom && ui.tabRoom.labelNode) {
+    ui.tabRoom.labelNode.textContent = inHall() ? '大厅' : '客厅';
+  }
+  if (ui.backRoom) {
+    // 这个按钮只是把聊天栏切到当前所在的频道，不是换客厅；已经在这一栏就不用显示。
+    ui.backRoom.textContent = inHall() ? '切到大厅' : '切回客厅';
+    ui.backRoom.hidden = tab === 'room';
+  }
   ui.composer.hidden = tab === 'mail';
   ui.mailNote.hidden = tab !== 'mail';
   ui.markRead.hidden = tab !== 'mail' || ((state.snap && state.snap.mailUnread) || 0) <= 0;
