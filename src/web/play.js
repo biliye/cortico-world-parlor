@@ -340,6 +340,10 @@ function pushLog(event, seed = false) {
 function lineOf(event, tableBucket) {
   const type = event.type || '';
   if (type === 'parlor.table.turn' || type === 'parlor.digest') return null;
+  // 出牌/过牌/开桌/开始/结算这些动作不进聊天栏：牌桌本身已经画出来了，
+  // 聊天栏只留人说的话（含桌内私聊），免得一局斗地主把聊天刷满。
+  if (type.startsWith('parlor.table.') && type !== 'parlor.table.say') return null;
+  if (type.startsWith('parlor.monopoly.')) return null;
   // 桌内发言只属于牌桌栏；桌子散了它也不该混进客厅。
   if (type === 'parlor.table.say' && !tableBucket) return null;
   const time = el('time', '', fmtClock(event.ts).slice(0, 5));

@@ -276,6 +276,9 @@ describe('网页玩家', () => {
     expect(js).toContain('客厅和不在桌上的人看不见');
     expect(js).toContain('你不在这一桌');
     expect(js).toContain("type: 'table_say'");
+    // 出牌/过牌这类牌桌动作不进聊天栏，只留人说的话。
+    expect(js).toContain("type.startsWith('parlor.table.') && type !== 'parlor.table.say'");
+    expect(js).toContain("type.startsWith('parlor.monopoly.')");
   });
 
   it('网页这版只开斗地主入口，骰子和大富翁收起，斗地主有结算手牌', () => {
