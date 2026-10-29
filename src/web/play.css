@@ -2184,3 +2184,77 @@ html.no-card-art .pcard.back { border: 0; }
     scroll-behavior: auto !important;
   }
 }
+
+/* —— 多客厅：房名牌可点、换客厅对话框 —— */
+button.room-pill {
+  font: inherit;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+button.room-pill:hover { border-color: var(--accent-border); color: var(--text); }
+.room-card .room-note { margin: 0; font-size: 12px; line-height: 1.5; }
+.rooms-dialog {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: min(560px, 92vw);
+  width: 100%;
+  color: var(--text);
+}
+.rooms-dialog::backdrop { background: rgba(70, 45, 35, .32); backdrop-filter: blur(2px); }
+.rooms-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(80vh, 720px);
+  padding: 18px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  background: var(--sheet-bg);
+  box-shadow: var(--shadow);
+}
+.rooms-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rooms-head h2 { margin: 0; font: 700 17px var(--font-ui); letter-spacing: .04em; }
+.rooms-status { margin: 0; font-size: 12px; }
+.rooms-list { display: flex; flex-direction: column; gap: 8px; overflow: auto; padding-right: 2px; }
+.rooms-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rooms-row:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+.rooms-row.is-here { border-color: var(--accent-border); background: var(--accent-soft); }
+.rooms-row .icon { width: 16px; height: 16px; color: var(--dim); flex: none; }
+.rooms-row-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.rooms-row-text strong { font-weight: 600; font-size: 13.5px; }
+.rooms-row-text small { color: var(--dim); font-size: 11.5px; }
+.rooms-here { flex: none; font-size: 11px; color: var(--accent-2); }
+.rooms-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.rooms-create h3 { width: 100%; margin: 0; font: 600 12px var(--font-ui); color: var(--muted); letter-spacing: .05em; }
+.rooms-create input, .rooms-create select {
+  flex: 1;
+  min-width: 120px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 13px var(--font-ui);
+}
+.rooms-create input:focus, .rooms-create select:focus { outline: 2px solid var(--focus); outline-offset: 1px; }

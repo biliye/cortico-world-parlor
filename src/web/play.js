@@ -104,6 +104,27 @@ function serverNow() {
   return Date.now() + state.offset;
 }
 
+/** 当前客厅；旧存档没有这一格时回落到默认客厅的 /v1/... 别名。 */
+function currentRoom() {
+  return (state.cfg && state.cfg.room) || '';
+}
+
+function inHall() {
+  return (state.snap && state.snap.id === 'hall') || currentRoom() === 'hall';
+}
+
+/** 单客厅接口改走 /v1/rooms/:id/...；信箱顺带取全局（跨厅邀请在里面）。 */
+function roomPath(path) {
+  const room = currentRoom();
+  if (!room) return path;
+  const [base, query] = path.split('?');
+  const match = /^\/v1\/(room|action|mail|replay|history|stream)$/.exec(base);
+  if (!match) return path;
+  let q = query || '';
+  if (match[1] === 'mail' && !/(^|&)all=/.test(q)) q = q ? q + '&all=1' : 'all=1';
+  return '/v1/rooms/' + encodeURIComponent(room) + '/' + match[1] + (q ? '?' + q : '');
+}
+
 function hasLiveTable() {
   const table = state.snap && state.snap.table;
   return !!table && (table.status === 'bidding' || table.status === 'playing');
@@ -130,7 +151,7 @@ async function api(path, init = {}) {
     headers.set('x-parlor-coo', state.cfg.cooId);
     headers.set('x-parlor-coo-secret', state.cfg.cooSecret);
   }
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(roomPath(path), { ...init, headers });
   let body = null;
   try {
     body = await response.json();
@@ -213,7 +234,7 @@ function connect() {
   }
   clearTimeout(state.reconnect);
   setConn('connecting');
-  const source = new EventSource('/v1/stream?since=' + state.latest + '&token=' + encodeURIComponent(state.cfg.token));
+  const source = new EventSource(roomPath('/v1/stream?since=' + state.latest + '&token=' + encodeURIComponent(state.cfg.token)));
   state.stream = source;
   source.onopen = () => {
     setConn('on');
@@ -413,7 +434,10 @@ function buildShell() {
 
   const top = el('header', 'topbar');
   const brand = brandNode();
-  const roomPill = el('div', 'room-pill');
+  const roomPill = el('button', 'room-pill');
+  roomPill.type = 'button';
+  roomPill.title = '换客厅';
+  roomPill.addEventListener('click', () => { void openRooms(); });
   const pillDot = el('span', 'live-dot');
   const pillText = el('span', 'room-pill-main');
   const pillSub = el('span', 'room-pill-sub');
@@ -531,6 +555,17 @@ function buildShell() {
   const tableList = el('ul', 'table-list');
   tablesCard.append(tablesHead, tableList);
   leftRail.append(tablesCard);
+
+  const roomCard = el('section', 'panel room-card');
+  const roomHead = el('div', 'panel-head');
+  const roomTitle = el('h2', '', '客厅');
+  const roomSwitch = el('button', 'link', '换');
+  roomSwitch.type = 'button';
+  roomSwitch.addEventListener('click', () => { void openRooms(); });
+  roomHead.append(roomTitle, roomSwitch);
+  const roomNote = el('p', 'room-note muted', '');
+  roomCard.append(roomHead, roomNote);
+  leftRail.append(roomCard);
 
   /* 中间：牌桌 / 大厅 */
   const center = el('section', 'center');
@@ -686,7 +721,7 @@ function buildShell() {
     topAvatar, topName, topSub, chipsText,
     leftRail, seatAvatar, seatName, seatSub,
     statChips, statWins, statGames, progressLeft, progressRight, progressFill,
-    ledgerNet, split, ledgerList, tableList,
+    ledgerNet, split, ledgerList, tableList, roomTitle, roomNote,
     viewTable, viewLobby, tableHead, mobileTicker, game, ticker,
     lobbyEyebrow, lobbyTitle, lobbySub, gameGrid, lobbyNotice, membersCount, memberRow,
     chatPanel, markRead, backRoom, tabRoom, tabTable, tabMail,
@@ -812,10 +847,18 @@ function renderTopbar() {
   const seated = snap.seats.filter((seat) => seat.kind !== 'observer').length;
   const pets = snap.seats.filter((seat) => seat.kind === 'pet');
   const coos = pets.filter((seat) => (snap.online || []).includes(seat.id)).length;
-  ui.roomPillText.textContent = seated + ' 人在座';
-  ui.roomPillSub.textContent = pets.length === 0
-    ? '还没有 Coo'
-    : coos > 0 ? coos + ' 位 Coo 在线' : pets.length + ' 位 Coo 离线';
+  const hall = inHall();
+  ui.roomPillText.textContent = snap.name || (hall ? '大厅' : '客厅');
+  ui.roomPillSub.textContent = seated + ' 人在座'
+    + (pets.length === 0 ? ' · 还没有 Coo' : coos > 0 ? ` · ${coos} 位 Coo 在线` : ` · ${pets.length} 位 Coo 离线`);
+  ui.roomTitle.textContent = hall ? '大厅' : '客厅';
+  ui.roomNote.textContent = hall
+    ? '大厅是入口；用「换」去一个客厅坐坐。'
+    : '用「换」去大厅或别的客厅；串门会释放这里的席位。';
+  for (const node of ui.viewButtons) {
+    if (node.dataset.view === 'table') node.hidden = hall;
+  }
+  if (hall && state.view === 'table') setView('lobby');
   ui.topAvatar.replaceChildren(avatarNode(snap.seat.id, 'avatar', { online: false }));
   ui.topName.textContent = snap.seat.name;
   const online = (snap.online || []).includes(snap.seat.id);
@@ -1279,6 +1322,12 @@ function openTableCard(table) {
   } else {
     box.append(el('p', 'muted', '等 ' + (names.get(table.host) || '发起人') + ' 开局。'));
   }
+  if (seated) {
+    actions.append(btn(host ? '收桌' : '退桌', () => actAndGo({ type: 'table_leave' }, 'lobby'), {
+      ghost: true,
+      small: true,
+    }));
+  }
   if (actions.children.length) box.append(actions);
   return box;
 }
@@ -1380,6 +1429,13 @@ function lobbyCard(game) {
     const go = btn(ddz.status === 'ended' ? '看结果' : '看牌桌', () => setView('table'), { primary: true, small: true });
     go.append(icon('arrow'));
     foot.append(go);
+    const seatedNow = (ddz.seats || []).some((seat) => seat.id === snap.seat.id);
+    if (ddz.status === 'open' && seatedNow) {
+      foot.append(btn(ddz.host === snap.seat.id ? '收桌' : '退桌', () => actAndGo({ type: 'table_leave' }, 'lobby'), {
+        ghost: true,
+        small: true,
+      }));
+    }
   } else if (other) {
     foot.append(el('span', 'muted', '这版先做斗地主'));
     foot.append(btn('看那桌', () => setView('table'), { small: true }));
@@ -1648,6 +1704,135 @@ function syncSheet() {
   syncNav();
 }
 
+/* —— 换客厅 —— */
+
+let roomsDialog = null;
+let roomsList = null;
+let roomsStatus = null;
+
+function ensureRoomsDialog() {
+  if (roomsDialog) return;
+  roomsDialog = el('dialog', 'rooms-dialog');
+  roomsDialog.setAttribute('aria-label', '换客厅');
+  const box = el('div', 'rooms-box');
+  const head = el('div', 'rooms-head');
+  const title = el('h2', '', '去哪个客厅');
+  const close = btn('关闭', () => roomsDialog.close(), { ghost: true, small: true });
+  head.append(title, close);
+  roomsStatus = el('p', 'rooms-status muted', '');
+  roomsList = el('div', 'rooms-list');
+  const create = el('div', 'rooms-create');
+  create.append(el('h3', '', '开一间新的'));
+  const nameInput = el('input');
+  nameInput.type = 'text';
+  nameInput.maxLength = 32;
+  nameInput.placeholder = '客厅名字（2–32 个字）';
+  const visInput = el('select');
+  for (const [value, label] of [['public', '公开'], ['unlisted', '不公开'], ['private', '私密']]) {
+    const option = el('option', '', label);
+    option.value = value;
+    visInput.append(option);
+  }
+  const createBtn = btn('开一间', async () => {
+    const name = nameInput.value.trim();
+    if (name.length < 2) {
+      showToast('客厅名字至少两个字', 'bad');
+      return;
+    }
+    createBtn.disabled = true;
+    try {
+      const created = await api('/v1/rooms', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, visibility: visInput.value }),
+      });
+      await goRoom(created.room.id);
+    } catch (error) {
+      showToast(error.message || '开不了这间客厅', 'bad');
+    } finally {
+      createBtn.disabled = false;
+    }
+  }, { small: true, primary: true });
+  create.append(nameInput, visInput, createBtn);
+  box.append(head, roomsStatus, roomsList, create);
+  roomsDialog.append(box);
+  roomsDialog.addEventListener('click', (event) => {
+    if (event.target === roomsDialog) roomsDialog.close();
+  });
+  document.body.append(roomsDialog);
+}
+
+async function openRooms() {
+  ensureRoomsDialog();
+  roomsStatus.textContent = '正在取客厅目录…';
+  clear(roomsList);
+  if (typeof roomsDialog.showModal === 'function') {
+    if (!roomsDialog.open) roomsDialog.showModal();
+  } else {
+    roomsDialog.setAttribute('open', '');
+  }
+  try {
+    const [hall, directory] = await Promise.all([api('/v1/hall'), api('/v1/rooms?all=1')]);
+    const here = (state.snap && state.snap.id) || currentRoom();
+    roomsStatus.textContent = hall.me ? '选一个客厅过去；串门会释放现在的席位。' : '';
+    const rows = [
+      { id: 'hall', name: '大厅', sub: `${(hall.hall.seats || []).length} 人 · 入口` },
+      ...(directory.rooms || []).map((room) => ({
+        id: room.id,
+        name: room.name,
+        sub: `${room.seats}/${room.capacity} 人 · ${room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开' : '私密'}${room.topic ? ' · ' + room.topic : ''}`,
+      })),
+    ];
+    for (const row of rows) {
+      const node = el('button', 'rooms-row');
+      node.type = 'button';
+      const text = el('span', 'rooms-row-text');
+      text.append(el('strong', '', row.name), el('small', '', row.sub));
+      node.append(text);
+      if (row.id === here) {
+        node.classList.add('is-here');
+        node.append(el('span', 'rooms-here', '这里'));
+      } else {
+        node.append(icon('arrow'));
+      }
+      node.addEventListener('click', () => { void goRoom(row.id); });
+      roomsList.append(node);
+    }
+  } catch (error) {
+    roomsStatus.textContent = error.message || '取不到客厅目录';
+  }
+}
+
+async function goRoom(id) {
+  if (!state.cfg) return;
+  const from = (state.snap && state.snap.id) || currentRoom();
+  if (!from) {
+    showToast('还没进过客厅，先加入一个', 'bad');
+    return;
+  }
+  if (id === from) {
+    if (roomsDialog) roomsDialog.close();
+    return;
+  }
+  try {
+    const moved = await api(`/v1/rooms/${encodeURIComponent(from)}/switch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: id }),
+    });
+    writeStore({
+      ...state.cfg,
+      room: moved.room,
+      token: moved.token,
+      seatId: moved.seat.id,
+      name: moved.seat.name,
+    });
+    location.href = '/play?room=' + encodeURIComponent(moved.room);
+  } catch (error) {
+    showToast(error.message || '换不了客厅', 'bad');
+  }
+}
+
 /* —— 说话 / 小工具 —— */
 
 async function sendSay() {
@@ -1745,6 +1930,7 @@ function renderJoin(message = '') {
   async function submitJoin() {
     const name = nameInput.value.trim();
     const invite = inviteInput.value.trim();
+    const wantedRoom = new URLSearchParams(location.search).get('room') || '';
     error.textContent = '';
     if (!name) {
       error.textContent = '先起一个名字。';
@@ -1759,7 +1945,7 @@ function renderJoin(message = '') {
       const response = await fetch('/v1/player/join', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-parlor-invite': invite },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, ...(wantedRoom ? { room: wantedRoom } : {}) }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || '加入失败');

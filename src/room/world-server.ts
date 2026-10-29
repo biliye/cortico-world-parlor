@@ -16,8 +16,8 @@ import { migrate, openDb, type Db } from './db.ts';
 import { MailDb } from './mail-db.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
-  RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, listRooms, memberOf, resolveRoom,
-  type RoomRow,
+  RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken, listRooms, memberOf,
+  resolveRoom, seatByTokenHash, type RoomRow,
 } from './room-seat-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
@@ -334,6 +334,17 @@ export class WorldServer {
     return this.coo.claimIdentity(cooId, secret) === 'ok' ? cooId : null;
   }
 
+  /** 网页用席位令牌也能看目录/大厅；Coo 客户端仍用身份头。 */
+  private cooOrSeat(req: IncomingMessage): string {
+    const direct = this.identify(req);
+    if (direct) return direct;
+    const token = bearer(req);
+    if (!token) throw new HttpError(401, '缺少身份');
+    const seat = seatByTokenHash(this.db, hashSeatToken(token));
+    if (!seat || seat.releasedAt !== null) throw new HttpError(401, '席位令牌无效或已经离开');
+    return seat.cooId;
+  }
+
   private seatAuth(req: IncomingMessage, roomId: string, tokenOverride?: string) {
     const token = tokenOverride ?? bearer(req);
     if (!token) throw new HttpError(401, '缺少席位令牌');
@@ -387,7 +398,7 @@ export class WorldServer {
     }
 
     if (method === 'GET' && url.pathname === '/v1/hall') {
-      const cooId = this.cooAuth(req);
+      const cooId = this.cooOrSeat(req);
       const hall = this.ensureHall();
       json(res, 200, {
         hall: {
@@ -449,7 +460,7 @@ export class WorldServer {
 
     if (method === 'GET' && url.pathname === '/v1/rooms') {
       const all = url.searchParams.get('all') === '1';
-      const cooId = all ? this.cooAuth(req) : null;
+      const cooId = all ? this.cooOrSeat(req) : null;
       const rooms = listRooms(this.db, { kind: 'room' }).filter((room) => (
         room.visibility === 'public'
         || (all && cooId !== null && memberOf(this.db, room.id, cooId) !== null)
@@ -524,16 +535,21 @@ export class WorldServer {
       const body = await readJson(req);
       this.checkInvite(req, body);
       const name = typeof body.name === 'string' ? body.name : '';
+      const value = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : this.defaultRoomId;
+      const room = getRoom(this.db, value) ?? resolveRoom(this.db, value);
+      if (!room) throw new HttpError(404, `客厅不存在：${value}`);
+      if (room.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
       const cooId = randomUUID();
       const secret = randomBytes(32).toString('base64url');
       this.coo.registerCoo(cooId, secret, 'human', name);
-      const host = this.host(this.defaultRoomId);
+      const host = this.host(room.id);
       const joined = host.join(cooId, { name, kind: 'human', tier: 'off' });
       json(res, 200, {
-        room: this.defaultRoomId,
-        seat: seatOfRow(this.defaultRoomId, joined.seat),
+        room: room.id,
+        roomName: room.name,
+        seat: seatOfRow(room.id, joined.seat),
         token: joined.token,
-        maxSeats: host.room().capacity,
+        maxSeats: room.capacity,
         identity: { cooId, cooSecret: secret },
       });
       return;

@@ -172,6 +172,32 @@ describe('WorldServer 大厅、邀请与网页', () => {
     expect(snapshot.body.id).toBe(roomId);
   });
 
+  it('网页玩家可以指定客厅入场，并用席位令牌看目录、换房', async () => {
+    const app = await start();
+    const created = await post(app.url, '/v1/rooms', { name: '网页厅', visibility: 'public' }, cooHeaders(A));
+    const roomId = (created.body.room as { id: string }).id;
+
+    const joined = await post(app.url, '/v1/player/join', { name: '爸爸', room: roomId }, {
+      'x-parlor-invite': 'inv',
+    });
+    expect(joined.status).toBe(200);
+    expect(joined.body.room).toBe(roomId);
+    const token = joined.body.token as string;
+
+    const directory = await get(app.url, '/v1/rooms?all=1', token);
+    expect((directory.body.rooms as { id: string }[]).some((room) => room.id === roomId)).toBe(true);
+    const hall = await get(app.url, '/v1/hall', token);
+    expect((hall.body.me as { room: string }).room).toBe(roomId);
+
+    const moved = await post(app.url, `/v1/rooms/${roomId}/switch`, { to: 'hall' }, {
+      authorization: `Bearer ${token}`,
+    });
+    expect(moved.status).toBe(200);
+    expect(moved.body.room).toBe('hall');
+    // 旧令牌当场失效。
+    expect((await get(app.url, '/v1/rooms/hall/room', token)).status).toBe(401);
+  });
+
   it('网页 /play 与静态资源由这台服务器直接给', async () => {
     const app = await start();
     const page = await fetch(`${app.url}/play`);
