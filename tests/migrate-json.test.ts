@@ -169,3 +169,38 @@ describe('旧 JSON 迁移到 SQLite', () => {
     expect(report.counts.events).toBe(2);
   });
 });
+
+describe('迁移后的旧家长链接', () => {
+  it('/v1/owner?token=… 换成新会话，跳到 /parent', async () => {
+    writeFileSync(join(dir, 'room.json'), JSON.stringify({
+      version: 1,
+      id: 'lobby',
+      maxSeats: 8,
+      seq: 1,
+      seatSeq: 1,
+      epoch: 'epoch-1',
+      seats: [{
+        id: 's1', name: '阿岚', kind: 'pet', tier: 'digest', joinedAt: 1,
+        token: 'old-seat-token', ownerToken: 'old-owner-token', cooId: A,
+      }],
+      events: [{ seq: 1, ts: 1, type: 'parlor.say', from: 's1', scope: { kind: 'room' }, text: 'hi' }],
+    }));
+    const dbFile = join(dir, 'legacy.db');
+    migrateLegacyJson({ dataDir: dir, dbFile });
+    server = new WorldServer({ dbFile, port: 0, inviteCode: 'inv' });
+    await server.listen();
+
+    const opened = await fetch(`${server.url}/v1/owner?token=old-owner-token`, { redirect: 'manual' });
+    expect(opened.status).toBe(302);
+    expect(opened.headers.get('location')).toBe('/parent');
+    const cookie = (opened.headers.get('set-cookie') ?? '').split(';')[0];
+    expect(cookie).toContain('parlor_parent=');
+
+    const me = await fetch(`${server.url}/v1/parent/me`, { headers: { cookie } });
+    expect(me.status).toBe(200);
+    expect((await me.json() as { account: { cooId: string } }).account.cooId).toBe(A);
+
+    const bad = await fetch(`${server.url}/v1/owner?token=not-a-real-token`, { redirect: 'manual' });
+    expect(bad.status).toBe(410);
+  });
+});

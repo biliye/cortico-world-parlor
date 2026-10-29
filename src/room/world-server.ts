@@ -5,7 +5,7 @@
  * 现有旧 World 通过 `/v1/...` 别名落到默认客厅；新客户端走 `/v1/rooms/:id/...`。
  * 牌桌/家长门户/大厅目录还没接进来；这一步先把多房 + 可见区间 + 全局账户跑通。
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -443,8 +443,16 @@ export class WorldServer {
 
     if (method === 'POST' && url.pathname === '/v1/me/owner-key/rotate') {
       const cooId = this.cooAuth(req);
-      const account = this.coo.byCooId(cooId);
-      if (!account) throw new HttpError(404, '这个 Coo 还没有家长账户');
+      let account = this.coo.byCooId(cooId);
+      if (!account) {
+        // 迁移过来的老 Coo 可能还没有 accounts 行：第一次要 key 时建一个。
+        const ensured = this.coo.ensureAccount(cooId);
+        account = ensured.account;
+        if (ensured.ownerKey) {
+          json(res, 200, { ownerKey: ensured.ownerKey });
+          return;
+        }
+      }
       const key = this.coo.rotateOwnerKey(cooId);
       if (!key) throw new HttpError(409, '轮换失败；稍后再试');
       this.coo.revokeAllSessions(account.id);
@@ -632,7 +640,26 @@ export class WorldServer {
     }
 
     if (url.pathname === '/v1/owner') {
-      throw new HttpError(410, '旧家长页已停用；请用扩展面板的新家长链接');
+      // 0.13.x 的家长链接是 /v1/owner?token=<每厅 ownerToken>。迁移把哈希存进
+      // room_seats.legacy_owner_token_hash；这里认出来就换一个 HttpOnly 会话，跳到新页面。
+      const token = url.searchParams.get('token') ?? '';
+      if (!token) throw new HttpError(410, '旧家长链接缺 token；请从扩展面板重新拿');
+      const hash = createHash('sha256').update(token).digest('hex');
+      const seat = this.db.prepare(
+        'SELECT room_id, coo_id FROM room_seats WHERE legacy_owner_token_hash = ? LIMIT 1',
+      ).get(hash) as { room_id: string; coo_id: string } | undefined;
+      if (!seat) throw new HttpError(410, '这个旧家长链接已经失效；请从扩展面板重新拿');
+      const account = this.coo.ensureAccount(seat.coo_id);
+      const session = this.coo.createSession(account.account.id);
+      if (!session) throw new HttpError(403, '这个家长账户被停用了');
+      res.writeHead(302, {
+        'set-cookie': this.parentCookie(session.token, req),
+        location: '/parent',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      });
+      res.end();
+      return;
     }
 
     throw new HttpError(404, '没有这个地址');
