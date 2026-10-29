@@ -226,14 +226,6 @@ export function mountDdz(root, ctx) {
     return slot;
   }
 
-  function cardRow(cards, art, cls) {
-    const row = el('div', cls || '');
-    cards.forEach((card, index) => {
-      row.append(cardButton(card, false, null, true, art ? art[index] : null));
-    });
-    return row;
-  }
-
   function backCard(extra) {
     const back = el('div', 'pcard back' + (extra ? ' ' + extra : ''));
     back.setAttribute('aria-hidden', 'true');
@@ -422,7 +414,10 @@ export function mountDdz(root, ctx) {
       node.append(head);
       const cards = el('div', 'ddz-end-cards');
       if (row && Array.isArray(row.cards) && row.cards.length) {
-        cards.append(cardRow(row.cards, row.handCards || null, ''));
+        row.cards.forEach((card, index) => {
+          cards.append(cardButton(card, false, null, true,
+            row.handCards ? row.handCards[index] : null));
+        });
       } else if (!row && (seat.cardsLeft ?? 0) > 0) {
         cards.append(el('span', 'ddz-end-empty', '剩 ' + seat.cardsLeft + ' 张'));
       } else {

@@ -149,7 +149,7 @@ a { color: var(--accent-2); }
 .app {
   position: relative;
   z-index: 2;
-  max-width: 1520px;
+  max-width: 2400px;
   margin: 0 auto;
   padding: 0 24px 40px;
 }
@@ -454,7 +454,9 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 /* —— 布局 —— */
 .layout {
   display: grid;
-  grid-template-columns: 272px minmax(0, 1fr) 348px;
+  /* 中间那栏给一个上限：屏幕再宽，牌桌也不会被拉成一条。 */
+  grid-template-columns: 272px minmax(0, 1360px) 348px;
+  justify-content: center;
   gap: 18px;
   align-items: start;
   padding-top: 8px;
