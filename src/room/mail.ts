@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export type MailKind = 'whisper' | 'gift' | 'promise' | 'ledger';
+export type MailKind = 'whisper' | 'gift' | 'promise' | 'ledger' | 'invite';
 
 export interface MailItem {
   id: string;
@@ -80,7 +80,7 @@ export class MailWriteError extends Error {
 }
 
 const DEFAULT_LIMIT = 400;
-const KINDS: readonly MailKind[] = ['whisper', 'gift', 'promise', 'ledger'];
+const KINDS: readonly MailKind[] = ['whisper', 'gift', 'promise', 'ledger', 'invite'];
 
 const isItem = (value: unknown): value is MailItem => {
   if (!value || typeof value !== 'object') return false;

@@ -174,11 +174,14 @@ CREATE INDEX IF NOT EXISTS ix_ledger_from ON ledger_entries(from_coo_id, ts);
 CREATE INDEX IF NOT EXISTS ix_ledger_to ON ledger_entries(to_coo_id, ts);
 CREATE INDEX IF NOT EXISTS ix_ledger_ref ON ledger_entries(ref_entry_id);
 CREATE INDEX IF NOT EXISTS ix_ledger_social ON ledger_entries(from_coo_id, kind, ts);
+CREATE INDEX IF NOT EXISTS ix_ledger_due ON ledger_entries(due_at) WHERE due_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ledger_participants (
   entry_id TEXT NOT NULL REFERENCES ledger_entries(id) ON DELETE CASCADE,
   coo_id TEXT NOT NULL REFERENCES coos(id),
-  PRIMARY KEY (entry_id, coo_id)
+  position INTEGER NOT NULL,
+  PRIMARY KEY (entry_id, coo_id),
+  UNIQUE (entry_id, position)
 );
 CREATE INDEX IF NOT EXISTS ix_ledger_participants_coo ON ledger_participants(coo_id, entry_id);
 
@@ -194,9 +197,11 @@ CREATE TABLE IF NOT EXISTS ledger_transfers (
   entry_id TEXT NOT NULL REFERENCES ledger_entries(id) ON DELETE CASCADE,
   from_kind TEXT NOT NULL CHECK (from_kind IN ('coo','room')),
   from_coo_id TEXT REFERENCES coos(id),
-  to_coo_id TEXT NOT NULL REFERENCES coos(id),
+  to_kind TEXT NOT NULL CHECK (to_kind IN ('coo','room')),
+  to_coo_id TEXT REFERENCES coos(id),
   amount INTEGER NOT NULL CHECK (amount > 0),
-  CHECK ((from_kind = 'coo') = (from_coo_id IS NOT NULL))
+  CHECK ((from_kind = 'coo') = (from_coo_id IS NOT NULL)),
+  CHECK ((to_kind = 'coo') = (to_coo_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS ix_transfer_from ON ledger_transfers(from_coo_id);
 CREATE INDEX IF NOT EXISTS ix_transfer_to ON ledger_transfers(to_coo_id);
@@ -208,7 +213,7 @@ CREATE TABLE IF NOT EXISTS mail (
   ts INTEGER NOT NULL,
   coo_id TEXT NOT NULL REFERENCES coos(id),
   room_id TEXT NOT NULL REFERENCES rooms(id),
-  kind TEXT NOT NULL CHECK (kind IN ('whisper','gift','promise','ledger')),
+  kind TEXT NOT NULL CHECK (kind IN ('whisper','gift','promise','ledger','invite')),
   action TEXT,
   from_name TEXT NOT NULL,
   text TEXT NOT NULL,

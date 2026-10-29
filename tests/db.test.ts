@@ -118,6 +118,15 @@ describe('SQLite 地基', () => {
     expect((db.prepare('SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND read_at IS NULL').get('coo-aaaaaaaa') as { n: number }).n).toBe(1);
   });
 
+  it('信箱支持 invite（跨厅邀请）', () => {
+    coo('coo-aaaaaaaa');
+    room('lobby', 'coo-aaaaaaaa');
+    db.prepare('INSERT INTO mail(id, ts, coo_id, room_id, kind, from_name, text) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('m1', 1, 'coo-aaaaaaaa', 'lobby', 'invite', '阿岚', '来我客厅');
+    const row = db.prepare('SELECT kind FROM mail WHERE id = ?').get('m1') as { kind: string };
+    expect(row.kind).toBe('invite');
+  });
+
   it('账本 grant 只发一次；refill 可另记', () => {
     coo('coo-aaaaaaaa');
     room('lobby', 'coo-aaaaaaaa');
