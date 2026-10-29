@@ -144,7 +144,10 @@ export class RoomHost {
   /** 客厅发言与桌内发言共用同一个间隔，防止交替发绕过限速。 */
   private readonly lastSay = new Map<string, number>();
 
-  constructor(private readonly db: Db, roomId: string, options: RoomHostOptions = {}) {
+  private readonly db: Db;
+
+  constructor(db: Db, roomId: string, options: RoomHostOptions = {}) {
+    this.db = db;
     this.roomId = roomId;
     this.events = new EventDb(db);
     this.now = options.now ?? Date.now;
@@ -378,6 +381,24 @@ export class RoomHost {
     });
   }
 
+  /**
+   * 跨房通知：给此刻在这个客厅的某个 Coo 写一条 seat-scope 事件（不写信箱）。
+   * 目标不在这个客厅时返回 null；调用方自己决定要不要另留一封信。
+   */
+  pingSeat(cooId: string, text: string, data: Record<string, unknown>, type = 'parlor.invite'): RoomEvent | null {
+    const seat = this.seatOf(cooId);
+    if (!seat) return null;
+    return this.events.append(this.roomId, {
+      type,
+      ts: this.now(),
+      from: 'system',
+      scope: { kind: 'seat', seatId: seat.id },
+      text,
+      data,
+      audience: [{ cooId, seatId: seat.id }],
+    });
+  }
+
   /** 赛后回看：历来有权看的全部事件，不受当前席位区间限制。 */
   replay(cooId: string, options: { before?: number; limit?: number } = {}): { events: RoomEvent[]; older: boolean } {
     this.requireRoom();
@@ -393,11 +414,13 @@ export class RoomHost {
     const interval = { visibleFromSeq: seat.visibleFromSeq, visibleUntilSeq: seat.visibleToSeq };
     const now = this.now();
     const latest = this.events.latest(this.roomId);
+    const room = this.requireRoom();
     return {
       id: this.roomId,
+      name: room.name,
       seat: seatOfRow(seat),
       seats: this.seats().map(seatOfRow),
-      maxSeats: this.requireRoom().capacity,
+      maxSeats: room.capacity,
       latest,
       now,
       at: serverClock(now),
@@ -407,7 +430,7 @@ export class RoomHost {
         ...(options.since !== undefined ? { since: options.since } : {}),
         limit: options.limit ?? 30,
       }),
-      mailUnread: this.mail.unreadCount(cooId, this.roomId),
+      mailUnread: this.mail.unreadCount(cooId),
       ...(this.tableHost.public() ? { table: this.tableHost.public() } : {}),
       tablePrivate: this.tableHost.private(seat.id),
       ledger: this.ledger.summaryFor(cooId),
@@ -415,8 +438,14 @@ export class RoomHost {
     };
   }
 
+  /** 这个客厅里的未读；跨厅邀请在全局未读里。 */
   mailUnread(cooId: string): number {
     return this.mail.unreadCount(cooId, this.roomId);
+  }
+
+  /** 全部客厅的未读（信箱是全局的，邀请也落在这里）。 */
+  mailUnreadAll(cooId: string): number {
+    return this.mail.unreadCount(cooId);
   }
 
   /** SSE 补看/轮询：从 since 之后、该 coo 可见的事件。 */
@@ -435,8 +464,8 @@ export class RoomHost {
     ).run(tier, this.roomId, seat.id);
   }
 
-  readMail(cooId: string, limit = 10, markRead = true) {
-    return this.mail.list(cooId, this.roomId, limit, markRead);
+  readMail(cooId: string, limit = 10, markRead = true, all = false) {
+    return this.mail.list(cooId, all ? undefined : this.roomId, limit, markRead);
   }
 
   // —— 牌桌 ——

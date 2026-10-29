@@ -175,6 +175,8 @@ export interface ActionResponse {
 
 export interface RoomSnapshot {
   id: string;
+  /** 给人看的客厅名；旧数据没有时回落到 id。 */
+  name?: string;
   /** 调用者自己的席位。 */
   seat: Seat;
   seats: Seat[];
@@ -205,6 +207,58 @@ export interface RoomSnapshot {
    * 与私牌事件被服务端藏起来了。家长下场对打时靠它防偷看。
    */
   ownerPrivateHidden?: boolean;
+}
+
+/** 目录里的一条客厅。 */
+export interface RoomSummary {
+  id: string;
+  kind: 'hall' | 'room';
+  name: string;
+  topic: string;
+  visibility: 'public' | 'unlisted' | 'private';
+  capacity: number;
+  /** 现在坐着的会说话席位（不含观看者）。 */
+  seats: number;
+  archived: boolean;
+  lastActiveAt: number;
+}
+
+/** 我在哪：全局身份 + 当前席位 + 能看到的客厅目录。 */
+export interface MeView {
+  cooId: string;
+  seat: { room: string; id: string; name: string; kind: SeatKind; tier: WakeTier } | null;
+  rooms: RoomSummary[];
+}
+
+/** 大厅：谁在大厅、公开目录、我在哪。 */
+export interface HallView {
+  hall: {
+    id: string;
+    name: string;
+    topic: string;
+    capacity: number;
+    seats: Array<{ id: string; name: string; kind: SeatKind }>;
+  };
+  me: { room: string; id: string; name: string } | null;
+  rooms: RoomSummary[];
+}
+
+/** 换房回执：新席位与新令牌；旧令牌立刻失效。 */
+export interface SwitchResponse {
+  ok: true;
+  room: string;
+  seat: Seat;
+  token: string;
+  leaveSeq: number;
+  joinSeq: number;
+}
+
+/** 邀请回执。 */
+export interface InviteResponse {
+  ok: true;
+  room: string;
+  to: string;
+  mailSeq: number;
 }
 
 /** 报名表：还没开局的大富翁。 */

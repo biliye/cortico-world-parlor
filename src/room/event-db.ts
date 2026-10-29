@@ -94,7 +94,11 @@ const clampLimit = (value: number | undefined, fallback = 50): number => (
 );
 
 export class EventDb {
-  constructor(private readonly db: Db) {}
+  private readonly db: Db;
+
+  constructor(db: Db) {
+    this.db = db;
+  }
 
   latest(roomId: string): number {
     const row = this.db.prepare('SELECT seq FROM rooms WHERE id = ?').get(roomId) as { seq: number } | undefined;

@@ -13,9 +13,10 @@ import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
 import { CooAccountDb } from './coo-account-db.ts';
 import { migrate, openDb, type Db } from './db.ts';
+import { MailDb } from './mail-db.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
-  RoomSeatError, activeSeats, createRoom, getRoom, listRooms, memberOf,
+  RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, listRooms, memberOf, resolveRoom,
   type RoomRow,
 } from './room-seat-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
@@ -31,10 +32,35 @@ export interface WorldServerOptions {
 
 interface SseClient {
   cooId: string;
+  seatId: string;
   since: number;
   lastPing: number;
   res: ServerResponse;
 }
+
+const WEB_TYPES: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+};
+
+/** 网页客户端只从本站取脚本、样式与接口；没有内联脚本。 */
+const PLAY_CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
 
 const PACKAGE_VERSION = ((): string => {
   try {
@@ -151,6 +177,8 @@ export class WorldServer {
   private clockTimer?: NodeJS.Timeout;
   /** 每厅一个 RoomHost：牌桌引擎在内存里，必须跨请求共用同一个实例。 */
   private readonly hosts = new Map<string, RoomHost>();
+  /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
+  private readonly inviteTimes = new Map<string, number[]>();
 
   constructor(options: WorldServerOptions = {}) {
     this.db = openDb(options.dbFile ?? ':memory:');
@@ -219,18 +247,36 @@ export class WorldServer {
   }
 
   private ensureDefaultRoom(): void {
-    if (getRoom(this.db, this.defaultRoomId)) return;
     const system = 'system-owner';
     this.db.prepare(
       'INSERT OR IGNORE INTO coos(id, kind, display_name, created_at) VALUES (?, ?, ?, ?)',
     ).run(system, 'system', '系统', this.now());
-    createRoom(this.db, {
-      id: this.defaultRoomId,
-      name: '默认客厅',
-      ownerCooId: system,
-      visibility: 'unlisted',
-      capacity: 8,
-    }, this.now());
+    if (!getRoom(this.db, this.defaultRoomId)) {
+      createRoom(this.db, {
+        id: this.defaultRoomId,
+        name: '默认客厅',
+        ownerCooId: system,
+        visibility: 'unlisted',
+        capacity: 8,
+      }, this.now());
+    }
+    this.ensureHall();
+  }
+
+  /** 大厅是特殊客厅（kind = 'hall'）：有席位、能说话，但不进目录、没有牌桌。 */
+  private ensureHall(): RoomRow {
+    const existing = this.db.prepare("SELECT id FROM rooms WHERE kind = 'hall' LIMIT 1").get() as { id: string } | undefined;
+    if (existing) return getRoom(this.db, existing.id)!;
+    const now = this.now();
+    this.db.prepare(
+      `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, topic, epoch, seq, created_at, last_active_at)
+       VALUES (?, 'hall', ?, NULL, 'public', 32, ?, ?, 0, ?, ?)`,
+    ).run('hall', '大厅', '所有客厅的入口：看谁在线、有哪些客厅、去哪串门。', randomUUID(), now, now);
+    return getRoom(this.db, 'hall')!;
+  }
+
+  get hallId(): string {
+    return this.ensureHall().id;
   }
 
   private host(roomId: string): RoomHost {
@@ -309,6 +355,8 @@ export class WorldServer {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
 
+    if (method === 'GET' && this.serveWeb(url.pathname, res)) return;
+
     if (method === 'GET' && url.pathname === '/healthz') {
       const room = getRoom(this.db, this.defaultRoomId);
       json(res, 200, {
@@ -316,9 +364,86 @@ export class WorldServer {
         room: this.defaultRoomId,
         version: PACKAGE_VERSION,
         protocol: 2,
+        hall: this.hallId,
         rooms: listRooms(this.db, { kind: 'room' }).length,
         seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,
       });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/me') {
+      const cooId = this.cooAuth(req);
+      const seat = activeSeatForCoo(this.db, cooId);
+      json(res, 200, {
+        cooId,
+        seat: seat ? {
+          room: seat.roomId, id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier,
+        } : null,
+        rooms: listRooms(this.db, { kind: 'room' })
+          .filter((room) => room.visibility === 'public' || memberOf(this.db, room.id, cooId) !== null)
+          .map((room) => roomSummary(this.db, room)),
+      });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/hall') {
+      const cooId = this.cooAuth(req);
+      const hall = this.ensureHall();
+      json(res, 200, {
+        hall: {
+          id: hall.id,
+          name: hall.name,
+          topic: hall.topic,
+          capacity: hall.capacity,
+          seats: activeSeats(this.db, hall.id).map((seat) => ({
+            id: seat.id, name: seat.name, kind: seat.kind,
+          })),
+        },
+        me: (() => {
+          const seat = activeSeatForCoo(this.db, cooId);
+          return seat ? { room: seat.roomId, id: seat.id, name: seat.name } : null;
+        })(),
+        rooms: listRooms(this.db, { kind: 'room' })
+          .filter((room) => room.visibility === 'public' || memberOf(this.db, room.id, cooId) !== null)
+          .map((room) => roomSummary(this.db, room)),
+      });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/invite') {
+      const cooId = this.cooAuth(req);
+      const body = await readJson(req);
+      const seat = activeSeatForCoo(this.db, cooId);
+      if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再邀请');
+      const to = typeof body.to === 'string' ? body.to.trim() : '';
+      if (!to) throw new HttpError(400, '要写邀请谁（席位名或 Coo 身份）');
+      const rows = this.db.prepare(
+        `SELECT room_id, id, coo_id, name FROM room_seats
+          WHERE released_at IS NULL AND (coo_id = ? OR name = ? COLLATE NOCASE)`,
+      ).all(to, to) as { room_id: string; id: string; coo_id: string; name: string }[];
+      const target = rows.find((row) => row.coo_id === to)
+        ?? rows.find((row) => row.name.toLowerCase() === to.toLowerCase());
+      if (!target) throw new HttpError(404, `没有找到「${to}」这个席位`);
+      if (target.coo_id === cooId) throw new HttpError(400, '不能邀请自己');
+      const roomValue = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : seat.roomId;
+      const room = getRoom(this.db, roomValue) ?? resolveRoom(this.db, roomValue);
+      if (!room) throw new HttpError(404, '要去的客厅不存在');
+      if (room.archivedAt !== null) throw new HttpError(409, '那个客厅已经归档了');
+      this.checkInviteRate(cooId);
+      const extra = typeof body.text === 'string' ? body.text.trim().slice(0, 200) : '';
+      const line = `${seat.name} 邀请你去「${room.name}」${extra ? `：${extra}` : ''}。用 parlor_room_visit 进去。`;
+      const letter = new MailDb(this.db, { now: this.now }).append({
+        to: target.coo_id,
+        room: room.id,
+        kind: 'invite',
+        action: 'invite',
+        fromName: seat.name,
+        text: line,
+      });
+      this.host(target.room_id).pingSeat(target.coo_id, line, {
+        room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
+      });
+      json(res, 200, { ok: true, room: room.id, to: target.name, mailSeq: letter.seq });
       return;
     }
 
@@ -459,14 +584,16 @@ export class WorldServer {
     if (action === 'switch' && method === 'POST') {
       const seat = this.seatAuth(req, roomId);
       const body = await readJson(req);
-      const to = typeof body.to === 'string' ? body.to : '';
-      const moved = this.host(roomId).switchTo(seat.cooId, to, {
+      const value = typeof body.to === 'string' ? body.to : '';
+      const target = getRoom(this.db, value) ?? resolveRoom(this.db, value);
+      if (!target) throw new HttpError(404, `目标客厅不存在：${value}`);
+      const moved = this.host(roomId).switchTo(seat.cooId, target.id, {
         ...(typeof body.name === 'string' ? { name: body.name } : {}),
       });
       json(res, 200, {
         ok: true,
-        room: to,
-        seat: seatOfRow(to, moved.seat),
+        room: target.id,
+        seat: seatOfRow(target.id, moved.seat),
         token: moved.token,
         leaveSeq: moved.leaveEvent.seq,
         joinSeq: moved.joinEvent.seq,
@@ -490,7 +617,7 @@ export class WorldServer {
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
       const snapshot: RoomSnapshot = this.host(roomId).snapshot(seat.cooId, { since, limit });
-      json(res, 200, snapshot);
+      json(res, 200, { ...snapshot, online: this.onlineSeatIds(roomId) });
       return;
     }
 
@@ -629,7 +756,8 @@ export class WorldServer {
       const seat = this.seatAuth(req, roomId);
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
       const peek = url.searchParams.get('peek') === '1';
-      json(res, 200, this.host(roomId).readMail(seat.cooId, limit, !peek));
+      const all = url.searchParams.get('all') === '1';
+      json(res, 200, this.host(roomId).readMail(seat.cooId, limit, !peek, all));
       return;
     }
 
@@ -660,7 +788,7 @@ export class WorldServer {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
       cursor = event.seq;
     }
-    const client: SseClient = { cooId: seat.cooId, since: cursor, lastPing: this.now(), res };
+    const client: SseClient = { cooId: seat.cooId, seatId: seat.id, since: cursor, lastPing: this.now(), res };
     let clients = this.sse.get(roomId);
     if (!clients) {
       clients = new Set();
@@ -671,6 +799,59 @@ export class WorldServer {
       clients?.delete(client);
       if (clients?.size === 0) this.sse.delete(roomId);
     });
+  }
+
+  /** 有推送连接的席位（快照里的在线标记）。 */
+  private onlineSeatIds(roomId: string): string[] {
+    const clients = this.sse.get(roomId);
+    return clients ? [...new Set([...clients].map((client) => client.seatId))] : [];
+  }
+
+  /** 定向邀请限频：一小时最多 20 次，防止拿邀请刷别人的提醒。 */
+  private checkInviteRate(cooId: string): void {
+    const now = this.now();
+    const cutoff = now - 3_600_000;
+    const times = (this.inviteTimes.get(cooId) ?? []).filter((at) => at >= cutoff);
+    if (times.length >= 20) throw new HttpError(429, '一小时内最多邀请 20 次，过一会儿再来');
+    times.push(now);
+    this.inviteTimes.set(cooId, times);
+  }
+
+  /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
+  private serveWeb(pathname: string, res: ServerResponse): boolean {
+    if (pathname === '/play' || pathname === '/play/') {
+      this.sendWeb('play.html', res, true);
+      return true;
+    }
+    const prefix = '/play/assets/';
+    if (!pathname.startsWith(prefix)) return false;
+    const rel = pathname.slice(prefix.length);
+    if (!rel || rel.startsWith('/') || rel.includes('..') || rel.includes('\\')
+      || !/^[A-Za-z0-9._/-]+$/.test(rel)) {
+      throw new HttpError(404, '没有这个文件');
+    }
+    this.sendWeb(rel, res, false);
+    return true;
+  }
+
+  private sendWeb(rel: string, res: ServerResponse, page: boolean): void {
+    let body: Buffer;
+    try {
+      body = readFileSync(new URL(`../web/${rel}`, import.meta.url));
+    } catch {
+      throw new HttpError(404, '没有这个文件');
+    }
+    const dot = rel.lastIndexOf('.');
+    const type = dot >= 0 ? WEB_TYPES[rel.slice(dot).toLowerCase()] : undefined;
+    res.writeHead(200, {
+      'content-type': type ?? 'application/octet-stream',
+      'content-length': body.length,
+      'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      ...(page ? { 'content-security-policy': PLAY_CSP } : {}),
+    });
+    res.end(body);
   }
 
   private pump(): void {

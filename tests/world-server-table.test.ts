@@ -123,6 +123,67 @@ describe('WorldServer 牌桌网关', () => {
   });
 });
 
+describe('WorldServer 大厅、邀请与网页', () => {
+  it('大厅是特殊客厅：能进去、能说话、不进目录', async () => {
+    const app = await start();
+    const a = await enter(app, A, '阿岚');
+    const hall = await fetch(`${app.url}/v1/hall`, { headers: cooHeaders(A) });
+    expect(hall.status).toBe(200);
+    const hallBody = await hall.json() as { hall: { id: string; capacity: number }; rooms: unknown[] };
+    expect(hallBody.hall.id).toBe('hall');
+
+    const switched = await post(app.url, '/v1/rooms/lobby/switch', { to: 'hall' }, {
+      authorization: `Bearer ${a}`,
+    });
+    expect(switched.status).toBe(200);
+    const hallToken = switched.body.token as string;
+    expect((await post(app.url, '/v1/rooms/hall/action', { type: 'say', text: '有人吗' }, {
+      authorization: `Bearer ${hallToken}`,
+    })).status).toBe(200);
+
+    const directory = await fetch(`${app.url}/v1/rooms`);
+    const rooms = (await directory.json() as { rooms: { id: string }[] }).rooms;
+    expect(rooms.some((room) => room.id === 'hall')).toBe(false);
+  });
+
+  it('定向邀请：目标收到一条 invite 事件与一封信；可以顺着邀请换房', async () => {
+    const app = await start();
+    const a = await enter(app, A, '阿岚');
+    const b = await enter(app, B, '小满');
+    const created = await post(app.url, '/v1/rooms', { name: '可可厅', visibility: 'public' }, cooHeaders(A));
+    const roomId = (created.body.room as { id: string }).id;
+
+    const invited = await post(app.url, '/v1/invite', { to: '小满', room: roomId, text: '来坐坐' }, cooHeaders(A));
+    expect(invited.status).toBe(200);
+    expect(invited.body.room).toBe(roomId);
+
+    const bHistory = await get(app.url, '/v1/history?since=0&limit=100', b);
+    expect((bHistory.body.events as { type: string; text: string }[])
+      .some((event) => event.type === 'parlor.invite' && event.text.includes('可可厅'))).toBe(true);
+    const bMail = await get(app.url, '/v1/mail?peek=1&all=1', b);
+    expect((bMail.body.items as { kind: string; text: string }[])
+      .some((item) => item.kind === 'invite' && item.text.includes('可可厅'))).toBe(true);
+
+    const moved = await post(app.url, `/v1/rooms/lobby/switch`, { to: roomId }, {
+      authorization: `Bearer ${b}`,
+    });
+    expect(moved.status).toBe(200);
+    const snapshot = await get(app.url, `/v1/rooms/${roomId}/room`, moved.body.token as string);
+    expect(snapshot.body.id).toBe(roomId);
+  });
+
+  it('网页 /play 与静态资源由这台服务器直接给', async () => {
+    const app = await start();
+    const page = await fetch(`${app.url}/play`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(await page.text()).toContain('<script type="module" src="/play/assets/play.js">');
+    const script = await fetch(`${app.url}/play/assets/play.js`);
+    expect(script.status).toBe(200);
+    expect(script.headers.get('content-type')).toContain('text/javascript');
+  });
+});
+
 describe('WorldServer 社交与回放', () => {
   it('礼物走账本与信箱；收礼的人看得到，第三人看不到', async () => {
     const app = await start();

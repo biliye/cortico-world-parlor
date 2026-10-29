@@ -51,7 +51,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "serve": "node --experimental-strip-types scripts/serve.ts"
+    "serve": "node --experimental-strip-types scripts/serve.ts",
+    "serve:world": "node --experimental-strip-types scripts/serve-world.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
