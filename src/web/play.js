@@ -90,6 +90,8 @@ function handleExpiredSeat(token) {
     location.reload();
     return;
   }
+  // 本来就在加入页（没有席位）：这不是「令牌失效」，重画会把正在填的名字冲掉。
+  if (!stored && !state.cfg) return;
   if (state.stream) {
     state.stream.close();
     state.stream = null;
@@ -191,6 +193,8 @@ async function refreshSnapshot() {
 }
 
 function scheduleRefresh() {
+  // 加入页还没有席位：没有可刷的东西，而未带令牌的刷新会 401、把整块表单重画掉。
+  if (!state.cfg) return;
   if (state.refreshTimer) return;
   state.refreshTimer = setTimeout(async () => {
     state.refreshTimer = null;

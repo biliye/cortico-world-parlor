@@ -307,6 +307,19 @@ describe('网页玩家', () => {
     expect(parent).toContain("localStorage.setItem('parlor-play-v1'");
   });
 
+  it('加入页不会被空刷新重画：窗口一获得焦点，正在填的名字就没了', () => {
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    // 加入页没有席位时，focus/visibilitychange 触发的刷新会 401；
+    // 旧代码把它当成「令牌失效」重画整块表单，名字被清空、还多一行红字，看上去就是进不去。
+    const schedule = js.match(/function scheduleRefresh\(\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(schedule).toContain('if (!state.cfg) return;');
+    const expired = js.match(/function handleExpiredSeat\(token\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(expired).toContain('if (!stored && !state.cfg) return;');
+    // 真的失效时仍要回加入页并说明原因。
+    expect(expired).toContain('renderJoin(');
+    expect(expired).toContain('这个席位的令牌已经失效');
+  });
+
   it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const reg = readFileSync(new URL('../src/web/games/registry.js', import.meta.url), 'utf8');
