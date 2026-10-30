@@ -330,12 +330,15 @@ describe('网页玩家', () => {
 
   it('带钥匙的「我下场玩」链接直接下场；席位被顶掉时不自动重入', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    // 面板的 #key= 链接：换家长会话 → 领席位 → 进牌桌；钥匙用完从地址栏抹掉。
+    // 面板的 #key= 链接：一次请求就换会话 + 领席位（跨境链路上少一个来回），再进牌桌；
+    // 钥匙用完从地址栏抹掉。
     expect(js).toContain('function takeKeyFromHash');
     expect(js).toContain('history.replaceState(null, \'\', location.pathname + location.search)');
     expect(js).toContain('function tryParentEntry');
-    expect(js).toContain("fetch('/v1/parent/session'");
     expect(js).toContain("fetch('/v1/parent/play'");
+    expect(js).toContain('JSON.stringify(key ? { key } : {})');
+    // 换席位这一步也要有超时：服务器挂住时要走到「重试」，不能一直等。
+    expect(js).toContain('timeoutSignal()');
     // 没有钥匙但浏览器已有家长会话：也直接下场（书签/刷新都能进）。
     expect(js).toContain('function hasParentSession');
     // 一个家长身份只有一个席位：401 时给「被另一台顶掉」的提示，不静默重入。

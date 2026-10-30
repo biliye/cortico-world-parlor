@@ -122,8 +122,12 @@ export const btn = (label, onClick, options = {}) => {
 const SPRITE_COLS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 const SPRITE_ROWS = { S: 0, H: 1, C: 2, D: 3 };
 
+/** 牌面图拉没拉过：idle / loading / ready / missing。 */
+let cardArtState = 'idle';
+
 /** 给一张牌画上真牌面；服务器没给花色（老回放、或没装图）就只留文字。 */
 export const paintCard = (node, rank, suit) => {
+  probeCardArt();
   const row = suit && SPRITE_ROWS[suit] !== undefined ? SPRITE_ROWS[suit] : 4;
   const col = row === 4 ? (rank === 'BJ' ? 0 : 1) : SPRITE_COLS.indexOf(rank);
   if (col < 0) return node;
@@ -133,10 +137,23 @@ export const paintCard = (node, rank, suit) => {
   return node;
 };
 
-/** 牌面图缺了就在 <html> 上挂 no-card-art，CSS 退回纯文字，桌子照常。 */
+/**
+ * 牌面雪碧图 346KB。以前在首屏就拉，跨境链路上它把登录的几个来回挤到十几秒；
+ * 改成第一次真要画牌时才拉：图没到先按点数画，到了挂 `card-art-ready` 由 CSS 切牌面，
+ * 缺图就挂 `no-card-art` 永远用文字。
+ */
 export const probeCardArt = () => {
+  if (cardArtState !== 'idle') return;
+  cardArtState = 'loading';
   const img = new Image();
-  img.addEventListener('error', () => document.documentElement.classList.add('no-card-art'));
+  img.addEventListener('load', () => {
+    cardArtState = 'ready';
+    document.documentElement.classList.add('card-art-ready');
+  });
+  img.addEventListener('error', () => {
+    cardArtState = 'missing';
+    document.documentElement.classList.add('no-card-art');
+  });
   img.src = '/play/assets/assets/cards/cards.webp';
 };
 

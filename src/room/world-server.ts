@@ -546,8 +546,20 @@ export class WorldServer {
     }
 
     if (method === 'POST' && url.pathname === '/v1/parent/play') {
-      const session = this.parentSession(req);
       const body = await readJson(req);
+      // 带钥匙时一次做完「换会话 + 领席位」：跨境链路上每多一个来回就是两三秒。
+      const key = typeof body.key === 'string' ? body.key.trim() : '';
+      if (key) {
+        this.checkParentKeyRate(req);
+        const account = this.coo.verifyOwnerKey(key);
+        if (!account) throw new HttpError(401, '这个家长链接不对，或已经失效了');
+        const fresh = this.coo.createSession(account.id);
+        if (!fresh) throw new HttpError(403, '这个家长账户被停用了');
+        res.setHeader('set-cookie', this.parentCookie(fresh.token, req));
+        json(res, 200, this.parentPlay(account, body));
+        return;
+      }
+      const session = this.parentSession(req);
       json(res, 200, this.parentPlay(session.account, body));
       return;
     }

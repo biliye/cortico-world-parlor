@@ -87,6 +87,19 @@ describe('家长下场', () => {
     const denied = await post(app.url, '/v1/parent/play', {});
     expect(denied.status).toBe(401);
 
+    // 带钥匙一次做完换会话 + 下场（网页「我下场玩」走这条，少一个来回）。
+    const direct = await fetch(`${app.url}/v1/parent/play`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ownerKey }),
+    });
+    expect(direct.status).toBe(200);
+    expect(cookieOf(direct)).toContain('parlor_parent=');
+    const directBody = await direct.json() as Json;
+    expect((directBody.seat as { kind: string }).kind).toBe('human');
+    const badKey = await post(app.url, '/v1/parent/play', { key: 'not-a-key' });
+    expect(badKey.status).toBe(401);
+
     // 第一次下场：新 human 席位，能读快照。
     const first = await post(app.url, '/v1/parent/play', {}, { cookie });
     expect(first.status).toBe(200);

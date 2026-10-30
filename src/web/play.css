@@ -1688,7 +1688,9 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   transform: rotate(var(--rot, 0deg)) translateY(calc(var(--lift, 0px) + var(--arc, 0px)));
   transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
 }
-.pcard.has-art {
+/* 牌：默认是点数；牌面雪碧图加载好了（html.card-art-ready）才切成真牌面。 */
+.pcard.has-art { color: inherit; }
+html.card-art-ready .pcard.has-art {
   background-image: url(assets/cards/cards.webp);
   background-size: 1300% 500%;
   background-position: calc(var(--c) * 100% / 12) calc(var(--r) * 100% / 4);

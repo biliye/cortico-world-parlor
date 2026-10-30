@@ -3,7 +3,7 @@
  *  牌桌 tab 发的是桌内私聊（只有同桌看得见），客厅 tab 才是全房间公开。 */
 import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
-  isNearBottom, readable, probeCardArt, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
+  isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
 import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js';
 
@@ -101,8 +101,7 @@ function bootFailureText(error) {
   return error && error.message ? error.message : String(error);
 }
 
-probeCardArt();
-boot();
+boot();   // 牌面图改成第一次画牌时才拉，见 common.js 的 probeCardArt
 
 // 在已经打开的页面地址栏里粘一条新的「我下场玩」链接：hash 变了但页面不会重载，
 // 这里主动换一次钥匙，换好再整页重来，免得旧席位的日志和牌桌还挂着。
@@ -157,9 +156,8 @@ async function boot() {
     state.tab = hasLiveTable() ? 'table' : 'room';
     buildShell();
     render();
+    // 回放补历史；它之后不再补一次快照——SSE 从第一份快照的游标接上，中间漏的会补发。
     await seedLog();
-    await refreshSnapshot();
-    render();
     if (state.view === 'hall') void loadHall(true);
     connect();
     void loadDmThreads();
@@ -183,7 +181,7 @@ function takeKeyFromHash() {
 
 async function hasParentSession() {
   try {
-    return (await fetch('/v1/parent/me')).ok;
+    return (await fetch('/v1/parent/me', timeoutSignal())).ok;
   } catch {
     return false;
   }
@@ -197,25 +195,15 @@ async function hasParentSession() {
 async function tryParentEntry(key = '', options = {}) {
   const before = state.cfg && state.cfg.name;
   try {
-    if (key) {
-      const session = await fetch('/v1/parent/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ key }),
-      });
-      if (!session.ok) {
-        const body = await session.json().catch(() => ({}));
-        showToast(body.error || '这个家长链接不对，或已经失效了', 'bad');
-        return false;
-      }
-    }
+    // 带钥匙时一次做完「换会话 + 领席位」：跨境链路上每多一个来回就是两三秒。
     const played = await fetch('/v1/parent/play', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify(key ? { key } : {}),
+      ...timeoutSignal(),
     });
     const body = await played.json().catch(() => ({}));
-    if (!played.ok) throw new Error(body.error || '现在下不了场');
+    if (!played.ok) throw new Error(body.error || (key ? '这个家长链接不对，或已经失效了' : '现在下不了场'));
     if (options.hadSeat) {
       state.latest = 0;
       state.seen = new Set();
@@ -236,7 +224,7 @@ async function tryParentEntry(key = '', options = {}) {
     }
     return true;
   } catch (error) {
-    showToast(error.message || '现在下不了场', 'bad');
+    showToast(bootFailureText(error), 'bad');
     return false;
   }
 }
@@ -2969,6 +2957,7 @@ function renderJoin(message = '') {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-parlor-invite': invite },
         body: JSON.stringify({ name, ...(wantedRoom ? { room: wantedRoom } : {}) }),
+        ...timeoutSignal(),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || '加入失败');
