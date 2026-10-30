@@ -94,16 +94,21 @@ describe('SQLite 地基', () => {
 
       migrate(oldDb);
 
-      // 大厅从 32 抬到 400；原有的 64 人房保留。
+      // 大厅从 32 抬到 400；普通客厅从 64 收到 30。
       const hall = oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get() as { capacity: number };
       expect(hall.capacity).toBe(400);
       const big = oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'big'").get() as { capacity: number };
-      expect(big.capacity).toBe(64);
+      expect(big.capacity).toBe(30);
 
-      // 新 CHECK 允许 300，拒绝 501。
+      // 库级 CHECK 仍允许 300、拒绝 501（这是最后兜底；接口层才是 30）。
       oldDb.prepare("UPDATE rooms SET capacity = 300 WHERE id = 'big'").run();
-      expect(() => oldDb.prepare("UPDATE rooms SET capacity = 501 WHERE id = 'big'").run())
+      expect(() => oldDb.prepare("UPDATE rooms SET capacity = 501 WHERE id = 'hall'").run())
         .toThrow(/CHECK/);
+
+      // 再跑一次 migrate：大房被收回 30，大厅不动。
+      migrate(oldDb);
+      expect((oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'big'").get() as { capacity: number }).capacity).toBe(30);
+      expect((oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get() as { capacity: number }).capacity).toBe(400);
 
       // 外键、索引与触发器都还在。
       expect(oldDb.prepare('PRAGMA foreign_key_check').all()).toEqual([]);

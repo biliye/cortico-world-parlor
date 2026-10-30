@@ -8,6 +8,7 @@
 import {
   DB_MAX_ROOM_CAPACITY,
   HALL_CAPACITY,
+  MAX_USER_ROOM_CAPACITY,
   SCHEMA_SQL,
   roomsTableSql,
 } from './schema.ts';
@@ -113,6 +114,10 @@ export const migrate = (db: Db): void => {
   // 大厅最初写死 32；只抬这个默认值，手工改过的不动。
   db.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity = ?')
     .run(HALL_CAPACITY, 'hall', 32);
+
+  // 普通客厅单间上限 30；以前建过的大房按新口径收回来（大厅不动）。
+  db.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity > ?')
+    .run(MAX_USER_ROOM_CAPACITY, 'room', MAX_USER_ROOM_CAPACITY);
 
   const stmt = db.prepare(
     'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',

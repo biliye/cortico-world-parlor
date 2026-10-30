@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe('客厅 store', () => {
-  it('建房：id 生成、默认值、2–300 容量、主题与非法输入', () => {
+  it('建房：id 生成、默认值、2–30 容量、主题与非法输入', () => {
     const room = createRoom(db, {
       name: '  可可   厅 ',
       ownerCooId: COO,
@@ -80,10 +80,10 @@ describe('客厅 store', () => {
     expect(room.epoch.length).toBeGreaterThan(0);
     expect(createRoom(db, { name: '两人厅', ownerCooId: COO, capacity: 2 }, 1_001).capacity).toBe(2);
     expect(createRoom(db, { name: '十二人厅', ownerCooId: COO, capacity: 12 }, 1_002).capacity).toBe(12);
-    expect(createRoom(db, { name: '三百人厅', ownerCooId: COO, capacity: 300 }, 1_003).capacity).toBe(300);
+    expect(createRoom(db, { name: '三十人厅', ownerCooId: COO, capacity: 30 }, 1_003).capacity).toBe(30);
 
     expectCode(() => createRoom(db, { name: '太小', ownerCooId: COO, capacity: 1 }), 'invalid');
-    expectCode(() => createRoom(db, { name: '太大', ownerCooId: COO, capacity: 301 }), 'invalid');
+    expectCode(() => createRoom(db, { name: '太大', ownerCooId: COO, capacity: 31 }), 'invalid');
     expectCode(() => createRoom(db, { name: 'x', ownerCooId: COO }), 'invalid');
     expectCode(() => createRoom(db, { name: '好厅', ownerCooId: 'coo-zzzzzzzz' }), 'unknown_coo');
     expectCode(() => createRoom(db, { name: '好厅', ownerCooId: COO, visibility: 'secret' as never }), 'invalid');
