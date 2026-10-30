@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import { ParlorServer } from '../src/room/server.ts';
 import type { PlayerJoinResponse, RoomSnapshot } from '../src/room/protocol.ts';
 
@@ -134,6 +136,48 @@ describe('网页玩家', () => {
     const health = await call('/healthz');
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
     expect(health.body.version).toBe(pkg.version);
+  });
+
+  it('文本资源走 gzip 并带 ETag，重开一次只回 304', async () => {
+    const raw = (path: string, headers: Record<string, string>) => new Promise<{
+      status: number; headers: Record<string, string | string[] | undefined>; body: Buffer;
+    }>((resolve, reject) => {
+      const req = request(server.url + path, { headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+        }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+    const js = await raw('/play/assets/play.js', { 'accept-encoding': 'gzip' });
+    expect(js.status).toBe(200);
+    expect(js.headers['content-encoding']).toBe('gzip');
+    expect(js.headers['cache-control']).toContain('max-age=300');
+    const plain = readFileSync(new URL('../src/web/play.js', import.meta.url));
+    expect(gunzipSync(js.body).equals(plain)).toBe(true);
+    expect(js.body.length).toBeLessThan(plain.length / 2);
+
+    const etag = String(js.headers.etag);
+    expect(etag).toContain('-gz');
+    const again = await raw('/play/assets/play.js', { 'accept-encoding': 'gzip', 'if-none-match': etag });
+    expect(again.status).toBe(304);
+    expect(again.body.length).toBe(0);
+
+    // 图片本来就压过，不再 gzip。
+    const chip = await raw('/play/assets/assets/coo-chip.png', { 'accept-encoding': 'gzip' });
+    expect(chip.status).toBe(200);
+    expect(chip.headers['content-encoding']).toBeUndefined();
+
+    // 页面不缓存，但仍带 ETag 与 CSP。
+    const page = await raw('/play', { 'accept-encoding': 'gzip' });
+    expect(page.headers['cache-control']).toBe('no-cache');
+    expect(String(page.headers['content-security-policy'])).toContain("script-src 'self'");
   });
 
   it('家长用自己的席位与账本身份入场，不占用孩子的账本', async () => {

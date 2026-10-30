@@ -58,6 +58,8 @@ const state = {
   hallLoading: false,
   /** 服务端是否开放「用户名 + 邀请码」入口；默认按开处理，boot 时问 /healthz。 */
   guestJoin: true,
+  /** 从 #key= 取到的钥匙；换席位失败时留着给「重试」用，成功就清掉。 */
+  entryKey: '',
   dm: { open: false, peer: null, threads: [], people: [], messages: [], unread: 0, q: '', timer: 0, drag: null },
   timerKey: '',
   timerTotal: 0,
@@ -66,8 +68,49 @@ const ui = {};
 let toastTimer = 0;
 let mailTimer = 0;
 
+/** 首屏的进度：页面还是那张占位卡时换一句话；界面画出来以后这层就没了。 */
+const bootClock = { started: Date.now(), base: '正在打开客厅…', timer: 0 };
+
+function note(text) {
+  if (text) bootClock.base = text;
+  paintNote();
+}
+
+function paintNote() {
+  const box = document.getElementById('boot-note');
+  if (!box) {
+    if (bootClock.timer) clearInterval(bootClock.timer);
+    bootClock.timer = 0;
+    return;
+  }
+  const secs = Math.floor((Date.now() - bootClock.started) / 1000);
+  const slow = secs >= 6 ? ' 网络看起来有点慢，还在等服务器回话。' : '';
+  box.textContent = `${bootClock.base}（已等 ${secs} 秒）${slow}`;
+}
+
+function startBootClock() {
+  bootClock.started = Date.now();
+  if (!bootClock.timer) bootClock.timer = setInterval(paintNote, 1000);
+  paintNote();
+}
+
+function bootFailureText(error) {
+  if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return '服务器 25 秒没有回话。网络可能断了，或者客厅那边没起来；点重试再试一次。';
+  }
+  return error && error.message ? error.message : String(error);
+}
+
 probeCardArt();
 boot();
+
+// 在已经打开的页面地址栏里粘一条新的「我下场玩」链接：hash 变了但页面不会重载，
+// 这里主动换一次钥匙，换好再整页重来，免得旧席位的日志和牌桌还挂着。
+window.addEventListener('hashchange', async () => {
+  const key = takeKeyFromHash();
+  if (!key) return;
+  if (await tryParentEntry(key, { hadSeat: true })) location.reload();
+});
 
 /* —— 起步 —— */
 
@@ -82,10 +125,24 @@ async function loadEntryPolicy() {
 }
 
 async function boot() {
+  startBootClock();
   // 带钥匙的「我下场玩」链接：钥匙只用来换会话，换完立刻从地址栏抹掉。
-  const key = takeKeyFromHash();
-  if (!state.cfg && (key || await hasParentSession())) {
-    await tryParentEntry(key);
+  // 钥匙是明确点开的意图，比这台设备存着的旧席位优先——旧席位可能是另一个家长身份，
+  // 也可能早就失效了；先换钥匙，再谈旧席位。
+  const key = takeKeyFromHash() || state.entryKey;
+  if (key) {
+    state.entryKey = key;
+    note('正在用链接里的钥匙换席位…');
+    if (await tryParentEntry(key, { hadSeat: !!state.cfg })) {
+      state.entryKey = '';
+    } else if (!state.cfg) {
+      // 没有旧席位可退：留在离线页，重试会再用这把钥匙试一次。
+      renderOffline('这个链接里的钥匙没换成席位。可能链接过期了，也可能网络没通——回扩展面板重新点一次「我下场玩」，或者点下面的重试。');
+      return;
+    }
+    // 换不到但旧席位还在：继续用旧席位，上面已经提示了原因。
+  } else if (!state.cfg && await hasParentSession()) {
+    await tryParentEntry('');
   }
   if (!state.cfg) {
     await loadEntryPolicy();
@@ -93,6 +150,7 @@ async function boot() {
     return;
   }
   try {
+    note('正在读取客厅状态…');
     await refreshSnapshot();
     state.latest = state.snap.latest;
     state.view = inHall() ? 'hall' : hasLiveTable() ? 'table' : 'lobby';
@@ -110,7 +168,7 @@ async function boot() {
       await handleExpiredSeat(state.cfg ? state.cfg.token : '');
       return;
     }
-    renderOffline(error && error.message ? error.message : String(error));
+    renderOffline(bootFailureText(error));
   }
 }
 
@@ -133,10 +191,11 @@ async function hasParentSession() {
 
 /**
  * 家长入场：钥匙或这台浏览器已有的家长会话，都直接以家长身份下场。
- * 只在「没有席位」时走这里；席位真的失效（401）时不自动重入——一个家长身份只有
- * 一个席位，两台设备都自动重入会来回顶。
+ * 带钥匙时不管这台设备有没有旧席位都先换钥匙——钥匙是点链接的人刚做的选择。
+ * 换好以后旧席位的界面状态要清掉，免得还挂着上一个身份的日志与牌桌。
  */
-async function tryParentEntry(key = '') {
+async function tryParentEntry(key = '', options = {}) {
+  const before = state.cfg && state.cfg.name;
   try {
     if (key) {
       const session = await fetch('/v1/parent/session', {
@@ -157,6 +216,13 @@ async function tryParentEntry(key = '') {
     });
     const body = await played.json().catch(() => ({}));
     if (!played.ok) throw new Error(body.error || '现在下不了场');
+    if (options.hadSeat) {
+      state.latest = 0;
+      state.seen = new Set();
+      state.log = [];
+      state.snap = null;
+      state.watchTableId = '';
+    }
     writeStore({
       room: body.room,
       seatId: body.seat.id,
@@ -165,6 +231,9 @@ async function tryParentEntry(key = '') {
       cooId: body.identity.cooId,
       cooSecret: body.identity.cooSecret,
     });
+    if (options.hadSeat && before && before !== body.seat.name) {
+      showToast(`这台设备原来在「${before}」的席位上，已经换成「${body.seat.name}」。`);
+    }
     return true;
   } catch (error) {
     showToast(error.message || '现在下不了场', 'bad');
@@ -334,6 +403,13 @@ function tableChatOpen() {
 
 /* —— 网络 —— */
 
+/** 普通接口 25 秒没回话就当超时；首屏卡住时能自己走到「重试」，而不是一直转。 */
+function timeoutSignal(existing) {
+  if (existing) return { signal: existing };
+  if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) return {};
+  return { signal: AbortSignal.timeout(25_000) };
+}
+
 async function api(path, init = {}) {
   const headers = new Headers(init.headers || {});
   if (state.cfg) {
@@ -341,7 +417,7 @@ async function api(path, init = {}) {
     headers.set('x-parlor-coo', state.cfg.cooId);
     headers.set('x-parlor-coo-secret', state.cfg.cooSecret);
   }
-  const response = await fetch(roomPath(path), { ...init, headers });
+  const response = await fetch(roomPath(path), { ...init, headers, ...timeoutSignal(init.signal) });
   let body = null;
   try {
     body = await response.json();
@@ -2926,7 +3002,11 @@ function renderOffline(message) {
   panel.append(el('h1', '', '连不上客厅'));
   panel.append(el('p', 'sub', message || '网络没有通。'));
   const actions = el('div', 'actions');
-  actions.append(btn('重试', () => boot(), { primary: true }));
+  actions.append(btn('重试', () => {
+    startBootClock();
+    note('正在重新连接…');
+    void boot();
+  }, { primary: true }));
   actions.append(btn('换一个席位', () => {
     clearStore();
     location.reload();

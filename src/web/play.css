@@ -1431,7 +1431,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .parent-play .sub { margin: 0; }
 .join .error { min-height: 22px; margin: 4px 0 8px; font-size: 11.5px; }
 .join .note { color: var(--dim); font-size: 10.5px; margin-top: 14px; }
-.booting { color: var(--muted); padding: 48px 8px; text-align: center; }
+.booting { color: var(--muted); padding: 48px 8px; text-align: center; line-height: 1.7; max-width: 34em; margin: 0 auto; }
 .noscript { padding: 24px; }
 
 /* —— 斗地主：一张木头小牌桌（左右是对手的牌堆，中间底牌与刚出的那手） —— */

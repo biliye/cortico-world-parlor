@@ -7,6 +7,7 @@
   <meta name="color-scheme" content="light">
   <title>客厅 · 一起玩</title>
   <link rel="stylesheet" href="/play/assets/play.css">
+  <link rel="modulepreload" href="/play/assets/play.js">
 </head>
 <body class="theme-cozy">
   <svg class="sprite" aria-hidden="true" width="0" height="0" focusable="false">
@@ -93,7 +94,7 @@
   <a class="skip-link" href="#main">跳到主要内容</a>
   <div class="room-light" aria-hidden="true"></div>
 
-  <div id="app" class="app"><div class="booting">正在打开客厅…</div></div>
+  <div id="app" class="app"><div class="booting" id="boot-note">正在打开客厅…</div></div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <noscript><p class="noscript">这个页面要开 JavaScript 才能玩。</p></noscript>
   <script type="module" src="/play/assets/play.js"></script>

@@ -30,6 +30,7 @@ import {
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
+import { sendWebAsset } from './web-assets.ts';
 
 export interface WorldServerOptions {
   dbFile?: string;
@@ -56,30 +57,6 @@ interface SseClient {
   closed: boolean;
   res: ServerResponse;
 }
-
-const WEB_TYPES: Readonly<Record<string, string>> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.ico': 'image/x-icon',
-};
-
-/** 网页客户端只从本站取脚本、样式与接口；没有内联脚本。 */
-const PLAY_CSP = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self'",
-  "connect-src 'self'",
-  "img-src 'self'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join('; ');
 
 const PACKAGE_VERSION = ((): string => {
   try {
@@ -511,7 +488,7 @@ export class WorldServer {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
 
-    if (method === 'GET' && this.serveWeb(url.pathname, res)) return;
+    if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
 
     if (method === 'GET' && url.pathname === '/healthz') {
       const room = getRoom(this.db, this.defaultRoomId);
@@ -1884,13 +1861,13 @@ export class WorldServer {
   }
 
   /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
-  private serveWeb(pathname: string, res: ServerResponse): boolean {
+  private serveWeb(pathname: string, req: IncomingMessage, res: ServerResponse): boolean {
     if (pathname === '/play' || pathname === '/play/') {
-      this.sendWeb('play.html', res, true);
+      this.sendWeb('play.html', req, res, true);
       return true;
     }
     if (pathname === '/parent' || pathname === '/parent/') {
-      this.sendWeb('parent.html', res, true);
+      this.sendWeb('parent.html', req, res, true);
       return true;
     }
     const prefix = pathname.startsWith('/parent/assets/') ? '/parent/assets/' : '/play/assets/';
@@ -1900,28 +1877,12 @@ export class WorldServer {
       || !/^[A-Za-z0-9._/-]+$/.test(rel)) {
       throw new HttpError(404, '没有这个文件');
     }
-    this.sendWeb(rel, res, false);
+    this.sendWeb(rel, req, res, false);
     return true;
   }
 
-  private sendWeb(rel: string, res: ServerResponse, page: boolean): void {
-    let body: Buffer;
-    try {
-      body = readFileSync(new URL(`../web/${rel}`, import.meta.url));
-    } catch {
-      throw new HttpError(404, '没有这个文件');
-    }
-    const dot = rel.lastIndexOf('.');
-    const type = dot >= 0 ? WEB_TYPES[rel.slice(dot).toLowerCase()] : undefined;
-    res.writeHead(200, {
-      'content-type': type ?? 'application/octet-stream',
-      'content-length': body.length,
-      'cache-control': 'no-cache',
-      'x-content-type-options': 'nosniff',
-      'referrer-policy': 'no-referrer',
-      ...(page ? { 'content-security-policy': PLAY_CSP } : {}),
-    });
-    res.end(body);
+  private sendWeb(rel: string, req: IncomingMessage, res: ServerResponse, page: boolean): void {
+    if (!sendWebAsset(rel, req, res, page)) throw new HttpError(404, '没有这个文件');
   }
 
   private pump(): void {

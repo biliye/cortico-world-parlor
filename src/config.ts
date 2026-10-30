@@ -7,8 +7,9 @@ export interface ParlorConfigSection {
   /** 空 = 由这个 World 自己开一台客厅；填 http(s) 地址 = 连别人的。默认连房主的服务器。 */
   serverUrl: string;
   /**
-   * 连别人服务器时的邀请码。留空时退回部署 `.env` 的 `PARLOR_INVITE_CODE`（旧部署兼容）。
-   * 存在 config.json 里；别把它提交进仓库或贴到公开地方。
+   * 邀请码。默认已经填好房主公开客厅那一份，装完不用再去设置里补；
+   * 连别人的服务器就换成对方的码，留空则退回部署 `.env` 的 `PARLOR_INVITE_CODE`（旧部署兼容）。
+   * 存在 config.json 里。
    */
   inviteCode: string;
   room: string;
@@ -26,10 +27,16 @@ export interface ParlorConfigSection {
 /** 房主的公共客厅；装完默认连这里，想自己开就把地址清空。 */
 export const DEFAULT_SERVER_URL = 'https://parlor.com.cn';
 
+/**
+ * 房主公共客厅的邀请码，跟着包一起发。填成默认值是为了装完就能激活；
+ * 自己开客厅（把 serverUrl 清空）时这一份不生效，用 `.env` 的或随机生成。
+ */
+export const DEFAULT_INVITE_CODE = 'parlor-cPBpxGcsOhzd';
+
 export const PARLOR_DEFAULTS: ParlorConfigSection = {
   enabled: false,
   serverUrl: DEFAULT_SERVER_URL,
-  inviteCode: '',
+  inviteCode: DEFAULT_INVITE_CODE,
   room: 'lobby',
   seatName: '',
   host: '127.0.0.1',
@@ -55,7 +62,7 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
       'worlds.parlor.inviteCode': {
         type: 'string',
         title: '邀请码',
-        description: '连别人的服务器时要填的入场码；留空则读部署 .env 的 PARLOR_INVITE_CODE。会存进 config.json，不要提交或外发。',
+        description: '默认已经填好房主公开客厅（https://parlor.com.cn）的邀请码，装完不用改。连别人的客厅就换成对方的码；清空则读部署 .env 的 PARLOR_INVITE_CODE。',
         'x-hot': false,
       },
       'worlds.parlor.room': {

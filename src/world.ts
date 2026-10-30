@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
-import { PARLOR_CONFIG_GROUP, type ParlorConfigSection } from './config.ts';
+import { PARLOR_CONFIG_GROUP, DEFAULT_INVITE_CODE, DEFAULT_SERVER_URL, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
 import { serverClock, serverClockShort } from './room/clock.ts';
 import { gameLabelOf } from './room/game-labels.ts';
@@ -576,11 +576,19 @@ export class ParlorWorld implements World {
     const defaultRoom = cfg.room || 'lobby';
     this.currentRoom = this.ctx.secret(CURRENT_ROOM_SECRET).trim() || defaultRoom;
     let baseUrl = cfg.serverUrl.trim().replace(/\/+$/, '');
-    // 扩展设置里的邀请码优先；没填就退回旧部署的 .env，保持兼容。
-    let invite = cfg.inviteCode.trim() || this.ctx.secret(INVITE_SECRET).trim();
+    // 自己填的码永远优先。留空、或还是包里那份公开默认值时，先看 .env（老部署把码写在那儿），
+    // 再看公开默认值——装完不用动设置就能连上房主的客厅。
+    const configured = cfg.inviteCode.trim();
+    const fromEnv = this.ctx.secret(INVITE_SECRET).trim();
+    let invite = configured;
+    if (!configured || configured === DEFAULT_INVITE_CODE) {
+      invite = fromEnv || (baseUrl === DEFAULT_SERVER_URL ? DEFAULT_INVITE_CODE : configured);
+    }
 
     if (!baseUrl) {
       const dataFile = this.roomFile();
+      // 自己开客厅时不用包里那份公开码：人人都有，等于没锁。读 .env，没有就新生成一个。
+      if (invite === DEFAULT_INVITE_CODE) invite = this.ctx.secret(INVITE_SECRET).trim();
       invite = invite || randomBytes(9).toString('base64url');
       if (!this.ctx.secret(INVITE_SECRET)) {
         try { this.ctx.storeSecret(INVITE_SECRET, invite); } catch { /* 假上下文或不可写 */ }
@@ -622,7 +630,7 @@ export class ParlorWorld implements World {
     }
 
     if (!invite) {
-      throw new Error('客厅：扩展设置里要填「邀请码」（或部署 .env 的 PARLOR_INVITE_CODE；邀请码向房主/运营者要）');
+      throw new Error('客厅：扩展设置里的「邀请码」是空的，部署 .env 里也没有 PARLOR_INVITE_CODE。连房主的客厅要填对方的邀请码；自己开客厅就留空让 World 生成。');
     }
     const joined = await client.join(invite, {
       name: cfg.seatName.trim() || this.ctx.botName,

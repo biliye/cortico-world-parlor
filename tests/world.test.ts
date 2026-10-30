@@ -6,7 +6,7 @@ import type { ToolCallContext } from 'cortico/core/types.ts';
 import { dryMountWorld, fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR } from '../src/definition.ts';
-import { PARLOR_DEFAULTS, type ParlorConfigSection } from '../src/config.ts';
+import { PARLOR_DEFAULTS, DEFAULT_INVITE_CODE, type ParlorConfigSection } from '../src/config.ts';
 import { ParlorClient } from '../src/room/client.ts';
 import { IDENTITY_FILE } from '../src/room/identity.ts';
 import { ParlorServer } from '../src/room/server.ts';
@@ -376,9 +376,25 @@ describe('客厅 World', () => {
 });
 
 describe('群友接入的默认值', () => {
-  it('默认服务器地址是房主的客厅，邀请码留空', () => {
+  it('默认服务器地址与邀请码都填好，装完直接能激活', () => {
     expect(PARLOR_DEFAULTS.serverUrl).toBe('https://parlor.com.cn');
-    expect(PARLOR_DEFAULTS.inviteCode).toBe('');
+    expect(PARLOR_DEFAULTS.inviteCode).toBe(DEFAULT_INVITE_CODE);
+    expect(PARLOR_DEFAULTS.inviteCode.length).toBeGreaterThan(8);
+  });
+
+  it('自己开客厅时不拿房主那份公开码当锁', async () => {
+    const secrets: Record<string, string> = {};
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = '';
+    ctx.cfg.inviteCode = DEFAULT_INVITE_CODE;
+    ctx.cfg.port = 0;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+    expect(host.events[0]?.type).toBe('parlor.started');
+    expect(secrets.PARLOR_INVITE_CODE).toBeTruthy();
+    expect(secrets.PARLOR_INVITE_CODE).not.toBe(DEFAULT_INVITE_CODE);
   });
 
   it('邀请码可以从扩展设置读，不必改 .env', async () => {
