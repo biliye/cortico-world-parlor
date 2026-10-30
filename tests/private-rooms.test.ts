@@ -276,3 +276,34 @@ describe('家长页防偷看', () => {
     expect((shown.body.tablePrivate as { text?: string } | null)?.text).toContain('斗地主');
   });
 });
+
+describe('成员管理：现在在厅里', () => {
+  it('列出在场席位；公开厅也能把来客请出去', async () => {
+    const { app } = await start();
+    const o = await enter(app, O, '房主');
+    const u = await enter(app, U, '小U');
+    const created = await post(app.url, '/v1/rooms', { name: '公开厅', visibility: 'public' }, cooHeaders(O));
+    const room = (created.body.room as { id: string }).id;
+    expect((await switchTo(app, o, 'lobby', room)).status).toBe(200);
+    const uIn = await switchTo(app, u, 'lobby', room);
+    expect(uIn.status).toBe(200);
+
+    const access = await get(app.url, `/v1/rooms/${room}/access`, cooHeaders(O));
+    expect(access.status).toBe(200);
+    const seats = access.body.seats as { cooId: string; name: string; owner: boolean; self: boolean }[];
+    expect(seats.map((seat) => seat.cooId).sort()).toEqual([O, U].sort());
+    const mine = seats.find((seat) => seat.cooId === O)!;
+    const guest = seats.find((seat) => seat.cooId === U)!;
+    expect(mine.owner).toBe(true);
+    expect(mine.self).toBe(true);
+    expect(guest.owner).toBe(false);
+    expect(guest.self).toBe(false);
+    // 公开厅没有单独授权记录，成员列表是空的，但席位列表能请人出去。
+    expect((access.body.members as unknown[]).length).toBe(0);
+
+    const removed = await post(app.url, `/v1/rooms/${room}/access`, { action: 'revoke', cooId: U }, cooHeaders(O));
+    expect(removed.status).toBe(200);
+    expect(removed.body.removedSeat).toBe(true);
+    expect((await get(app.url, `/v1/rooms/${room}/room`, bearer(uIn.body.token as string))).status).toBe(401);
+  });
+});

@@ -882,11 +882,27 @@ export class WorldServer {
           ? this.db.prepare('SELECT id, display_name FROM coos WHERE id = ?').get(room.ownerCooId) as
             { id: string; display_name: string } | undefined
           : undefined;
+        // 房主的家长会话：manager 是孩子的 cooId，本人在场时坐的是 player_coo_id 那个 human 身份。
+        // 两个身份都不给「请出去」按钮，免得房主把自己踢下线。
+        const managerAccount = this.coo.byCooId(manager);
+        const managerPlayer = managerAccount ? this.coo.playerCooOf(managerAccount.id) : null;
         json(res, 200, {
           room: roomSummary(this.db, room),
           owner: ownerRow ? { cooId: ownerRow.id, name: ownerRow.display_name } : null,
           members: listRoomAccess(this.db, roomId),
           invitations: pendingInvitationsForRoom(this.db, roomId, now),
+          // 现在在厅里的人：公开厅没有 room_access 记录，成员列表是空的；
+          // 这一份按活跃席位来，房主能看见来客并直接请出去。
+          seats: activeSeats(this.db, roomId).map((seat) => ({
+            cooId: seat.cooId,
+            seatId: seat.id,
+            name: seat.name,
+            kind: seat.kind,
+            tier: seat.tier,
+            joinedAt: seat.joinedAt,
+            owner: seat.cooId === room.ownerCooId,
+            self: seat.cooId === manager || seat.cooId === managerPlayer,
+          })),
         });
         return;
       }

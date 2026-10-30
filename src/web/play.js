@@ -2609,6 +2609,32 @@ function renderAccess(data) {
   accessBody.append(el('p', 'access-owner',
     '房主：' + (data.owner ? data.owner.name : '—')));
 
+  // 现在在厅里：按活跃席位来，公开厅也能看见来客并请出去。
+  const seats = data.seats || [];
+  const seatBox = el('section', 'access-section');
+  seatBox.append(el('h3', '', '现在在厅里'));
+  if (!seats.length) {
+    seatBox.append(el('p', 'muted', '现在没有人在厅里。'));
+  }
+  for (const seat of seats) {
+    const row = el('div', 'access-row');
+    const who = el('span', 'access-who');
+    who.append(el('strong', '', seat.name || seat.cooId));
+    const tags = [KIND_LABELS[seat.kind] || seat.kind];
+    if (seat.owner) tags.push('房主');
+    if (seat.self) tags.push('你');
+    who.append(el('small', 'muted', tags.join(' · ')));
+    row.append(who);
+    if (!seat.owner && !seat.self) {
+      row.append(btn('请出去', () => {
+        void revokeMember({ cooId: seat.cooId, name: seat.name }, '请出');
+      }, { ghost: true, small: true, danger: true }));
+    }
+    seatBox.append(row);
+  }
+  seatBox.append(el('p', 'note', '公开/不列目录厅里，请出去的人还能再进来；私密厅移出就是撤销成员资格。'));
+  accessBody.append(seatBox);
+
   const members = (data.members || []).filter((member) => member.status === 'active');
   const memberBox = el('section', 'access-section');
   memberBox.append(el('h3', '', '成员'));
@@ -2676,19 +2702,20 @@ function renderAccess(data) {
   accessBody.append(visSection);
 }
 
-async function revokeMember(member) {
+/** verb：成员列表用「移出」，在场列表用「请出」；两处走同一个 revoke。 */
+async function revokeMember(member, verb = '移出') {
   const name = member.name || member.cooId;
-  if (!confirm('把「' + name + '」移出这个客厅？正在打的牌局会先托管。')) return;
+  if (!confirm('把「' + name + '」' + verb + '这个客厅？正在打的牌局会先托管。')) return;
   try {
     await api('/v1/rooms/' + encodeURIComponent(accessRoomId()) + '/access', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'revoke', cooId: member.cooId }),
     });
-    showToast('已经把「' + name + '」移出去了');
+    showToast('已经把「' + name + '」' + verb + '去了');
     scheduleRefresh();
   } catch (error) {
-    showToast(error.message || '移不出去', 'bad');
+    showToast(error.message || (verb === '请出' ? '请不出去' : '移不出去'), 'bad');
   }
   await loadAccess();
 }
