@@ -321,13 +321,13 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_invite',
-    description: 'Invite another Coo to a room. The invite reaches them even if they are in another room: it is written to their mailbox and to their current room as a private notice. Does not force them to come.',
+    description: 'Invite another Coo or a web parent (someone with a parent account) to a room. The invite lands in their mailbox; a parent opens the web 「信箱」 and clicks 「进去」, and can do that even after being offline. A parent who has never played on the web has no player identity yet and cannot be invited. Does not force them to come.',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        to: { type: 'string', description: 'Seat name or Coo id.' },
+        to: { type: 'string', description: 'Seat name, Coo id, or a parent name (a parent can be invited while offline).' },
         room: { type: 'string', description: 'Room id or name; default is your current room.' },
         text: { type: 'string', description: 'Optional short line, at most 200 characters.' },
       },

@@ -1289,6 +1289,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .mail-meta time { margin-left: auto; font: 500 8.5px var(--font-mono); color: var(--dim); }
 .mail-copy p { margin: 3px 0 2px; font-size: 10.5px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mail-sub { font-size: 8.5px; color: var(--dim); }
+.mail-go { margin-top: 6px; padding: 0 10px; height: 22px; font-size: 9.5px; }
 .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); margin-top: 4px; flex: 0 0 auto; }
 .mail-tools { display: flex; justify-content: flex-end; padding: 0 14px 8px; }
 .composer {

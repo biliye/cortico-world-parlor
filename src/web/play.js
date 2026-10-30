@@ -2052,6 +2052,18 @@ function renderMail() {
       node.title = '点开私聊';
       node.addEventListener('click', () => openDm(item.fromCooId, item.fromName));
     }
+    // 邀请：信里的 room 就是目的地客厅。点「进去」走一次换房；已经在那儿就不给按钮。
+    if (item.kind === 'invite' && item.room) {
+      node.classList.add('is-invite');
+      if (currentRoom() === item.room) {
+        copy.append(el('span', 'mail-sub', '你现在就在这儿'));
+      } else {
+        const go = el('button', 'ghost-btn mail-go', '进去');
+        go.type = 'button';
+        go.addEventListener('click', () => { void goRoom(item.room); });
+        copy.append(go);
+      }
+    }
     ui.mailList.append(node);
   });
   if (mail.unread > mail.items.length) {

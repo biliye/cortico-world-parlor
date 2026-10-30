@@ -248,6 +248,48 @@ export class CooAccountDb {
     return row?.player_coo_id ?? null;
   }
 
+  /** 这个 coo 是不是某个家长账户的下场身份（网页邀请只对这类人开放）。 */
+  isPlayerCoo(cooId: string): boolean {
+    const row = this.db.prepare(
+      `SELECT 1 AS hit FROM accounts
+        WHERE player_coo_id = ? AND status = 'active' LIMIT 1`,
+    ).get(cooId) as { hit: number } | undefined;
+    return row !== undefined;
+  }
+
+  /**
+   * 按名字找家长；人不在座也能找到。
+   * 玩家身份的显示名（也就是席位名）与账户显示名都认。
+   * `cooId` 为 null = 这个账户还没下过场，没有可收信的下场身份。
+   */
+  findParentsByName(name: string): { accountId: string; cooId: string | null; name: string }[] {
+    const clean = cleanName(name);
+    if (!clean) return [];
+    const rows = this.db.prepare(
+      `SELECT a.id AS account_id, a.player_coo_id AS coo_id, a.display_name AS account_name,
+              COALESCE(c.display_name, '') AS player_name
+         FROM accounts a
+         LEFT JOIN coos c ON c.id = a.player_coo_id
+        WHERE a.status = 'active'
+          AND (a.display_name = ? COLLATE NOCASE OR c.display_name = ? COLLATE NOCASE)`,
+    ).all(clean, clean) as {
+      account_id: string; coo_id: string | null; account_name: string; player_name: string;
+    }[];
+    const seen = new Set<string>();
+    const out: { accountId: string; cooId: string | null; name: string }[] = [];
+    for (const row of rows) {
+      const key = row.coo_id ?? `account:${row.account_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        accountId: row.account_id,
+        cooId: row.coo_id,
+        name: row.player_name || row.account_name,
+      });
+    }
+    return out;
+  }
+
   /** 这个 coo 的显示名（家长玩家席位沿用它，换房不丢名字）。 */
   cooDisplayName(cooId: string): string {
     const row = this.cooRow(cooId);

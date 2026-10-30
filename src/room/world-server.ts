@@ -566,33 +566,62 @@ export class WorldServer {
       const seat = activeSeatForCoo(this.db, cooId);
       if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再邀请');
       const to = typeof body.to === 'string' ? body.to.trim() : '';
-      if (!to) throw new HttpError(400, '要写邀请谁（席位名或 Coo 身份）');
+      if (!to) throw new HttpError(400, '要写邀请谁（席位名、Coo 身份或家长名）');
       const rows = this.db.prepare(
-        `SELECT room_id, id, coo_id, name FROM room_seats
+        `SELECT room_id, id, coo_id, name, kind FROM room_seats
           WHERE released_at IS NULL AND (coo_id = ? OR name = ? COLLATE NOCASE)`,
-      ).all(to, to) as { room_id: string; id: string; coo_id: string; name: string }[];
-      const target = rows.find((row) => row.coo_id === to)
-        ?? rows.find((row) => row.name.toLowerCase() === to.toLowerCase());
-      if (!target) throw new HttpError(404, `没有找到「${to}」这个席位`);
-      if (target.coo_id === cooId) throw new HttpError(400, '不能邀请自己');
+      ).all(to, to) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
+      const row = rows.find((entry) => entry.coo_id === to)
+        ?? rows.find((entry) => entry.name.toLowerCase() === to.toLowerCase());
+      let target: { cooId: string; name: string; roomId: string | null; kind: string };
+      if (row) {
+        target = { cooId: row.coo_id, name: row.name, roomId: row.room_id, kind: row.kind };
+      } else {
+        // 家长不在座也能邀请：按家长固定的下场身份找，信留在信箱里，下次打开网页就能看到。
+        const parents = this.coo.findParentsByName(to);
+        const ready = parents.filter(
+          (entry): entry is { accountId: string; cooId: string; name: string } => entry.cooId !== null,
+        );
+        if (ready.length > 1) {
+          throw new HttpError(409, `有 ${ready.length} 位家长叫「${to}」；换一个能分清的名字`);
+        }
+        const parent = ready[0];
+        if (!parent) {
+          if (parents.length) {
+            throw new HttpError(409, `「${to}」还没下场玩过，没有能收信的身份；先让他点「下场玩」进来一次`);
+          }
+          throw new HttpError(404, `没有找到「${to}」这个席位或家长`);
+        }
+        target = { cooId: parent.cooId, name: parent.name, roomId: null, kind: 'human' };
+      }
+      if (target.cooId === cooId) throw new HttpError(400, '不能邀请自己');
+      // 人类只邀请已有家长账户的人；无账户的旧访客席不接受邀请。
+      if (target.kind === 'human' && !this.coo.isPlayerCoo(target.cooId)) {
+        throw new HttpError(403, `「${target.name}」没有家长账户；这个邀请只对家长开放`);
+      }
       const roomValue = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : seat.roomId;
       const room = getRoom(this.db, roomValue) ?? resolveRoom(this.db, roomValue);
       if (!room) throw new HttpError(404, '要去的客厅不存在');
       if (room.archivedAt !== null) throw new HttpError(409, '那个客厅已经归档了');
       this.checkInviteRate(cooId);
       const extra = typeof body.text === 'string' ? body.text.trim().slice(0, 200) : '';
-      const line = `${seat.name} 邀请你去「${room.name}」${extra ? `：${extra}` : ''}。用 parlor_room_visit 进去。`;
+      const how = target.kind === 'human'
+        ? '。打开网页的「信箱」点「进去」就到。'
+        : '。用 parlor_room_visit 进去。';
+      const line = `${seat.name} 邀请你去「${room.name}」${extra ? `：${extra}` : ''}${how}`;
       const letter = new MailDb(this.db, { now: this.now }).append({
-        to: target.coo_id,
+        to: target.cooId,
         room: room.id,
         kind: 'invite',
         action: 'invite',
         fromName: seat.name,
         text: line,
       });
-      this.host(target.room_id).pingSeat(target.coo_id, line, {
-        room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
-      });
+      if (target.roomId) {
+        this.host(target.roomId).pingSeat(target.cooId, line, {
+          room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
+        });
+      }
       json(res, 200, { ok: true, room: room.id, to: target.name, mailSeq: letter.seq });
       return;
     }

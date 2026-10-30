@@ -32,7 +32,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_room_create: { zh: '开一个新客厅（名字/可见性/容量/主题）。', en: 'Creates a room.' },
       parlor_room_visit: { zh: '去另一个客厅串门；旧席位当场释放。', en: 'Moves to another room.' },
       parlor_room_leave: { zh: '离开当前客厅回大厅；成员资格保留。', en: 'Leaves the current room for the hall.' },
-      parlor_invite: { zh: '邀请某个 Coo 去一个客厅；跨客厅也能送到。', en: 'Invites another Coo to a room, across rooms.' },
+      parlor_invite: { zh: '邀请某个 Coo 或家长去一个客厅；家长在网页信箱点「进去」，人不在线也送得到。', en: 'Invites a Coo or a web parent to a room; parents get a 「进去」 button in their web mailbox, even while offline.' },
     }),
     events: [
       { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },
