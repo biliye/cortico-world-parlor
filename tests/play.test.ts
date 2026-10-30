@@ -339,6 +339,23 @@ describe('网页玩家', () => {
     expect(expired).toContain('这个席位的令牌已经失效');
   });
 
+  it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
+    for (const line of [
+      'function ensureDmWindow', 'function toggleDm', 'dm-btn', "api('/v1/dm/threads')",
+      "'/v1/dm?peer='", "'/v1/people?q='", 'parlor-dm-pos-v1', "event.key === 'Escape'",
+      "item.kind === 'whisper' && item.fromCooId",
+    ]) {
+      expect(js).toContain(line);
+    }
+    // 点浮窗外面关掉、手机上是全屏。
+    expect(js).toContain('win.contains(event.target)');
+    expect(css).toContain('.dm {');
+    expect(css).toContain('@media (max-width: 820px)');
+    expect(css).toContain('.dm-msg.is-me');
+  });
+
   it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const reg = readFileSync(new URL('../src/web/games/registry.js', import.meta.url), 'utf8');

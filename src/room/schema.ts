@@ -214,6 +214,7 @@ CREATE TABLE IF NOT EXISTS mail (
   id TEXT NOT NULL UNIQUE,
   ts INTEGER NOT NULL,
   coo_id TEXT NOT NULL REFERENCES coos(id),
+  from_coo_id TEXT REFERENCES coos(id),
   room_id TEXT NOT NULL REFERENCES rooms(id),
   kind TEXT NOT NULL CHECK (kind IN ('whisper','gift','promise','ledger','invite')),
   action TEXT,

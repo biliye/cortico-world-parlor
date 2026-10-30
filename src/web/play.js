@@ -40,6 +40,7 @@ const state = {
   sheet: null,
   hallData: null,
   hallLoading: false,
+  dm: { open: false, peer: null, threads: [], people: [], messages: [], unread: 0, q: '', timer: 0, drag: null },
   timerKey: '',
   timerTotal: 0,
 };
@@ -74,6 +75,7 @@ async function boot() {
     render();
     if (state.view === 'hall') void loadHall(true);
     connect();
+    void loadDmThreads();
   } catch (error) {
     if (error && error.status === 401) {
       await handleExpiredSeat(state.cfg ? state.cfg.token : '');
@@ -370,6 +372,7 @@ function handleEvent(event) {
     && (type === 'parlor.whisper' || type === 'parlor.ledger' || type === 'parlor.table.turn')) {
     loadMail(true);
   }
+  if (type === 'parlor.whisper') dmRefreshSoon();
 }
 
 async function seedLog() {
@@ -569,6 +572,15 @@ function buildShell() {
   mailBtn.append(mailBadge);
   mailBtn.addEventListener('click', () => openMailTab());
 
+  const dmBtn = el('button', 'ghost-btn dm-btn');
+  dmBtn.type = 'button';
+  dmBtn.title = '私聊：找人说话，离线也能收到';
+  dmBtn.append(icon('chat'), document.createTextNode('私聊'));
+  const dmBadge = el('span', 'badge', '0');
+  dmBadge.hidden = true;
+  dmBtn.append(dmBadge);
+  dmBtn.addEventListener('click', () => toggleDm());
+
   const leaveBtn = btn('换席位', () => {
     if (!confirm('换席位会清掉这台浏览器里的令牌；旧席位会留在房间里。要继续吗？')) return;
     if (state.stream) state.stream.close();
@@ -595,7 +607,7 @@ function buildShell() {
   menuBtn.append(icon('menu'));
   menuBtn.addEventListener('click', () => openSheet('me'));
 
-  topRight.append(conn, mailBtn, leaveBtn, topMe, menuBtn);
+  topRight.append(conn, mailBtn, dmBtn, leaveBtn, topMe, menuBtn);
   top.append(brand, roomPill, viewSwitch, topRight);
 
   const banner = el('div', 'banner');
@@ -855,7 +867,7 @@ function buildShell() {
   layout.append(leftRail, center, rightRail);
 
   Object.assign(ui, {
-    top, conn, connText, mailBtn, mailBadge, banner, bannerText, bannerGo,
+    top, conn, connText, mailBtn, mailBadge, dmBtn, dmBadge, banner, bannerText, bannerGo,
     roomPillText: pillText, roomPillSub: pillSub,
     viewButtons: [topHall, topRoom, topTable],
     topAvatar, topName, topSub, chipsText,
@@ -1987,6 +1999,11 @@ function renderMail() {
     copy.append(meta, el('p', '', readable(item.text || '')), el('span', 'mail-sub', '只有你能看'));
     node.append(copy);
     if (unread) node.append(el('span', 'unread-dot'));
+    if (item.kind === 'whisper' && item.fromCooId) {
+      node.classList.add('is-dm');
+      node.title = '点开私聊';
+      node.addEventListener('click', () => openDm(item.fromCooId, item.fromName));
+    }
     ui.mailList.append(node);
   });
   if (mail.unread > mail.items.length) {
@@ -2419,3 +2436,356 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) scheduleRefresh();
 });
 window.addEventListener('focus', () => scheduleRefresh());
+
+/* —— 私聊浮窗 —— */
+/* 位置存在本地：拖标题栏移动、点窗外空白或 Esc 关闭；手机上是全屏抽屉。 */
+
+let dmSearchTimer = 0;
+let dmRefreshTimer = 0;
+
+function dm() {
+  return state.dm;
+}
+
+function toggleDm() {
+  if (dm().open) closeDm();
+  else openDm();
+}
+
+function openDm(peer = '', name = '') {
+  if (!state.cfg) return;
+  const view = ensureDmWindow();
+  dm().open = true;
+  view.win.hidden = false;
+  restoreDmPos();
+  paintDmThreads();
+  paintDmPeople();
+  void loadDmThreads();
+  if (peer) void openDmThread(peer, name);
+  else view.search.focus();
+  startDmPolling();
+}
+
+function closeDm() {
+  const view = ui.dm;
+  if (!view) return;
+  dm().open = false;
+  view.win.hidden = true;
+  stopDmPolling();
+}
+
+function startDmPolling() {
+  stopDmPolling();
+  dm().timer = setInterval(() => {
+    if (!dm().open) return;
+    void loadDmThreads();
+    if (dm().peer) void loadDmMessages(dm().peer.cooId, true);
+  }, 5000);
+}
+
+function stopDmPolling() {
+  if (dm().timer) clearInterval(dm().timer);
+  dm().timer = 0;
+}
+
+/** 收到一条私聊事件时轻刷一次会话列表（有未读就亮角标）。 */
+function dmRefreshSoon() {
+  if (!state.shell) return;
+  clearTimeout(dmRefreshTimer);
+  dmRefreshTimer = setTimeout(() => { void loadDmThreads(); }, 400);
+}
+
+function ensureDmWindow() {
+  if (ui.dm) return ui.dm;
+  const win = el('aside', 'dm');
+  win.hidden = true;
+  win.setAttribute('role', 'dialog');
+  win.setAttribute('aria-label', '私聊');
+
+  const head = el('header', 'dm-head');
+  const title = el('span', 'dm-title', '私聊');
+  const close = el('button', 'dm-close', '×');
+  close.type = 'button';
+  close.setAttribute('aria-label', '关闭私聊');
+  close.addEventListener('click', () => closeDm());
+  head.append(title, close);
+
+  const body = el('div', 'dm-body');
+  const list = el('div', 'dm-list');
+  const search = el('input', 'dm-search');
+  search.placeholder = '搜人 / 搜会话';
+  search.setAttribute('aria-label', '搜索用户');
+  search.addEventListener('input', () => {
+    dm().q = search.value.trim();
+    clearTimeout(dmSearchTimer);
+    dmSearchTimer = setTimeout(() => { void loadDmPeople(); }, 250);
+  });
+  const threadsBox = el('div', 'dm-threads');
+  const peopleBox = el('div', 'dm-people');
+  list.append(search, threadsBox, peopleBox);
+
+  const pane = el('div', 'dm-pane');
+  const peerBox = el('div', 'dm-peer', '选一个人说话');
+  const msgs = el('div', 'dm-msgs');
+  const form = el('form', 'dm-send');
+  const input = el('textarea', 'dm-input');
+  input.rows = 1;
+  input.placeholder = '说点什么…（Enter 发送，Shift+Enter 换行）';
+  const send = btn('发送', null, { primary: true, small: true });
+  send.type = 'submit';
+  form.append(input, send);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void sendDm();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    void sendDm();
+  });
+  pane.append(peerBox, msgs, form);
+  body.append(list, pane);
+  win.append(head, body);
+  document.body.append(win);
+
+  ui.dm = { win, head, list, search, threadsBox, peopleBox, peerBox, msgs, form, input, send };
+
+  dragDm(head);
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!dm().open) return;
+    if (win.contains(event.target)) return;
+    if (ui.dmBtn && ui.dmBtn.contains(event.target)) return;
+    closeDm();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && dm().open) closeDm();
+  });
+  return ui.dm;
+}
+
+/** 拖标题栏；手机（窄屏）不拖，窗口是全屏。 */
+function dragDm(head) {
+  head.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('.dm-close')) return;
+    if (window.matchMedia('(max-width: 820px)').matches) return;
+    const win = ui.dm.win;
+    const rect = win.getBoundingClientRect();
+    dm().drag = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+    try { head.setPointerCapture(event.pointerId); } catch { /* 合成事件没有真实指针 */ }
+  });
+  head.addEventListener('pointermove', (event) => {
+    const drag = dm().drag;
+    if (!drag) return;
+    const win = ui.dm.win;
+    const left = Math.min(Math.max(0, event.clientX - drag.dx), Math.max(0, window.innerWidth - win.offsetWidth));
+    const top = Math.min(Math.max(0, event.clientY - drag.dy), Math.max(0, window.innerHeight - win.offsetHeight));
+    win.style.left = left + 'px';
+    win.style.top = top + 'px';
+    win.style.right = 'auto';
+  });
+  head.addEventListener('pointerup', () => {
+    if (!dm().drag) return;
+    dm().drag = null;
+    try {
+      const win = ui.dm.win;
+      localStorage.setItem('parlor-dm-pos-v1', JSON.stringify({ left: win.offsetLeft, top: win.offsetTop }));
+    } catch { /* 存不了就这次有效 */ }
+  });
+}
+
+function restoreDmPos() {
+  const win = ui.dm.win;
+  try {
+    const raw = JSON.parse(localStorage.getItem('parlor-dm-pos-v1') || 'null');
+    if (!raw || typeof raw.left !== 'number' || typeof raw.top !== 'number') return;
+    const left = Math.min(Math.max(0, raw.left), Math.max(0, window.innerWidth - win.offsetWidth));
+    const top = Math.min(Math.max(0, raw.top), Math.max(0, window.innerHeight - win.offsetHeight));
+    win.style.left = left + 'px';
+    win.style.top = top + 'px';
+    win.style.right = 'auto';
+  } catch { /* 没存过 */ }
+}
+
+async function loadDmThreads() {
+  if (!state.cfg) return;
+  try {
+    const data = await api('/v1/dm/threads');
+    dm().threads = data.threads || [];
+    dm().unread = data.unread || 0;
+    paintDmThreads();
+    updateDmBadge();
+  } catch { /* 掉线时静默，下一次轮询再试 */ }
+}
+
+async function loadDmPeople() {
+  const query = dm().q;
+  if (!query) {
+    dm().people = [];
+    paintDmPeople();
+    return;
+  }
+  try {
+    const data = await api('/v1/people?q=' + encodeURIComponent(query));
+    if (dm().q !== query) return;
+    dm().people = data.people || [];
+    paintDmPeople();
+  } catch { /* 搜索失败就当没有 */ }
+}
+
+async function openDmThread(peer, name = '') {
+  dm().peer = { cooId: peer, name };
+  paintDmPeer();
+  ui.dm.msgs.replaceChildren(el('p', 'chat-empty', '正在取聊天…'));
+  await loadDmMessages(peer);
+  await markDmRead(peer);
+  ui.dm.input.focus();
+}
+
+async function loadDmMessages(peer, quiet = false) {
+  try {
+    const data = await api('/v1/dm?peer=' + encodeURIComponent(peer) + '&limit=60');
+    if (!dm().peer || dm().peer.cooId !== peer) return;
+    if (data.peer && data.peer.name) dm().peer.name = data.peer.name;
+    dm().messages = data.messages || [];
+    paintDmPeer();
+    paintDmMessages(!quiet);
+  } catch (error) {
+    if (!quiet) ui.dm.msgs.replaceChildren(el('p', 'chat-empty bad', error.message || '取不到聊天'));
+  }
+}
+
+async function sendDm() {
+  const view = ui.dm;
+  const peer = dm().peer;
+  const text = view.input.value.trim();
+  if (!peer || !text || view.send.disabled) return;
+  view.send.disabled = true;
+  try {
+    const data = await api('/v1/dm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: peer.cooId, text }),
+    });
+    dm().messages.push(data.message);
+    view.input.value = '';
+    paintDmMessages(true);
+    await loadDmThreads();
+  } catch (error) {
+    showToast(error.message || '没发出去', 'bad');
+  } finally {
+    view.send.disabled = false;
+    view.input.focus();
+  }
+}
+
+async function markDmRead(peer) {
+  try {
+    await api('/v1/dm/read', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ peer }),
+    });
+    await loadDmThreads();
+  } catch { /* 已读标不上不影响看 */ }
+}
+
+function paintDmThreads() {
+  const view = ui.dm;
+  if (!view) return;
+  clear(view.threadsBox);
+  const threads = dm().threads;
+  if (!threads.length) {
+    view.threadsBox.append(el('p', 'chat-empty', '还没有私聊。上面搜个名字开始。'));
+  }
+  const active = dm().peer ? dm().peer.cooId : '';
+  for (const thread of threads) {
+    const node = el('button', 'dm-thread' + (thread.peer === active ? ' is-active' : ''));
+    node.type = 'button';
+    const who = el('span', 'dm-who');
+    who.append(el('span', 'dm-name', thread.name || '某人'));
+    if (thread.online) who.append(el('span', 'dm-online', '在线'));
+    if (thread.unread > 0) who.append(el('span', 'badge', String(thread.unread)));
+    node.append(
+      who,
+      el('span', 'dm-last', (thread.lastFromMe ? '我：' : '') + readable(thread.lastText || '')),
+      el('time', 'dm-time', fmtClock(thread.lastTs).slice(0, 5)),
+    );
+    node.addEventListener('click', () => { void openDmThread(thread.peer, thread.name); });
+    view.threadsBox.append(node);
+  }
+  updateDmBadge();
+}
+
+function paintDmPeople() {
+  const view = ui.dm;
+  if (!view) return;
+  clear(view.peopleBox);
+  if (!dm().q) return;
+  if (!dm().people.length) {
+    view.peopleBox.append(el('p', 'chat-empty', '没有找到（只能搜在线的人和你聊过的人）'));
+    return;
+  }
+  view.peopleBox.append(el('p', 'dm-hint', '找人'));
+  for (const person of dm().people) {
+    const node = el('button', 'dm-thread dm-person');
+    node.type = 'button';
+    const who = el('span', 'dm-who');
+    who.append(el('span', 'dm-name', person.name || '某人'));
+    if (person.online) who.append(el('span', 'dm-online', '在线'));
+    node.append(who);
+    node.addEventListener('click', () => {
+      view.search.value = '';
+      dm().q = '';
+      paintDmPeople();
+      void openDmThread(person.cooId, person.name);
+    });
+    view.peopleBox.append(node);
+  }
+}
+
+function paintDmPeer() {
+  const view = ui.dm;
+  if (!view) return;
+  const peer = dm().peer;
+  if (!peer) {
+    view.peerBox.textContent = '选一个人说话';
+    view.input.disabled = true;
+    view.send.disabled = true;
+    return;
+  }
+  view.peerBox.replaceChildren(el('strong', '', peer.name || '某人'));
+  const thread = dm().threads.find((item) => item.peer === peer.cooId);
+  if (thread && thread.online) view.peerBox.append(el('span', 'dm-online', '在线'));
+  view.input.disabled = false;
+  view.send.disabled = false;
+}
+
+function paintDmMessages(scroll = true) {
+  const view = ui.dm;
+  if (!view) return;
+  const nearBottom = view.msgs.scrollHeight - view.msgs.scrollTop - view.msgs.clientHeight < 80;
+  clear(view.msgs);
+  if (!dm().peer) {
+    view.msgs.append(el('p', 'chat-empty', '选左边一个人，或者上面搜个名字。'));
+    return;
+  }
+  if (!dm().messages.length) {
+    view.msgs.append(el('p', 'chat-empty', '还没有消息。'));
+    return;
+  }
+  for (const message of dm().messages) {
+    const node = el('article', 'dm-msg' + (message.fromMe ? ' is-me' : ''));
+    node.append(el('p', 'dm-text', readable(message.text || '')));
+    node.append(el('time', 'dm-time', fmtClock(message.ts).slice(0, 5)));
+    view.msgs.append(node);
+  }
+  if (scroll && nearBottom) view.msgs.scrollTop = view.msgs.scrollHeight;
+}
+
+function updateDmBadge() {
+  if (!ui.dmBadge) return;
+  const unread = dm().unread || 0;
+  ui.dmBadge.textContent = String(unread);
+  ui.dmBadge.hidden = unread <= 0;
+}

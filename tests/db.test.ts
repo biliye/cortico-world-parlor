@@ -32,9 +32,21 @@ describe('SQLite 地基', () => {
   it('migrate 可重复执行，schema 版本写进 meta', () => {
     migrate(db);
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string };
-    expect(row.value).toBe('2');
+    expect(row.value).toBe('3');
     const mode = db.prepare('SELECT value FROM meta WHERE key = ?').get('storage_mode') as { value: string };
     expect(mode.value).toBe('sqlite');
+  });
+
+  it('老库没有 from_coo_id 时能补列并建索引（不能在建索引那步炸）', () => {
+    migrate(db);
+    db.exec('DROP INDEX IF EXISTS ix_mail_peer');
+    db.exec('ALTER TABLE mail DROP COLUMN from_coo_id');
+    db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+    expect(() => migrate(db)).not.toThrow();
+    const cols = (db.prepare('PRAGMA table_info(mail)').all() as { name: string }[]).map((row) => row.name);
+    expect(cols).toContain('from_coo_id');
+    const index = db.prepare("SELECT name FROM sqlite_master WHERE name = 'ix_mail_peer'").get();
+    expect(index).toBeTruthy();
   });
 
   it('身份 → 账户 → 客厅 → 席位的基本写入', () => {

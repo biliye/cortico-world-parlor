@@ -18,6 +18,24 @@ import type { MailItem, MailKind, MailPage, MailView } from './mail.ts';
 /** 投递一封新信时需要的字段；id/seq/ts/read 由 store 填。 */
 export type MailInput = Omit<MailItem, 'id' | 'seq' | 'ts' | 'read'>;
 
+export interface DmThreadSummary {
+  peer: string;
+  lastSeq: number;
+  lastTs: number;
+  lastText: string;
+  lastFromMe: boolean;
+  unread: number;
+}
+
+export interface DmThreadMessage {
+  seq: number;
+  ts: number;
+  text: string;
+  fromName: string;
+  fromMe: boolean;
+  unread: boolean;
+}
+
 export interface MailDbOptions {
   now?: () => number;
 }
@@ -48,7 +66,7 @@ const DEFAULT_PAGE = 10;
 const DEFAULT_RECENT = 3;
 
 /** 视图列：带 room 与 read，不带 coo_id。 */
-const VIEW_COLUMNS = `id, seq, ts, room_id, kind, action, from_name, text, entry_id,
+const VIEW_COLUMNS = `id, seq, ts, room_id, kind, action, from_name, text, entry_id, from_coo_id,
   (read_at IS NOT NULL) AS read_flag`;
 
 const clampPage = (limit: number, fallback: number): number => {
@@ -62,6 +80,7 @@ const toView = (row: Record<string, unknown>): MailView => ({
   seq: Number(row.seq),
   ts: Number(row.ts),
   room: String(row.room_id),
+  ...(typeof row.from_coo_id === 'string' ? { fromCooId: row.from_coo_id } : {}),
   kind: row.kind as MailKind,
   ...(typeof row.action === 'string' ? { action: row.action } : {}),
   fromName: String(row.from_name),
@@ -155,15 +174,17 @@ export class MailDb {
     const ts = this.now();
     const action = input.action ?? null;
     const entryId = input.entryId ?? null;
+    const fromCooId = input.fromCooId ?? null;
     const result = this.db.prepare(
-      `INSERT INTO mail(id, ts, coo_id, room_id, kind, action, from_name, text, entry_id, key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, ts, input.to, input.room, input.kind, action, input.fromName, input.text, entryId, key);
+      `INSERT INTO mail(id, ts, coo_id, from_coo_id, room_id, kind, action, from_name, text, entry_id, key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, ts, input.to, fromCooId, input.room, input.kind, action, input.fromName, input.text, entryId, key);
     return {
       id,
       seq: Number(result.lastInsertRowid),
       ts,
       room: input.room,
+      ...(fromCooId ? { fromCooId } : {}),
       kind: input.kind,
       ...(action ? { action } : {}),
       fromName: input.fromName,
@@ -238,6 +259,83 @@ export class MailDb {
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? ORDER BY seq DESC LIMIT ?`,
       ).all(cooId, room, size);
     return rows.map(toView);
+  }
+
+  /** 私聊会话摘要：每个对方一条，按最后一条排序。只算带 from_coo_id 的信。 */
+  threads(cooId: string): DmThreadSummary[] {
+    const rows = this.db.prepare(
+      `SELECT seq, ts, coo_id, from_coo_id, text
+         FROM mail
+        WHERE from_coo_id IS NOT NULL AND (coo_id = ? OR from_coo_id = ?)
+        ORDER BY seq DESC LIMIT 500`,
+    ).all(cooId, cooId) as Record<string, unknown>[];
+    const last = new Map<string, DmThreadSummary>();
+    for (const row of rows) {
+      const mine = String(row.coo_id) === cooId;
+      const peer = mine ? String(row.from_coo_id) : String(row.coo_id);
+      if (last.has(peer)) continue;
+      last.set(peer, {
+        peer,
+        lastSeq: Number(row.seq),
+        lastTs: Number(row.ts),
+        lastText: String(row.text),
+        lastFromMe: !mine,
+        unread: 0,
+      });
+    }
+    const unreadRows = this.db.prepare(
+      `SELECT from_coo_id AS peer, COUNT(*) AS n
+         FROM mail
+        WHERE coo_id = ? AND from_coo_id IS NOT NULL AND read_at IS NULL
+        GROUP BY from_coo_id`,
+    ).all(cooId) as { peer: string; n: number }[];
+    for (const row of unreadRows) {
+      const item = last.get(row.peer);
+      if (item) item.unread = Number(row.n);
+    }
+    return [...last.values()].sort((a, b) => b.lastSeq - a.lastSeq);
+  }
+
+  /** 和某一个人的私聊历史；before=0 表示最新一页。 */
+  thread(cooId: string, peer: string, before = 0, limit = 50): { messages: DmThreadMessage[]; hasMore: boolean } {
+    const size = Math.max(1, Math.min(100, Math.trunc(Number(limit)) || 50));
+    const cursor = Number.isFinite(before) ? Math.max(0, Math.trunc(before)) : 0;
+    const rows = this.db.prepare(
+      `SELECT seq, ts, text, from_name, (read_at IS NULL) AS unread, (from_coo_id = ?) AS out_flag
+         FROM mail
+        WHERE from_coo_id IS NOT NULL
+          AND ((coo_id = ? AND from_coo_id = ?) OR (coo_id = ? AND from_coo_id = ?))
+          AND (? = 0 OR seq < ?)
+        ORDER BY seq DESC LIMIT ?`,
+    ).all(cooId, cooId, peer, peer, cooId, cursor, cursor, size + 1) as Record<string, unknown>[];
+    const hasMore = rows.length > size;
+    const page = rows.slice(0, size).reverse();
+    return {
+      hasMore,
+      messages: page.map((row) => ({
+        seq: Number(row.seq),
+        ts: Number(row.ts),
+        text: String(row.text),
+        fromName: String(row.from_name),
+        fromMe: Boolean(row.out_flag),
+        unread: Boolean(row.unread),
+      })),
+    };
+  }
+
+  /** 把和某个人的来信全部标成已读；返回这次标了几封。 */
+  markThreadRead(cooId: string, peer: string): number {
+    const result = this.db.prepare(
+      'UPDATE mail SET read_at = ? WHERE coo_id = ? AND from_coo_id = ? AND read_at IS NULL',
+    ).run(this.now(), cooId, peer);
+    return Number(result.changes);
+  }
+
+  /** 私聊未读总数（信箱角标用）。 */
+  dmUnread(cooId: string): number {
+    return Number(this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND from_coo_id IS NOT NULL AND read_at IS NULL',
+    ).get(cooId)?.n ?? 0);
   }
 
   /** 全库信件数；迁移/巡检用。 */

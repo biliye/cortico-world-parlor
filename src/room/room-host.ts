@@ -249,6 +249,24 @@ export class RoomHost {
     });
   }
 
+  /**
+   * 私聊信已经落进信箱了，这里只往对方所在的客厅推一条事件，让在线的人立刻看到；
+   * 不再写第二封信（否则信箱里会出现两条）。
+   */
+  whisperNotice(fromCooId: string, fromName: string, target: { cooId: string; id: string; name: string }, text: string): RoomEvent {
+    const now = this.now();
+    const senderSeat = activeSeatForCoo(this.db, fromCooId);
+    return this.events.append(this.roomId, {
+      type: 'parlor.whisper',
+      ts: now,
+      from: senderSeat?.id ?? 'system',
+      scope: { kind: 'seat', seatId: target.id },
+      text,
+      data: { name: fromName, to: target.name, dm: true },
+      audience: [{ cooId: target.cooId, seatId: target.id }],
+    });
+  }
+
   leave(cooId: string): LeaveResult {
     this.requireRoom();
     const seat = this.seatOf(cooId);
@@ -368,6 +386,7 @@ export class RoomHost {
       });
       const letter = this.mail.append({
         to: target.cooId,
+        fromCooId: seat.cooId,
         room: this.roomId,
         kind: 'whisper',
         fromName: seat.name,

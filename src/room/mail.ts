@@ -19,6 +19,8 @@ export interface MailItem {
   room: string;
   /** 收件人 cooId。 */
   to: string;
+  /** 发件人 cooId；私聊才有，系统信为 null。 */
+  fromCooId?: string;
   kind: MailKind;
   /** 具体动作（gift / promise / accept / decline / settle / default / refill…）。 */
   action?: string;
@@ -37,6 +39,8 @@ export interface MailView {
   seq: number;
   ts: number;
   room: string;
+  /** 私聊来信时有：对方 cooId（网页用它打开会话）。 */
+  fromCooId?: string;
   kind: MailKind;
   action?: string;
   fromName: string;

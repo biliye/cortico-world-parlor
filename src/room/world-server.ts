@@ -551,6 +551,46 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/v1/dm') {
+      const cooId = this.cooOrSeat(req);
+      const body = await readJson(req);
+      json(res, 200, this.sendDm(cooId, body));
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/dm/threads') {
+      const cooId = this.cooOrSeat(req);
+      json(res, 200, this.dmThreads(cooId));
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/dm') {
+      const cooId = this.cooOrSeat(req);
+      const peer = (url.searchParams.get('peer') ?? '').trim();
+      if (!peer) throw new HttpError(400, '要看和谁的会话？');
+      const before = Number(url.searchParams.get('before') ?? 0) || 0;
+      const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
+      json(res, 200, this.dmThreadPage(cooId, peer, before, limit));
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/dm/read') {
+      const cooId = this.cooOrSeat(req);
+      const body = await readJson(req);
+      const peer = typeof body.peer === 'string' ? body.peer.trim() : '';
+      if (!peer) throw new HttpError(400, '要看和谁的会话？');
+      const changed = new MailDb(this.db, { now: this.now }).markThreadRead(cooId, peer);
+      json(res, 200, { ok: true, changed });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/people') {
+      const cooId = this.cooOrSeat(req);
+      const q = (url.searchParams.get('q') ?? '').trim();
+      json(res, 200, this.searchPeople(cooId, q));
+      return;
+    }
+
     if (method === 'GET' && url.pathname === '/v1/rooms') {
       const all = url.searchParams.get('all') === '1';
       const cooId = all ? this.cooOrSeat(req) : null;
@@ -678,6 +718,106 @@ export class WorldServer {
     }
 
     throw new HttpError(404, '没有这个地址');
+  }
+
+  /** 一个人的展示信息：当前席位名优先，其次 coo 显示名；online 看有没有活跃席位。 */
+  private personInfo(cooId: string, fallbackName = ''): { cooId: string; name: string; online: boolean; room: string | null } {
+    const seat = activeSeatForCoo(this.db, cooId);
+    const row = this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
+    const name = seat?.name || (row?.display_name ?? '').trim() || fallbackName || '某人';
+    return { cooId, name, online: !!seat, room: seat?.roomId ?? null };
+  }
+
+  /** 找人：优先 cooId（搜索结果带的就是它），退一步按当前唯一同名席位。 */
+  private dmPeer(value: string, fromCooId: string): { cooId: string; name: string; online: boolean; room: string | null } {
+    const needle = value.trim();
+    if (!needle) throw new HttpError(400, '要写给谁？');
+    if (isCooId(needle)) {
+      const row = this.db.prepare("SELECT id FROM coos WHERE id = ? AND status = 'active'").get(needle);
+      if (!row) throw new HttpError(404, '没有这个人');
+      return this.personInfo(needle);
+    }
+    const seats = this.db.prepare(
+      'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND name = ? COLLATE NOCASE',
+    ).all(needle) as { coo_id: string }[];
+    const ids = [...new Set(seats.map((row) => row.coo_id))].filter((id) => id !== fromCooId);
+    if (ids.length === 1) return this.personInfo(ids[0]);
+    if (ids.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
+    throw new HttpError(404, `没有找到「${needle}」（离线的人要用搜索结果选）`);
+  }
+
+  /** 私聊：对方离线也照常投信箱；在线时顺手往他所在的客厅推一条事件。 */
+  private sendDm(cooId: string, body: Record<string, unknown>): Record<string, unknown> {
+    const seat = activeSeatForCoo(this.db, cooId);
+    if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再发私聊');
+    const peer = this.dmPeer(typeof body.to === 'string' ? body.to : '', cooId);
+    if (peer.cooId === cooId) throw new HttpError(400, '不能给自己发私聊');
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!text) throw new HttpError(400, '消息不能是空的');
+    if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
+    this.checkDmRate(cooId);
+    const letter = new MailDb(this.db, { now: this.now }).append({
+      to: peer.cooId,
+      fromCooId: cooId,
+      room: seat.roomId,
+      kind: 'whisper',
+      fromName: seat.name,
+      text,
+    });
+    const target = activeSeatForCoo(this.db, peer.cooId);
+    if (target) {
+      try {
+        this.host(target.roomId).whisperNotice(cooId, seat.name, {
+          cooId: target.cooId, id: target.id, name: target.name,
+        }, text);
+      } catch { /* 推事件失败不影响信 */ }
+    }
+    return {
+      message: { seq: letter.seq, ts: letter.ts, text: letter.text, fromName: seat.name, fromMe: true, unread: false },
+      peer,
+    };
+  }
+
+  private dmThreads(cooId: string): Record<string, unknown> {
+    const mail = new MailDb(this.db, { now: this.now });
+    const threads = mail.threads(cooId).map((thread) => {
+      const info = this.personInfo(thread.peer);
+      return { ...thread, name: info.name, online: info.online, room: info.room };
+    });
+    return { threads, unread: mail.dmUnread(cooId) };
+  }
+
+  private dmThreadPage(cooId: string, peer: string, before: number, limit: number): Record<string, unknown> {
+    if (!isCooId(peer)) throw new HttpError(400, '对方身份不对');
+    const page = new MailDb(this.db, { now: this.now }).thread(cooId, peer, before, limit);
+    return { peer: this.personInfo(peer), ...page };
+  }
+
+  /** 搜人：在线的人 + 我聊过的人；空查询就是全部候选。 */
+  private searchPeople(cooId: string, query: string): Record<string, unknown> {
+    const needle = query.trim().toLowerCase();
+    const rows = this.db.prepare(
+      "SELECT id, display_name FROM coos WHERE status = 'active' AND id <> ?",
+    ).all(cooId) as { id: string; display_name: string }[];
+    const past = new Set(new MailDb(this.db, { now: this.now }).threads(cooId).map((thread) => thread.peer));
+    const people = rows
+      .map((row) => this.personInfo(row.id, row.display_name))
+      .filter((person) => (person.online || past.has(person.cooId))
+        && (!needle || person.name.toLowerCase().includes(needle)))
+      .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, 'zh'))
+      .slice(0, 20);
+    return { people };
+  }
+
+  private readonly dmTimes = new Map<string, number[]>();
+
+  private checkDmRate(cooId: string): void {
+    const now = this.now();
+    const times = (this.dmTimes.get(cooId) ?? []).filter((at) => at >= now - 3_600_000);
+    if (times.filter((at) => at >= now - 60_000).length >= 20) throw new HttpError(429, '发得太快了，过一会儿再发');
+    if (times.length >= 200) throw new HttpError(429, '一小时内最多 200 条私聊');
+    times.push(now);
+    this.dmTimes.set(cooId, times);
   }
 
   private async roomRoute(

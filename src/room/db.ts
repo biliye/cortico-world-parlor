@@ -32,10 +32,19 @@ export const migrate = (db: Db): void => {
   if (!columns.has('player_coo_id')) {
     db.exec('ALTER TABLE accounts ADD COLUMN player_coo_id TEXT REFERENCES coos(id)');
   }
+  // 私聊会话需要知道「谁发的那封」；老信没有这一列，按 NULL 处理（不进会话）。
+  const mailColumns = new Set(
+    (db.prepare('PRAGMA table_info(mail)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!mailColumns.has('from_coo_id')) {
+    db.exec('ALTER TABLE mail ADD COLUMN from_coo_id TEXT REFERENCES coos(id)');
+  }
+  // 索引要等列补上再建：写在 SCHEMA_SQL 里会在老库上炸（建索引时那列还不存在）。
+  db.exec('CREATE INDEX IF NOT EXISTS ix_mail_peer ON mail(coo_id, from_coo_id, seq)');
   const stmt = db.prepare(
     'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   );
-  stmt.run('schema_version', '2');
+  stmt.run('schema_version', '3');
   stmt.run('storage_mode', 'sqlite');
 };
 
