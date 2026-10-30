@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 const start = async (): Promise<WorldServer> => {
-  server = new WorldServer({ dbFile: join(dir!, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby' });
+  server = new WorldServer({ allowGuestJoin: true, dbFile: join(dir!, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby' });
   await server.listen();
   return server;
 };

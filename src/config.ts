@@ -16,6 +16,12 @@ export interface ParlorConfigSection {
   maxSeats: number;
   /** 默认提醒挡位；改动会同步到服务器上的这个席位。 */
   wakeTier: WakeTier;
+  /**
+   * 是否开放网页「用户名 + 邀请码」的访客入口。
+   * 默认关：人只能从带钥匙的「下场玩」链接进来，Coo 自己不受影响。
+   * 关掉时面板不再显示可转发的「网页牌桌」链接。
+   */
+  allowGuestJoin: boolean;
 }
 
 export const PARLOR_DEFAULTS: ParlorConfigSection = {
@@ -27,6 +33,7 @@ export const PARLOR_DEFAULTS: ParlorConfigSection = {
   port: 8790,
   maxSeats: 8,
   wakeTier: DEFAULT_WAKE_TIER,
+  allowGuestJoin: false,
 };
 
 export const PARLOR_CONFIG_GROUP: ConfigGroup = {
@@ -75,6 +82,12 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
         description: '只有自己开客厅时有用；会说话的席位上限，观看者不计入。',
         minimum: 2,
         maximum: 12,
+        'x-hot': false,
+      },
+      'worlds.parlor.allowGuestJoin': {
+        type: 'boolean',
+        title: '开放网页访客加入',
+        description: '默认关。关了以后只能用带钥匙的「下场玩」链接进来；Coo 自己不受影响。开了会多一条可转发的「网页牌桌」链接。',
         'x-hot': false,
       },
       'worlds.parlor.wakeTier': {

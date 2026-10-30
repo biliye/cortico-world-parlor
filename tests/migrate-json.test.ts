@@ -72,7 +72,7 @@ describe('旧 JSON 迁移到 SQLite', () => {
     expect(report.unread.every((check) => check.match)).toBe(true);
 
     // 旧席位令牌在新网关里仍然有效；历史与私聊按原受众可见。
-    server = new WorldServer({ dbFile, port: 0, inviteCode: 'inv' });
+    server = new WorldServer({ allowGuestJoin: true, dbFile, port: 0, inviteCode: 'inv' });
     await server.listen();
     const snapA = await snapshot(server.url, a.token);
     expect(snapA.status).toBe(200);
@@ -187,7 +187,7 @@ describe('迁移后的旧家长链接', () => {
     }));
     const dbFile = join(dir, 'legacy.db');
     migrateLegacyJson({ dataDir: dir, dbFile });
-    server = new WorldServer({ dbFile, port: 0, inviteCode: 'inv' });
+    server = new WorldServer({ allowGuestJoin: true, dbFile, port: 0, inviteCode: 'inv' });
     await server.listen();
 
     const opened = await fetch(`${server.url}/v1/owner?token=old-owner-token`, { redirect: 'manual' });

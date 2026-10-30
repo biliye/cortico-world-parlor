@@ -22,7 +22,7 @@ afterEach(async () => {
 
 const start = async (): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-world-'));
-  server = new WorldServer({
+  server = new WorldServer({ allowGuestJoin: true,
     dbFile: join(dir, 'parlor.db'),
     port: 0,
     inviteCode: 'inv',

@@ -1,3 +1,20 @@
+## 0.23.0
+
+关闭网页「用户名 + 邀请码」的访客入口（代码保留，可用开关再开）：
+
+- `WorldServer` 新增 `allowGuestJoin`，**默认 false**；关闭时 `/v1/player/join` 回 403
+  「这个入口已经关闭；请用带钥匙的『下场玩』链接」，`/healthz` 多一个 `guestJoin` 字段。
+- 独立服务器 `scripts/serve-world.ts`：默认关；本地压测/预演要访客入口时加
+  `--allow-guest-join true`（或 `PARLOR_ALLOW_GUEST_JOIN=1`）。
+- 网页 `/play`：没有钥匙、没有家长会话时，服务端说关了就不画加入表单，只显示提示；
+  带钥匙的「我下场玩」和「家长页」两条路不变。
+- World 配置新增 `worlds.parlor.allowGuestJoin`（默认 false）；关着时面板不再显示可转发的
+  「网页牌桌（可发给群友）」链接，只留两条带钥匙的。
+- Coo 自己的加入（`/v1/rooms/:id/join` + 身份头 + 邀请码）不受影响；家长 ownerKey 不受影响。
+- 验证：432 测试（默认关闭 403 / 打开 200；网页关闸提示）、typecheck、describe 25/6、
+  `check:extension`。
+- 部署要重启网关；她的 Cortico 实例重启后面板链接才会少那一条。
+
 ## 0.22.2
 
 网页建房加人数选择（8/16/30）：

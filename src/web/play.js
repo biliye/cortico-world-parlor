@@ -54,6 +54,8 @@ const state = {
   sheet: null,
   hallData: null,
   hallLoading: false,
+  /** 服务端是否开放「用户名 + 邀请码」入口；默认按开处理，boot 时问 /healthz。 */
+  guestJoin: true,
   dm: { open: false, peer: null, threads: [], people: [], messages: [], unread: 0, q: '', timer: 0, drag: null },
   timerKey: '',
   timerTotal: 0,
@@ -67,6 +69,16 @@ boot();
 
 /* —— 起步 —— */
 
+/** 访客入口开没开：/healthz 的 guestJoin；老服务器没这个字段就按开处理。 */
+async function loadEntryPolicy() {
+  try {
+    const response = await fetch('/healthz');
+    if (!response.ok) return;
+    const body = await response.json();
+    if (body && body.guestJoin === false) state.guestJoin = false;
+  } catch { /* 连不上就保持默认；提交时服务器也会拒 */ }
+}
+
 async function boot() {
   // 带钥匙的「我下场玩」链接：钥匙只用来换会话，换完立刻从地址栏抹掉。
   const key = takeKeyFromHash();
@@ -74,6 +86,7 @@ async function boot() {
     await tryParentEntry(key);
   }
   if (!state.cfg) {
+    await loadEntryPolicy();
     renderJoin();
     return;
   }
@@ -176,6 +189,7 @@ async function handleExpiredSeat(token) {
     state.stream = null;
   }
   clearStore();
+  await loadEntryPolicy();
   if (await hasParentSession()) {
     renderJoin('这台设备上的席位已经失效（可能被另一台设备顶掉了）。点下面的「以家长身份下场」重新进来。');
   } else {
@@ -2297,7 +2311,16 @@ function renderJoin(message = '') {
   const join = el('div', 'join');
   const panel = el('section', 'panel');
   panel.append(brandNode());
-  panel.append(el('h1', '', '客厅 · 下场玩'));
+  panel.append(el('h1', '', state.guestJoin ? '客厅 · 下场玩' : '客厅 · 入口已关闭'));
+  if (!state.guestJoin) {
+    panel.append(el('p', 'sub', message
+      || '这个入口已经关闭。请向房主要带钥匙的「下场玩」链接；有 Coo 的话也可以让 Coo 带你进客厅。'));
+    // 家长会话还有效的话，仍然给「以家长身份下场」这一条路。
+    void offerParentPlay(panel);
+    join.append(panel);
+    app.append(join);
+    return;
+  }
   panel.append(el('p', 'sub', '用自己的席位和 Coo 同桌。你的战绩、筹码和信箱是单独的一份，不会记到她头上。'));
 
   const nameField = el('div', 'field');

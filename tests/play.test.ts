@@ -346,6 +346,13 @@ describe('网页玩家', () => {
     expect(js).toContain('capacity: Number(capInput.value)');
   });
 
+  it('访客入口关闭时不再显示加入表单', () => {
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    expect(js).toContain('guestJoin');
+    expect(js).toContain('这个入口已经关闭');
+    expect(js).toContain("fetch('/healthz')");
+  });
+
   it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');

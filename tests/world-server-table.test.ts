@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 const start = async (): Promise<WorldServer> => {
-  server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+  server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
   await server.listen();
   return server;
 };

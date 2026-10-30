@@ -419,7 +419,10 @@ export class ParlorWorld implements World {
   webUi(): WorldWebUiDecl {
     const links = this.baseUrl
       ? [
-        { label: '客厅 · 网页牌桌（可发给群友）', href: `${this.baseUrl}/play`, inheritTheme: true },
+        // 访客入口默认关；关了就不给可转发的公开链接，只留带钥匙的那两条。
+        ...(this.ctx.cfg.allowGuestJoin
+          ? [{ label: '客厅 · 网页牌桌（可发给群友）', href: `${this.baseUrl}/play`, inheritTheme: true }]
+          : []),
         // 带钥匙的那条只给自己：点开就换家长会话并下场，不能转发。
         ...(this.multiRoom && this.ownerToken
           ? [{

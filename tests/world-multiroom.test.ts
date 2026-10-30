@@ -58,12 +58,13 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
 const startWorld = async (): Promise<{
   host: FakeHost; friend: ParlorClient; friendToken: string; secrets: Record<string, string>;
 }> => {
-  server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+  server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
   await server.listen();
   const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
   const ctx = makeContext(secrets);
   ctx.cfg.serverUrl = server.url;
   ctx.cfg.seatName = '小满';
+  ctx.cfg.allowGuestJoin = true;
   world = PARLOR.create(ctx);
   const host = new FakeHost();
   await world.start(host);
@@ -97,7 +98,7 @@ describe('World 多客厅', () => {
   });
 
   it('已有账户再次加入不会把 .env 里的 ownerKey 冲掉', async () => {
-    server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
     await server.listen();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx1 = makeContext(secrets);

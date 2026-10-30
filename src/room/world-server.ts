@@ -29,6 +29,8 @@ export interface WorldServerOptions {
   port?: number;
   defaultRoomId?: string;
   inviteCode?: string;
+  /** 网页「用户名 + 邀请码」的访客入口；默认关。 */
+  allowGuestJoin?: boolean;
   now?: () => number;
 }
 
@@ -179,6 +181,7 @@ export class WorldServer {
   private readonly now: () => number;
   private readonly defaultRoomId: string;
   private readonly inviteCode: string;
+  private readonly allowGuestJoin: boolean;
   private readonly hostName: string;
   private readonly port: number;
   private server?: Server;
@@ -202,6 +205,7 @@ export class WorldServer {
     this.coo = new CooAccountDb(this.db, { now: this.now });
     this.defaultRoomId = options.defaultRoomId ?? 'lobby';
     this.inviteCode = options.inviteCode ?? '';
+    this.allowGuestJoin = options.allowGuestJoin ?? false;
     this.hostName = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
     this.ensureDefaultRoom();
@@ -394,6 +398,7 @@ export class WorldServer {
         room: this.defaultRoomId,
         version: PACKAGE_VERSION,
         protocol: 2,
+        guestJoin: this.allowGuestJoin,
         hall: this.hallId,
         rooms: listRooms(this.db, { kind: 'room' }).length,
         seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,
@@ -666,6 +671,9 @@ export class WorldServer {
     }
 
     if (url.pathname === '/v1/player/join' && method === 'POST') {
+      if (!this.allowGuestJoin) {
+        throw new HttpError(403, '这个入口已经关闭；请用带钥匙的「下场玩」链接');
+      }
       const body = await readJson(req);
       this.checkInvite(req, body);
       const name = typeof body.name === 'string' ? body.name : '';

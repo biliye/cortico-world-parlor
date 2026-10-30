@@ -61,7 +61,7 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
 
 describe('旧 World 工具 × 新服务器', () => {
   it('连接、说话、私聊、查看、回放、骰子一局都能走通', async () => {
-    server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
     await server.listen();
 
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
