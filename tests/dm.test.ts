@@ -173,12 +173,23 @@ describe('网页私聊', () => {
     await post(app.url, '/v1/rooms/lobby/leave', {}, {
       authorization: `Bearer ${cToken}`, 'x-parlor-coo': c, 'x-parlor-coo-secret': secretFor(c),
     });
+    // D 有活跃席位但从没连过（放了几天的旧座位）：不能算在线，也不该出现在搜索里。
+    const d = 'coo-dmtest00014';
+    await joinRoom(app, d, '老座位');
+
+    // B 真的连着（SSE），才算在线。
+    const controller = new AbortController();
+    const stream = await fetch(`${app.url}/v1/stream?token=${bToken}&since=0`, { signal: controller.signal });
+    expect(stream.status).toBe(200);
 
     const found = await get(app.url, '/v1/people?q=阿', headers(a));
     expect(found.status).toBe(200);
     const names = (found.body.people as Json[]).map((person) => person.name);
     expect(names).toContain('阿岚');
     expect(names).not.toContain('路人丙');
+    const stale = await get(app.url, '/v1/people?q=老', headers(a));
+    expect((stale.body.people as Json[]).map((person) => person.name)).not.toContain('老座位');
+    controller.abort();
 
     // 聊过之后，离线的人也能搜到（并按 cooId 发）。
     await post(app.url, '/v1/dm', { to: c, text: '在吗' }, headers(a));

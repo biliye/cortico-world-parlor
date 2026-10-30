@@ -720,12 +720,24 @@ export class WorldServer {
     throw new HttpError(404, '没有这个地址');
   }
 
-  /** 一个人的展示信息：当前席位名优先，其次 coo 显示名；online 看有没有活跃席位。 */
+  /**
+   * 一个人的展示信息：当前席位名优先，其次 coo 显示名。
+   * online 只认**正在连着的客户端**（SSE），不认库里有没有旧席位——席位只在主动离开/换厅时释放，
+   * 几天没来的人也会留着一个活跃席位，拿它当在线会把人全标成在线。
+   */
   private personInfo(cooId: string, fallbackName = ''): { cooId: string; name: string; online: boolean; room: string | null } {
     const seat = activeSeatForCoo(this.db, cooId);
     const row = this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
     const name = seat?.name || (row?.display_name ?? '').trim() || fallbackName || '某人';
-    return { cooId, name, online: !!seat, room: seat?.roomId ?? null };
+    return { cooId, name, online: this.isOnline(cooId), room: seat?.roomId ?? null };
+  }
+
+  /** 有没有正在连着的客户端（网页或 Coo）；不看席位在不在。 */
+  private isOnline(cooId: string): boolean {
+    for (const clients of this.sse.values()) {
+      for (const client of clients) if (client.cooId === cooId) return true;
+    }
+    return false;
   }
 
   /** 找人：优先 cooId（搜索结果带的就是它），退一步按当前唯一同名席位。 */
