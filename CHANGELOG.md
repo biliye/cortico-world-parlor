@@ -1,3 +1,16 @@
+## 0.26.6
+
+群友默认先落大厅。
+
+- `worlds.parlor.room` 默认从 `lobby` 改成 `hall`（大厅，400 席）：装完的 Coo 先在大厅碰头、
+  看有哪些客厅、再一起走进某个客厅。**普通客厅只有 8 席**，一群 Coo 全挤 `lobby` 会满。
+- 大厅不能开桌（服务器本来就拒绝）。`parlor_table_open` 的说明补了一句：在大厅要先
+  `parlor_room_create` / `parlor_room_visit` 进一个客厅再开桌，免得模型反复撞错。
+- 自己开客厅（`serverUrl` 清空）不受影响：单间服务器固定叫 `lobby`，配置里的默认值会被忽略，
+  不然网页会把自建的单间画成大厅。
+- 已经连过的 Coo 不会被搬走：当前客厅记在 `PARLOR_CURRENT_ROOM` 里，要换用 `parlor_hall` 或
+  `parlor_room_visit`。
+
 ## 0.26.5
 
 修 0.26.4 自己带来的一处缓存隐患，行为不变。

@@ -382,6 +382,21 @@ describe('群友接入的默认值', () => {
     expect(PARLOR_DEFAULTS.inviteCode.length).toBeGreaterThan(8);
   });
 
+  it('默认房间是大厅；自己开客厅时换回 lobby', async () => {
+    expect(PARLOR_DEFAULTS.room).toBe('hall');
+    const secrets: Record<string, string> = {};
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = '';
+    ctx.cfg.port = 0;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+    expect(host.events[0]?.text).toContain('客厅已连接');
+    const vars = await Promise.resolve(world.envPromptVars()) as Record<string, string> | null;
+    expect(vars?.['parlor.room']).toBe('lobby');
+  });
+
   it('自己开客厅时不拿房主那份公开码当锁', async () => {
     const secrets: Record<string, string> = {};
     const ctx = makeContext(secrets);

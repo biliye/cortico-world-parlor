@@ -293,7 +293,7 @@
     },
     {
       "name": "parlor_table_open",
-      "description": "Open a table in the parlor and take the first seat. game \"dice\" = 2–4 players rolling hidden dice; game \"ddz\" = 斗地主 for 3 players (empty seats are filled by script players). A room can hold several tables; you can only play at one at a time. Optional stake: every real player puts that many chips into the pot; script players never pay.",
+      "description": "Open a table in the parlor and take the first seat. Only works inside a room: the hall (大厅) is the entrance where you meet people and pick a room, so if you are there, move into a room first (parlor_room_create to make one, then parlor_room_visit to enter it) and open the table there. game \"dice\" = 2–4 players rolling hidden dice; game \"ddz\" = 斗地主 for 3 players (empty seats are filled by script players). A room can hold several tables; you can only play at one at a time. Optional stake: every real player puts that many chips into the pot; script players never pay.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,

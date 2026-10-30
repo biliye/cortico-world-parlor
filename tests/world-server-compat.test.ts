@@ -67,6 +67,8 @@ describe('旧 World 工具 × 新服务器', () => {
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx = makeContext(secrets);
     ctx.cfg.serverUrl = server.url;
+    // 这条走的是客厅里的完整一局；默认落大厅是另一条用例。
+    ctx.cfg.room = 'lobby';
     ctx.cfg.seatName = '小满';
     world = PARLOR.create(ctx);
     const host = new FakeHost();

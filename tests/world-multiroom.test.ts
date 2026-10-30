@@ -66,6 +66,8 @@ const startWorld = async (): Promise<{
   };
   const ctx = makeContext(secrets);
   ctx.cfg.serverUrl = server.url;
+  // 这些用例考的是同房串门与牌桌，落在大厅开不了桌；默认值本身另有用例。
+  ctx.cfg.room = 'lobby';
   ctx.cfg.seatName = '小满';
   world = PARLOR.create(ctx);
   const host = new FakeHost();
@@ -105,6 +107,7 @@ describe('World 多客厅', () => {
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx1 = makeContext(secrets);
     ctx1.cfg.serverUrl = server.url;
+    ctx1.cfg.room = 'lobby';
     ctx1.cfg.seatName = '小满';
     const first = PARLOR.create(ctx1);
     await first.start(new FakeHost());
@@ -123,6 +126,7 @@ describe('World 多客厅', () => {
     delete secrets.PARLOR_SEAT_TOKEN;
     const ctx2 = makeContext(secrets);
     ctx2.cfg.serverUrl = server.url;
+    ctx2.cfg.room = 'lobby';
     ctx2.cfg.seatName = '小满';
     world = PARLOR.create(ctx2);
     await world.start(new FakeHost());
@@ -206,5 +210,36 @@ describe('World 多客厅', () => {
     expect(await call('parlor_table_leave')).toContain('离开牌桌');
     const moved = await call('parlor_room_visit', { room: '隔壁厅' });
     expect(moved).toContain('隔壁厅');
+  });
+});
+
+describe('默认落在大厅', () => {
+  it('装完就在大厅；想开桌要先走进一个客厅', async () => {
+    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    await server.listen();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+    expect(host.events[0]?.type).toBe('parlor.started');
+
+    // 默认房间是 hall：朋友在大厅快照里能看到她。
+    const friend = new ParlorClient(server.url, {
+      cooId: 'coo-ffffffff',
+      cooSecret: 'friend-secret-0123456789',
+    });
+    const joined = await friend.join('inv', { name: '阿岚' }, 'hall');
+    const hall = await friend.snapshot(joined.token, 0, 50, 'hall');
+    expect(hall.seats.some((seat) => seat.name === '小满')).toBe(true);
+
+    // 大厅不能开桌，回执要说清怎么走。
+    const refused = await call('parlor_table_open', { game: 'dice' });
+    expect(refused).toContain('大厅');
+    expect(refused).toContain('先走进一个客厅');
+    const vars = await Promise.resolve(world!.envPromptVars()) as Record<string, string> | null;
+    expect(vars?.['parlor.room']).toBe('hall');
   });
 });

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
-import { PARLOR_CONFIG_GROUP, DEFAULT_INVITE_CODE, DEFAULT_SERVER_URL, type ParlorConfigSection } from './config.ts';
+import { PARLOR_CONFIG_GROUP, DEFAULT_INVITE_CODE, DEFAULT_ROOM_ID, DEFAULT_SERVER_URL, type ParlorConfigSection } from './config.ts';
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
 import { serverClock, serverClockShort } from './room/clock.ts';
 import { gameLabelOf } from './room/game-labels.ts';
@@ -199,7 +199,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_open',
-    description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). A room can hold several tables; you can only play at one at a time. Optional stake: every real player puts that many chips into the pot; script players never pay.',
+    description: 'Open a table in the parlor and take the first seat. Only works inside a room: the hall (大厅) is the entrance where you meet people and pick a room, so if you are there, move into a room first (parlor_room_create to make one, then parlor_room_visit to enter it) and open the table there. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). A room can hold several tables; you can only play at one at a time. Optional stake: every real player puts that many chips into the pot; script players never pay.',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -439,7 +439,7 @@ export class ParlorWorld implements World {
   envPromptVars(): Record<string, string> {
     const cfg = this.ctx.cfg;
     return {
-      'parlor.room': this.currentRoom || cfg.room || 'lobby',
+      'parlor.room': this.currentRoom || cfg.room || DEFAULT_ROOM_ID,
       'parlor.seat': this.seat?.name ?? (cfg.seatName.trim() || this.ctx.botName),
       'parlor.tier': this.seat?.tier ?? cfg.wakeTier,
       'parlor.address': this.baseUrl || '（未连接）',
@@ -573,7 +573,7 @@ export class ParlorWorld implements World {
 
   private async connect(): Promise<void> {
     const cfg = this.ctx.cfg;
-    const defaultRoom = cfg.room || 'lobby';
+    const defaultRoom = cfg.room || DEFAULT_ROOM_ID;
     this.currentRoom = this.ctx.secret(CURRENT_ROOM_SECRET).trim() || defaultRoom;
     let baseUrl = cfg.serverUrl.trim().replace(/\/+$/, '');
     // 自己填的码永远优先。留空、或还是包里那份公开默认值时，先看 .env（老部署把码写在那儿），
@@ -590,6 +590,9 @@ export class ParlorWorld implements World {
       // 自己开客厅时不用包里那份公开码：人人都有，等于没锁。读 .env，没有就新生成一个。
       if (invite === DEFAULT_INVITE_CODE) invite = this.ctx.secret(INVITE_SECRET).trim();
       invite = invite || randomBytes(9).toString('base64url');
+      // 单间服务器没有「大厅」这种东西（大厅是多客厅网关的目录，网页会按大厅画）；
+      // 配置还是默认值时就叫 lobby，免得自己开的客厅在网页上显示成大厅。
+      if (this.currentRoom === DEFAULT_ROOM_ID) this.currentRoom = 'lobby';
       if (!this.ctx.secret(INVITE_SECRET)) {
         try { this.ctx.storeSecret(INVITE_SECRET, invite); } catch { /* 假上下文或不可写 */ }
       }

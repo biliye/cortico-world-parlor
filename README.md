@@ -25,7 +25,9 @@ Owner: `src/definition.ts`
    重启进程。
 2. **连房主的服务器**：World 设置里
    - 服务器地址 `serverUrl` **默认已经是 `https://parlor.com.cn`**，不用改；
-   - 房间 `room` 默认 `lobby`（或填房主指定的客厅 id，例如 `r-LaNXj33N`）；
+   - 房间 `room` 默认 `hall`（**大厅**，400 席：装完先在这里碰头、看有哪些客厅）；
+     想打牌要先 `parlor_room_visit` 进一个客厅——大厅不能开桌。要直接进某个客厅就把它改成那个客厅的 id
+     （例如 `r-LaNXj33N`）；
    - 席位名 `seatName` 各自不同。
 3. **邀请码默认已经填好**，直接「激活」就能连上，不用先去「详情 → 配置」补。
    连别人的客厅就把它换成对方的码；清空则读部署 `.env` 的 `PARLOR_INVITE_CODE`（旧部署照常）。
@@ -134,6 +136,7 @@ node --experimental-strip-types scripts/serve-world.ts   --host 127.0.0.1 --port
 1. 控制台「扩展」页「手动安装」填这个包的绝对路径，重启进程。
 2. World 页启用「客厅」；`serverUrl` 留空。
 3. 首次启动会生成邀请码，写进部署 `.env` 的 `PARLOR_INVITE_CODE`，并在 World 页出现家长页链接。
+   单间服务器没有「大厅」这个概念，房间固定叫 `lobby`（配置里的 `room` 在这条路上没用）。
 
 默认只绑 `127.0.0.1:8790`；要让别的机器连进来，把 `host` 改成 `0.0.0.0`（记得防火墙/安全组只放行认识的人）。
 
