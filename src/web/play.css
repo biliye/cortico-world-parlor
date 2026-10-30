@@ -1489,7 +1489,8 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 
 .ddz-grid {
   display: grid;
-  grid-template-columns: 116px minmax(0, 1fr) 116px;
+  /* 两个对手的侧栏让一点位置给中间出牌区：牌放大后，一手里三张也放得下。 */
+  grid-template-columns: 100px minmax(0, 1fr) 100px;
   grid-template-areas:
     "left center right"
     "hand hand hand";
@@ -1558,7 +1559,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 }
 .ddz-bottom-label { font-size: 9px; letter-spacing: .18em; color: #b99b78; }
 .ddz-bottom-cards { display: flex; gap: 3px; }
-.ddz-bottom-cards .pcard.small-card { --cw: 30px; }
+.ddz-bottom-cards .pcard.small-card { --cw: clamp(38px, 2.6vw, 52px); }
 
 /* 中间：每家这一轮打出的牌各留一处，出下一手/过牌才换。
    两家在上、我在下，凑成一个对称的倒三角；我那一手贴着我的手牌。 */
@@ -1586,8 +1587,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   font-size: 9.5px; color: #c6a683;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ddz-play-cards { display: flex; flex-wrap: wrap; gap: 2px; align-items: flex-start; }
-.ddz-play-cards .pcard.small-card { --cw: 34px; }
+.ddz-play-cards { display: flex; flex-wrap: wrap; gap: 0; align-items: flex-start; }
+/* 牌放大后轻微叠放（点数在左上角，叠起来也不挡），一手五张放得进一个格。
+   用右负边距而不是左：长牌型换行时，第二行第一张不会被拉出去。 */
+.ddz-play-cards .pcard:not(:last-child) { margin-right: -18px; }
+.ddz-play-cards .pcard.small-card { --cw: clamp(42px, 3.2vw, 64px); }
 .ddz-play-left { grid-area: left; align-items: flex-start; }
 .ddz-play-left .ddz-play-cards { justify-content: flex-start; }
 .ddz-play-me { grid-area: me; align-items: center; }
@@ -1614,7 +1618,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   scrollbar-width: none;
 }
 .ddz-hand::-webkit-scrollbar { display: none; }
-.ddz-hand .pcard { --cw: 76px; margin-left: var(--overlap, -34px); }
+.ddz-hand .pcard { --cw: clamp(84px, 5.8vw, 112px); margin-left: var(--overlap, -34px); }
 .ddz-hand .pcard:first-child { margin-left: 0; }
 .ddz-hand-empty { color: #c6a683; font-size: 11px; padding: 18px 0; }
 
@@ -1761,7 +1765,7 @@ html.no-card-art .pcard.back { border: 0; }
   margin-top: 8px;
   align-content: flex-start;
 }
-.ddz-end-cards .pcard.small-card { --cw: 30px; margin-left: -1px; }
+.ddz-end-cards .pcard.small-card { --cw: clamp(40px, 2.8vw, 56px); margin-left: -1px; }
 .ddz-end-cards .pcard.small-card:first-child { margin-left: 0; }
 .ddz-end-empty { font-size: 10px; color: var(--dim); }
 
@@ -2164,7 +2168,7 @@ html.no-card-art .pcard.back { border: 0; }
   .join { min-height: 100dvh; padding: 16px; }
   .join .panel { padding: 20px; }
   .pcard { --cw: 42px; }
-  .pcard.small-card { --cw: 26px; }
+  .pcard.small-card { --cw: 30px; }
   .ddz-board { padding: 10px 10px 11px; border-radius: 18px; }
   .ddz-topbar { flex-wrap: wrap; gap: 6px; }
   .ddz-seat-mine { margin-left: 0; width: 100%; }
@@ -2185,9 +2189,10 @@ html.no-card-art .pcard.back { border: 0; }
   .ddz-side-meta { font-size: 8.5px; }
   .ddz-side-info .tag, .ddz-bot-mark { display: none; }
   .ddz-center { min-height: 112px; gap: 8px; }
-  .ddz-play-cards .pcard.small-card { --cw: 24px; }
+  .ddz-play-cards .pcard.small-card { --cw: 36px; }
+  .ddz-play-cards .pcard:not(:last-child) { margin-right: -14px; }
   .ddz-hand { padding: 28px 4px 2px; }
-  .ddz-hand .pcard { --cw: 48px; margin-left: var(--overlap, -24px); }
+  .ddz-hand .pcard { --cw: 56px; margin-left: var(--overlap, -24px); }
   .ddz-actionbar { flex-wrap: wrap; gap: 6px; }
   .ddz-clock { margin-left: 0; width: 100%; }
   .guide-list { grid-template-columns: 1fr; gap: 4px; }
@@ -2209,7 +2214,7 @@ html.no-card-art .pcard.back { border: 0; }
 @media (max-width: 380px) {
   .tseat { width: 84px; }
   .tseat .avatar { width: 34px; height: 34px; font-size: 12px; }
-  .ddz-hand .pcard { --cw: 44px; }
+  .ddz-hand .pcard { --cw: 52px; }
   .game-id p { display: none; }
   .timer { width: 42px; height: 42px; }
   .action-bar .btn { font-size: 11px; }

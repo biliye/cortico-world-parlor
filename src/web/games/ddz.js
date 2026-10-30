@@ -300,8 +300,9 @@ export function mountDdz(root, ctx) {
     if (!cardWidth || available <= 0) return;
     const maxStep = cardWidth * 0.66;
     const fitStep = (available - cardWidth) / (count - 1);
-    // 大牌只要露出 18px 就能读点数；手机的小牌要露出四成多，不然两张数字会被盖住。
-    const readable = cardWidth >= 60 ? 18 : Math.max(20, cardWidth * 0.42);
+    // 露出这一条才读得出点数和花色：大牌 26px；小牌按牌宽的一半，至少 24px。
+    // 放不下就横向滑（下面 overflow-x:auto），不再把每张压成一条缝。
+    const readable = cardWidth >= 60 ? 26 : Math.max(24, cardWidth * 0.5);
     const step = Math.max(Math.min(readable, maxStep), Math.min(maxStep, fitStep));
     hand.style.setProperty('--overlap', (step - cardWidth).toFixed(1) + 'px');
   }
