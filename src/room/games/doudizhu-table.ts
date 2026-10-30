@@ -10,7 +10,7 @@ import {
   type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep,
 } from '../table-engine.ts';
 import {
-  canBeat, deal, formatCards, moveLabel, parseMove, scoreRound, sortCards, sortPhys,
+  canBeat, deal, formatCards, isCard, moveLabel, parseMove, scoreRound, sortCards, sortPhys,
   type Card, type Move, type PhysCard,
 } from './doudizhu.ts';
 import { chooseBid, chooseMove, type BotContext } from './doudizhu-bot.ts';
@@ -59,6 +59,7 @@ const MAX_REDEALS = 5;
 export class DoudizhuTable implements TableEngine {
   readonly game = 'ddz';
   readonly label = '斗地主';
+  readonly stateVersion = 1;
   readonly host: string;
   status: TableStatus = 'open';
 
@@ -315,6 +316,132 @@ export class DoudizhuTable implements TableEngine {
       ? `上一手：${this.seats.find((seat) => seat.id === this.lastPlay!.seat)?.name ?? '？'} 出了 ${formatCards(this.lastPlay.move.cards)}（${moveLabel(this.lastPlay.move)}）。`
       : '新一轮，还没人出牌。';
     return `【斗地主】进行中，轮到 ${turn}；地主 ${landlord}；倍数 x${2 ** this.bombs}；剩牌：${left}。${last}`;
+  }
+
+  exportState(): unknown {
+    return {
+      version: this.stateVersion,
+      host: this.host,
+      status: this.status,
+      seats: this.seats.map((seat) => ({
+        id: seat.id, name: seat.name, bot: seat.bot,
+        hand: [...seat.hand], cards: seat.cards.map((card) => ({ ...card })),
+        role: seat.role, plays: seat.plays,
+      })),
+      hands: this.hands.map((hand) => [...hand]),
+      handCards: this.handCards.map((cards) => cards.map((card) => ({ ...card }))),
+      bottom: [...this.bottom],
+      bottomCards: this.bottomCards.map((card) => ({ ...card })),
+      dealer: this.dealer,
+      bidIndex: this.bidIndex,
+      bids: this.bids,
+      redeals: this.redeals,
+      turnId: this.turnId ?? null,
+      deadline: this.deadline,
+      lastPlay: this.lastPlay
+        ? { seat: this.lastPlay.seat, move: { ...this.lastPlay.move, cards: [...this.lastPlay.move.cards] }, cards: this.lastPlay.cards.map((card) => ({ ...card })) }
+        : null,
+      passes: this.passes,
+      roundPlays: [...this.roundPlays.entries()].map(([id, entry]) => [id, {
+        seat: entry.seat,
+        move: { ...entry.move, cards: [...entry.move.cards] },
+        cards: entry.cards.map((card) => ({ ...card })),
+      }]),
+      roundPasses: [...this.roundPasses],
+      bombs: this.bombs,
+      result: this.result,
+    };
+  }
+
+  restoreState(state: unknown): void {
+    const raw = state as Record<string, unknown> | null;
+    if (!raw || typeof raw !== 'object') throw new Error('斗地主存档不是对象');
+    if (raw.version !== this.stateVersion) throw new Error(`不认识的斗地主存档版本：${String(raw.version)}`);
+    if (raw.host !== this.host) throw new Error('斗地主存档的主持席位对不上');
+    if (raw.status !== 'open' && raw.status !== 'bidding' && raw.status !== 'playing' && raw.status !== 'ended') {
+      throw new Error(`斗地主存档的状态不对：${String(raw.status)}`);
+    }
+    const rawSeats = raw.seats;
+    if (!Array.isArray(rawSeats) || rawSeats.length === 0) throw new Error('斗地主存档缺席位');
+    const seats = rawSeats.map((entry) => {
+      const seat = entry as Record<string, unknown>;
+      if (typeof seat.id !== 'string' || typeof seat.name !== 'string') throw new Error('斗地主存档的席位形状不对');
+      if (!Array.isArray(seat.hand) || !Array.isArray(seat.cards)) throw new Error('斗地主存档的手牌形状不对');
+      return {
+        id: seat.id,
+        name: seat.name,
+        bot: seat.bot === true,
+        hand: seat.hand.filter(isCard),
+        cards: seat.cards.map((card) => card as PhysCard),
+        role: seat.role === 'landlord' || seat.role === 'farmer' ? seat.role : null,
+        plays: typeof seat.plays === 'number' ? seat.plays : 0,
+      } as Seat;
+    });
+    this.seats.splice(0, this.seats.length, ...seats);
+    const hands = raw.hands;
+    if (!Array.isArray(hands) || hands.length !== SEAT_COUNT) throw new Error('斗地主存档的牌堆形状不对');
+    this.hands = hands.map((hand) => (Array.isArray(hand) ? hand.filter(isCard) : [])) as [Card[], Card[], Card[]];
+    const handCards = raw.handCards;
+    this.handCards = (Array.isArray(handCards) && handCards.length === SEAT_COUNT ? handCards : [[], [], []])
+      .map((cards) => (Array.isArray(cards) ? cards as PhysCard[] : [])) as [PhysCard[], PhysCard[], PhysCard[]];
+    this.bottom = Array.isArray(raw.bottom) ? raw.bottom.filter(isCard) : [];
+    this.bottomCards = Array.isArray(raw.bottomCards) ? raw.bottomCards as PhysCard[] : [];
+    this.dealer = typeof raw.dealer === 'number' ? raw.dealer : 0;
+    this.bidIndex = typeof raw.bidIndex === 'number' ? raw.bidIndex : 0;
+    this.bids = typeof raw.bids === 'number' ? raw.bids : 0;
+    this.redeals = typeof raw.redeals === 'number' ? raw.redeals : 0;
+    this.turnId = typeof raw.turnId === 'string' ? raw.turnId : undefined;
+    this.deadline = typeof raw.deadline === 'number' ? raw.deadline : 0;
+    this.passes = typeof raw.passes === 'number' ? raw.passes : 0;
+    this.bombs = typeof raw.bombs === 'number' ? raw.bombs : 0;
+    this.result = typeof raw.result === 'string' ? raw.result : '';
+    this.roundPlays.clear();
+    for (const pair of Array.isArray(raw.roundPlays) ? raw.roundPlays : []) {
+      const [id, entry] = pair as [unknown, unknown];
+      const row = entry as Record<string, unknown>;
+      if (typeof id !== 'string' || !row || typeof row !== 'object') throw new Error('斗地主存档的轮次出牌形状不对');
+      this.roundPlays.set(id, {
+        seat: String(row.seat ?? id),
+        move: row.move as Move,
+        cards: Array.isArray(row.cards) ? row.cards as PhysCard[] : [],
+      });
+    }
+    this.roundPasses.clear();
+    for (const id of Array.isArray(raw.roundPasses) ? raw.roundPasses : []) {
+      if (typeof id === 'string') this.roundPasses.add(id);
+    }
+    const last = raw.lastPlay as Record<string, unknown> | null;
+    this.lastPlay = last && typeof last === 'object'
+      ? {
+        seat: String(last.seat ?? ''),
+        move: last.move as Move,
+        cards: Array.isArray(last.cards) ? last.cards as PhysCard[] : [],
+      }
+      : undefined;
+    this.status = raw.status;
+  }
+
+  rearm(now: number, downtimeMs: number, minHumanMs: number): void {
+    if (this.status !== 'bidding' && this.status !== 'playing') return;
+    const seat = this.currentSeat();
+    if (!seat) return;
+    if (seat.bot) {
+      this.deadline = now + this.botDelayMs;
+      return;
+    }
+    const remaining = Math.max(0, this.deadline - (now - downtimeMs));
+    this.deadline = now + Math.max(remaining, minHumanMs);
+  }
+
+  autoPlay(seatId: string, now: number): TableStep | null {
+    if (this.status !== 'bidding' && this.status !== 'playing') return null;
+    if (this.turnId !== seatId) return null;
+    const seat = this.seats.find((entry) => entry.id === seatId);
+    if (!seat) return null;
+    if (this.status === 'bidding') return this.bid(seat.id, chooseBid(seat.hand), now, true);
+    const picked = chooseMove(seat.hand, this.lastPlay?.move ?? null, this.botContext(seat));
+    if (picked && picked.length > 0) return this.play(seat.id, picked, now, true);
+    return this.pass(seat.id, now, true);
   }
 
   private dealRound(): void {

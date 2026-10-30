@@ -174,7 +174,7 @@ describe('World 多客厅', () => {
   it('专注 B：牌桌上的客厅闲聊不叫醒，牌局结束一次性给摘要', async () => {
     const { host, friend, friendToken } = await startWorld();
     expect(await call('parlor_table_open', { game: 'dice' })).toContain('骰子桌开了');
-    await friend.action(friendToken, { type: 'table_join' }, 'lobby');
+    await friend.action(friendToken, { type: 'table_join', requestId: 'friend-join' }, 'lobby');
     expect(await call('parlor_table_start')).toContain('服务器已收下');
 
     // 打牌期间客厅里的普通闲聊：不该产生 parlor.message，只进专注摘要。
@@ -185,7 +185,12 @@ describe('World 多客厅', () => {
 
     // 世界先停牌，朋友再停牌 → 牌局结束 → 一次性摘要。
     expect(await call('parlor_table_action', { action: 'stand' })).toContain('停牌了');
-    await friend.action(friendToken, { type: 'table_action', action: 'stand' }, 'lobby');
+    const table = await friend.snapshot(friendToken, 0, 1, 'lobby');
+    const revision = table.tablePrivate?.revision ?? table.table?.revision;
+    expect(typeof revision).toBe('number');
+    await friend.action(friendToken, {
+      type: 'table_action', action: 'stand', requestId: 'friend-stand', revision,
+    }, 'lobby');
     await until(() => host.events.some((event) => event.type === 'parlor.digest'
       && event.text.includes('打牌期间的客厅')));
     const digest = host.events.find((event) => event.type === 'parlor.digest')!;

@@ -206,8 +206,9 @@ export class EventDb {
   }
 
   /**
-   * 回放：这个客厅里某个 coo 历来有权看的全部事件（不受某一次席位的可见区间限制）。
-   * 公开事件人人可见；私聊/桌聊按 append 时写下的 event_audience 授权。
+   * 回放：这个客厅里某个 coo 历来有权看的全部事件。
+   * 公开事件只给「那一次到访区间覆盖到的事件」——历次到访的区间取并集（长期成员资格
+   * 不等于能看不在场期间的聊天）；私聊/桌聊仍按 append 时写下的 event_audience 授权。
    * `before` 之前的最后 N 条，按旧到新返回。
    */
   replay(roomId: string, query: { cooId: string; before?: number; limit?: number }): { events: RoomEvent[]; older: boolean } {
@@ -219,10 +220,18 @@ export class EventDb {
          ON a.room_id = e.room_id AND a.seq = e.seq AND a.coo_id = ?
        WHERE e.room_id = ?
          AND (? IS NULL OR e.seq < ?)
-         AND (e.scope_kind IN ('room','hall') OR a.coo_id IS NOT NULL)
+         AND (
+           (e.scope_kind IN ('room','hall') AND EXISTS (
+             SELECT 1 FROM room_seats s
+              WHERE s.room_id = e.room_id AND s.coo_id = ?
+                AND e.seq > s.visible_from_seq
+                AND (s.visible_to_seq IS NULL OR e.seq <= s.visible_to_seq)
+           ))
+           OR (e.scope_kind NOT IN ('room','hall') AND a.coo_id IS NOT NULL)
+         )
        ORDER BY e.seq DESC
        LIMIT ?`,
-    ).all(query.cooId, roomId, before, before, limit + 1) as unknown as EventRow[];
+    ).all(query.cooId, roomId, before, before, query.cooId, limit + 1) as unknown as EventRow[];
     const older = rows.length > limit;
     const events = rows.slice(0, limit).map(eventOf).reverse();
     return { events, older };

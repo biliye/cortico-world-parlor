@@ -34,6 +34,26 @@ export interface TableEngine {
   readonly label: string;
   readonly host: string;
   readonly status: TableStatus;
+  /**
+   * 存档格式版本。与包版本无关；读到不认识的版本必须抛错，不能猜。
+   * 引擎只导出规则状态：已经发出去的牌、骰点、座次、回合与截止时刻。
+   * 随机源不存档——恢复之后新发的一轮用新随机数，已经提交的结果绝不重掷。
+   */
+  readonly stateVersion: number;
+  /** 可校验的完整内部状态；客户端永远拿不到它，只进服务端 `tables.state_json`。 */
+  exportState(): unknown;
+  /** 从已提交快照恢复；不能发牌、掷骰或产生事件。版本不认识就抛错。 */
+  restoreState(state: unknown): void;
+  /**
+   * 恢复后把截止时刻搬到现在：短停机续局。
+   * 真人保留停机前的剩余时间（至少 `minHumanMs` 秒重新连），脚本按自己的延迟走。
+   */
+  rearm(now: number, downtimeMs: number, minHumanMs: number): void;
+  /**
+   * 代打：被移出客厅/托管的人轮到时，由服务器按同一套规则替他走一步。
+   * 没轮到他或状态不对返回 null。返回的结构与 `act` 相同。
+   */
+  autoPlay(seatId: string, now: number): TableStep | null;
   has(seatId: string): boolean;
   seatIds(): string[];
   join(seat: TableSeat): TableEvent;
@@ -75,6 +95,13 @@ export interface TableSummary {
   status: TableStatus;
   host: string;
   text: string;
+  /** 多桌身份：客户端拿它选桌、发动作。 */
+  id?: string;
+  tableId?: string;
+  /** 已提交状态版本；动作用它防迟到。 */
+  revision?: number;
+  /** 快照读不出来而被隔离的桌：不再推进，也不接动作。 */
+  frozen?: boolean;
   turn?: string;
   deadline?: number;
   [key: string]: unknown;
@@ -85,6 +112,9 @@ export interface TablePrivateSummary {
   game: string;
   seat: string;
   text: string;
+  /** 这张私视图属于哪张桌（多桌时必需）。 */
+  tableId?: string;
+  revision?: number;
   [key: string]: unknown;
 }
 

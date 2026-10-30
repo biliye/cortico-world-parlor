@@ -50,22 +50,39 @@ const act = async (app: WorldServer, token: string, body: unknown) => (
   post(app.url, '/v1/action', body, { authorization: `Bearer ${token}` })
 );
 
+/** 牌桌动作要带桌面版本与幂等键：现取一次快照。 */
+const tableRef = async (app: WorldServer, token: string): Promise<{ table: string; revision: number }> => {
+  const snap = await get(app.url, '/v1/room?limit=1', token);
+  const table = snap.body.table as { id?: string; revision?: number };
+  const priv = snap.body.tablePrivate as { revision?: number } | null;
+  expect(typeof table.id).toBe('string');
+  const revision = priv?.revision ?? table.revision;
+  expect(typeof revision).toBe('number');
+  return { table: table.id as string, revision: revision as number };
+};
+
 describe('WorldServer 牌桌网关', () => {
   it('旧 /v1/action 就能开桌、坐下、开局、停牌与结算', async () => {
     const app = await start();
     const a = await enter(app, A, '阿岚');
     const b = await enter(app, B, '小满');
 
-    expect((await act(app, a, { type: 'table_open', game: 'dice' })).status).toBe(200);
-    expect((await act(app, b, { type: 'table_join' })).status).toBe(200);
-    const started = await act(app, a, { type: 'table_start' });
+    expect((await act(app, a, { type: 'table_open', requestId: 'open-1', game: 'dice' })).status).toBe(200);
+    expect((await act(app, b, { type: 'table_join', requestId: 'join-2' })).status).toBe(200);
+    const started = await act(app, a, { type: 'table_start', requestId: 'start-3' });
     expect(started.status).toBe(200);
     expect(started.body.seats).toEqual(['阿岚', '小满']);
     expect(started.body.turn).toBe('阿岚');
     expect(typeof started.body.deadline).toBe('number');
 
-    expect((await act(app, a, { type: 'table_action', action: 'stand' })).status).toBe(200);
-    expect((await act(app, b, { type: 'table_action', action: 'stand' })).status).toBe(200);
+    const first = await tableRef(app, a);
+    expect((await act(app, a, {
+      type: 'table_action', action: 'stand', table: first.table, revision: first.revision, requestId: 'stand-a',
+    })).status).toBe(200);
+    const second = await tableRef(app, b);
+    expect((await act(app, b, {
+      type: 'table_action', action: 'stand', table: second.table, revision: second.revision, requestId: 'stand-b',
+    })).status).toBe(200);
 
     const snapshot = await get(app.url, '/v1/room', b);
     expect(snapshot.status).toBe(200);
@@ -82,9 +99,9 @@ describe('WorldServer 牌桌网关', () => {
     const b = await enter(app, B, '小满');
     const c = await enter(app, C, '小柚');
 
-    await act(app, a, { type: 'table_open', game: 'ddz' });
-    await act(app, b, { type: 'table_join' });
-    await act(app, a, { type: 'table_start' });
+    await act(app, a, { type: 'table_open', requestId: 'open-4', game: 'ddz' });
+    await act(app, b, { type: 'table_join', requestId: 'join-5' });
+    await act(app, a, { type: 'table_start', requestId: 'start-6' });
 
     expect((await act(app, a, { type: 'table_say', text: '这把我要地主' })).status).toBe(200);
     const bHistory = await get(app.url, '/v1/history?since=0&limit=200', b);
@@ -98,9 +115,9 @@ describe('WorldServer 牌桌网关', () => {
     const app = await start();
     const a = await enter(app, A, '阿岚');
     const b = await enter(app, B, '小满');
-    await act(app, a, { type: 'table_open', game: 'dice' });
-    await act(app, b, { type: 'table_join' });
-    expect((await act(app, a, { type: 'table_start' })).status).toBe(200);
+    await act(app, a, { type: 'table_open', requestId: 'open-7', game: 'dice' });
+    await act(app, b, { type: 'table_join', requestId: 'join-8' });
+    expect((await act(app, a, { type: 'table_start', requestId: 'start-9' })).status).toBe(200);
 
     const left = await post(app.url, '/v1/rooms/lobby/leave', {}, { authorization: `Bearer ${a}` });
     expect(left.status).toBe(409);
@@ -111,13 +128,13 @@ describe('WorldServer 牌桌网关', () => {
     const app = await start();
     const a = await enter(app, A, '阿岚');
     const b = await enter(app, B, '小满');
-    await act(app, a, { type: 'table_open', game: 'dice' });
-    await act(app, b, { type: 'table_join' });
+    await act(app, a, { type: 'table_open', requestId: 'open-10', game: 'dice' });
+    await act(app, b, { type: 'table_join', requestId: 'join-11' });
 
-    expect((await act(app, b, { type: 'table_leave' })).status).toBe(200);
+    expect((await act(app, b, { type: 'table_leave', requestId: 'leave-12' })).status).toBe(200);
     expect((await post(app.url, '/v1/rooms/lobby/leave', {}, { authorization: `Bearer ${b}` })).status).toBe(200);
 
-    expect((await act(app, a, { type: 'table_leave' })).status).toBe(200);
+    expect((await act(app, a, { type: 'table_leave', requestId: 'leave-13' })).status).toBe(200);
     const snapshot = await get(app.url, '/v1/room', a);
     expect(snapshot.body.table).toBeFalsy();
   });

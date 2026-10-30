@@ -83,6 +83,7 @@ const DEFAULT_MAX_SEATS = 4;
 export class DiceTable implements TableEngine {
   readonly game = 'dice';
   readonly label = '骰子';
+  readonly stateVersion = 1;
   status: TableStatus = 'open';
   readonly host: string;
 
@@ -229,6 +230,91 @@ export class DiceTable implements TableEngine {
       winners: this.winners.length ? [...this.winners] : undefined,
       revealed: this.status === 'ended' ? this.revealed : undefined,
     };
+  }
+
+  exportState(): unknown {
+    return {
+      version: this.stateVersion,
+      status: this.status,
+      host: this.host,
+      seats: this.seats.map((seat) => ({ ...seat })),
+      dice: [...this.dice.entries()].map(([id, values]) => [id, [...values]]),
+      rerolls: [...this.rerolls.entries()],
+      turnId: this.turnId ?? null,
+      deadline: this.deadline,
+      winners: [...this.winners],
+      revealed: this.revealed.map((entry) => ({ ...entry, dice: [...entry.dice] })),
+    };
+  }
+
+  restoreState(state: unknown): void {
+    const raw = state as {
+      version?: unknown; status?: unknown; host?: unknown; seats?: unknown; dice?: unknown;
+      rerolls?: unknown; turnId?: unknown; deadline?: unknown; winners?: unknown; revealed?: unknown;
+    } | null;
+    if (!raw || typeof raw !== 'object') throw new Error('骰子桌存档不是对象');
+    if (raw.version !== this.stateVersion) throw new Error(`不认识的骰子存档版本：${String(raw.version)}`);
+    if (raw.host !== this.host) throw new Error('骰子存档的主持席位对不上');
+    if (raw.status !== 'open' && raw.status !== 'playing' && raw.status !== 'ended') {
+      throw new Error(`骰子存档的状态不对：${String(raw.status)}`);
+    }
+    if (!Array.isArray(raw.seats) || raw.seats.length === 0) throw new Error('骰子存档缺席位');
+    const seats = raw.seats.map((entry) => {
+      const seat = entry as { id?: unknown; name?: unknown; stood?: unknown };
+      if (typeof seat.id !== 'string' || typeof seat.name !== 'string') throw new Error('骰子存档的席位形状不对');
+      return { id: seat.id, name: seat.name, stood: seat.stood === true };
+    });
+    this.seats.splice(0, this.seats.length, ...seats);
+    this.dice.clear();
+    for (const pair of Array.isArray(raw.dice) ? raw.dice : []) {
+      const [id, values] = pair as [unknown, unknown];
+      if (typeof id !== 'string' || !Array.isArray(values)) throw new Error('骰子存档的点数形状不对');
+      this.dice.set(id, values.map((value) => Number(value)));
+    }
+    this.rerolls.clear();
+    for (const pair of Array.isArray(raw.rerolls) ? raw.rerolls : []) {
+      const [id, left] = pair as [unknown, unknown];
+      if (typeof id !== 'string' || typeof left !== 'number') throw new Error('骰子存档的重掷次数形状不对');
+      this.rerolls.set(id, left);
+    }
+    this.turnId = typeof raw.turnId === 'string' ? raw.turnId : undefined;
+    this.deadline = typeof raw.deadline === 'number' ? raw.deadline : 0;
+    this.winners = Array.isArray(raw.winners) ? raw.winners.filter((id): id is string => typeof id === 'string') : [];
+    this.revealed = Array.isArray(raw.revealed)
+      ? raw.revealed.map((entry) => {
+        const row = entry as { id?: unknown; name?: unknown; dice?: unknown; total?: unknown };
+        if (typeof row.id !== 'string' || typeof row.name !== 'string' || !Array.isArray(row.dice)) {
+          throw new Error('骰子存档的亮骰形状不对');
+        }
+        const dice = row.dice.map((value) => Number(value));
+        return {
+          id: row.id,
+          name: row.name,
+          dice,
+          total: typeof row.total === 'number' ? row.total : dice.reduce((sum, value) => sum + value, 0),
+        };
+      })
+      : [];
+    this.status = raw.status;
+  }
+
+  rearm(now: number, downtimeMs: number, minHumanMs: number): void {
+    if (this.status !== 'playing' || !this.turnId) return;
+    const remaining = Math.max(0, this.deadline - (now - downtimeMs));
+    this.deadline = now + Math.max(remaining, minHumanMs);
+  }
+
+  autoPlay(seatId: string, now: number): TableStep | null {
+    if (this.status !== 'playing' || this.turnId !== seatId) return null;
+    const seat = this.seats.find((entry) => entry.id === seatId);
+    if (!seat) return null;
+    seat.stood = true;
+    return this.advance(now, [{
+      type: 'parlor.table.action',
+      scope: { kind: 'room' },
+      text: `${seat.name} 被托管，自动停牌。`,
+      data: { game: this.game, seat: seat.id, auto: true },
+    }]);
   }
 
   privateText(seatId: string, now: number): string | null {

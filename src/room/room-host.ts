@@ -30,6 +30,8 @@ export { HostError, type HostErrorCode } from './host-error.ts';
 export interface RoomHostOptions {
   now?: () => number;
   token?: () => string;
+  /** 启动恢复用的健康基准（由网关从 meta.last_healthy_at 读一次，所有客厅共用）。 */
+  recovery?: { lastHealthyAt?: number; maxDowntimeMs?: number; minHumanMs?: number };
 }
 
 export interface JoinResult {
@@ -164,6 +166,7 @@ export class RoomHost {
         activeSeat: (cooId) => this.seatOf(cooId),
         seats: () => this.seats(),
       },
+      ...(options.recovery ? { recovery: options.recovery } : {}),
     });
   }
 
@@ -309,6 +312,27 @@ export class RoomHost {
         scope: { kind: 'room' },
         text: `${seat.name} 的席位因长时间未上线被释放。`,
         data: { seatId: seat.id, name: seat.name, reason: 'offline' },
+      });
+      const released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
+      return { seat: released, event };
+    });
+  }
+
+  /**
+   * 房主移除成员：立刻停止这一房的访问并释放席位；牌桌锁不拦（牌局由服务器托管到结算）。
+   * 调用方先 `markTableAuto`，这里只管席位与事件。
+   */
+  remove(cooId: string, now = this.now()): LeaveResult | null {
+    const seat = this.seatOf(cooId);
+    if (!seat) return null;
+    return withTransaction(this.db, () => {
+      const event = this.events.append(this.roomId, {
+        type: 'parlor.left',
+        ts: now,
+        from: seat.id,
+        scope: { kind: 'room' },
+        text: `${seat.name} 被房主移出了${this.placeOf(this.roomId)}。`,
+        data: { seatId: seat.id, name: seat.name, reason: 'removed' },
       });
       const released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
       return { seat: released, event };
@@ -486,7 +510,8 @@ export class RoomHost {
         limit: options.limit ?? 30,
       }),
       mailUnread: this.mail.unreadCount(cooId),
-      ...(this.tableHost.public() ? { table: this.tableHost.public() } : {}),
+      tables: this.tableHost.list(),
+      ...(this.tableHost.public(cooId) ? { table: this.tableHost.public(cooId) } : {}),
       tablePrivate: this.tableHost.private(seat.id),
       ledger: this.ledger.summaryFor(cooId),
       ledgerRoom: this.ledger.publicInRoom(this.roomId, 5),
@@ -530,38 +555,60 @@ export class RoomHost {
     return this.tableHost.lockOf(cooId);
   }
 
-  openTable(cooId: string, input: { game?: string; stake?: unknown } = {}): TableOpenResult {
-    return this.tableHost.open(cooId, input);
+  openTable(cooId: string, input: { game?: string; stake?: unknown } = {}, requestId?: string): TableOpenResult {
+    if (this.requireRoom().kind === 'hall') {
+      throw new HostError('conflict', '大厅是进场和选房的地方，不能开桌；先走进一个客厅');
+    }
+    return this.tableHost.open(cooId, input, requestId);
   }
 
-  joinTable(cooId: string): RoomEvent {
-    return this.tableHost.join(cooId);
+  joinTable(cooId: string, tableId?: string, requestId?: string) {
+    return this.tableHost.join(cooId, tableId, requestId);
   }
 
-  leaveTable(cooId: string): TableLeaveResult {
-    return this.tableHost.leave(cooId);
+  leaveTable(cooId: string, tableId?: string, requestId?: string): TableLeaveResult {
+    return this.tableHost.leave(cooId, tableId, requestId);
   }
 
-  startTable(cooId: string): StartReceipt {
-    return this.tableHost.start(cooId);
+  startTable(cooId: string, tableId?: string, requestId?: string): StartReceipt {
+    return this.tableHost.start(cooId, tableId, requestId);
   }
 
-  tableAction(cooId: string, action: unknown): TableReceipt {
-    return this.tableHost.act(cooId, action);
+  tableAction(cooId: string, action: unknown, options: { tableId?: string; revision?: number; requestId?: string } = {}): TableReceipt {
+    return this.tableHost.act(cooId, action, options);
   }
 
-  tableSay(cooId: string, text: string): RoomEvent {
+  tableSay(cooId: string, text: string, tableId?: string): RoomEvent {
     this.requireSeat(cooId);
     this.checkSayGap(cooId);
-    return this.tableHost.say(cooId, text);
+    return this.tableHost.say(cooId, text, tableId);
   }
 
-  tablePublic() {
-    return this.tableHost.public();
+  tablePublic(tableId?: string, cooId?: string) {
+    return this.tableHost.tableSummary(tableId, cooId);
   }
 
   tablePrivate(seatId: string) {
     return this.tableHost.private(seatId);
+  }
+
+  /** 被移出客厅的人：牌局里改成托管（结算仍归他）。 */
+  markTableAuto(cooId: string): string[] {
+    return this.tableHost.markAuto(cooId);
+  }
+
+  /** 这个客厅的桌（运营诊断用）。 */
+  tableList() {
+    return this.tableHost.list();
+  }
+
+  /** 运营命令：作废一张桌并按开局明细退款。 */
+  voidTable(tableId: string, note?: string): boolean {
+    return this.tableHost.voidTable(tableId, note);
+  }
+
+  myTable(cooId: string) {
+    return this.tableHost.tableOf(cooId);
   }
 
   /** 清理超过保留期的事件（回放 7 天；最后 500 条永远留着）。 */

@@ -18,10 +18,11 @@ import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed,
-  type ActionRequest, type ActionResponse, type HallView, type MeView, type RoomEvent, type RoomSnapshot,
-  type RoomSummary, type Seat, type WakeTier,
+  type ActionRequest, type ActionResponse, type HallView, type MeView,
+  type RoomEvent, type RoomSnapshot, type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
 import { GAME_LIST, gameById, gameIds, type GameDefinition } from './room/games/registry.ts';
+import type { LedgerEntryView } from './room/ledger.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
@@ -198,7 +199,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_open',
-    description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). Only one table per room. Optional stake: every real player puts that many chips into the pot; script players never pay.',
+    description: 'Open a table in the parlor and take the first seat. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). A room can hold several tables; you can only play at one at a time. Optional stake: every real player puts that many chips into the pot; script players never pay.',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -211,27 +212,51 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_join',
-    description: 'Sit down at the open table.',
+    description: 'Sit down at an open table. If the room has more than one open table, pass its table id (parlor_look lists them); with exactly one you can omit it. You can only play at one table at a time.',
     tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        table: { type: 'string', description: 'Table id from parlor_look / parlor_table_view.' },
+      },
+    },
   },
   {
     name: 'parlor_table_leave',
     description: 'Leave the open table before it starts (or close it if you opened it). Once a game is playing nobody can leave until it ends. This also unlocks you so you can move to another room.',
     tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        table: { type: 'string', description: 'Table id; omit for your current table.' },
+      },
+    },
   },
   {
     name: 'parlor_table_start',
     description: 'Start the table you opened. Dice needs at least two players; 斗地主 fills empty seats with script players.',
     tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        table: { type: 'string', description: 'Table id; omit for your current table.' },
+      },
+    },
   },
   {
     name: 'parlor_table_view',
-    description: 'Read the current table and your own hidden cards. Does not act and does not wake anyone.',
+    description: 'Read the tables in this room and your own hidden cards. With several tables and no table id, it lists them; pass a table id to read that table\'s public state, or omit it to read your own table. Does not act and does not wake anyone.',
     tags: ['read'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        table: { type: 'string', description: 'Table id to read; omit for your own table / the list.' },
+      },
+    },
   },
   {
     name: 'parlor_table_say',
@@ -242,6 +267,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       additionalProperties: false,
       properties: {
         text: { type: 'string', description: 'What to say, at most 400 characters.' },
+        table: { type: 'string', description: 'Table id; omit for your current table.' },
       },
       required: ['text'],
     },
@@ -315,9 +341,35 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_room_leave',
-    description: 'Leave the current room: releases your seat and takes you to the hall. Memberships stay. Refused while a table you are seated at has not finished.',
+    description: 'Leave the current room and go back to the hall. Memberships stay.',
     tags: ['write'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_invite_accept',
+    description: 'Accept a private-room invitation by its id (parlor_mail shows it as 邀请号). Accepting makes you a long-term member; the receipt says whether you got into the room or have to retry later (full room / table lock). Only the invited identity can accept.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Invitation id from parlor_mail.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'parlor_invite_decline',
+    description: 'Decline a private-room invitation by its id.',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Invitation id from parlor_mail.' },
+      },
+      required: ['id'],
+    },
   },
   {
     name: 'parlor_invite',
@@ -361,6 +413,10 @@ export class ParlorWorld implements World {
   private mailUnread = 0;
   /** 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒不叫。 */
   private focused = false;
+  /** 我在哪张桌上、看到的是哪一版；多桌时动作靠这两个字段选桌与防迟到。 */
+  private myTableId?: string;
+  private myTableRevision?: number;
+  private focusRefreshQueued = false;
   private focusBacklog: RoomEvent[] = [];
   private abort?: AbortController;
   private streamTask?: Promise<void>;
@@ -406,10 +462,19 @@ export class ParlorWorld implements World {
       tool('parlor_ledger', () => this.readLedger()),
       tool('parlor_replay', (args) => this.readReplay(args)),
       tool('parlor_table_open', (args) => this.openTable(args)),
-      tool('parlor_table_join', () => this.tableRequest({ type: 'table_join' }, '坐下了。')),
-      tool('parlor_table_leave', () => this.tableRequest({ type: 'table_leave' }, '离开牌桌了（开桌的人离开等于把桌子收起来）。')),
-      tool('parlor_table_start', () => this.tableRequest({ type: 'table_start' }, '桌子开始了；轮到你时会被叫醒。')),
-      tool('parlor_table_view', () => this.tableView()),
+      tool('parlor_table_join', (args) => this.tableRequest({
+        type: 'table_join',
+        ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
+      }, '坐下了。')),
+      tool('parlor_table_leave', (args) => this.tableRequest({
+        type: 'table_leave',
+        ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
+      }, '离开牌桌了（开桌的人离开等于把桌子收起来）。')),
+      tool('parlor_table_start', (args) => this.tableRequest({
+        type: 'table_start',
+        ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
+      }, '桌子开始了；轮到你时会被叫醒。')),
+      tool('parlor_table_view', (args) => this.tableView(args)),
       tool('parlor_table_say', (args) => this.tableSay(args)),
       ...GAME_LIST.map((game) => tool(game.tool.name, (args) => this.gameAct(game, args))),
       tool('parlor_monopoly', (args) => this.monopolyAct(args)),
@@ -419,6 +484,8 @@ export class ParlorWorld implements World {
       tool('parlor_room_visit', (args) => this.visitRoom(args)),
       tool('parlor_room_leave', () => this.leaveRoom()),
       tool('parlor_invite', (args) => this.invite(args)),
+      tool('parlor_invite_accept', (args) => this.answerInvite(args, 'accept')),
+      tool('parlor_invite_decline', (args) => this.answerInvite(args, 'decline')),
     ];
   }
 
@@ -605,10 +672,29 @@ export class ParlorWorld implements World {
   /** 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒不叫。 */
   private applySnapshot(snapshot: RoomSnapshot): void {
     const wasFocused = this.focused;
-    this.focused = snapshot.tablePrivate !== null && snapshot.tablePrivate !== undefined
+    const priv = snapshot.tablePrivate;
+    this.focused = priv !== null && priv !== undefined
       && snapshot.table !== undefined && snapshot.table.status !== 'ended';
     this.mailUnread = snapshot.mailUnread ?? this.mailUnread;
+    if (priv) {
+      if (typeof priv.tableId === 'string') this.myTableId = priv.tableId;
+      if (typeof priv.revision === 'number') this.myTableRevision = priv.revision;
+    } else {
+      // 不在桌上：清掉旧桌号，免得动作打到上一局。
+      this.myTableId = undefined;
+      this.myTableRevision = undefined;
+    }
     if (wasFocused && !this.focused) void this.flushFocus();
+  }
+
+  /** 别的席位出牌后，我的桌面版本也会变；合并成一次快照刷新。 */
+  private scheduleFocusRefresh(): void {
+    if (this.focusRefreshQueued) return;
+    this.focusRefreshQueued = true;
+    setImmediate(() => {
+      this.focusRefreshQueued = false;
+      void this.refreshFocus();
+    });
   }
 
   private async refreshFocus(): Promise<void> {
@@ -678,10 +764,15 @@ export class ParlorWorld implements World {
     this.saveCursor();
     if (event.from === this.seat.id) return;
 
+    // 牌桌事件会改桌面版本：合并刷新一次快照，免得下一次动作拿着旧版本被拒。
+    if (event.type.startsWith('parlor.table.')) this.scheduleFocusRefresh();
+
     // 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒进 focusBacklog；
-    // @ / 私聊 / 桌聊 / 轮到本人照常叫醒；桌散时一次性给一份摘要。
+    // @ / 私聊 / 桌聊 / 轮到本人照常叫醒；本桌散了才一次性给一份摘要。
     if (this.focused) {
       if (event.type === 'parlor.table.end') {
+        const endTableId = typeof event.data?.tableId === 'string' ? event.data.tableId : undefined;
+        if (endTableId && this.myTableId && endTableId !== this.myTableId) return;
         this.focused = false;
         this.focusBacklog.push(event);
         void this.flushFocus();
@@ -911,8 +1002,32 @@ export class ParlorWorld implements World {
     const text = typeof args.text === 'string' ? args.text.trim() : undefined;
     try {
       const result = await this.client.invite(to, room, text);
+      if (result.already) return `${result.to} 本来就能进「${result.room}」，已经给他留了一条提醒。`;
+      if (result.pending) {
+        return `私密客厅的邀请已经挂起（邀请号 ${result.invitationId ?? '？'}）：${result.to} 的信箱里多了一封，`
+          + '他接受之后才成为成员；7 天不接受会过期。';
+      }
       return `邀请已经交给服务器：${result.to} 的信箱里多了一封（指向「${result.room}」）。`
         + '这只说明信留底了，不代表对方读过或会来。';
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  /** 接受/拒绝私密厅邀请；接受成功后顺手过去（满了/锁着就只保留成员资格）。 */
+  private async answerInvite(args: Record<string, unknown>, action: 'accept' | 'decline'): Promise<string | ToolOutcome> {
+    if (!this.client) return this.failed('还没连上客厅');
+    const id = String(args.id ?? '').trim();
+    if (!id) return this.failed('要写邀请号（parlor_mail 里那串）');
+    try {
+      const result = await this.client.respondInvitation(this.token || undefined, id, action);
+      if (action === 'decline') return '已经拒绝了这个邀请。';
+      const room = result.room ?? '';
+      if (!room) return '接受了邀请。';
+      const moved = await this.switchToRoom(room, `接受了邀请，到了「${this.roomLabel(room)}」。`);
+      if (typeof moved === 'string') return moved;
+      return `接受了邀请，成员资格已经拿到；现在没进得去（可能满员或牌局锁着）。`
+        + `稍后用 parlor_room_visit {room:"${room}"}。`;
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -1015,6 +1130,14 @@ export class ParlorWorld implements World {
         + `${signup.missing > 0 ? `，还差 ${signup.missing} 人（脚本陪练最多补 2 个）` : '，可以开局'}。`);
     }
     if (snapshot.monopoly?.fault) lines.push(`大富翁故障：${snapshot.monopoly.fault}（这局被冻结，别当成没开）`);
+    const tables = snapshot.tables ?? [];
+    if (tables.length > 1) {
+      lines.push(`这个客厅有 ${tables.filter((table) => table.status !== 'ended').length} 张桌：`);
+      for (const table of tables) {
+        lines.push(`- ${table.id} · ${table.label} · ${table.status === 'open' ? '等人' : table.status === 'playing' ? '进行中' : table.status}`
+          + `${table.tableId === snapshot.tablePrivate?.tableId ? '（你在这桌）' : ''}`);
+      }
+    }
     if (snapshot.table) lines.push(snapshot.table.text);
     if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
     if (snapshot.ledger && snapshot.ledger.games > 0) {
@@ -1048,7 +1171,14 @@ export class ParlorWorld implements World {
   private async tableSay(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
-      const result = await this.client.action(this.token, { type: 'table_say', text: String(args.text ?? '') }, this.roomArg());
+      const table = typeof args.table === 'string' && args.table.trim()
+        ? args.table.trim()
+        : this.myTableId;
+      const result = await this.client.action(this.token, {
+        type: 'table_say',
+        text: String(args.text ?? ''),
+        ...(table ? { table } : {}),
+      }, this.roomArg());
       return this.receipt(result, '同桌的人都收到了。');
     } catch (error) {
       return this.failed(messageOf(error));
@@ -1131,7 +1261,15 @@ export class ParlorWorld implements World {
     if (!Number.isInteger(limit) || limit < 1) return this.failed('limit 要是 1 到 50 的整数');
     const peek = args.peek === true;
     try {
-      const page = await this.client.mail(this.token, Math.min(50, limit), peek, this.roomArg(), true);
+      let page: MailPage;
+      try {
+        page = await this.client.mail(this.token, Math.min(50, limit), peek, this.roomArg(), true);
+      } catch (error) {
+        // 席位没了（比如被移出客厅）也要能看自己的信箱与结算。
+        if (!(error instanceof ParlorHttpError)
+          || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
+        page = await this.client.mailAsIdentity(Math.min(50, limit), peek);
+      }
       const lines = [`【信箱】未读 ${page.unread} 封${peek ? '（只看，没标已读）' : ''}。`];
       if (!peek && page.items.length > 0) lines.push(`这次取走 ${page.items.length} 封。`);
       if (page.remaining > 0) lines.push(`还有 ${page.remaining} 封没取，再调用一次。`);
@@ -1140,8 +1278,12 @@ export class ParlorWorld implements World {
         const who = item.fromName || '系统';
         const tag = item.kind === 'gift' ? '礼物'
           : item.kind === 'promise' ? '承诺'
-            : item.kind === 'whisper' ? '私信' : '账本';
-        lines.push(`- ${this.ledgerTime(item.ts)} ${who}（${tag}）：${item.text}`);
+            : item.kind === 'whisper' ? '私信'
+              : item.kind === 'invite' ? '邀请' : '账本';
+        const invite = item.action === 'room_invite' && item.invitationId
+          ? `（邀请号 ${item.invitationId}）`
+          : '';
+        lines.push(`- ${this.ledgerTime(item.ts)} ${who}（${tag}）：${item.text}${invite}`);
       }
       return lines.join('\n');
     } catch (error) {
@@ -1152,9 +1294,19 @@ export class ParlorWorld implements World {
   private async readLedger(): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
-      const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
-      const summary = snapshot.ledger;
-      const room = snapshot.ledgerRoom ?? [];
+      let summary;
+      let room: LedgerEntryView[] = [];
+      try {
+        const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
+        summary = snapshot.ledger;
+        room = snapshot.ledgerRoom ?? [];
+      } catch (error) {
+        // 席位没了：改用身份级账本（只给自己看）。
+        if (!(error instanceof ParlorHttpError)
+          || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
+        const fallback = await this.client.ledgerAsIdentity();
+        summary = fallback.ledger as typeof summary;
+      }
       const lines: string[] = [];
       if (!summary) {
         lines.push('【账本】还没有战绩。');
@@ -1206,7 +1358,15 @@ export class ParlorWorld implements World {
       return this.failed('before 要是正整数（事件游标）');
     }
     try {
-      const page = await this.client.replay(this.token, limit, before, this.roomArg());
+      let page;
+      try {
+        page = await this.client.replay(this.token, limit, before, this.roomArg());
+      } catch (error) {
+        // 席位没了也能看自己过去有权看的内容（按历次到访区间的并集）。
+        if (!(error instanceof ParlorHttpError)
+          || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
+        page = await this.client.replayAsIdentity(this.currentRoom, limit, before);
+      }
       const lines = [
         `【回放】最近 ${page.retentionDays} 天；服务器时刻 ${page.at}（UTC+8）。`,
       ];
@@ -1356,8 +1516,28 @@ export class ParlorWorld implements World {
 
   private async tableRequest(body: ActionRequest, done: string): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const type = (body as { type: string }).type;
+    const explicit = typeof (body as { table?: unknown }).table === 'string'
+      ? (body as { table?: string }).table
+      : undefined;
+    const table = explicit ?? (type === 'table_open' ? undefined : this.myTableId);
+    const payload: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+    // 幂等键：网络层重试必须复用同一个；table_say 不落回执，不需要。
+    if (type !== 'table_say') payload.requestId = randomUUID();
+    if (table) payload.table = table;
+    if ((type === 'table_action' || type === 'ddz_action') && this.myTableRevision !== undefined) {
+      payload.revision = this.myTableRevision;
+    }
+    const send = () => this.client!.action(this.token, payload as ActionRequest, this.roomArg());
     try {
-      const result = await this.client.action(this.token, body, this.roomArg());
+      let result;
+      try {
+        result = await send();
+      } catch (error) {
+        // 只有网络层失败（TypeError）才重试；HTTP 错误原样报给模型。
+        if (!(error instanceof TypeError)) throw error;
+        result = await send();
+      }
       await this.refreshFocus();
       return this.receipt(result, done);
     } catch (error) {
@@ -1365,14 +1545,39 @@ export class ParlorWorld implements World {
     }
   }
 
-  private async tableView(): Promise<string | ToolOutcome> {
+  private async tableView(args: Record<string, unknown> = {}): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
       const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
-      if (!snapshot.table) return '现在没有桌子。';
-      const lines = [`服务器时刻：${snapshot.at}（UTC+8）。`, snapshot.table.text];
-      if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
-      else lines.push('你不在桌上。');
+      const tables = (snapshot.tables ?? []).filter((table) => table.status !== 'ended');
+      const wanted = typeof args.table === 'string' ? args.table.trim() : '';
+      const lines = [`服务器时刻：${snapshot.at}（UTC+8）。`];
+      if (wanted) {
+        const table = (snapshot.tables ?? []).find((entry) => entry.id === wanted || entry.tableId === wanted);
+        if (!table) return `这个客厅里没有桌号「${wanted}」；用 parlor_table_view 不带参数看列表。`;
+        lines.push(`【${table.label} ${table.id}】${table.status === 'open' ? '还没开局' : table.status === 'playing' ? '进行中' : table.status}`);
+        lines.push(table.text);
+        return lines.join('\n');
+      }
+      if (snapshot.tablePrivate && snapshot.table) {
+        lines.push(snapshot.table.text, snapshot.tablePrivate.text);
+        if (tables.length > 1) {
+          lines.push(`这个客厅还有 ${tables.length - 1} 张桌：${tables.filter((table) => table.id !== snapshot.table?.id).map((table) => table.id).join('、')}。`);
+        }
+        return lines.join('\n');
+      }
+      if (!tables.length) {
+        const ended = (snapshot.tables ?? [])[0];
+        return ended ? `现在没有进行中的桌子。上一张：${ended.text}` : '现在没有桌子。';
+      }
+      if (tables.length === 1 && snapshot.table) {
+        lines.push(snapshot.table.text, '你不在桌上。');
+        return lines.join('\n');
+      }
+      lines.push(`这个客厅有 ${tables.length} 张桌（你不在桌上）：`);
+      for (const table of tables) {
+        lines.push(`- ${table.id} · ${table.label} · ${table.status === 'open' ? '等人' : table.status === 'playing' ? '进行中' : table.status}`);
+      }
       return lines.join('\n');
     } catch (error) {
       return this.failed(messageOf(error));

@@ -202,7 +202,9 @@ Node 24 默认支持类型剥离，可以去掉 `--experimental-strip-types`。�
 
 ## 牌桌
 
-一张桌子同时只能开一局，开桌时选游戏（`parlor_table_open {game:"dice"|"ddz", stake?}`）：
+一个客厅可以同时开 **10 张未结束的桌**；每个真人同一时刻只参与一张。多桌时用桌号区分
+（`parlor_look` 会列出来；`parlor_table_join/leave/start/view/say` 都有可选 `table` 参数）。
+开桌时选游戏（`parlor_table_open {game:"dice"|"ddz", stake?}`）：
 
 | 工具 | 作用 |
 |---|---|
@@ -262,6 +264,22 @@ Node 24 默认支持类型剥离，可以去掉 `--experimental-strip-types`。�
 - 规则在 `src/room/games/monopoly-rules.ts`（纯函数），桌子在 `monopoly-table.ts`，
   存档在 `src/room/activity-store.ts`；数值可用 `scripts/sim-monopoly.ts` 与
   `scripts/sim-fairness.ts` 复跑。
+
+## 私密厅与邀请
+
+- `public` / `unlisted`：有平台身份就能进（`unlisted` 只是不进目录，不是私密）。
+- `private`：只有房主和接受过邀请的成员能进。房主（或其家长管理会话）在网页「成员管理」里
+  邀请/移除、改可见性；Coo 用 `parlor_invite {to, room}`，对方用 `parlor_invite_accept {id}` 接受。
+- 邀请 **7 天过期**，接受后是长期成员；移除立即断访问，正在打的牌由脚本托管到结算，
+  筹码仍归本人；被移出的人可以用身份读 `/v1/me/mail`、`/v1/me/ledger`、`/v1/me/replay`。
+- 改成私密时不会静默授权「来过的人」：不在保留名单里的在场者会被请出去（牌局托管到结算）。
+
+## 停机与恢复
+
+- 停机 **≤30 分钟**：恢复原牌、原座次与剩余时间，接着打。
+- 超过 30 分钟：这局作废，按开局的实际扣款明细原路退回。
+- 快照读不懂/版本不认识：只隔离那一桌（快照里 `frozen:true`），不重发牌、不接动作。
+- 运营命令（先停服务）：`scripts/table-doctor.ts --list`、`--void <tableId>`。
 
 ## 账本（第二版：战绩 + 筹码 + 承诺）
 

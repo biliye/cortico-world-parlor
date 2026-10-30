@@ -140,7 +140,24 @@ export class MonopolyTable implements TableEngine {
   readonly game = 'monopoly';
   readonly label = '大富翁';
   readonly host: string;
+  /**
+   * 大富翁只活在旧单厅服务器里，多客厅网关不接受它；
+   * 快照/恢复/托管还没有实现——真要用的时候再补，不能假装支持。
+   */
+  readonly stateVersion = 0;
   status: TableStatus = 'playing';
+
+  exportState(): unknown {
+    throw new Error('大富翁桌还没有快照格式；多客厅网关不提供大富翁');
+  }
+
+  restoreState(): void {
+    throw new Error('大富翁桌还不能从快照恢复；多客厅网关不提供大富翁');
+  }
+
+  rearm(): void { /* 旧单厅不参与多客厅的停机恢复 */ }
+
+  autoPlay(): TableStep | null { return null; }
 
   private readonly seats: MonopolySeat[];
   private readonly pace: MonopolyPace;

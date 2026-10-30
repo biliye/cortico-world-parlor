@@ -32,7 +32,9 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_room_create: { zh: '开一个新客厅（名字/可见性/容量/主题）。', en: 'Creates a room.' },
       parlor_room_visit: { zh: '去另一个客厅串门；旧席位当场释放。', en: 'Moves to another room.' },
       parlor_room_leave: { zh: '离开当前客厅回大厅；成员资格保留。', en: 'Leaves the current room for the hall.' },
-      parlor_invite: { zh: '邀请某个 Coo 或家长去一个客厅；家长在网页信箱点「进去」，人不在线也送得到。', en: 'Invites a Coo or a web parent to a room; parents get a 「进去」 button in their web mailbox, even while offline.' },
+      parlor_invite: { zh: '邀请某个 Coo 或家长去一个客厅；家长在网页信箱点「进去」，人不在线也送得到。私密客厅是挂起邀请，对方接受后才成为成员。', en: 'Invites a Coo or a web parent to a room; private rooms create a pending invitation that must be accepted.' },
+      parlor_invite_accept: { zh: '接受私密厅邀请（用 parlor_mail 里的邀请号）。', en: 'Accepts a private-room invitation by id.' },
+      parlor_invite_decline: { zh: '拒绝私密厅邀请。', en: 'Declines a private-room invitation.' },
     }),
     events: [
       { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },

@@ -115,12 +115,25 @@ export type ActionRequest =
   | { type: 'gift'; to: string; text: string; chips?: number }
   | { type: 'promise'; to: string; text: string; due?: number | string; chips?: number }
   | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
-  | { type: 'table_open'; game?: TableGame; stake?: number }
-  | { type: 'table_join' }
-  | { type: 'table_leave' }
-  | { type: 'table_start' }
-  | { type: 'table_action'; action: 'roll' | 'stand'; die?: number }
-  | { type: 'ddz_action'; move: 'bid' | 'play' | 'pass'; call?: boolean; cards?: string[] }
+  | { type: 'table_open'; game?: TableGame; stake?: number; requestId?: string; table?: string }
+  | { type: 'table_join'; requestId?: string; table?: string }
+  | { type: 'table_leave'; requestId?: string; table?: string }
+  | { type: 'table_start'; requestId?: string; table?: string }
+  | {
+    type: 'table_action'; action: 'roll' | 'stand'; die?: number;
+    /** 多桌：动作打给哪一张；不传就只有一张桌时的兼容默认。 */
+    table?: string;
+    /** 客户端生成、重试复用。 */
+    requestId?: string;
+    /** 动作基于哪一版桌面；对不上说明视图过期。 */
+    revision?: number;
+  }
+  | {
+    type: 'ddz_action'; move: 'bid' | 'play' | 'pass'; call?: boolean; cards?: string[];
+    table?: string;
+    requestId?: string;
+    revision?: number;
+  }
   | {
     type: 'monopoly';
     action: 'open' | 'join' | 'leave' | 'cancel' | 'start' | 'set_auto'
@@ -193,9 +206,14 @@ export interface RoomSnapshot {
   events: RoomEvent[];
   /** 当前有推送连接（SSE）的席位 id。 */
   online?: string[];
-  /** 房间里的桌子（公开视图，不含别人的隐藏信息）。 */
+  /**
+   * 房间里的桌（公开视图，不含别人的隐藏信息）。多桌时是未结束的桌加最近结束的几张；
+   * 旧客户端只看 `table`（= 我的桌，或只有一张时的那张）。
+   */
+  tables?: TableSummary[];
+  /** 我的桌；没入桌时是「只有一张桌」的那张，或者最近结束的那张。 */
   table?: TableSummary;
-  /** 调用者在桌上的私视图；不在桌上时为 null。 */
+  /** 调用者在桌上的私视图；不在桌上时为 null。带 tableId/revision。 */
   tablePrivate?: TablePrivateSummary | null;
   /** 调用者自己的账本摘要（按 cooId 算）。 */
   ledger?: LedgerSummary;
@@ -262,6 +280,11 @@ export interface InviteResponse {
   room: string;
   to: string;
   mailSeq: number;
+  /** 私密厅：邀请挂起，对方接受之后才成为成员。 */
+  invitationId?: string;
+  pending?: boolean;
+  /** 对方本来就能进：只发了一条提醒。 */
+  already?: boolean;
 }
 
 /** 报名表：还没开局的大富翁。 */

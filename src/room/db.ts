@@ -13,8 +13,13 @@ import {
   roomsTableSql,
 } from './schema.ts';
 
-/** 库结构版本。4 = rooms.capacity 的 CHECK 放宽到 500。 */
-const SCHEMA_VERSION = 4;
+/**
+ * 库结构版本。5 = 多桌/可靠存档/私密厅准入。
+ * 5：tables 加 revision/state_version/frozen_at/recovery_error，table_seats 加 auto，
+ *    去掉「一房一桌」唯一索引，新增 action_receipts / table_finalizations /
+ *    active_table_players / room_access / room_invitations。
+ */
+export const SCHEMA_VERSION = 5;
 
 // Vite 5 的 builtin 列表还不认识 node:sqlite，静态 import 会被当成名为 sqlite 的包。
 // process.getBuiltinModule 在运行时直接拿内置模块，绕过打包器解析。
@@ -87,8 +92,28 @@ const rebuildRooms = (db: Db): void => {
   }
 };
 
+/**
+ * 打开库之前先看版本：比本程序新的库不能碰。
+ * 这条检查必须在任何 DDL 之前跑（老库没有 meta 表时跳过）。
+ */
+const assertSchemaSupported = (db: Db): void => {
+  const hasMeta = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+  ).get() as { name?: string } | undefined;
+  if (!hasMeta) return;
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value?: string } | undefined;
+  const current = Number(row?.value ?? 0);
+  if (Number.isFinite(current) && current > SCHEMA_VERSION) {
+    throw new Error(
+      `这个数据库是 schema ${current}，本程序只认到 ${SCHEMA_VERSION}；`
+      + '请换回能读新库的程序，或从备份恢复到旧库，不要用旧代码直接打开。',
+    );
+  }
+};
+
 /** 建表/补表；可重复执行。 */
 export const migrate = (db: Db): void => {
+  assertSchemaSupported(db);
   db.exec(SCHEMA_SQL);
   // CREATE TABLE IF NOT EXISTS 不会给老库加列；新列在这里补。
   const columns = new Set(
@@ -104,8 +129,29 @@ export const migrate = (db: Db): void => {
   if (!mailColumns.has('from_coo_id')) {
     db.exec('ALTER TABLE mail ADD COLUMN from_coo_id TEXT REFERENCES coos(id)');
   }
+  if (!mailColumns.has('invitation_id')) {
+    db.exec('ALTER TABLE mail ADD COLUMN invitation_id TEXT');
+  }
   // 索引要等列补上再建：写在 SCHEMA_SQL 里会在老库上炸（建索引时那列还不存在）。
   db.exec('CREATE INDEX IF NOT EXISTS ix_mail_peer ON mail(coo_id, from_coo_id, seq)');
+
+  // —— schema 5：多桌 / 可靠存档 / 准入 ——
+  // 老库的 tables 没有这些列；CREATE TABLE IF NOT EXISTS 不会补。
+  const tableColumns = new Set(
+    (db.prepare('PRAGMA table_info(tables)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!tableColumns.has('revision')) db.exec('ALTER TABLE tables ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+  if (!tableColumns.has('state_version')) db.exec('ALTER TABLE tables ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0');
+  if (!tableColumns.has('frozen_at')) db.exec('ALTER TABLE tables ADD COLUMN frozen_at INTEGER');
+  if (!tableColumns.has('recovery_error')) db.exec('ALTER TABLE tables ADD COLUMN recovery_error TEXT');
+
+  const tableSeatColumns = new Set(
+    (db.prepare('PRAGMA table_info(table_seats)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!tableSeatColumns.has('auto')) db.exec('ALTER TABLE table_seats ADD COLUMN auto INTEGER NOT NULL DEFAULT 0');
+
+  // 一房一桌的约束从这一版起取消；多桌的「一人一桌」由 active_table_players 保证。
+  db.exec('DROP INDEX IF EXISTS ux_live_table_per_room');
 
   // 老库的 rooms.capacity CHECK 还是 2–64；放宽的唯一办法是重建表。
   // 用实际 DDL 判断（而不是只看版本号），新库与已升级的库都不会白重建一次。

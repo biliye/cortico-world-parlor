@@ -12,8 +12,9 @@ import type { AddressInfo } from 'node:net';
 import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
 import { CooAccountDb, type ParentAccount } from './coo-account-db.ts';
-import { migrate, openDb, type Db } from './db.ts';
+import { migrate, openDb, withTransaction, type Db } from './db.ts';
 import { HALL_CAPACITY } from './schema.ts';
+import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { gameByActionType } from './games/registry.ts';
 import { HostError, RoomHost } from './room-host.ts';
@@ -22,6 +23,12 @@ import {
   humanSeatsForOfflineRelease, listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash,
   touchSeatSeen, type RoomRow,
 } from './room-seat-db.ts';
+import {
+  acceptInvitationTx, canManageRoom, createRoomInvitationTx, declineInvitationTx,
+  expireInvitations, findInvitation, grantRoomAccessTx, hasRoomAccess, isRoomOwner,
+  listRoomAccess, pendingInvitationsForCoo, pendingInvitationsForRoom, revokeInvitationsFor,
+  revokeRoomAccessTx, roomEntryRefusal,
+} from './room-access-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
 export interface WorldServerOptions {
@@ -193,8 +200,12 @@ export class WorldServer {
   private readonly sse = new Map<string, Set<SseClient>>();
   private pumpTimer?: NodeJS.Timeout;
   private clockTimer?: NodeJS.Timeout;
+  private heartbeatTimer?: NodeJS.Timeout;
   private janitorTimer?: NodeJS.Timeout;
   private janitorFirstTimer?: NodeJS.Timeout;
+  /** 启动恢复基准：进程起来时读一次旧的 last_healthy_at，所有客厅共用。 */
+  private readonly recovery: { lastHealthyAt?: number };
+  private lastHeartbeatAt = 0;
   /** 每厅一个 RoomHost：牌桌引擎在内存里，必须跨请求共用同一个实例。 */
   private readonly hosts = new Map<string, RoomHost>();
   /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
@@ -216,6 +227,10 @@ export class WorldServer {
     this.hostName = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
     this.ensureDefaultRoom();
+    const healthy = this.db.prepare("SELECT value FROM meta WHERE key = 'last_healthy_at'").get() as
+      { value?: string } | undefined;
+    const lastHealthyAt = Number(healthy?.value ?? '');
+    this.recovery = Number.isFinite(lastHealthyAt) && lastHealthyAt > 0 ? { lastHealthyAt } : {};
   }
 
   get url(): string {
@@ -227,6 +242,8 @@ export class WorldServer {
   }
 
   async listen(): Promise<{ url: string; host: string; port: number }> {
+    // 先把所有有未结束牌局的客厅建出来：恢复要在开始接请求之前完成。
+    this.recoverOpenTables();
     this.server = createServer((req, res) => {
       void this.handle(req, res).catch((error: unknown) => {
         if (res.headersSent) {
@@ -248,6 +265,10 @@ export class WorldServer {
     this.pumpTimer.unref?.();
     this.clockTimer = setInterval(() => this.tickClock(), 1000);
     this.clockTimer.unref?.();
+    // 健康心跳：只反映「进程和数据库都能写」。有未结束牌局时每 5 秒一次。
+    this.heartbeatTimer = setInterval(() => this.heartbeat(), 5_000);
+    this.heartbeatTimer.unref?.();
+    this.heartbeat(true);
     // 真人席位离线清理：每 5 分钟一次；刚启动 10 秒先扫一遍（这时还没有 SSE）。
     this.janitorTimer = setInterval(() => this.releaseOfflineSeats(), 5 * 60_000);
     this.janitorTimer.unref?.();
@@ -261,6 +282,10 @@ export class WorldServer {
     this.pumpTimer = undefined;
     if (this.clockTimer) clearInterval(this.clockTimer);
     this.clockTimer = undefined;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    // 正常退出：把准确停止时刻记下来，下次启动算停机时长才有意义。
+    try { this.heartbeat(true); } catch { /* 库可能已经坏了 */ }
     if (this.janitorTimer) clearInterval(this.janitorTimer);
     this.janitorTimer = undefined;
     if (this.janitorFirstTimer) clearTimeout(this.janitorFirstTimer);
@@ -317,9 +342,62 @@ export class WorldServer {
   private host(roomId: string): RoomHost {
     const existing = this.hosts.get(roomId);
     if (existing) return existing;
-    const host = new RoomHost(this.db, roomId, { now: this.now });
+    const host = new RoomHost(this.db, roomId, { now: this.now, recovery: this.recovery });
     this.hosts.set(roomId, host);
     return host;
+  }
+
+  /** 统一准入：初次加入、换房、家长下场、邀请跳转、重发令牌都先过这里。 */
+  private assertRoomEntry(roomId: string, cooId: string): void {
+    const refusal = roomEntryRefusal(this.db, roomId, cooId);
+    if (refusal) throw new HttpError(403, refusal);
+  }
+
+  /** 房主管理权限：房主本人（Coo 身份）或该房主的家长管理会话。 */
+  private roomManager(req: IncomingMessage, roomId: string): string {
+    const cookie = cookieOf(req, 'parlor_parent');
+    if (cookie) {
+      const session = this.coo.verifySession(cookie);
+      if (session && isRoomOwner(this.db, roomId, session.account.cooId)) return session.account.cooId;
+    }
+    const cooId = this.identify(req);
+    if (cooId && isRoomOwner(this.db, roomId, cooId)) return cooId;
+    throw new HttpError(403, '只有房主（或房主的家长会话）能管理这个客厅');
+  }
+
+  /**
+   * 启动恢复：所有还有未结束牌局的客厅都要先建出 host（恢复在构造函数里做），
+   * 不能等某个房间第一次被访问才恢复。
+   */
+  private recoverOpenTables(): void {
+    const rows = this.db.prepare(
+      `SELECT DISTINCT room_id FROM tables WHERE status IN ('open','bidding','playing')`,
+    ).all() as { room_id: string }[];
+    for (const row of rows) {
+      try {
+        this.host(row.room_id);
+      } catch (error) {
+        console.error(`parlor: 客厅 ${row.room_id} 的牌桌恢复失败`, error);
+      }
+    }
+  }
+
+  /**
+   * 健康心跳：写进去本身就是一次数据库可用性检查。
+   * 只有存在未结束牌局时才需要（它只用来算停机时长）。
+   */
+  private heartbeat(force = false): void {
+    const now = this.now();
+    if (!force && now - this.lastHeartbeatAt < 5_000) return;
+    const live = this.db.prepare(
+      `SELECT 1 AS hit FROM tables WHERE status IN ('open','bidding','playing') LIMIT 1`,
+    ).get() as { hit: number } | undefined;
+    if (!force && !live) return;
+    this.db.prepare(
+      `INSERT INTO meta(key, value) VALUES('last_healthy_at', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run(String(now));
+    this.lastHeartbeatAt = now;
   }
 
   /**
@@ -442,6 +520,11 @@ export class WorldServer {
         hall: this.hallId,
         rooms: listRooms(this.db, { kind: 'room' }).length,
         seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,
+        // 能力发现：客户端按这些字段决定用哪套接口。
+        tablesV2: true,
+        durableActions: true,
+        roomInvitesV1: true,
+        maxTablesPerRoom: 10,
       });
       return;
     }
@@ -530,8 +613,51 @@ export class WorldServer {
           room: seat.roomId, id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier,
         } : null,
         rooms: listRooms(this.db, { kind: 'room' })
-          .filter((room) => room.visibility === 'public' || memberOf(this.db, room.id, cooId) !== null)
+          .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
           .map((room) => roomSummary(this.db, room)),
+      });
+      return;
+    }
+
+    // 身份级读取：被移出客厅、大厅满员时，自己的信箱/账本/历史还看得到。
+    if (method === 'GET' && url.pathname === '/v1/me/mail') {
+      const cooId = this.cooOrSeat(req);
+      const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
+      const peek = url.searchParams.get('peek') === '1';
+      const room = url.searchParams.get('room') || undefined;
+      json(res, 200, new MailDb(this.db, { now: this.now }).list(cooId, room, limit, !peek));
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/me/ledger') {
+      const cooId = this.cooOrSeat(req);
+      json(res, 200, { ledger: new LedgerDb(this.db, { now: this.now }).summaryFor(cooId) });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/me/replay') {
+      const cooId = this.cooOrSeat(req);
+      const room = url.searchParams.get('room') ?? '';
+      if (!room || !getRoom(this.db, room)) throw new HttpError(404, '客厅不存在');
+      const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
+      const before = Number(url.searchParams.get('before') ?? 0) || undefined;
+      const page = this.host(room).replay(cooId, { limit, ...(before ? { before } : {}) });
+      json(res, 200, {
+        room,
+        latest: this.host(room).latest(),
+        now: this.now(),
+        at: serverClock(this.now()),
+        retentionDays: 7,
+        events: page.events.map((event) => ({
+          seq: event.seq,
+          ts: event.ts,
+          at: serverClock(event.ts),
+          type: event.type,
+          from: event.from,
+          text: event.text,
+          ...(event.data ? { data: event.data } : {}),
+        })),
+        older: page.older,
       });
       return;
     }
@@ -554,7 +680,7 @@ export class WorldServer {
           return seat ? { room: seat.roomId, id: seat.id, name: seat.name } : null;
         })(),
         rooms: listRooms(this.db, { kind: 'room' })
-          .filter((room) => room.visibility === 'public' || memberOf(this.db, room.id, cooId) !== null)
+          .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
           .map((room) => roomSummary(this.db, room)),
       });
       return;
@@ -567,33 +693,7 @@ export class WorldServer {
       if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再邀请');
       const to = typeof body.to === 'string' ? body.to.trim() : '';
       if (!to) throw new HttpError(400, '要写邀请谁（席位名、Coo 身份或家长名）');
-      const rows = this.db.prepare(
-        `SELECT room_id, id, coo_id, name, kind FROM room_seats
-          WHERE released_at IS NULL AND (coo_id = ? OR name = ? COLLATE NOCASE)`,
-      ).all(to, to) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
-      const row = rows.find((entry) => entry.coo_id === to)
-        ?? rows.find((entry) => entry.name.toLowerCase() === to.toLowerCase());
-      let target: { cooId: string; name: string; roomId: string | null; kind: string };
-      if (row) {
-        target = { cooId: row.coo_id, name: row.name, roomId: row.room_id, kind: row.kind };
-      } else {
-        // 家长不在座也能邀请：按家长固定的下场身份找，信留在信箱里，下次打开网页就能看到。
-        const parents = this.coo.findParentsByName(to);
-        const ready = parents.filter(
-          (entry): entry is { accountId: string; cooId: string; name: string } => entry.cooId !== null,
-        );
-        if (ready.length > 1) {
-          throw new HttpError(409, `有 ${ready.length} 位家长叫「${to}」；换一个能分清的名字`);
-        }
-        const parent = ready[0];
-        if (!parent) {
-          if (parents.length) {
-            throw new HttpError(409, `「${to}」还没下场玩过，没有能收信的身份；先让他点「下场玩」进来一次`);
-          }
-          throw new HttpError(404, `没有找到「${to}」这个席位或家长`);
-        }
-        target = { cooId: parent.cooId, name: parent.name, roomId: null, kind: 'human' };
-      }
+      const target = this.resolveInviteTarget(to);
       if (target.cooId === cooId) throw new HttpError(400, '不能邀请自己');
       // 人类只邀请已有家长账户的人；无账户的旧访客席不接受邀请。
       if (target.kind === 'human' && !this.coo.isPlayerCoo(target.cooId)) {
@@ -605,6 +705,59 @@ export class WorldServer {
       if (room.archivedAt !== null) throw new HttpError(409, '那个客厅已经归档了');
       this.checkInviteRate(cooId);
       const extra = typeof body.text === 'string' ? body.text.trim().slice(0, 200) : '';
+      const now = this.now();
+
+      // 私密厅：只有房主能邀请；邀请先挂起，接受之后才写长期准入。
+      if (room.visibility === 'private') {
+        if (!isRoomOwner(this.db, room.id, cooId)) {
+          throw new HttpError(403, '这是私密客厅：只有房主能邀请人；成员不能把自己的邀请转给别人');
+        }
+        if (hasRoomAccess(this.db, room.id, target.cooId)) {
+          const line = `${seat.name} 说你可以进私密客厅「${room.name}」了。`;
+          const letter = new MailDb(this.db, { now: this.now }).append({
+            to: target.cooId, room: room.id, kind: 'invite', action: 'notice', fromName: seat.name, text: line,
+          });
+          if (target.roomId) {
+            this.host(target.roomId).pingSeat(target.cooId, line, {
+              room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
+            });
+          }
+          json(res, 200, { ok: true, room: room.id, to: target.name, already: true, mailSeq: letter.seq });
+          return;
+        }
+        let invitationId = '';
+        let mailSeq = 0;
+        withTransaction(this.db, () => {
+          const invitation = createRoomInvitationTx(this.db, {
+            roomId: room.id, invitedBy: cooId, targetCooId: target.cooId, now,
+          });
+          invitationId = invitation.id;
+          const line = target.kind === 'human'
+            ? `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。打开网页的「信箱」，点「接受并进去」。`
+            : `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。用 parlor_invite_accept {id:"${invitation.id}"} 接受。`;
+          const letter = new MailDb(this.db, { now: this.now }).append({
+            to: target.cooId,
+            room: room.id,
+            kind: 'invite',
+            action: 'room_invite',
+            fromName: seat.name,
+            text: line,
+            invitationId: invitation.id,
+          });
+          mailSeq = letter.seq;
+          if (target.roomId) {
+            this.host(target.roomId).pingSeat(target.cooId, line, {
+              room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
+              invitationId: invitation.id, private: true,
+            });
+          }
+        });
+        json(res, 200, {
+          ok: true, room: room.id, to: target.name, invitationId, mailSeq, pending: true,
+        });
+        return;
+      }
+
       const how = target.kind === 'human'
         ? '。打开网页的「信箱」点「进去」就到。'
         : '。用 parlor_room_visit 进去。';
@@ -671,7 +824,7 @@ export class WorldServer {
       const cooId = all ? this.cooOrSeat(req) : null;
       const rooms = listRooms(this.db, { kind: 'room' }).filter((room) => (
         room.visibility === 'public'
-        || (all && cooId !== null && memberOf(this.db, room.id, cooId) !== null)
+        || (all && cooId !== null && (room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null))
       ));
       json(res, 200, { rooms: rooms.map((room) => roomSummary(this.db, room)) });
       return;
@@ -701,9 +854,191 @@ export class WorldServer {
       if (!room) throw new HttpError(404, '客厅不存在');
       if (room.visibility !== 'public') {
         const cooId = this.identify(req);
-        if (!cooId || memberOf(this.db, room.id, cooId) === null) throw new HttpError(404, '客厅不存在');
+        if (!cooId || (!isRoomOwner(this.db, room.id, cooId) && memberOf(this.db, room.id, cooId) === null)) {
+          throw new HttpError(404, '客厅不存在');
+        }
       }
       json(res, 200, { room: roomSummary(this.db, room) });
+      return;
+    }
+
+    // —— 私密厅：成员管理 / 可见性 / 房主邀请 ——
+    const managed = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(access|visibility|invite)$/);
+    if (managed) {
+      const roomId = managed[1];
+      const what = managed[2];
+      const room = getRoom(this.db, roomId);
+      if (!room) throw new HttpError(404, '客厅不存在');
+      const manager = this.roomManager(req, roomId);
+      const now = this.now();
+      if (what === 'access' && method === 'GET') {
+        expireInvitations(this.db, now);
+        const ownerRow = room.ownerCooId
+          ? this.db.prepare('SELECT id, display_name FROM coos WHERE id = ?').get(room.ownerCooId) as
+            { id: string; display_name: string } | undefined
+          : undefined;
+        json(res, 200, {
+          room: roomSummary(this.db, room),
+          owner: ownerRow ? { cooId: ownerRow.id, name: ownerRow.display_name } : null,
+          members: listRoomAccess(this.db, roomId),
+          invitations: pendingInvitationsForRoom(this.db, roomId, now),
+        });
+        return;
+      }
+      if (what === 'access' && method === 'POST') {
+        const body = await readJson(req);
+        const action = typeof body.action === 'string' ? body.action : '';
+        const target = typeof body.cooId === 'string' && body.cooId.trim()
+          ? { cooId: body.cooId.trim(), name: this.coo.cooDisplayName(body.cooId.trim()) || body.cooId.trim() }
+          : this.resolveInviteTarget(typeof body.to === 'string' ? body.to.trim() : '');
+        if (action === 'grant') {
+          if (isRoomOwner(this.db, roomId, target.cooId)) throw new HttpError(400, '房主本来就能进');
+          if (room.visibility !== 'private') {
+            throw new HttpError(409, '只有私密客厅需要单独授权；公开/不列目录的厅有身份就能进');
+          }
+          withTransaction(this.db, () => {
+            grantRoomAccessTx(this.db, { roomId, cooId: target.cooId, source: 'owner', grantedBy: manager, now });
+            revokeInvitationsFor(this.db, roomId, target.cooId, now);
+          });
+          json(res, 200, { ok: true, cooId: target.cooId, name: target.name });
+          return;
+        }
+        if (action === 'revoke') {
+          if (isRoomOwner(this.db, roomId, target.cooId)) throw new HttpError(400, '不能移除房主');
+          const host = this.host(roomId);
+          let removedSeat = false;
+          let tables: string[] = [];
+          withTransaction(this.db, () => {
+            revokeRoomAccessTx(this.db, roomId, target.cooId, now, manager);
+            revokeInvitationsFor(this.db, roomId, target.cooId, now);
+            // 开局前移除 = 退桌（开桌者收桌）；开局后交给脚本托管（结算仍归他）。
+            try {
+              if (host.tablePublic(undefined, target.cooId)?.status === 'open') {
+                host.leaveTable(target.cooId);
+              }
+            } catch { /* 牌局已开始/已结束：走托管 */ }
+            tables = host.markTableAuto(target.cooId);
+            removedSeat = host.remove(target.cooId, now) !== null;
+          });
+          json(res, 200, { ok: true, cooId: target.cooId, name: target.name, removedSeat, tables });
+          return;
+        }
+        throw new HttpError(400, 'action 只能是 grant 或 revoke');
+      }
+      if (what === 'visibility' && method === 'POST') {
+        const body = await readJson(req);
+        const visibility = body.visibility;
+        if (visibility !== 'public' && visibility !== 'unlisted' && visibility !== 'private') {
+          throw new HttpError(400, 'visibility 只能是 public / unlisted / private');
+        }
+        const keep = Array.isArray(body.keep)
+          ? body.keep.filter((id): id is string => typeof id === 'string')
+          : [];
+        const host = this.host(roomId);
+        let kicked: string[] = [];
+        withTransaction(this.db, () => {
+          this.db.prepare('UPDATE rooms SET visibility = ? WHERE id = ?').run(visibility, roomId);
+          if (visibility === 'private') {
+            // 改成私密时不自动授权「来过的人」；只认房主确认保留的名单。
+            const keepSet = new Set(keep);
+            for (const cooId of keep) {
+              const exists = this.db.prepare('SELECT 1 FROM coos WHERE id = ?').get(cooId);
+              if (!exists) continue;
+              grantRoomAccessTx(this.db, { roomId, cooId, source: 'owner', grantedBy: manager, now });
+            }
+            revokeInvitationsFor(this.db, roomId, null, now);
+            // 不在保留名单里的在场者当场请出去（牌局交给托管，结算仍归本人）。
+            for (const seat of activeSeats(this.db, roomId)) {
+              if (seat.cooId === room.ownerCooId || keepSet.has(seat.cooId)) continue;
+              try {
+                if (host.tablePublic(undefined, seat.cooId)?.status === 'open') {
+                  host.leaveTable(seat.cooId);
+                }
+              } catch { /* 牌局已开始：走托管 */ }
+              host.markTableAuto(seat.cooId);
+              if (host.remove(seat.cooId, now)) kicked.push(seat.cooId);
+            }
+          }
+        });
+        json(res, 200, {
+          ok: true,
+          room: roomSummary(this.db, getRoom(this.db, roomId)!),
+          ...(kicked.length > 0 ? { removed: kicked } : {}),
+        });
+        return;
+      }
+      if (what === 'invite' && method === 'POST') {
+        const body = await readJson(req);
+        const target = this.resolveInviteTarget(typeof body.to === 'string' ? body.to.trim() : '');
+        if (target.cooId === manager) throw new HttpError(400, '不能邀请自己');
+        if (room.visibility !== 'private') {
+          throw new HttpError(409, '公开/不列目录的厅有平台身份就能进；不需要房主邀请');
+        }
+        if (hasRoomAccess(this.db, roomId, target.cooId)) throw new HttpError(409, `「${target.name}」本来就能进`);
+        const inviterName = this.coo.cooDisplayName(manager) || '房主';
+        let invitationId = '';
+        withTransaction(this.db, () => {
+          const invitation = createRoomInvitationTx(this.db, {
+            roomId, invitedBy: manager, targetCooId: target.cooId, now,
+          });
+          invitationId = invitation.id;
+          const line = target.kind === 'human'
+            ? `${inviterName} 邀请你加入私密客厅「${room.name}」。打开网页的「信箱」，点「接受并进去」。`
+            : `${inviterName} 邀请你加入私密客厅「${room.name}」。用 parlor_invite_accept {id:"${invitation.id}"} 接受。`;
+          new MailDb(this.db, { now: this.now }).append({
+            to: target.cooId,
+            room: roomId,
+            kind: 'invite',
+            action: 'room_invite',
+            fromName: inviterName,
+            text: line,
+            invitationId: invitation.id,
+          });
+          const seat = activeSeatForCoo(this.db, target.cooId);
+          if (seat) {
+            this.host(seat.roomId).pingSeat(target.cooId, line, {
+              room: roomId, roomName: room.name, invitationId: invitation.id, private: true,
+            });
+          }
+        });
+        json(res, 200, { ok: true, cooId: target.cooId, name: target.name, invitationId });
+        return;
+      }
+      throw new HttpError(404, '没有这个地址');
+    }
+
+    // —— 邀请接受/拒绝（Coo 和网页玩家都能用） ——
+    const invitation = url.pathname.match(/^\/v1\/invitations\/([^/]+)\/(accept|decline)$/);
+    if (invitation && method === 'POST') {
+      const cooId = this.cooOrSeat(req);
+      const id = invitation[1];
+      const now = this.now();
+      if (invitation[2] === 'accept') {
+        let decision: 'ok' | 'not_found' | 'not_yours' | 'not_pending' | 'expired' = 'not_found';
+        let roomId = '';
+        withTransaction(this.db, () => {
+          const accepted = acceptInvitationTx(this.db, id, cooId, now);
+          decision = accepted.decision;
+          roomId = accepted.room?.id ?? '';
+        });
+        if (decision === 'not_found') throw new HttpError(404, '邀请不存在或已失效');
+        if (decision === 'not_yours') throw new HttpError(403, '这个邀请不是给你的');
+        if (decision === 'expired') throw new HttpError(409, '这个邀请已经过期（7 天）');
+        if (decision === 'not_pending') throw new HttpError(409, '这个邀请已经处理过了');
+        json(res, 200, { ok: true, room: roomId });
+        return;
+      }
+      const decision = withTransaction(this.db, () => declineInvitationTx(this.db, id, cooId, now));
+      if (decision === 'not_found') throw new HttpError(404, '邀请不存在或已失效');
+      if (decision === 'not_yours') throw new HttpError(403, '这个邀请不是给你的');
+      if (decision === 'not_pending') throw new HttpError(409, '这个邀请已经处理过了');
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === '/v1/me/invitations' && method === 'GET') {
+      const cooId = this.cooOrSeat(req);
+      json(res, 200, { invitations: pendingInvitationsForCoo(this.db, cooId, this.now()) });
       return;
     }
 
@@ -720,6 +1055,7 @@ export class WorldServer {
       this.checkInvite(req, body);
       const name = typeof body.name === 'string' ? body.name : '';
       const cooId = this.cooAuth(req, name);
+      this.assertRoomEntry(this.defaultRoomId, cooId);
       const host = this.host(this.defaultRoomId);
       if (host.seatOf(cooId)) host.leave(cooId);
       const joined = host.join(cooId, {
@@ -753,6 +1089,7 @@ export class WorldServer {
       const cooId = randomUUID();
       const secret = randomBytes(32).toString('base64url');
       this.coo.registerCoo(cooId, secret, 'human', name);
+      this.assertRoomEntry(room.id, cooId);
       const host = this.host(room.id);
       const joined = host.join(cooId, { name, kind: 'human', tier: 'off' });
       json(res, 200, {
@@ -803,11 +1140,21 @@ export class WorldServer {
    * online 只认**正在连着的客户端**（SSE），不认库里有没有旧席位——席位只在主动离开/换厅时释放，
    * 几天没来的人也会留着一个活跃席位，拿它当在线会把人全标成在线。
    */
-  private personInfo(cooId: string, fallbackName = ''): { cooId: string; name: string; online: boolean; room: string | null } {
+  private personInfo(
+    cooId: string,
+    fallbackName = '',
+    viewer = '',
+  ): { cooId: string; name: string; online: boolean; room: string | null } {
     const seat = activeSeatForCoo(this.db, cooId);
     const row = this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
     const name = seat?.name || (row?.display_name ?? '').trim() || fallbackName || '某人';
-    return { cooId, name, online: this.isOnline(cooId), room: seat?.roomId ?? null };
+    // 私密厅的实时位置不给没有权限的人看。
+    let room = seat?.roomId ?? null;
+    if (room) {
+      const info = getRoom(this.db, room);
+      if (info && info.visibility === 'private' && (!viewer || !hasRoomAccess(this.db, room, viewer))) room = null;
+    }
+    return { cooId, name, online: this.isOnline(cooId), room };
   }
 
   /** 有没有正在连着的客户端（网页或 Coo）；不看席位在不在。 */
@@ -825,24 +1172,24 @@ export class WorldServer {
     if (isCooId(needle)) {
       const row = this.db.prepare("SELECT id FROM coos WHERE id = ? AND status = 'active'").get(needle);
       if (!row) throw new HttpError(404, '没有这个人');
-      return this.personInfo(needle);
+      return this.personInfo(needle, '', fromCooId);
     }
     const bySeatId = this.db.prepare(
       'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND id = ?',
     ).get(needle) as { coo_id: string } | undefined;
-    if (bySeatId) return this.personInfo(bySeatId.coo_id);
+    if (bySeatId) return this.personInfo(bySeatId.coo_id, '', fromCooId);
     const seats = this.db.prepare(
       'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND name = ? COLLATE NOCASE',
     ).all(needle) as { coo_id: string }[];
     const ids = [...new Set(seats.map((row) => row.coo_id))].filter((id) => id !== fromCooId);
-    if (ids.length === 1) return this.personInfo(ids[0]);
+    if (ids.length === 1) return this.personInfo(ids[0], '', fromCooId);
     if (ids.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
     // 不在座的人：按 coo 显示名再找一次，这样 Coo 能回已经走开的私聊。
     const coos = this.db.prepare(
       "SELECT id FROM coos WHERE status = 'active' AND display_name = ? COLLATE NOCASE",
     ).all(needle) as { id: string }[];
     const names = [...new Set(coos.map((row) => row.id))].filter((id) => id !== fromCooId);
-    if (names.length === 1) return this.personInfo(names[0]);
+    if (names.length === 1) return this.personInfo(names[0], '', fromCooId);
     if (names.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
     throw new HttpError(404, `没有找到「${needle}」（离线的人要用搜索结果选）`);
   }
@@ -882,7 +1229,7 @@ export class WorldServer {
   private dmThreads(cooId: string): Record<string, unknown> {
     const mail = new MailDb(this.db, { now: this.now });
     const threads = mail.threads(cooId).map((thread) => {
-      const info = this.personInfo(thread.peer);
+      const info = this.personInfo(thread.peer, '', cooId);
       return { ...thread, name: info.name, online: info.online, room: info.room };
     });
     return { threads, unread: mail.dmUnread(cooId) };
@@ -891,7 +1238,7 @@ export class WorldServer {
   private dmThreadPage(cooId: string, peer: string, before: number, limit: number): Record<string, unknown> {
     if (!isCooId(peer)) throw new HttpError(400, '对方身份不对');
     const page = new MailDb(this.db, { now: this.now }).thread(cooId, peer, before, limit);
-    return { peer: this.personInfo(peer), ...page };
+    return { peer: this.personInfo(peer, '', cooId), ...page };
   }
 
   /** 搜人：在线的人 + 我聊过的人；空查询就是全部候选。 */
@@ -902,7 +1249,7 @@ export class WorldServer {
     ).all(cooId) as { id: string; display_name: string }[];
     const past = new Set(new MailDb(this.db, { now: this.now }).threads(cooId).map((thread) => thread.peer));
     const people = rows
-      .map((row) => this.personInfo(row.id, row.display_name))
+      .map((row) => this.personInfo(row.id, row.display_name, cooId))
       .filter((person) => (person.online || past.has(person.cooId))
         && (!needle || person.name.toLowerCase().includes(needle)))
       .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, 'zh'))
@@ -936,6 +1283,7 @@ export class WorldServer {
       // 已有身份（cookies 里的 cooId+secret 认得出来）换房不受影响；新身份必须带邀请码。
       if (this.identify(req) === null) this.checkInvite(req, body);
       const cooId = this.cooAuth(req, name);
+      this.assertRoomEntry(roomId, cooId);
       const host = this.host(roomId);
       const joined = host.join(cooId, {
         name,
@@ -959,6 +1307,7 @@ export class WorldServer {
       const value = typeof body.to === 'string' ? body.to : '';
       const target = getRoom(this.db, value) ?? resolveRoom(this.db, value);
       if (!target) throw new HttpError(404, `目标客厅不存在：${value}`);
+      this.assertRoomEntry(target.id, seat.cooId);
       const moved = this.host(roomId).switchTo(seat.cooId, target.id, {
         ...(typeof body.name === 'string' ? { name: body.name } : {}),
       });
@@ -1006,17 +1355,29 @@ export class WorldServer {
       const seat = this.seatAuth(req, roomId);
       const body = await readJson(req);
       const type = typeof body.type === 'string' ? body.type : '';
+      const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+      // 牌桌修改一律要幂等键：旧客户端在这里拿到明确的升级提示，不会开出一张打不了的桌。
+      const tableMutation = type === 'table_open' || type === 'table_join' || type === 'table_leave'
+        || type === 'table_start' || type === 'table_action' || type === 'ddz_action';
+      if (tableMutation && !requestId) {
+        throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
+      }
       const host = this.host(roomId);
+      const tableArg = typeof body.table === 'string' && body.table.trim() ? body.table.trim() : undefined;
+      const revisionArg = typeof body.revision === 'number' ? body.revision : undefined;
       let delivered: unknown;
       let seats: unknown;
       let deadline: number | undefined;
       let turn: string | undefined;
       let text: string | undefined;
+      let tableId: string | undefined;
+      let revision: number | undefined;
+      let receiptSeq: number | undefined;
 
       if (type === 'say') {
         host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
       } else if (type === 'table_say') {
-        host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '');
+        host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '', tableArg);
       } else if (type === 'whisper') {
         // 私聊走全局那条：对方在别的客厅或不在线也照样投信箱（Coo 也能跨厅回）。
         const result = this.sendDm(seat.cooId, body);
@@ -1055,16 +1416,31 @@ export class WorldServer {
         const result = host.respond(seat.cooId, typeof body.id === 'string' ? body.id : '', actionName);
         delivered = result.delivered;
       } else if (type === 'table_open') {
-        host.openTable(seat.cooId, {
+        const opened = host.openTable(seat.cooId, {
           game: typeof body.game === 'string' ? body.game : undefined,
           stake: body.stake,
-        });
+        }, requestId);
+        tableId = opened.tableId;
+        revision = opened.receipt.revision;
+        receiptSeq = opened.receipt.seq;
+        deadline = opened.receipt.deadline;
+        turn = opened.receipt.turn;
       } else if (type === 'table_join') {
-        host.joinTable(seat.cooId);
+        const joined = host.joinTable(seat.cooId, tableArg, requestId);
+        tableId = joined.tableId;
+        revision = joined.receipt.revision;
+        receiptSeq = joined.receipt.seq;
+        deadline = joined.receipt.deadline;
+        turn = joined.receipt.turn;
       } else if (type === 'table_leave') {
-        host.leaveTable(seat.cooId);
+        const left = host.leaveTable(seat.cooId, tableArg, requestId);
+        revision = left.receipt.revision;
+        receiptSeq = left.receipt.seq;
       } else if (type === 'table_start') {
-        const receipt = host.startTable(seat.cooId);
+        const receipt = host.startTable(seat.cooId, tableArg, requestId);
+        tableId = receipt.tableId;
+        revision = receipt.revision;
+        receiptSeq = receipt.seq;
         seats = receipt.seats;
         deadline = receipt.deadline;
         turn = receipt.turn;
@@ -1072,10 +1448,19 @@ export class WorldServer {
         // 牌桌动作按注册表分发：加一个游戏不用再改这里，只要它在 games/registry.ts 里登记过。
         const game = gameByActionType(type);
         if (game) {
-          if (host.tablePublic()?.game !== game.id) {
+          const target = host.tablePublic(tableArg, seat.cooId);
+          if (!target) throw new HttpError(404, '你不在任何牌桌上');
+          if (target.game !== game.id) {
             throw new HttpError(400, `这张桌子不是${game.label}桌`);
           }
-          const receipt = host.tableAction(seat.cooId, game.toAction(body));
+          const receipt = host.tableAction(seat.cooId, game.toAction(body), {
+            ...(tableArg ? { tableId: tableArg } : { tableId: target.id ?? target.tableId }),
+            ...(revisionArg !== undefined ? { revision: revisionArg } : {}),
+            ...(requestId ? { requestId } : {}),
+          });
+          tableId = receipt.tableId;
+          revision = receipt.revision;
+          receiptSeq = receipt.seq;
           deadline = receipt.deadline;
           turn = receipt.turn;
         } else if (type === 'monopoly') {
@@ -1088,9 +1473,12 @@ export class WorldServer {
       const ts = this.now();
       json(res, 200, {
         ok: true,
-        seq: host.latest(),
+        seq: receiptSeq ?? host.latest(),
         ts,
         at: serverClock(ts),
+        ...(requestId ? { requestId } : {}),
+        ...(tableId ? { tableId } : {}),
+        ...(revision !== undefined ? { revision } : {}),
         ...(delivered && Array.isArray(delivered) && delivered.length > 0 ? { delivered } : {}),
         ...(seats ? { seats } : {}),
         ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
@@ -1219,6 +1607,55 @@ export class WorldServer {
   }
 
   /**
+   * 邀请/授权要送给谁：活跃席位（Coo id 或席位名）优先；找不到再按家长固定的
+   * 下场身份找（人不在座也能邀请）。人类只认有家长账户的；没下过场的家长没有
+   * 能收信的身份。
+   */
+  private resolveInviteTarget(to: string): { cooId: string; name: string; roomId: string | null; kind: string } {
+    const rows = this.db.prepare(
+      `SELECT room_id, id, coo_id, name, kind FROM room_seats
+        WHERE released_at IS NULL AND (coo_id = ? OR name = ? COLLATE NOCASE)`,
+    ).all(to, to) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
+    const row = rows.find((entry) => entry.coo_id === to)
+      ?? rows.find((entry) => entry.name.toLowerCase() === to.toLowerCase());
+    let target: { cooId: string; name: string; roomId: string | null; kind: string };
+    if (row) {
+      target = { cooId: row.coo_id, name: row.name, roomId: row.room_id, kind: row.kind };
+    } else {
+      // 没在座的 Coo：按身份 id 找（房主管理页里列出的就是 cooId）。
+      const coo = this.db.prepare('SELECT id, kind, display_name FROM coos WHERE id = ?').get(to) as
+        { id: string; kind: string; display_name: string } | undefined;
+      if (coo) {
+        return {
+          cooId: coo.id,
+          name: coo.display_name || coo.id,
+          roomId: null,
+          kind: coo.kind === 'human' ? 'human' : 'pet',
+        };
+      }
+      const parents = this.coo.findParentsByName(to);
+      const ready = parents.filter(
+        (entry): entry is { accountId: string; cooId: string; name: string } => entry.cooId !== null,
+      );
+      if (ready.length > 1) {
+        throw new HttpError(409, `有 ${ready.length} 位家长叫「${to}」；换一个能分清的名字`);
+      }
+      const parent = ready[0];
+      if (!parent) {
+        if (parents.length) {
+          throw new HttpError(409, `「${to}」还没下场玩过，没有能收信的身份；先让他点「下场玩」进来一次`);
+        }
+        throw new HttpError(404, `没有找到「${to}」这个席位或家长`);
+      }
+      target = { cooId: parent.cooId, name: parent.name, roomId: null, kind: 'human' };
+    }
+    if (target.kind === 'human' && !this.coo.isPlayerCoo(target.cooId)) {
+      throw new HttpError(403, `「${target.name}」没有家长账户；这个邀请只对家长开放`);
+    }
+    return target;
+  }
+
+  /**
    * 家长下场：用家长会话给自己领一个 human 席位。
    * 玩家身份固定在 `accounts.player_coo_id` 上——同一个家长链接在任何浏览器都是同一个人；
    * 账本/筹码与孩子那份分开（孩子是 Coo 的 cooId，家长玩家是另一个 human coo）。
@@ -1232,6 +1669,8 @@ export class WorldServer {
     if (target.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
 
     const player = this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
+    // 家长作为玩家也要按自己的身份准入（孩子被邀请不等于家长玩家也是成员）。
+    this.assertRoomEntry(target.id, player.cooId);
     let seat = activeSeatForCoo(this.db, player.cooId);
     let token: string;
     if (!seat) {
@@ -1333,20 +1772,34 @@ export class WorldServer {
     const room = getRoom(this.db, seat.roomId);
     const host = this.host(seat.roomId);
     const snapshot = host.snapshot(cooId, { since, limit });
+    // 家长防偷看：桌上还有别的真人时，藏起孩子的暗牌与私牌事件。
+    const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
+      ? snapshot.table.id ?? snapshot.table.tableId
+      : undefined;
+    const otherReal = liveTableId
+      ? (this.db.prepare(
+        `SELECT coo_id FROM table_seats
+          WHERE table_id = ? AND left_at IS NULL AND coo_id IS NOT NULL`,
+      ).all(liveTableId) as { coo_id: string }[]).some((row) => row.coo_id !== cooId)
+      : false;
+    const ownerPrivateHidden = !!liveTableId && otherReal;
     return {
       seat: snapshot.seat,
       room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },
       latest: snapshot.latest,
       now: snapshot.now,
       at: snapshot.at,
-      events: snapshot.events,
+      events: ownerPrivateHidden
+        ? snapshot.events.filter((event) => event.type !== 'parlor.table.turn')
+        : snapshot.events,
+      tables: snapshot.tables ?? [],
       ...(snapshot.table ? { table: snapshot.table } : {}),
-      tablePrivate: snapshot.tablePrivate ?? null,
+      tablePrivate: ownerPrivateHidden ? null : snapshot.tablePrivate ?? null,
       ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
       ledgerRoom: snapshot.ledgerRoom ?? [],
       mailUnread: snapshot.mailUnread ?? 0,
       mail: mail.recent(cooId, undefined, 5),
-      ownerPrivateHidden: false,
+      ownerPrivateHidden,
     };
   }
 
@@ -1361,6 +1814,14 @@ export class WorldServer {
         console.error(`parlor: 清理事件失败（${room.id}）`, error);
       }
     }
+    // 牌桌的隐藏内容与动作回执也按同一保留期清；活动牌局不受影响。
+    this.db.prepare('DELETE FROM action_receipts WHERE created_at < ?').run(before);
+    this.db.prepare(
+      `UPDATE tables SET state_json = NULL
+        WHERE state_json IS NOT NULL AND status IN ('ended','abandoned')
+          AND ended_at IS NOT NULL AND ended_at < ?`,
+    ).run(before);
+    expireInvitations(this.db, now);
   }
 
   /** 有推送连接的席位（快照里的在线标记）。 */

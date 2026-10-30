@@ -84,6 +84,64 @@ export class ParlorClient {
     return this.parse<MailPage>(response);
   }
 
+  /**
+   * 身份级信箱：不占着任何客厅席位也能读（被移出客厅后，结算与退注还看得到）。
+   * 用 x-parlor-coo 身份头，不需要席位令牌。
+   */
+  async mailAsIdentity(limit = 10, peek = false, roomId?: string): Promise<MailPage> {
+    const query = new URLSearchParams({
+      limit: String(limit),
+      ...(peek ? { peek: '1' } : {}),
+      ...(roomId ? { room: roomId } : {}),
+    });
+    const response = await fetch(`${this.url('/v1/me/mail')}?${query}`, {
+      headers: this.headers({}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<MailPage>(response);
+  }
+
+  /** 身份级账本摘要。 */
+  async ledgerAsIdentity(): Promise<{ ledger: unknown }> {
+    const response = await fetch(this.url('/v1/me/ledger'), {
+      headers: this.headers({}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<{ ledger: unknown }>(response);
+  }
+
+  /** 身份级回放：按历次到访区间的并集，不需要席位。 */
+  async replayAsIdentity(roomId: string, limit = 30, before?: number): Promise<ReplayResponse> {
+    const query = new URLSearchParams({
+      room: roomId,
+      limit: String(limit),
+      ...(before ? { before: String(before) } : {}),
+    });
+    const response = await fetch(`${this.url('/v1/me/replay')}?${query}`, {
+      headers: this.headers({}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<ReplayResponse>(response);
+  }
+
+  /** 接受/拒绝私密厅邀请；有席位令牌就带，没有也能用身份头。 */
+  async respondInvitation(
+    token: string | undefined,
+    id: string,
+    action: 'accept' | 'decline',
+  ): Promise<{ ok: boolean; room?: string }> {
+    const response = await fetch(`${this.url('/v1/invitations')}/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      headers: this.headers({
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      }),
+      body: '{}',
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<{ ok: boolean; room?: string }>(response);
+  }
+
   /** 读回放：默认最近的；before 往前翻。 */
   async replay(token: string, limit = 30, before?: number, roomId?: string): Promise<ReplayResponse> {
     const query = new URLSearchParams({ limit: String(limit), ...(before ? { before: String(before) } : {}) });

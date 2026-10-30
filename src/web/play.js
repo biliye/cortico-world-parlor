@@ -48,6 +48,8 @@ const state = {
   busy: false,
   view: 'lobby',
   tab: 'table',
+  /** 正在看的那张桌（snap.tables 里的 id）；空串 = 我的桌 / 唯一那张。 */
+  watchTableId: '',
   unread: { room: 0, table: 0 },
   mail: null,
   mailLoading: false,
@@ -247,15 +249,86 @@ function hasLiveTable() {
   return !!table && (table.status === 'bidding' || table.status === 'playing');
 }
 
+/** 一张桌（或一份私视图）的 id：新服务器 id 与 tableId 都给，老数据可能都没有。 */
+function tableIdOf(table) {
+  if (!table) return '';
+  if (typeof table.tableId === 'string' && table.tableId) return table.tableId;
+  if (typeof table.id === 'string' && table.id) return table.id;
+  return '';
+}
+
+/** 快照里的桌列表；老服务器没有 tables 时退回单桌快照。 */
+function tableList() {
+  const snap = state.snap;
+  if (!snap) return [];
+  if (Array.isArray(snap.tables) && snap.tables.length) return snap.tables;
+  return snap.table ? [snap.table] : [];
+}
+
+/** watchTableId 指向的那张桌；桌子没了就是 null。 */
+function watchedTable() {
+  if (!state.watchTableId) return null;
+  return tableList().find((table) => tableIdOf(table) === state.watchTableId) || null;
+}
+
+/** 现在该画的那张桌：看着的那张，否则服务器给的「我的桌 / 唯一那张」。 */
+function activeTable() {
+  return watchedTable() || (state.snap && state.snap.table) || null;
+}
+
+/** 我的桌：服务器只在我坐在桌上时给 tablePrivate。 */
+function myTable() {
+  const snap = state.snap;
+  const priv = snap && snap.tablePrivate;
+  if (!priv) return null;
+  const id = tableIdOf(priv);
+  if (id) {
+    const found = tableList().find((table) => tableIdOf(table) === id);
+    if (found) return found;
+  }
+  return snap.table || null;
+}
+
+function myTableId() {
+  return tableIdOf(myTable()) || tableIdOf(state.snap && state.snap.tablePrivate);
+}
+
+/** 只有看着自己那张桌时才带私视图；看别人的桌子就当旁观者。 */
+function activePrivate() {
+  const snap = state.snap;
+  const priv = snap && snap.tablePrivate;
+  if (!priv) return null;
+  const table = activeTable();
+  if (!table) return null;
+  const privId = tableIdOf(priv);
+  const mine = privId
+    ? tableIdOf(table) === privId
+    : tableIdOf(table) === tableIdOf(snap.table);
+  return mine ? priv : null;
+}
+
+/** 点回自己的桌：watchTableId 清空 = 跟随服务器的「我的桌」。 */
+function watchMine() {
+  state.watchTableId = '';
+}
+
+/** 看过的那张桌从快照里消失（被收掉、超出「最近结束」保留）就回默认桌。 */
+function normalizeWatch() {
+  if (!state.watchTableId) return;
+  if (!tableList().some((table) => tableIdOf(table) === state.watchTableId)) {
+    state.watchTableId = '';
+  }
+}
+
 /**
- * 现在能不能「只对同桌说」：桌子还在（没散）而且我就坐在这桌上。
+ * 现在能不能「只对同桌说」：我的桌子还在（没散）而且我就坐在这桌上。
  * 不在桌上时输入框是停用的——宁可让人切到客厅，也不把以为是私密的话发成全房间可见。
+ * 看别的桌不改变这一点：桌上的话永远发回我自己的那张桌。
  */
 function tableChatOpen() {
-  const snap = state.snap;
-  const table = snap && snap.table;
+  const table = myTable();
   if (!table || table.status === 'ended') return false;
-  const me = snap.seat && snap.seat.id;
+  const me = state.snap.seat && state.snap.seat.id;
   return (table.seats || []).some((seat) => seat && seat.id === me);
 }
 
@@ -287,6 +360,7 @@ async function refreshSnapshot() {
   const snapshot = await api('/v1/room?limit=1');
   state.snap = snapshot;
   state.offset = snapshot.now - Date.now();
+  normalizeWatch();
 }
 
 function scheduleRefresh(delay = 120) {
@@ -319,15 +393,89 @@ function scheduleHallRefresh() {
   }, 1200);
 }
 
+/** 服务器按 requestId 去重的动作：网络掉线时可以原样重发一次。 */
+const IDEMPOTENT_ACTIONS = new Set([
+  'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'monopoly',
+]);
+
+/** 幂等键：优先 crypto.randomUUID；老浏览器退回 getRandomValues 拼一个 v4。 */
+function newRequestId() {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  } catch { /* 有些环境下 randomUUID 不可调用 */ }
+  const bytes = new Uint8Array(16);
+  let filled = false;
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      crypto.getRandomValues(bytes);
+      filled = true;
+    }
+  } catch { /* 下面用 Math.random 兜底 */ }
+  if (!filled) {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-'
+    + hex.slice(16, 20) + '-' + hex.slice(20);
+}
+
+/**
+ * 牌桌动作只写「做什么」；「对哪张桌、基于哪一版」在这里补。
+ * 游戏渲染器不传桌号：动作永远打回我自己那张桌（看别人的桌时也一样）。
+ */
+function withTableFields(body) {
+  if (!body || typeof body !== 'object') return body;
+  const out = { ...body };
+  const type = typeof out.type === 'string' ? out.type : '';
+  if (type === 'table_open') return out;
+  if (type === 'table_join') {
+    if (!out.table) {
+      const target = activeTable();
+      if (target) out.table = tableIdOf(target);
+    }
+    return out;
+  }
+  if (!type.startsWith('table_') && type !== 'ddz_action') return out;
+  const mine = myTableId();
+  if (mine && !out.table) out.table = mine;
+  if (type === 'table_action' || type === 'ddz_action') {
+    const revision = state.snap && state.snap.tablePrivate && state.snap.tablePrivate.revision;
+    if (typeof revision === 'number' && out.revision === undefined) out.revision = revision;
+  }
+  return out;
+}
+
+/** 网络没送到（fetch 抛 TypeError）；HTTP 错误是服务器已经答了，不算。 */
+function isNetworkError(error) {
+  return !!error && (error instanceof TypeError || error.name === 'TypeError');
+}
+
 async function act(body) {
   if (state.busy) return null;
   state.busy = true;
   try {
-    const receipt = await api('/v1/action', {
+    const payload = withTableFields(body) || {};
+    const retryable = IDEMPOTENT_ACTIONS.has(payload.type);
+    if (retryable) payload.requestId = newRequestId();
+    const send = () => api('/v1/action', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
+    let receipt;
+    try {
+      receipt = await send();
+    } catch (error) {
+      // 只重发「可能没到服务器」的那一次；重发用同一个 requestId，服务器会去重。
+      if (!retryable || !isNetworkError(error)) throw error;
+      receipt = await send();
+    }
+    if ((payload.type === 'table_open' || payload.type === 'table_join')
+      && receipt && typeof receipt.tableId === 'string' && receipt.tableId) {
+      state.watchTableId = receipt.tableId;
+    }
     await refreshSnapshot();
     render();
     return receipt;
@@ -432,11 +580,14 @@ async function seedLog() {
 
 /* —— 事件分栏与渲染 —— */
 
+/** 「在牌桌」标记：把客厅里所有还没结束的桌子的座位并起来。 */
 function tableSeatIds() {
   const ids = new Set();
-  const table = state.snap && state.snap.table;
-  for (const seat of ((table && table.seats) || [])) {
-    if (seat && typeof seat.id === 'string') ids.add(seat.id);
+  for (const table of tableList()) {
+    if (table.status === 'ended') continue;
+    for (const seat of (table.seats || [])) {
+      if (seat && typeof seat.id === 'string') ids.add(seat.id);
+    }
   }
   return ids;
 }
@@ -556,7 +707,7 @@ function lineOf(event, tableBucket) {
 
 function avatarNode(id, size = 'avatar-sm', options = {}) {
   const snap = state.snap;
-  const tableSeats = (snap && snap.table && snap.table.seats) || [];
+  const tableSeats = tableList().flatMap((table) => table.seats || []);
   const seat = (snap && snap.seats.find((entry) => entry.id === id))
     || tableSeats.find((entry) => entry.id === id)
     || null;
@@ -656,7 +807,10 @@ function buildShell() {
   const banner = el('div', 'banner');
   banner.hidden = true;
   const bannerText = el('span', 'banner-text');
-  const bannerGo = btn('去牌桌', () => setView('table'), { small: true });
+  const bannerGo = btn('去牌桌', () => {
+    watchMine();
+    setView('table');
+  }, { small: true });
   banner.append(bannerText, bannerGo);
 
   const layout = el('main', 'layout');
@@ -713,8 +867,8 @@ function buildShell() {
   tablesAll.type = 'button';
   tablesAll.addEventListener('click', () => setView('lobby'));
   tablesHead.append(el('h2', '', '牌桌'), tablesAll);
-  const tableList = el('ul', 'table-list');
-  tablesCard.append(tablesHead, tableList);
+  const tableListNode = el('ul', 'table-list');
+  tablesCard.append(tablesHead, tableListNode);
   leftRail.append(tablesCard);
 
   const roomCard = el('section', 'panel room-card');
@@ -725,9 +879,13 @@ function buildShell() {
   roomSwitch.addEventListener('click', () => { void openRooms(); });
   roomHead.append(roomTitle, roomSwitch);
   const roomNote = el('p', 'room-note muted', '');
+  const roomManage = btn('成员管理', () => { void openAccess(); }, { ghost: true, small: true });
+  roomManage.title = '房主：管成员、发邀请、改可见性';
   const roomLeave = btn('离开客厅', () => { void goRoom('hall'); }, { ghost: true, small: true });
   roomLeave.title = '回到大厅（牌局进行中时会被拦住）';
-  roomCard.append(roomHead, roomNote, roomLeave);
+  const roomActions = el('div', 'room-actions');
+  roomActions.append(roomManage, roomLeave);
+  roomCard.append(roomHead, roomNote, roomActions);
   leftRail.append(roomCard);
 
   /* 中间：牌桌 / 客厅 / 大厅 */
@@ -917,7 +1075,7 @@ function buildShell() {
     topAvatar, topName, topSub, chipsText,
     leftRail, seatAvatar, seatName, seatSub,
     statChips, statWins, statGames, progressLeft, progressRight, progressFill,
-    ledgerNet, split, ledgerList, tableList, roomTitle, roomNote, roomLeave,
+    ledgerNet, split, ledgerList, tableList: tableListNode, roomTitle, roomNote, roomManage, roomLeave,
     tablesCard, roomCard, chatEyebrow,
     viewTable, viewLobby, viewHall, tableHead, mobileTicker, game, ticker,
     lobbyEyebrow, lobbyTitle, lobbySub, gameGrid, guide, lobbyNotice, membersCount, memberRow,
@@ -1069,6 +1227,7 @@ function renderTopbar() {
     if (view === 'table' || view === 'lobby') node.hidden = hall;
   }
   ui.roomLeave.hidden = hall;
+  ui.roomManage.hidden = hall;
   // 大厅里没有客厅/牌桌这两张卡，留着只会让人点进空页面。
   ui.tablesCard.hidden = hall;
   ui.roomCard.hidden = hall;
@@ -1155,59 +1314,79 @@ function renderLedger() {
   }
 }
 
+/**
+ * 牌桌栏列的是真实的桌（没结束的在前，最近结束的在后），不再按游戏造行。
+ * 点一行只是「看那张桌」，不换桌、不离开自己那桌；「开一桌」固定在底部。
+ */
 function renderTablesRail() {
   const snap = state.snap;
-  const table = snap.table;
   const signup = snap.monopoly && snap.monopoly.signup;
+  const tables = tableList();
+  const names = namesMap();
+  const mineId = myTableId();
+  const yourTurn = !!(snap.tablePrivate && snap.tablePrivate.yourTurn);
+  const currentId = tableIdOf(activeTable());
   clear(ui.tableList);
-  const games = [...ENABLED_GAMES];
-  if (table && table.status !== 'ended' && !games.includes(table.game)) games.unshift(table.game);
-  for (const game of games) {
+  // 未结束的在前、最近结束的在后（服务器的顺序也这样，这里再兜一层）。
+  const ordered = [
+    ...tables.filter((table) => table.status !== 'ended'),
+    ...tables.filter((table) => table.status === 'ended'),
+  ];
+  for (const table of ordered) {
+    const id = tableIdOf(table);
     const row = el('li');
     const button = el('button', 'table-row');
     button.type = 'button';
-    const current = table && table.game === game;
-    const live = current && table.status !== 'ended';
-    const ended = current && table.status === 'ended';
-    const hidden = !ENABLED_GAMES.includes(game);
-    if (live) button.classList.add('is-active');
+    if (id && id === currentId) button.classList.add('is-active');
     const iconBox = el('span', 'table-icon');
-    iconBox.append(icon(gameIcon(game)));
+    iconBox.append(icon(gameIcon(table.game)));
     const copy = el('span', 'table-copy');
-    copy.append(el('strong', '', gameLabel(game)));
+    copy.append(el('strong', '', table.label || gameLabel(table.game)));
     const small = el('small');
-    let stateText = '';
-    if (live) {
-      small.append(el('span', 'live-dot'));
-      small.append(document.createTextNode(
-        (STATUS_LABELS[table.status] || table.status) + ' · ' + (table.seats || []).length + ' 人'
-        + (hidden ? ' · 已收起' : ''),
-      ));
-      stateText = '在桌上';
-    } else if (ended) {
-      small.append(document.createTextNode('已结束 · 看结果' + (hidden ? ' · 已收起' : '')));
-      stateText = '看结果';
-    } else if (table && table.status !== 'ended') {
-      small.append(document.createTextNode('另一桌进行中'));
-      stateText = '看那桌';
-    } else {
-      small.append(document.createTextNode('可开桌'));
-      stateText = '去开桌';
-    }
+    if (table.status !== 'ended') small.append(el('span', 'live-dot'));
+    const bits = [
+      STATUS_LABELS[table.status] || table.status,
+      (table.seats || []).length + ' 人',
+    ];
+    const hostName = table.host ? names.get(table.host) : '';
+    if (hostName) bits.push('房主 ' + hostName);
+    if (!ENABLED_GAMES.includes(table.game)) bits.push('已收起');
+    small.append(document.createTextNode(bits.join(' · ')));
     copy.append(small);
-    const stateEl = el('span', 'table-state' + (live || ended ? '' : ' muted'), stateText);
+    const isMine = !!id && id === mineId;
+    const stateText = isMine && yourTurn ? '轮到你'
+      : isMine ? '我的'
+        : table.status === 'ended' ? '看结果'
+          : table.status === 'open' ? '可加入' : '观战';
+    const stateEl = el('span', 'table-state' + (isMine || table.status === 'ended' ? '' : ' muted'), stateText);
     button.append(iconBox, copy, stateEl);
     button.addEventListener('click', () => {
-      if (live || ended || (table && table.status !== 'ended')) setView('table');
-      else setView('lobby');
+      state.watchTableId = id;
+      setView('table');
     });
     row.append(button);
     ui.tableList.append(row);
   }
+  if (!tables.length) ui.tableList.append(el('li', 'rail-note', '还没有牌桌。开一桌吧。'));
+
+  const openRow = el('li', 'table-row-open');
+  const mine = myTable();
+  const blocked = !!(mine && mine.status !== 'ended');
+  openRow.append(btn('开' + gameLabel(heroGame()) + '桌', () => {
+    actAndGo({ type: 'table_open', game: heroGame() }, 'table');
+  }, {
+    primary: true,
+    small: true,
+    disabled: blocked,
+    title: blocked ? '先把自己那张桌打完或收掉' : '',
+  }));
+  ui.tableList.append(openRow);
+
   let note = '';
   if (signup) note = '大富翁已收起 · 报名 ' + signup.seats.length + '/' + signup.size;
-  else if (table && table.status !== 'ended' && !ENABLED_GAMES.includes(table.game)) {
-    note = gameLabel(table.game) + ' 已收起，先把这局打完';
+  else if (tables.some((table) => table.status !== 'ended' && !ENABLED_GAMES.includes(table.game))) {
+    const legacy = tables.find((table) => table.status !== 'ended' && !ENABLED_GAMES.includes(table.game));
+    note = gameLabel(legacy.game) + ' 已收起，先把这局打完';
   } else {
     const hidden = Object.keys(GAMES).filter((id) => !GAMES[id].enabled);
     note = hidden.length ? hidden.map((id) => gameLabel(id)).join(' / ') + ' 已收起' : '';
@@ -1217,14 +1396,18 @@ function renderTablesRail() {
 
 function renderBanner() {
   const snap = state.snap;
+  // 「轮到你」只看我自己的桌；正在看别人的桌时也要提醒。
   const priv = snap.tablePrivate;
   const yourTurn = !!(priv && priv.yourTurn === true);
-  ui.banner.hidden = !yourTurn || state.view === 'table';
+  const mine = myTable();
+  const watchingMine = !state.watchTableId
+    || (!!mine && tableIdOf(mine) === state.watchTableId);
+  ui.banner.hidden = !yourTurn || (state.view === 'table' && watchingMine);
   if (ui.banner.hidden) return;
   clear(ui.bannerText);
-  const gameName = snap.table ? tableTitle(snap.table) : '';
+  const gameName = mine ? tableTitle(mine) : '';
   ui.bannerText.append(document.createTextNode('轮到你' + (gameName ? ' · ' + gameName : '')));
-  const deadline = (priv && priv.deadline) || (snap.table && snap.table.deadline);
+  const deadline = (priv && priv.deadline) || (mine && mine.deadline);
   if (deadline) {
     ui.bannerText.append(document.createTextNode(' '));
     ui.bannerText.append(clockSpan(deadline, 'clock'));
@@ -1256,8 +1439,10 @@ function tableTitle(table) {
 
 function namesMap() {
   const names = new Map((state.snap.seats || []).map((seat) => [seat.id, seat.name]));
-  for (const seat of ((state.snap.table && state.snap.table.seats) || [])) {
-    if (!names.has(seat.id)) names.set(seat.id, seat.name);
+  for (const table of tableList()) {
+    for (const seat of (table.seats || [])) {
+      if (seat && !names.has(seat.id)) names.set(seat.id, seat.name);
+    }
   }
   return names;
 }
@@ -1265,7 +1450,7 @@ function namesMap() {
 function renderTableHead() {
   const host = ui.tableHead;
   clear(host);
-  const table = state.snap.table;
+  const table = activeTable();
   const active = !!table && (table.status === 'bidding' || table.status === 'playing');
   host.hidden = !active;
   if (!active) {
@@ -1289,7 +1474,7 @@ function renderTableHead() {
   copy.append(el('p', '', parts.join(' · ')));
   left.append(iconBox, copy);
 
-  const priv = state.snap.tablePrivate;
+  const priv = activePrivate();
   const myTurn = !!(priv && priv.yourTurn === true);
   const names = namesMap();
   const turnBox = el('div', 'turn-box');
@@ -1307,7 +1492,7 @@ function renderTableHead() {
   if (deadline && !botTurn) {
     // 一回合有多长，服务器没有单独给；第一次见到这个截止时刻时按剩余秒数记总长。
     // 骰子约 45 秒、斗地主 30/60 秒、大富翁 5/30 分钟，都能落在同一个环上。
-    const key = table.game + ':' + deadline;
+    const key = tableIdOf(table) + ':' + table.game + ':' + deadline;
     if (state.timerKey !== key) {
       state.timerKey = key;
       state.timerTotal = Math.max(10, Math.ceil((deadline - serverNow()) / 1000));
@@ -1327,7 +1512,7 @@ function renderTableHead() {
 }
 
 function renderGame() {
-  const table = state.snap.table;
+  const table = activeTable();
   const active = !!table && (table.status === 'bidding' || table.status === 'playing');
   // 有的游戏结束后还要留在桌面渲染器里（斗地主展示三家剩牌），由注册表的 endScreen 决定；
   // 其余游戏结束仍走通用结算卡。
@@ -1339,14 +1524,19 @@ function renderGame() {
     renderTicker();
     return;
   }
-  if (!state.mounted || state.mounted.game !== table.game) {
+  // 两张同游戏的桌各挂各的渲染器：桌号进 key，换桌就重建。
+  const tableId = tableIdOf(table);
+  const mountKey = table.game + ':' + tableId;
+  if (!state.mounted || state.mounted.key !== mountKey) {
     disposeGame();
     const root = el('div', 'game-root');
     ui.game.append(root);
     const factory = def ? def.mount : null;
     if (!factory) {
       root.append(el('p', 'muted', '这个游戏还没有网页桌面。'));
-      state.mounted = { game: table.game, instance: { update() {}, destroy() {} } };
+      state.mounted = {
+        key: mountKey, game: table.game, tableId, instance: { update() {}, destroy() {} },
+      };
       return;
     }
     const ctx = {
@@ -1358,25 +1548,49 @@ function renderGame() {
       openDdz: () => openNewTable('ddz'),
       openGame: (game) => openNewTable(game),
     };
-    state.mounted = { game: table.game, instance: factory(root, ctx) };
+    state.mounted = { key: mountKey, game: table.game, tableId, instance: factory(root, ctx) };
   }
   state.mounted.instance.update(makeView());
   renderTicker();
 }
 
+/** 事件是不是属于这张桌；老事件没有 tableId 时按「是」处理。 */
+function onTable(event, tableId) {
+  if (!tableId) return true;
+  const id = event && event.data ? event.data.tableId : '';
+  return !id || id === tableId;
+}
+
+function tableRecentEvents(tableId, limit, options = {}) {
+  return state.log
+    .filter((event) => event.type !== 'parlor.table.turn'
+      && !(options.skipDigest && event.type === 'parlor.digest')
+      && onTable(event, tableId)
+      && (String(event.type || '').startsWith('parlor.table.')
+        || String(event.type || '').startsWith('parlor.monopoly.')))
+    .slice(-limit);
+}
+
 function makeView() {
   const snap = state.snap;
+  const table = activeTable();
+  const tableId = tableIdOf(table);
   const names = namesMap();
   const classes = new Map();
   (snap.seats || []).forEach((seat, index) => classes.set(seat.id, playerClass(index)));
-  ((snap.table && snap.table.seats) || []).forEach((seat, index) => {
-    if (!classes.has(seat.id)) classes.set(seat.id, playerClass(index));
-  });
+  for (const entry of tableList()) {
+    (entry.seats || []).forEach((seat, index) => {
+      if (!classes.has(seat.id)) classes.set(seat.id, playerClass(index));
+    });
+  }
+  const game = table ? table.game : 'ddz';
+  // 结算事件也按桌号认：两张桌都打过时，别把另一桌的底牌摆到这桌上。
   const endEvent = [...state.log].reverse().find((event) => event.type === 'parlor.table.end'
-    && event.data && event.data.game === 'ddz' && Array.isArray(event.data.revealed)) || null;
+    && event.data && event.data.game === game && Array.isArray(event.data.revealed)
+    && onTable(event, tableId)) || null;
   return {
-    table: snap.table,
-    priv: snap.tablePrivate,
+    table,
+    priv: activePrivate(),
     me: snap.seat,
     seats: snap.seats,
     names,
@@ -1384,10 +1598,7 @@ function makeView() {
     online: snap.online || [],
     now: serverNow(),
     endEvent,
-    recent: state.log
-      .filter((event) => event.type !== 'parlor.table.turn'
-        && (String(event.type || '').startsWith('parlor.table.') || String(event.type || '').startsWith('parlor.monopoly.')))
-      .slice(-4),
+    recent: tableRecentEvents(tableId, 4),
   };
 }
 
@@ -1404,7 +1615,7 @@ function disposeGame() {
 }
 
 function renderTicker() {
-  const table = state.snap.table;
+  const table = activeTable();
   const active = !!table && (table.status === 'bidding' || table.status === 'playing');
   clear(ui.ticker);
   clear(ui.mobileTicker);
@@ -1413,12 +1624,7 @@ function renderTicker() {
     ui.mobileTicker.hidden = true;
     return;
   }
-  const recent = state.log
-    .filter((event) => event.type !== 'parlor.table.turn' && event.type !== 'parlor.digest'
-      && (String(event.type || '').startsWith('parlor.table.')
-        || String(event.type || '').startsWith('parlor.monopoly.')))
-    .slice(-3)
-    .reverse();
+  const recent = tableRecentEvents(tableIdOf(table), 3, { skipDigest: true }).reverse();
   ui.ticker.hidden = false;
   ui.mobileTicker.hidden = false;
   const label = el('span', 'ticker-label');
@@ -1435,7 +1641,7 @@ function renderTableIdle() {
   const snap = state.snap;
   const signup = snap.monopoly && snap.monopoly.signup;
   const fault = snap.monopoly && snap.monopoly.fault;
-  const table = snap.table;
+  const table = activeTable();
   const panel = el('section', 'panel wait-card');
   if (fault) panel.append(el('p', 'warn', '大富翁故障：' + fault));
   if (table) {
@@ -1542,7 +1748,9 @@ function openTableCard(table) {
   const host = table.host === me.id;
   const actions = el('div', 'actions');
   if (!seated) {
-    actions.append(btn('坐下', () => actAndGo({ type: 'table_join' }), { primary: true }));
+    // 看的是哪张桌就坐哪张：多桌时必须把桌号带上。
+    const target = tableIdOf(table);
+    actions.append(btn('坐下', () => actAndGo({ type: 'table_join', ...(target ? { table: target } : {}) }), { primary: true }));
   } else if (host) {
     const count = (table.seats || []).length;
     const enough = count >= (def ? def.minPlayers : 2) || !!(def && def.botFill);
@@ -1566,8 +1774,9 @@ function openTableCard(table) {
 
 function openButtons() {
   const box = el('div', 'open-buttons');
-  const table = state.snap.table;
-  const blocked = !!(table && table.status !== 'ended');
+  // 「能不能再开一桌」看的是我自己的桌：看别人的桌不算我在打。
+  const mine = myTable();
+  const blocked = !!(mine && mine.status !== 'ended');
   const hero = heroGame();
   const def = gameOf(hero);
   const row = el('div', 'actions');
@@ -1909,13 +2118,26 @@ function renderChat() {
       ? '发到大厅 · 大厅里的人都看得见'
       : '发到客厅 · 房间里的人都看得见';
     ui.sayInput.placeholder = inHall() ? '在大厅说点什么…' : '在客厅说点什么…';
+    ui.sayInput.title = '';
   } else if (tab === 'table') {
     if (canTableTalk) {
-      ui.scopeText.textContent = '只发到这一桌 · 客厅和不在桌上的人看不见';
-      ui.sayInput.placeholder = '对同桌说点什么…';
+      const watching = activeTable();
+      const mine = myTable();
+      const elsewhere = !!watching && !!mine && tableIdOf(watching) !== tableIdOf(mine);
+      if (elsewhere) {
+        // 看着别人的桌时，牌桌聊天仍然发回我自己的那张桌，输入框里说明白。
+        ui.scopeText.textContent = '只发到我的桌 · 你现在看的是另一桌';
+        ui.sayInput.placeholder = '对同桌说点什么…（发到我的「' + tableTitle(mine) + '」）';
+        ui.sayInput.title = '我的桌：' + tableIdOf(mine);
+      } else {
+        ui.scopeText.textContent = '只发到这一桌 · 客厅和不在桌上的人看不见';
+        ui.sayInput.placeholder = '对同桌说点什么…';
+        ui.sayInput.title = '';
+      }
     } else {
       ui.scopeText.textContent = '你不在这一桌 · 想去客厅说就切到「客厅」';
       ui.sayInput.placeholder = '不在这桌上，说不了…';
+      ui.sayInput.title = '';
     }
   }
 }
@@ -2052,8 +2274,17 @@ function renderMail() {
       node.title = '点开私聊';
       node.addEventListener('click', () => openDm(item.fromCooId, item.fromName));
     }
-    // 邀请：信里的 room 就是目的地客厅。点「进去」走一次换房；已经在那儿就不给按钮。
-    if (item.kind === 'invite' && item.room) {
+    // 邀请：私密客厅的邀请要先「接受」才有权限，接受后直接过去；
+    // 老式邀请（没有 invitationId）只带目的地，点「进去」走一次换房。
+    if (item.kind === 'invite' && item.action === 'room_invite' && item.invitationId) {
+      node.classList.add('is-invite');
+      const actions = el('div', 'mail-actions');
+      actions.append(
+        btn('接受并进去', () => { void acceptRoomInvite(item); }, { primary: true, small: true }),
+        btn('拒绝', () => { void declineRoomInvite(item); }, { ghost: true, small: true }),
+      );
+      copy.append(actions);
+    } else if (item.kind === 'invite' && item.room) {
       node.classList.add('is-invite');
       if (currentRoom() === item.room) {
         copy.append(el('span', 'mail-sub', '你现在就在这儿'));
@@ -2068,6 +2299,56 @@ function renderMail() {
   });
   if (mail.unread > mail.items.length) {
     ui.mailList.append(el('p', 'chat-empty', '还有 ' + (mail.unread - mail.items.length) + ' 封未读。'));
+  }
+}
+
+/** 邀请处理失败的共同说法：403 不是你的，409 过期/处理过了。 */
+function inviteErrorText(error) {
+  const status = error && error.status;
+  if (status === 403) return '这个邀请不是给你的';
+  if (status === 409) return '这个邀请已经过期或处理过了';
+  if (status === 404) return '这个邀请不存在或已经失效';
+  return (error && error.message) || '处理不了这个邀请';
+}
+
+/** 接受私密客厅邀请：先拿到授权，再换到这个客厅。 */
+async function acceptRoomInvite(item) {
+  try {
+    const result = await api('/v1/invitations/' + encodeURIComponent(item.invitationId) + '/accept', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const room = (result && result.room) || item.room;
+    if (!room) throw new Error('这封邀请没有目的地');
+    state.mail = null;
+    await loadMail(true);
+    if (room === currentRoom()) {
+      showToast('你现在就在这个客厅里。');
+      return;
+    }
+    showToast('接受了，正在进这个客厅…');
+    await goRoom(room);
+  } catch (error) {
+    showToast(inviteErrorText(error), 'bad');
+    state.mail = null;
+    await loadMail(true);
+  }
+}
+
+async function declineRoomInvite(item) {
+  try {
+    await api('/v1/invitations/' + encodeURIComponent(item.invitationId) + '/decline', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    showToast('已经拒绝这个邀请');
+  } catch (error) {
+    showToast(inviteErrorText(error), 'bad');
+  } finally {
+    state.mail = null;
+    await loadMail(true);
   }
 }
 
@@ -2256,6 +2537,207 @@ async function goRoom(id) {
   }
 }
 
+/* —— 房主：成员管理（私密厅的成员 / 邀请 / 可见性） —— */
+
+let accessDialog = null;
+let accessStatus = null;
+let accessBody = null;
+
+function accessRoomId() {
+  return (state.snap && state.snap.id) || currentRoom() || '';
+}
+
+function ensureAccessDialog() {
+  if (accessDialog) return;
+  accessDialog = el('dialog', 'rooms-dialog');
+  accessDialog.setAttribute('aria-label', '成员管理');
+  const box = el('div', 'rooms-box');
+  const head = el('div', 'rooms-head');
+  const close = btn('关闭', () => accessDialog.close(), { ghost: true, small: true });
+  head.append(el('h2', '', '成员管理'), close);
+  accessStatus = el('p', 'rooms-status muted', '');
+  accessBody = el('div', 'access-body');
+  box.append(head, accessStatus, accessBody);
+  accessDialog.append(box);
+  accessDialog.addEventListener('click', (event) => {
+    if (event.target === accessDialog) accessDialog.close();
+  });
+  document.body.append(accessDialog);
+}
+
+async function openAccess() {
+  if (inHall()) return;
+  ensureAccessDialog();
+  if (typeof accessDialog.showModal === 'function') {
+    if (!accessDialog.open) accessDialog.showModal();
+  } else {
+    accessDialog.setAttribute('open', '');
+  }
+  await loadAccess();
+}
+
+async function loadAccess() {
+  const room = accessRoomId();
+  clear(accessBody);
+  accessStatus.classList.remove('bad');
+  if (!room) {
+    accessStatus.textContent = '还没进过客厅。';
+    return;
+  }
+  accessStatus.textContent = '正在取成员…';
+  try {
+    const data = await api('/v1/rooms/' + encodeURIComponent(room) + '/access');
+    accessStatus.textContent = '';
+    renderAccess(data || {});
+  } catch (error) {
+    clear(accessBody);
+    accessStatus.textContent = error && error.status === 403
+      ? '只有房主能管理这个客厅'
+      : (error && error.message) || '取不到成员';
+    accessStatus.classList.add('bad');
+  }
+}
+
+function renderAccess(data) {
+  clear(accessBody);
+  const visibility = data.room && data.room.visibility ? data.room.visibility : 'public';
+  accessBody.append(el('p', 'access-owner',
+    '房主：' + (data.owner ? data.owner.name : '—')));
+
+  const members = (data.members || []).filter((member) => member.status === 'active');
+  const memberBox = el('section', 'access-section');
+  memberBox.append(el('h3', '', '成员'));
+  if (!members.length) {
+    memberBox.append(el('p', 'muted', '还没有单独授权的人；私密客厅只有房主和被邀请的人能进。'));
+  }
+  for (const member of members) {
+    const row = el('div', 'access-row');
+    const who = el('span', 'access-who');
+    who.append(el('strong', '', member.name || member.cooId));
+    who.append(el('small', 'muted', member.source === 'invite' ? '接受邀请进来的' : '房主授权'));
+    row.append(who);
+    row.append(btn('移出', () => { void revokeMember(member); }, {
+      ghost: true, small: true, danger: true,
+    }));
+    memberBox.append(row);
+  }
+  accessBody.append(memberBox);
+
+  const invitations = data.invitations || [];
+  const inviteBox = el('section', 'access-section');
+  inviteBox.append(el('h3', '', '等接受的邀请'));
+  if (!invitations.length) inviteBox.append(el('p', 'muted', '没有挂着的邀请。'));
+  for (const invitation of invitations) {
+    const row = el('div', 'access-row');
+    const who = el('span', 'access-who');
+    who.append(el('strong', '', invitation.targetName || invitation.targetCooId));
+    who.append(el('small', 'muted', '到期 ' + fmtDateTime(invitation.expiresAt)));
+    row.append(who);
+    inviteBox.append(row);
+  }
+  accessBody.append(inviteBox);
+
+  const inviteSection = el('section', 'access-section');
+  inviteSection.append(el('h3', '', '邀请一个人'));
+  const inviteRow = el('div', 'access-row');
+  const inviteInput = el('input', 'access-input');
+  inviteInput.type = 'text';
+  inviteInput.maxLength = 40;
+  inviteInput.placeholder = '对方的席位名或家长名';
+  const inviteBtn = btn('邀请', () => { void invitePerson(inviteInput, inviteBtn); }, {
+    primary: true, small: true,
+  });
+  inviteRow.append(inviteInput, inviteBtn);
+  inviteSection.append(inviteRow);
+  inviteSection.append(el('p', 'note', '只能邀请私密客厅；对方在网页「信箱」里点「接受并进去」。'));
+  accessBody.append(inviteSection);
+
+  const visSection = el('section', 'access-section');
+  visSection.append(el('h3', '', '可见性'));
+  const visRow = el('div', 'access-row');
+  const select = el('select', 'access-input');
+  for (const [value, label] of [['public', '公开'], ['unlisted', '不列目录'], ['private', '私密']]) {
+    const option = el('option', '', label);
+    option.value = value;
+    select.append(option);
+  }
+  select.value = visibility;
+  const saveBtn = btn('保存', () => { void saveVisibility(select, visibility, saveBtn); }, {
+    primary: true, small: true,
+  });
+  visRow.append(select, saveBtn);
+  visSection.append(visRow);
+  visSection.append(el('p', 'note', '改成私密不会自动授权现在在厅里的人，要在这里逐个授权或邀请。'));
+  accessBody.append(visSection);
+}
+
+async function revokeMember(member) {
+  const name = member.name || member.cooId;
+  if (!confirm('把「' + name + '」移出这个客厅？正在打的牌局会先托管。')) return;
+  try {
+    await api('/v1/rooms/' + encodeURIComponent(accessRoomId()) + '/access', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'revoke', cooId: member.cooId }),
+    });
+    showToast('已经把「' + name + '」移出去了');
+    scheduleRefresh();
+  } catch (error) {
+    showToast(error.message || '移不出去', 'bad');
+  }
+  await loadAccess();
+}
+
+async function invitePerson(input, button) {
+  const to = input.value.trim();
+  if (!to) {
+    showToast('先填要邀请的人', 'bad');
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await api('/v1/rooms/' + encodeURIComponent(accessRoomId()) + '/invite', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to }),
+    });
+    input.value = '';
+    showToast('邀请已经送到「' + ((result && result.name) || to) + '」的信箱');
+  } catch (error) {
+    showToast(error.message || '邀请发不出去', 'bad');
+  } finally {
+    button.disabled = false;
+    await loadAccess();
+  }
+}
+
+async function saveVisibility(select, before, button) {
+  const next = select.value;
+  if (next === before) {
+    showToast('可见性没变');
+    return;
+  }
+  if (next === 'private' && before !== 'private') {
+    if (!confirm('改成私密后，现在在厅里、又没有单独授权的人会被请出去（正在打的牌交给脚本托管到结算）。继续吗？')) {
+      select.value = before;
+      return;
+    }
+  }
+  button.disabled = true;
+  try {
+    await api('/v1/rooms/' + encodeURIComponent(accessRoomId()) + '/visibility', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visibility: next }),
+    });
+    showToast('可见性改成「' + (next === 'public' ? '公开' : next === 'unlisted' ? '不列目录' : '私密') + '」了');
+  } catch (error) {
+    showToast(error.message || '改不了可见性', 'bad');
+  } finally {
+    await loadAccess();
+  }
+}
+
 /* —— 说话 / 小工具 —— */
 
 async function sendSay() {
@@ -2299,7 +2781,7 @@ function dotClass(game) {
 
 function renderTableInfo() {
   const snap = state.snap;
-  const table = snap.table;
+  const table = activeTable();
   const signup = snap.monopoly && snap.monopoly.signup;
   const names = namesMap();
   ui.infoGame.textContent = table ? (table.label || gameLabel(table.game)) : (signup ? '大富翁（报名）' : '—');

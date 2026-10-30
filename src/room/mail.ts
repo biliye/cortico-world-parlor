@@ -27,6 +27,8 @@ export interface MailItem {
   fromName: string;
   text: string;
   entryId?: string;
+  /** 私密厅邀请：对应的 room_invitations.id。 */
+  invitationId?: string;
   /** 幂等键：同一条通知只留一封。 */
   key?: string;
   /** 逐封已读；老文件没有这一位时按旧游标迁移。 */
@@ -46,6 +48,8 @@ export interface MailView {
   fromName: string;
   text: string;
   entryId?: string;
+  /** 私密厅邀请：点「接受」时带上它。 */
+  invitationId?: string;
   read: boolean;
 }
 
@@ -109,6 +113,7 @@ const view = (item: MailItem): MailView => ({
   fromName: item.fromName,
   text: item.text,
   ...(item.entryId ? { entryId: item.entryId } : {}),
+  ...(item.invitationId ? { invitationId: item.invitationId } : {}),
   read: item.read === true,
 });
 

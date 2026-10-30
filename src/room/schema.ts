@@ -240,6 +240,8 @@ CREATE TABLE IF NOT EXISTS mail (
   from_name TEXT NOT NULL,
   text TEXT NOT NULL,
   entry_id TEXT REFERENCES ledger_entries(id),
+  -- 私密厅邀请：信里带着 room_invitations.id，点「接受」时用它核对。
+  invitation_id TEXT,
   key TEXT,
   read_at INTEGER
 );
@@ -258,7 +260,14 @@ CREATE TABLE IF NOT EXISTS tables (
   state_json TEXT,
   engine_version TEXT,
   turn_seq INTEGER NOT NULL DEFAULT 0,
+  -- 每次已提交的状态变更 +1；客户端带着它来，旧视图的动作打不进新回合。
+  revision INTEGER NOT NULL DEFAULT 0,
+  -- 快照格式版本（引擎自己的 stateVersion），与 npm 包版本无关。
+  state_version INTEGER NOT NULL DEFAULT 0,
   deadline_at INTEGER,
+  -- 恢复失败时隔离这一桌：不再推进、不再接受动作，等人处理。
+  frozen_at INTEGER,
+  recovery_error TEXT,
   created_at INTEGER NOT NULL,
   started_at INTEGER,
   ended_at INTEGER,
@@ -266,8 +275,7 @@ CREATE TABLE IF NOT EXISTS tables (
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (room_id, host_seat_id) REFERENCES room_seats(room_id, id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_live_table_per_room
-  ON tables(room_id) WHERE status IN ('open','bidding','playing');
+-- 多桌：一房可以同时有多张未结束的桌（上限在 TableHost 里按房算）。
 CREATE INDEX IF NOT EXISTS ix_tables_room_status ON tables(room_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS table_seats (
@@ -278,12 +286,71 @@ CREATE TABLE IF NOT EXISTS table_seats (
   position INTEGER NOT NULL,
   role TEXT,
   is_bot INTEGER NOT NULL DEFAULT 0 CHECK (is_bot IN (0,1)),
+  -- 被移出客厅/掉线托管的真人：轮到他们时由脚本代打，结算仍归本人。
+  auto INTEGER NOT NULL DEFAULT 0 CHECK (auto IN (0,1)),
   joined_at INTEGER NOT NULL,
   left_at INTEGER,
   PRIMARY KEY (table_id, seat_id),
   UNIQUE (table_id, position)
 );
 CREATE INDEX IF NOT EXISTS ix_table_seats_coo ON table_seats(coo_id, table_id);
+
+-- 一人一桌：真人同一时刻只能参与一张未结束的桌；脚本与观众不进这张表。
+CREATE TABLE IF NOT EXISTS active_table_players (
+  coo_id TEXT PRIMARY KEY REFERENCES coos(id),
+  table_id TEXT NOT NULL REFERENCES tables(id) ON DELETE CASCADE,
+  room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  joined_at INTEGER NOT NULL
+);
+
+-- 动作回执：按「真实身份 + requestId」唯一；重试拿原回执，不同参数冲突。
+CREATE TABLE IF NOT EXISTS action_receipts (
+  coo_id TEXT NOT NULL REFERENCES coos(id),
+  request_id TEXT NOT NULL,
+  room_id TEXT NOT NULL,
+  table_id TEXT,
+  hash TEXT NOT NULL,
+  receipt_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (coo_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS ix_action_receipts_table ON action_receipts(table_id);
+
+-- 一桌只能有一个终态：正常结算与作废退款互斥，防双重扣/退。
+CREATE TABLE IF NOT EXISTS table_finalizations (
+  table_id TEXT PRIMARY KEY REFERENCES tables(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('result','refund')),
+  entry_id TEXT,
+  at INTEGER NOT NULL,
+  payload_json TEXT
+);
+
+-- 私密厅的长期准入：只有房主与这里 active 的人能进；进过房间本身不产生授权。
+CREATE TABLE IF NOT EXISTS room_access (
+  room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  coo_id TEXT NOT NULL REFERENCES coos(id),
+  status TEXT NOT NULL CHECK (status IN ('active','revoked')),
+  source TEXT NOT NULL CHECK (source IN ('owner','invite','admin')),
+  granted_by TEXT REFERENCES coos(id),
+  granted_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  PRIMARY KEY (room_id, coo_id)
+);
+CREATE INDEX IF NOT EXISTS ix_room_access_coo ON room_access(coo_id, status);
+
+-- 私密厅邀请：接受之后才写 room_access；转发的 invitationId 不等于身份。
+CREATE TABLE IF NOT EXISTS room_invitations (
+  id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  invited_by TEXT NOT NULL REFERENCES coos(id),
+  target_coo_id TEXT NOT NULL REFERENCES coos(id),
+  status TEXT NOT NULL CHECK (status IN ('pending','accepted','declined','revoked','expired')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  handled_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_room_invitations_target ON room_invitations(target_coo_id, status, created_at);
+CREATE INDEX IF NOT EXISTS ix_room_invitations_room ON room_invitations(room_id, status);
 
 CREATE TABLE IF NOT EXISTS monopoly_requests (
   game_id TEXT NOT NULL REFERENCES tables(id) ON DELETE CASCADE,

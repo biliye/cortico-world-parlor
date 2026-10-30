@@ -32,7 +32,7 @@ describe('SQLite 地基', () => {
   it('migrate 可重复执行，schema 版本写进 meta', () => {
     migrate(db);
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string };
-    expect(row.value).toBe('4');
+    expect(row.value).toBe('5');
     const mode = db.prepare('SELECT value FROM meta WHERE key = ?').get('storage_mode') as { value: string };
     expect(mode.value).toBe('sqlite');
   });
@@ -126,7 +126,7 @@ describe('SQLite 地基', () => {
         .toEqual({ n: 1 });
 
       const version = oldDb.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string };
-      expect(version.value).toBe('4');
+      expect(version.value).toBe('5');
     } finally {
       oldDb.close();
     }
@@ -256,5 +256,38 @@ describe('SQLite 地基', () => {
     grant('g1', 0);
     expect(() => grant('g2', 0)).toThrow(/UNIQUE/);
     expect(() => grant('g3', 1)).not.toThrow();
+  });
+});
+
+describe('schema 5：多桌 / 可靠存档 / 准入', () => {
+  const columns = (table: string): string[] => (
+    db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  ).map((row) => row.name);
+
+  it('tables 与 table_seats 的新列都在，一房一桌的索引已删', () => {
+    expect(columns('tables')).toEqual(expect.arrayContaining([
+      'revision', 'state_version', 'frozen_at', 'recovery_error',
+    ]));
+    expect(columns('table_seats')).toContain('auto');
+    const indexes = (db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tables'",
+    ).all() as { name: string }[]).map((row) => row.name);
+    expect(indexes).not.toContain('ux_live_table_per_room');
+  });
+
+  it('回执、终态、一人一桌、准入与邀请的表都在', () => {
+    const names = (db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    ).all() as { name: string }[]).map((row) => row.name);
+    for (const table of [
+      'action_receipts', 'table_finalizations', 'active_table_players', 'room_access', 'room_invitations',
+    ]) {
+      expect(names).toContain(table);
+    }
+  });
+
+  it('比本程序新的库拒绝打开', () => {
+    db.prepare("UPDATE meta SET value = '99' WHERE key = 'schema_version'").run();
+    expect(() => migrate(db)).toThrow(/schema 99/);
   });
 });

@@ -66,7 +66,7 @@ const DEFAULT_PAGE = 10;
 const DEFAULT_RECENT = 3;
 
 /** 视图列：带 room 与 read，不带 coo_id。 */
-const VIEW_COLUMNS = `id, seq, ts, room_id, kind, action, from_name, text, entry_id, from_coo_id,
+const VIEW_COLUMNS = `id, seq, ts, room_id, kind, action, from_name, text, entry_id, invitation_id, from_coo_id,
   (read_at IS NOT NULL) AS read_flag`;
 
 const clampPage = (limit: number, fallback: number): number => {
@@ -86,6 +86,7 @@ const toView = (row: Record<string, unknown>): MailView => ({
   fromName: String(row.from_name),
   text: String(row.text),
   ...(typeof row.entry_id === 'string' ? { entryId: row.entry_id } : {}),
+  ...(typeof row.invitation_id === 'string' ? { invitationId: row.invitation_id } : {}),
   read: Boolean(row.read_flag),
 });
 
@@ -175,10 +176,11 @@ export class MailDb {
     const action = input.action ?? null;
     const entryId = input.entryId ?? null;
     const fromCooId = input.fromCooId ?? null;
+    const invitationId = input.invitationId ?? null;
     const result = this.db.prepare(
-      `INSERT INTO mail(id, ts, coo_id, from_coo_id, room_id, kind, action, from_name, text, entry_id, key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, ts, input.to, fromCooId, input.room, input.kind, action, input.fromName, input.text, entryId, key);
+      `INSERT INTO mail(id, ts, coo_id, from_coo_id, room_id, kind, action, from_name, text, entry_id, invitation_id, key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, ts, input.to, fromCooId, input.room, input.kind, action, input.fromName, input.text, entryId, invitationId, key);
     return {
       id,
       seq: Number(result.lastInsertRowid),
@@ -190,6 +192,7 @@ export class MailDb {
       fromName: input.fromName,
       text: input.text,
       ...(entryId ? { entryId } : {}),
+      ...(invitationId ? { invitationId } : {}),
       read: false,
     };
   }

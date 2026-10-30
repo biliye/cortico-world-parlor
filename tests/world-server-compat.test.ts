@@ -92,13 +92,18 @@ describe('旧 World 工具 × 新服务器', () => {
 
     // 骰子一局：她开桌，人坐下，她开始；人停牌后轮到她。
     expect(await call('parlor_table_open', { game: 'dice' })).toContain('骰子桌开了');
-    await friend.action(joined.token, { type: 'table_join' });
+    await friend.action(joined.token, { type: 'table_join', requestId: 'friend-join' });
     const started = await call('parlor_table_start');
     expect(started).toContain('服务器已收下');
     const view = await call('parlor_table_view');
     expect(view).toContain('骰子桌');
     expect(await call('parlor_table_action', { action: 'stand' })).toContain('停牌了');
-    await friend.action(joined.token, { type: 'table_action', action: 'stand' });
+    const table = await friend.snapshot(joined.token, 0, 1);
+    const revision = table.tablePrivate?.revision ?? table.table?.revision;
+    expect(typeof revision).toBe('number');
+    await friend.action(joined.token, {
+      type: 'table_action', action: 'stand', requestId: 'friend-stand', revision,
+    });
 
     const ended = await friend.snapshot(joined.token, 0, 100);
     expect(ended.table?.status).toBe('ended');

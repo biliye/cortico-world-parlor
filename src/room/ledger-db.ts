@@ -184,6 +184,29 @@ export class LedgerDb {
     return row ? this.entryOf(row as unknown as EntryRow) : undefined;
   }
 
+  /** 一条记录的实际筹码转移（退款按开局明细原路退回时用）。 */
+  transfersOf(entryId: string): Array<{
+    fromKind: 'coo' | 'room'; fromCooId?: string;
+    toKind: 'coo' | 'room'; toCooId?: string;
+    amount: number;
+  }> {
+    const rows = this.db.prepare(
+      `SELECT from_kind, from_coo_id, to_kind, to_coo_id, amount
+         FROM ledger_transfers WHERE entry_id = ? ORDER BY id`,
+    ).all(entryId) as Array<{
+      from_kind: 'coo' | 'room'; from_coo_id: string | null;
+      to_kind: 'coo' | 'room'; to_coo_id: string | null;
+      amount: number;
+    }>;
+    return rows.map((row) => ({
+      fromKind: row.from_kind,
+      ...(row.from_coo_id ? { fromCooId: row.from_coo_id } : {}),
+      toKind: row.to_kind,
+      ...(row.to_coo_id ? { toCooId: row.to_coo_id } : {}),
+      amount: row.amount,
+    }));
+  }
+
   /** 按完整 id 或唯一前缀找条目；前缀撞了就返回 undefined。 */
   find(idOrPrefix: string): LedgerEntry | undefined {
     const needle = idOrPrefix.trim().toLowerCase();

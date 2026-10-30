@@ -51,6 +51,13 @@ const setup = (file?: string): Fixture => {
 
 const enter = (host: RoomHost, cooId: string, name: string) => host.join(cooId, { name });
 
+/** 牌桌动作现在带幂等键与桌面版本；测试里每步现取一次版本。 */
+const act = (host: RoomHost, cooId: string, action: unknown, requestId: string) => {
+  const revision = host.snapshot(cooId, { limit: 1 }).tablePrivate?.revision;
+  expect(typeof revision).toBe('number');
+  return host.tableAction(cooId, action, { revision: revision as number, requestId });
+};
+
 const texts = (events: { text: string; type: string }[]): string[] => events.map((event) => event.text);
 
 let fixture: Fixture | undefined;
@@ -85,7 +92,8 @@ describe('客厅牌桌（骰子）', () => {
     // 开局与动作事件是公开的，但不带任何人的暗骰。
     const publicEvents = host.history(B, { since: 0, limit: 200 });
     const start = publicEvents.find((event) => event.type === 'parlor.table.start');
-    expect(start?.data).toEqual({ game: 'dice' });
+    expect(start?.data).toMatchObject({ game: 'dice' });
+    expect(typeof start?.data?.tableId).toBe('string');
 
     // A 的私视图在 A 的历史里，B 看不到。
     const aView = host.history(a.seat.cooId, { since: 0, limit: 200 })
@@ -99,9 +107,9 @@ describe('客厅牌桌（骰子）', () => {
 
     // 两人依次停牌，骰子桌结束并写一条公开战绩。
     clock.now += 100;
-    host.tableAction(A, { type: 'stand' });
+    act(host, A, { type: 'stand' }, 'stand-a');
     clock.now += 100;
-    host.tableAction(B, { type: 'stand' });
+    act(host, B, { type: 'stand' }, 'stand-b');
     const all = host.history(B, { since: 0, limit: 200 });
     expect(all.some((event) => event.type === 'parlor.table.end')).toBe(true);
     expect(host.tablePublic()?.status).toBe('ended');
@@ -122,9 +130,9 @@ describe('客厅牌桌（骰子）', () => {
     expect(ledger.balanceOf(B)).toBe(START_CHIPS - 5);
 
     clock.now += 100;
-    host.tableAction(A, { type: 'stand' });
+    act(host, A, { type: 'stand' }, 'stand-a');
     clock.now += 100;
-    host.tableAction(B, { type: 'stand' });
+    act(host, B, { type: 'stand' }, 'stand-b');
 
     const summary = ledger.summaryFor(A);
     expect(summary.games).toBe(1);
@@ -211,13 +219,13 @@ describe('客厅牌桌（斗地主）与桌聊', () => {
     // 不在桌上的第三人看不到桌内话。
     const cEvents = texts(host.history(C, { since: 0, limit: 200 }));
     expect(cEvents).not.toContain('这把我要地主');
-    expect(() => host.tableSay(C, '我也想插一句')).toThrow(/不在这一桌/);
+    expect(() => host.tableSay(C, '我也想插一句')).toThrow(/不在任何牌桌上/);
 
     // 脚本轮到时会自动叫地主（1.5 秒后由时钟代打）。
     clock.now += 100;
-    host.tableAction(A, { move: 'bid', call: false });
+    act(host, A, { move: 'bid', call: false }, 'bid-a');
     clock.now += 100;
-    host.tableAction(B, { move: 'bid', call: false });
+    act(host, B, { move: 'bid', call: false }, 'bid-b');
     clock.now += 2_000;
     host.tickClock();
     const events = host.history(a.seat.cooId, { since: 0, limit: 200 });
@@ -233,9 +241,9 @@ describe('客厅牌桌（斗地主）与桌聊', () => {
     host.joinTable(B);
     host.startTable(A);
     clock.now += 100;
-    host.tableAction(A, { type: 'stand' });
+    act(host, A, { type: 'stand' }, 'stand-a');
     clock.now += 100;
-    host.tableAction(B, { type: 'stand' });
+    act(host, B, { type: 'stand' }, 'stand-b');
 
     expect(() => host.tableSay(A, '结束了还说')).toThrow(/已经结束/);
     const snapshot = host.snapshot(A, {});
@@ -245,7 +253,7 @@ describe('客厅牌桌（斗地主）与桌聊', () => {
 });
 
 describe('重启与持久化', () => {
-  it('服务重启后还挂着的桌子作废，押注原路退回', () => {
+  it('短停机续局：牌、轮次和扣款都不变，还能接着打', () => {
     const file = fileDb();
     fixture = setup(file);
     const { host } = fixture;
@@ -254,8 +262,7 @@ describe('重启与持久化', () => {
     host.openTable(A, { game: 'dice', stake: 5 });
     host.joinTable(B);
     host.startTable(A);
-    const before = new LedgerDb(fixture.db);
-    expect(before.balanceOf(A)).toBe(START_CHIPS - 5);
+    expect(new LedgerDb(fixture.db).balanceOf(A)).toBe(START_CHIPS - 5);
 
     // 模拟进程重启：关库、重开、新的 RoomHost（引擎已不在内存里）。
     fixture.close();
@@ -265,11 +272,41 @@ describe('重启与持久化', () => {
     fixture = { db, host: restarted, clock: { now: 1_760_000_100_000 }, close: () => db.close() };
 
     const ledger = new LedgerDb(db);
+    expect(ledger.balanceOf(A)).toBe(START_CHIPS - 5);
+    expect(restarted.tablePublic()?.status).toBe('playing');
+    expect(restarted.snapshot(A, { limit: 1 }).tablePrivate?.text).toContain('你的点数');
+    const events = restarted.history(A, { since: 0, limit: 200 });
+    expect(events.some((event) => event.type === 'parlor.table.resume')).toBe(true);
+
+    // 恢复之后还能接着打，并正常结算。
+    act(restarted, A, { type: 'stand' }, 'resume-a');
+    act(restarted, B, { type: 'stand' }, 'resume-b');
+    expect(restarted.tablePublic()?.status).toBe('ended');
+  });
+
+  it('停机超过 30 分钟：这局作废，按开局明细退回', () => {
+    const file = fileDb();
+    fixture = setup(file);
+    const { host } = fixture;
+    enter(host, A, '阿岚');
+    enter(host, B, '小满');
+    host.openTable(A, { game: 'dice', stake: 5 });
+    host.joinTable(B);
+    host.startTable(A);
+
+    fixture.close();
+    const db = openDb(file);
+    migrate(db);
+    const later = 1_760_000_000_000 + 31 * 60_000;
+    const restarted = new RoomHost(db, 'lobby', { now: () => later });
+    fixture = { db, host: restarted, clock: { now: later }, close: () => db.close() };
+
+    const ledger = new LedgerDb(db);
     expect(ledger.balanceOf(A)).toBe(START_CHIPS);
     expect(ledger.balanceOf(B)).toBe(START_CHIPS);
     expect(restarted.tablePublic()).toBeUndefined();
     const events = restarted.history(A, { since: 0, limit: 200 });
-    expect(events.some((event) => event.text.includes('服务重启'))).toBe(true);
+    expect(events.some((event) => event.text.includes('停机超过'))).toBe(true);
     expect(restarted.readMail(A, 10, false).items.some((item) => item.text.includes('退回'))).toBe(true);
   });
 
