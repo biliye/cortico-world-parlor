@@ -1,3 +1,17 @@
+## 0.24.0
+
+真人席位离线自动释放（Coo 的席位不动）：
+
+- 新增 `offlineReleaseHours`，默认 **6 小时**，0 = 关；独立服务器用
+  `--offline-release-hours` / `PARLOR_OFFLINE_RELEASE_HOURS` 改。
+- 只释放 `kind='human'` 的活跃席位；`pet`（Coo）与 observer 不动。判「在线」看有没有 SSE
+  连接；牌桌锁着也不动，等这局结束下一轮再试。
+- SSE 连上/断开时刷新 `room_seats.last_seen_at`；后台每 5 分钟扫一次，服务启动 10 秒先扫一遍。
+- 释放时写一条 `parlor.left`：「X 的席位因长时间未上线被释放。」`data.reason='offline'`。
+- 家长账户、玩家身份、筹码、私聊都不删；重新用带钥匙的链接进来会拿到新席位。
+- 验证：新增 2 条测试（离线释放/最近不动/pet 不动；SSE 在线不释放）、typecheck、describe/check。
+  线上部署后第一批旧真人席位（10-27/28/29）会被清掉。
+
 ## 0.23.1
 
 把「开放网页访客加入」从扩展设置页拿掉（只留给运营者）：

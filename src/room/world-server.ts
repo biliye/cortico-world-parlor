@@ -18,8 +18,9 @@ import { MailDb } from './mail-db.ts';
 import { gameByActionType } from './games/registry.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
-  RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken, listRooms, memberOf,
-  renameSeat, resolveRoom, seatByTokenHash, type RoomRow,
+  RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken,
+  humanSeatsForOfflineRelease, listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash,
+  touchSeatSeen, type RoomRow,
 } from './room-seat-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
@@ -31,6 +32,8 @@ export interface WorldServerOptions {
   inviteCode?: string;
   /** 网页「用户名 + 邀请码」的访客入口；默认关。 */
   allowGuestJoin?: boolean;
+  /** 真人席位离线多少小时后释放；默认 6，0 = 关。 */
+  offlineReleaseHours?: number;
   now?: () => number;
 }
 
@@ -182,6 +185,7 @@ export class WorldServer {
   private readonly defaultRoomId: string;
   private readonly inviteCode: string;
   private readonly allowGuestJoin: boolean;
+  private readonly offlineReleaseMs: number;
   private readonly hostName: string;
   private readonly port: number;
   private server?: Server;
@@ -189,6 +193,8 @@ export class WorldServer {
   private readonly sse = new Map<string, Set<SseClient>>();
   private pumpTimer?: NodeJS.Timeout;
   private clockTimer?: NodeJS.Timeout;
+  private janitorTimer?: NodeJS.Timeout;
+  private janitorFirstTimer?: NodeJS.Timeout;
   /** 每厅一个 RoomHost：牌桌引擎在内存里，必须跨请求共用同一个实例。 */
   private readonly hosts = new Map<string, RoomHost>();
   /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
@@ -206,6 +212,7 @@ export class WorldServer {
     this.defaultRoomId = options.defaultRoomId ?? 'lobby';
     this.inviteCode = options.inviteCode ?? '';
     this.allowGuestJoin = options.allowGuestJoin ?? false;
+    this.offlineReleaseMs = Math.max(0, options.offlineReleaseHours ?? 6) * 3_600_000;
     this.hostName = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
     this.ensureDefaultRoom();
@@ -241,6 +248,11 @@ export class WorldServer {
     this.pumpTimer.unref?.();
     this.clockTimer = setInterval(() => this.tickClock(), 1000);
     this.clockTimer.unref?.();
+    // 真人席位离线清理：每 5 分钟一次；刚启动 10 秒先扫一遍（这时还没有 SSE）。
+    this.janitorTimer = setInterval(() => this.releaseOfflineSeats(), 5 * 60_000);
+    this.janitorTimer.unref?.();
+    this.janitorFirstTimer = setTimeout(() => this.releaseOfflineSeats(), 10_000);
+    this.janitorFirstTimer.unref?.();
     return { url: this.baseUrl, host: this.hostName, port: address.port };
   }
 
@@ -249,6 +261,10 @@ export class WorldServer {
     this.pumpTimer = undefined;
     if (this.clockTimer) clearInterval(this.clockTimer);
     this.clockTimer = undefined;
+    if (this.janitorTimer) clearInterval(this.janitorTimer);
+    this.janitorTimer = undefined;
+    if (this.janitorFirstTimer) clearTimeout(this.janitorFirstTimer);
+    this.janitorFirstTimer = undefined;
     this.hosts.clear();
     for (const clients of this.sse.values()) {
       for (const client of clients) {
@@ -335,6 +351,29 @@ export class WorldServer {
     }
   }
 
+  /**
+   * 真人席位离线超过阈值就释放；Coo 的 pet 席位不动。
+   * 「在线」以 SSE 连接为准：还有一条连着就不动；牌桌锁着也不动。
+   * 返回这次释放了几个，方便测试和运维日志。
+   */
+  releaseOfflineSeats(now = this.now()): number {
+    if (this.offlineReleaseMs <= 0) return 0;
+    const cutoff = now - this.offlineReleaseMs;
+    const online = new Set<string>();
+    for (const clients of this.sse.values()) {
+      for (const client of clients) online.add(client.cooId);
+    }
+    let released = 0;
+    for (const seat of humanSeatsForOfflineRelease(this.db)) {
+      if (online.has(seat.cooId)) continue;
+      if (seat.lastSeenAt > cutoff) continue;
+      try {
+        if (this.host(seat.roomId).releaseOffline(seat.cooId, now)) released += 1;
+      } catch { /* 这间房暂时有问题就跳过，下一轮再试 */ }
+    }
+    return released;
+  }
+
   /** Coo 身份：缺行就自动注册；secret 不匹配拒绝。 */
   private cooAuth(req: IncomingMessage, name = ''): string {
     const cooId = headerValue(req, 'x-parlor-coo').trim();
@@ -399,6 +438,7 @@ export class WorldServer {
         version: PACKAGE_VERSION,
         protocol: 2,
         guestJoin: this.allowGuestJoin,
+        offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
         hall: this.hallId,
         rooms: listRooms(this.db, { kind: 'room' }).length,
         seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,
@@ -1100,9 +1140,11 @@ export class WorldServer {
       this.sse.set(roomId, clients);
     }
     clients.add(client);
+    touchSeatSeen(this.db, roomId, seat.id, this.now());
     req.on('close', () => {
       clients?.delete(client);
       if (clients?.size === 0) this.sse.delete(roomId);
+      try { touchSeatSeen(this.db, roomId, seat.id, this.now()); } catch { /* 席位已释放/库关了 */ }
     });
   }
 

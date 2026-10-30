@@ -586,6 +586,39 @@ export const activeSeats = (db: Db, roomId: string): SeatRow[] => {
   return rows.map(toSeat);
 };
 
+/** 离线清理的候选：只看活跃的真人席位（Coo 的 pet 席位不动）。 */
+export interface OfflineSeatCandidate {
+  roomId: string;
+  id: string;
+  cooId: string;
+  name: string;
+  lastSeenAt: number;
+}
+
+export const humanSeatsForOfflineRelease = (db: Db): OfflineSeatCandidate[] => {
+  const rows = db.prepare(
+    `SELECT room_id, id, coo_id, name, COALESCE(last_seen_at, joined_at) AS last_seen_at
+       FROM room_seats
+      WHERE released_at IS NULL AND kind = 'human'`,
+  ).all() as unknown as {
+    room_id: string; id: string; coo_id: string; name: string; last_seen_at: number;
+  }[];
+  return rows.map((row) => ({
+    roomId: row.room_id,
+    id: row.id,
+    cooId: row.coo_id,
+    name: row.name,
+    lastSeenAt: Number(row.last_seen_at),
+  }));
+};
+
+/** SSE 连上/断开时刷新；离线清理用它判断多久没见。 */
+export const touchSeatSeen = (db: Db, roomId: string, seatId: string, now = Date.now()): void => {
+  db.prepare(
+    'UPDATE room_seats SET last_seen_at = ? WHERE room_id = ? AND id = ? AND released_at IS NULL',
+  ).run(now, roomId, seatId);
+};
+
 /** 只认活跃席位；释放后的令牌不能再用来行动。 */
 export const seatByTokenHash = (db: Db, tokenHash: string): SeatRow | null => {
   if (typeof tokenHash !== 'string' || !tokenHash) return null;

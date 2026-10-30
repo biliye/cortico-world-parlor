@@ -293,6 +293,28 @@ export class RoomHost {
     });
   }
 
+  /**
+   * 长时间没有 SSE 的真人席位：写一条带原因的离开事件再释放。
+   * 牌桌锁着就不动（等这局结束，下一轮清理再看）。
+   */
+  releaseOffline(cooId: string, now = this.now()): LeaveResult | null {
+    const seat = this.seatOf(cooId);
+    if (!seat) return null;
+    if (this.tableHost.lockOf(cooId)) return null;
+    return withTransaction(this.db, () => {
+      const event = this.events.append(this.roomId, {
+        type: 'parlor.left',
+        ts: now,
+        from: seat.id,
+        scope: { kind: 'room' },
+        text: `${seat.name} 的席位因长时间未上线被释放。`,
+        data: { seatId: seat.id, name: seat.name, reason: 'offline' },
+      });
+      const released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
+      return { seat: released, event };
+    });
+  }
+
   /** 原子换房：源客厅写离开事件并释放席位，目标客厅拿新席位并写加入事件。 */
   switchTo(cooId: string, targetRoomId: string, input: { name?: string } = {}): SwitchResult {
     if (targetRoomId === this.roomId) throw new HostError('invalid', '已经在这个客厅里');
