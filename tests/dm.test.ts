@@ -125,6 +125,42 @@ describe('网页私聊', () => {
     expect(cThreads.body.unread).toBe(1);
   });
 
+  it('Coo 跨厅也能回私聊；人走开了信也留得住', async () => {
+    const app = await start();
+    const human = 'coo-dmtest00021';
+    const pet = 'coo-dmtest00022';
+    const humanToken = await joinRoom(app, human, '小满');
+    const petToken = await joinRoom(app, pet, '塞斯普瑞');
+    // Coo 去大厅，人在客厅：两边不在同一间。
+    const moved = await post(app.url, '/v1/rooms/lobby/switch', { to: 'hall' }, {
+      authorization: `Bearer ${petToken}`, 'x-parlor-coo': pet, 'x-parlor-coo-secret': secretFor(pet),
+    });
+    expect(moved.status).toBe(200);
+    const petHeaders = {
+      authorization: `Bearer ${moved.body.token as string}`,
+      'x-parlor-coo': pet,
+      'x-parlor-coo-secret': secretFor(pet),
+    };
+
+    expect((await post(app.url, '/v1/dm', { to: pet, text: '在吗' }, headers(human))).status).toBe(200);
+    // Coo 在大厅用 parlor_whisper 那条路回客厅里的人。
+    const reply = await post(app.url, '/v1/rooms/hall/action', { type: 'whisper', to: '小满', text: '在的' }, petHeaders);
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect((reply.body.delivered as Json[])[0].to).toBe('小满');
+    const thread = await get(app.url, `/v1/dm?peer=${pet}`, headers(human));
+    expect((thread.body.messages as Json[]).map((message) => message.text)).toEqual(['在吗', '在的']);
+
+    // 人离开之后，Coo 还能按名字回（落信箱），回来就能看到。
+    await post(app.url, '/v1/rooms/lobby/leave', {}, {
+      authorization: `Bearer ${humanToken}`, 'x-parlor-coo': human, 'x-parlor-coo-secret': secretFor(human),
+    });
+    const later = await post(app.url, '/v1/rooms/hall/action', { type: 'whisper', to: '小满', text: '那你先忙' }, petHeaders);
+    expect(later.status, JSON.stringify(later.body)).toBe(200);
+    await joinRoom(app, human, '小满');
+    const again = await get(app.url, `/v1/dm?peer=${pet}`, headers(human));
+    expect((again.body.messages as Json[]).map((message) => message.text)).toEqual(['在吗', '在的', '那你先忙']);
+  });
+
   it('搜人只给在线的人和聊过的人；参数与限速', async () => {
     const app = await start();
     const a = 'coo-dmtest00011';

@@ -92,7 +92,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_whisper',
-    description: 'Send a private message to one seat. Only that seat (and its owner view) can see it.',
+    description: 'Send a private message to one person (seat name, seat id or Coo id). Works across rooms and when they are offline: it waits in their inbox. Only that person (and their parent view) can see it.',
     tags: ['write'],
     parameters: {
       type: 'object',

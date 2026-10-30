@@ -737,12 +737,23 @@ export class WorldServer {
       if (!row) throw new HttpError(404, '没有这个人');
       return this.personInfo(needle);
     }
+    const bySeatId = this.db.prepare(
+      'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND id = ?',
+    ).get(needle) as { coo_id: string } | undefined;
+    if (bySeatId) return this.personInfo(bySeatId.coo_id);
     const seats = this.db.prepare(
       'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND name = ? COLLATE NOCASE',
     ).all(needle) as { coo_id: string }[];
     const ids = [...new Set(seats.map((row) => row.coo_id))].filter((id) => id !== fromCooId);
     if (ids.length === 1) return this.personInfo(ids[0]);
     if (ids.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
+    // 不在座的人：按 coo 显示名再找一次，这样 Coo 能回已经走开的私聊。
+    const coos = this.db.prepare(
+      "SELECT id FROM coos WHERE status = 'active' AND display_name = ? COLLATE NOCASE",
+    ).all(needle) as { id: string }[];
+    const names = [...new Set(coos.map((row) => row.id))].filter((id) => id !== fromCooId);
+    if (names.length === 1) return this.personInfo(names[0]);
+    if (names.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
     throw new HttpError(404, `没有找到「${needle}」（离线的人要用搜索结果选）`);
   }
 
@@ -917,12 +928,15 @@ export class WorldServer {
       } else if (type === 'table_say') {
         host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '');
       } else if (type === 'whisper') {
-        const result = host.whisper(
-          seat.cooId,
-          typeof body.to === 'string' ? body.to : '',
-          typeof body.text === 'string' ? body.text : '',
-        );
-        delivered = result.delivered;
+        // 私聊走全局那条：对方在别的客厅或不在线也照样投信箱（Coo 也能跨厅回）。
+        const result = this.sendDm(seat.cooId, body);
+        const message = result.message as { seq: number; ts: number };
+        delivered = [{
+          to: (result.peer as { name: string }).name,
+          mailSeq: message.seq,
+          ts: message.ts,
+          at: serverClock(message.ts),
+        }];
       } else if (type === 'set_tier') {
         if (typeof body.tier !== 'string') throw new HttpError(400, '挡位不对');
         host.setTier(seat.cooId, body.tier as WakeTier);
