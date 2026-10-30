@@ -467,6 +467,8 @@ function chatVisible(tab) {
 
 function lineOf(event, tableBucket) {
   const type = event.type || '';
+  // 私聊只进浮窗：它不是房间聊天，别混进大厅/客厅的聊天栏，也不该给聊天栏记未读。
+  if (type === 'parlor.whisper') return null;
   if (type === 'parlor.table.turn' || type === 'parlor.digest') return null;
   // 出牌/过牌/开桌/开始/结算这些动作不进聊天栏：牌桌本身已经画出来了，
   // 聊天栏只留人说的话（含桌内私聊），免得一局斗地主把聊天刷满。
@@ -494,19 +496,17 @@ function lineOf(event, tableBucket) {
   const name = (event.data && typeof event.data.name === 'string' ? event.data.name : '')
     || (seat ? seat.name : '')
     || event.from;
-  const whisper = type === 'parlor.whisper';
   const tableTalk = type === 'parlor.table.say';
-  const node = el('article', 'msg' + (tableBucket ? ' is-table' : '') + (whisper ? ' is-whisper' : ''));
+  const node = el('article', 'msg' + (tableBucket ? ' is-table' : ''));
   node.append(avatarNode(event.from, 'avatar-sm'));
   const body = el('div', 'msg-body');
   const meta = el('div', 'msg-meta');
   meta.append(el('span', 'msg-name', name));
-  meta.append(el('span', 'tag ' + (whisper ? 'tag-whisper' : tableBucket ? 'tag-table' : 'tag-room'),
-    whisper ? '私聊' : tableTalk ? '牌桌私聊' : tableBucket ? '牌桌' : inHall() ? '大厅' : '客厅'));
+  meta.append(el('span', 'tag ' + (tableBucket ? 'tag-table' : 'tag-room'),
+    tableTalk ? '牌桌私聊' : tableBucket ? '牌桌' : inHall() ? '大厅' : '客厅'));
   meta.append(time);
   body.append(meta);
-  body.append(el('p', '',
-    (whisper ? '（只有你们看得见）' : tableTalk ? '（只有同桌看得见）' : '') + readable(event.text || '')));
+  body.append(el('p', '', (tableTalk ? '（只有同桌看得见）' : '') + readable(event.text || '')));
   node.append(body);
   return node;
 }

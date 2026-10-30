@@ -349,6 +349,9 @@ describe('网页玩家', () => {
     ]) {
       expect(js).toContain(line);
     }
+    // 私聊只进浮窗，不再混进大厅/客厅的聊天栏。
+    expect(js).toContain("if (type === 'parlor.whisper') return null;");
+    expect(js).not.toContain('is-whisper');
     // 点浮窗外面关掉、手机上是全屏。
     expect(js).toContain('win.contains(event.target)');
     expect(css).toContain('.dm {');
