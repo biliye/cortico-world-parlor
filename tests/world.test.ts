@@ -6,7 +6,7 @@ import type { ToolCallContext } from 'cortico/core/types.ts';
 import { dryMountWorld, fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR } from '../src/definition.ts';
-import type { ParlorConfigSection } from '../src/config.ts';
+import { PARLOR_DEFAULTS, type ParlorConfigSection } from '../src/config.ts';
 import { ParlorClient } from '../src/room/client.ts';
 import { IDENTITY_FILE } from '../src/room/identity.ts';
 import { ParlorServer } from '../src/room/server.ts';
@@ -370,5 +370,26 @@ describe('客厅 World', () => {
     expect(String(await monopoly.handler({ action: 'set_auto', on: true }, {} as ToolCallContext))).toContain('托管');
     const bad = await monopoly.handler({ action: 'nope' }, {} as ToolCallContext) as { text?: string };
     expect(bad.text).toContain('action 只能是');
+  });
+});
+
+describe('群友接入的默认值', () => {
+  it('默认服务器地址是房主的客厅，邀请码留空', () => {
+    expect(PARLOR_DEFAULTS.serverUrl).toBe('https://parlor.com.cn');
+    expect(PARLOR_DEFAULTS.inviteCode).toBe('');
+  });
+
+  it('邀请码可以从扩展设置读，不必改 .env', async () => {
+    await startServer();
+    const secrets: Record<string, string> = {};
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.inviteCode = 'inv';
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    const host = new FakeHost();
+    await world.start(host);
+    expect(host.events[0]?.type).toBe('parlor.started');
+    expect(secrets.PARLOR_SEAT_TOKEN).toBeTruthy();
   });
 });

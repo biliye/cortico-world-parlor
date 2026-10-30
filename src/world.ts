@@ -576,7 +576,8 @@ export class ParlorWorld implements World {
     const defaultRoom = cfg.room || 'lobby';
     this.currentRoom = this.ctx.secret(CURRENT_ROOM_SECRET).trim() || defaultRoom;
     let baseUrl = cfg.serverUrl.trim().replace(/\/+$/, '');
-    let invite = this.ctx.secret(INVITE_SECRET).trim();
+    // 扩展设置里的邀请码优先；没填就退回旧部署的 .env，保持兼容。
+    let invite = cfg.inviteCode.trim() || this.ctx.secret(INVITE_SECRET).trim();
 
     if (!baseUrl) {
       const dataFile = this.roomFile();
@@ -621,7 +622,7 @@ export class ParlorWorld implements World {
     }
 
     if (!invite) {
-      throw new Error('客厅：部署 .env 里需要 PARLOR_INVITE_CODE（邀请码向房主/运营者要）');
+      throw new Error('客厅：扩展设置里要填「邀请码」（或部署 .env 的 PARLOR_INVITE_CODE；邀请码向房主/运营者要）');
     }
     const joined = await client.join(invite, {
       name: cfg.seatName.trim() || this.ctx.botName,

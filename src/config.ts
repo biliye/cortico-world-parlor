@@ -4,8 +4,13 @@ import { DEFAULT_WAKE_TIER, type WakeTier } from './room/protocol.ts';
 /** config.json 的 worlds.parlor 段，默认禁用；bot 或部署可启用。 */
 export interface ParlorConfigSection {
   enabled: boolean;
-  /** 空 = 由这个 World 自己开一台客厅；填 http(s) 地址 = 连别人的。 */
+  /** 空 = 由这个 World 自己开一台客厅；填 http(s) 地址 = 连别人的。默认连房主的服务器。 */
   serverUrl: string;
+  /**
+   * 连别人服务器时的邀请码。留空时退回部署 `.env` 的 `PARLOR_INVITE_CODE`（旧部署兼容）。
+   * 存在 config.json 里；别把它提交进仓库或贴到公开地方。
+   */
+  inviteCode: string;
   room: string;
   /** 空 = 用 bot 的显示名。 */
   seatName: string;
@@ -18,9 +23,13 @@ export interface ParlorConfigSection {
   wakeTier: WakeTier;
 }
 
+/** 房主的公共客厅；装完默认连这里，想自己开就把地址清空。 */
+export const DEFAULT_SERVER_URL = 'https://parlor.com.cn';
+
 export const PARLOR_DEFAULTS: ParlorConfigSection = {
   enabled: false,
-  serverUrl: '',
+  serverUrl: DEFAULT_SERVER_URL,
+  inviteCode: '',
   room: 'lobby',
   seatName: '',
   host: '127.0.0.1',
@@ -35,12 +44,18 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
   schema: {
     type: 'object',
     title: '客厅',
-    description: '一个共享房间。serverUrl 留空时由这个 World 自己开一台；填地址时连过去，邀请码放在部署 .env。',
+    description: '一个共享房间。默认连房主的 https://parlor.com.cn；把地址清空就由这个 World 自己开一台。',
     properties: {
       'worlds.parlor.serverUrl': {
         type: 'string',
         title: '服务器地址',
-        description: '留空 = 自己开客厅（本机 + 端口）。填 http(s)://host:port = 连别人的房间，需要邀请码。',
+        description: '默认 https://parlor.com.cn。清空 = 自己开客厅（本机 + 端口）；填 http(s)://host:port = 连别人的房间。',
+        'x-hot': false,
+      },
+      'worlds.parlor.inviteCode': {
+        type: 'string',
+        title: '邀请码',
+        description: '连别人的服务器时要填的入场码；留空则读部署 .env 的 PARLOR_INVITE_CODE。会存进 config.json，不要提交或外发。',
         'x-hot': false,
       },
       'worlds.parlor.room': {
