@@ -164,7 +164,7 @@ describe('网页玩家', () => {
     expect(js.body.length).toBeLessThan(plain.length / 2);
 
     const etag = String(js.headers.etag);
-    expect(etag).toContain('-gz');
+    expect(etag).toMatch(/^"[\w-]{18}-gz"$/);
     const again = await raw('/play/assets/play.js', { 'accept-encoding': 'gzip', 'if-none-match': etag });
     expect(again.status).toBe(304);
     expect(again.body.length).toBe(0);

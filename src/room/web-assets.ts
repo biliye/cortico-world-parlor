@@ -2,6 +2,7 @@
  * 网页客户端的静态文件。房主的客厅在香港，从国内拉一次 play.js（129KB）要七八秒；
  * 压完只有 30KB 左右，所以文本资源按文件压一次放内存，配上 ETag —— 第二次打开只回 304。
  */
+import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { gzipSync } from 'node:zlib';
@@ -34,22 +35,26 @@ export const PLAY_CSP = [
 const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json', '.map']);
 
 interface Asset {
+  /** 缓存判据：大小 / mtime / inode 任一变了就重读。npm 包里 mtime 是固定的 1985，inode 是唯一可靠的信号。 */
+  stamp: string;
   etag: string;
   body: Buffer;
   gzipped: Buffer;
 }
 
-/** 一个进程里每个文件只读一次盘、只压一次；文件换了（mtime/size 变了）就重来。 */
+/** 一个进程里每个文件只读一次盘、只压一次；文件换了就重来。 */
 const assets = new Map<string, Asset>();
 
 function loadAsset(rel: string): Asset {
   const file = new URL(`../web/${rel}`, import.meta.url);
   const info = statSync(file);
-  const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+  const stamp = `${info.size}:${Math.floor(info.mtimeMs)}:${info.ino}`;
   const cached = assets.get(rel);
-  if (cached && cached.etag === etag) return cached;
+  if (cached && cached.stamp === stamp) return cached;
   const body = readFileSync(file);
-  const asset: Asset = { etag, body, gzipped: gzipSync(body) };
+  // ETag 用内容算：npm 打包会把 mtime 抹平，同长度的改动靠 mtime 认不出来。
+  const etag = `"${createHash('sha1').update(body).digest('base64url').slice(0, 18)}"`;
+  const asset: Asset = { stamp, etag, body, gzipped: gzipSync(body) };
   assets.set(rel, asset);
   return asset;
 }
