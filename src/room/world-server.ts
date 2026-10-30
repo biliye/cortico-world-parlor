@@ -605,7 +605,7 @@ export class WorldServer {
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
-      const account = this.coo.ensureAccount(cooId, name);
+      const account = this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: this.defaultRoomId,
         seat: seatOfRow(this.defaultRoomId, joined.seat),
@@ -694,7 +694,7 @@ export class WorldServer {
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
-      const account = this.coo.ensureAccount(cooId, name);
+      const account = this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: roomId,
         seat: seatOfRow(roomId, joined.seat),

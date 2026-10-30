@@ -78,6 +78,11 @@ describe('家长下场', () => {
     const cookie = cookieOf(session);
     expect(cookie).toContain('parlor_parent=');
 
+    // 账户的默认显示名跟着孩子走：「<孩子名>的家长」。
+    const me = await getWith(app.url, '/v1/parent/me', { cookie });
+    expect(me.status).toBe(200);
+    expect((me.body.account as { displayName: string }).displayName).toBe('小满的家长');
+
     // 没有会话不能下场。
     const denied = await post(app.url, '/v1/parent/play', {});
     expect(denied.status).toBe(401);

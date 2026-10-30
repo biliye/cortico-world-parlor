@@ -281,7 +281,7 @@ export class CooAccountDb {
       if (existing) return { account: existing, created: false };
       if (this.count() >= this.limit) throw new Error('家长账户表满了');
 
-      const name = cleanName(displayName);
+      const name = cleanName(displayName) || this.defaultAccountName(cooId);
       const now = this.now();
       if (!this.cooRow(cooId)) {
         this.db.prepare(
@@ -304,6 +304,15 @@ export class CooAccountDb {
       this.insertAccount(account);
       return { account, ownerKey, created: true };
     });
+  }
+
+  /** 家长账户的默认显示名：「<孩子名>的家长」；孩子不在座就退回 coo 显示名，最后「家长」。 */
+  private defaultAccountName(cooId: string): string {
+    const seat = this.db.prepare(
+      'SELECT name FROM room_seats WHERE coo_id = ? AND released_at IS NULL ORDER BY joined_at DESC LIMIT 1',
+    ).get(cooId) as { name: string } | undefined;
+    const child = (seat?.name || this.cooRow(cooId)?.display_name || '').trim();
+    return child ? cleanName(`${child}的家长`) : '家长';
   }
 
   /** 用 ownerKey 找账户；找不到/格式不对/账户或 coo 被禁用返回 null。 */

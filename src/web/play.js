@@ -2344,7 +2344,7 @@ async function offerParentPlay(panel) {
     if (!account) return;
     const box = el('div', 'parent-play');
     box.append(
-      el('p', 'sub', '这台浏览器有「' + (account.displayName || '家长') + '」的家长会话，可以直接以家长身份下场。'),
+      el('p', 'sub', '这台浏览器登录了「' + (account.displayName || '家长') + '」，可以直接以这个身份下场。'),
       btn('以家长身份下场', () => { void parentPlay(); }, { primary: true }),
     );
     panel.append(box);
