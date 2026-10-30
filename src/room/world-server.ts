@@ -47,8 +47,13 @@ export interface WorldServerOptions {
 interface SseClient {
   cooId: string;
   seatId: string;
+  seatName: string;
   since: number;
   lastPing: number;
+  openedAt: number;
+  /** 谁先关的：服务端主动收（席位没了/写失败）时写原因，客户端断则留空。 */
+  closeReason?: string;
+  closed: boolean;
   res: ServerResponse;
 }
 
@@ -1373,6 +1378,7 @@ export class WorldServer {
       let tableId: string | undefined;
       let revision: number | undefined;
       let receiptSeq: number | undefined;
+      let closed: boolean | undefined;
 
       if (type === 'say') {
         host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
@@ -1436,6 +1442,7 @@ export class WorldServer {
         const left = host.leaveTable(seat.cooId, tableArg, requestId);
         revision = left.receipt.revision;
         receiptSeq = left.receipt.seq;
+        closed = left.closed;
       } else if (type === 'table_start') {
         const receipt = host.startTable(seat.cooId, tableArg, requestId);
         tableId = receipt.tableId;
@@ -1449,7 +1456,10 @@ export class WorldServer {
         const game = gameByActionType(type);
         if (game) {
           const target = host.tablePublic(tableArg, seat.cooId);
-          if (!target) throw new HttpError(404, '你不在任何牌桌上');
+          // 不带桌号时，快照里那张「刚打完」的结果桌不能当成正在打的桌。
+          if (!target || (!tableArg && target.status === 'ended')) {
+            throw new HttpError(404, '你不在任何牌桌上');
+          }
           if (target.game !== game.id) {
             throw new HttpError(400, `这张桌子不是${game.label}桌`);
           }
@@ -1484,6 +1494,7 @@ export class WorldServer {
         ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
         ...(turn ? { turn } : {}),
         ...(text ? { text } : {}),
+        ...(closed !== undefined ? { closed } : {}),
       });
       return;
     }
@@ -1550,18 +1561,34 @@ export class WorldServer {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
       cursor = event.seq;
     }
-    const client: SseClient = { cooId: seat.cooId, seatId: seat.id, since: cursor, lastPing: this.now(), res };
+    const now = this.now();
+    const client: SseClient = {
+      cooId: seat.cooId,
+      seatId: seat.id,
+      seatName: seat.name,
+      since: cursor,
+      lastPing: now,
+      openedAt: now,
+      closed: false,
+      res,
+    };
     let clients = this.sse.get(roomId);
     if (!clients) {
       clients = new Set();
       this.sse.set(roomId, clients);
     }
     clients.add(client);
-    touchSeatSeen(this.db, roomId, seat.id, this.now());
+    touchSeatSeen(this.db, roomId, seat.id, now);
+    // 掉线排查用：一行开、一行关（谁断的、持续多久）。不带令牌。
+    console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条）`);
     req.on('close', () => {
       clients?.delete(client);
       if (clients?.size === 0) this.sse.delete(roomId);
       try { touchSeatSeen(this.db, roomId, seat.id, this.now()); } catch { /* 席位已释放/库关了 */ }
+      if (client.closed) return;
+      client.closed = true;
+      const ms = Math.max(0, this.now() - client.openedAt);
+      console.log(`parlor: SSE 关闭 ${roomId}/${client.seatName} 持续 ${Math.round(ms / 1000)} 秒（${client.closeReason ?? '客户端断开'}）`);
     });
   }
 
@@ -1889,6 +1916,7 @@ export class WorldServer {
         try {
           if (!host.seatOf(client.cooId)) {
             clients.delete(client);
+            client.closeReason = '席位已经不在这个客厅';
             client.res.end();
             continue;
           }
@@ -1901,8 +1929,9 @@ export class WorldServer {
             client.res.write(': ping\n\n');
             client.lastPing = now;
           }
-        } catch {
+        } catch (error) {
           clients.delete(client);
+          client.closeReason = `写推送失败：${(error as Error)?.message ?? String(error)}`;
           try { client.res.end(); } catch { /* 已断开 */ }
         }
       }

@@ -207,3 +207,63 @@ describe('动作回执与桌面版本', () => {
     })).status).toBe(200);
   });
 });
+
+describe('打完一局就算下桌', () => {
+  it('结算后私视图消失、不带桌号也能开新桌；迟到的退桌不再说谎', async () => {
+    const app = await start();
+    const a = await enter(app, A, '阿岚');
+    const b = await enter(app, B, '小满');
+    const opened = await act(app, a, { type: 'table_open', game: 'dice', requestId: 'open-done' });
+    const id = opened.body.tableId as string;
+    expect((await act(app, b, { type: 'table_join', table: id, requestId: 'join-done' })).status).toBe(200);
+    expect((await act(app, a, { type: 'table_start', table: id, requestId: 'start-done' })).status).toBe(200);
+
+    const aRef = await myTable(app, a);
+    expect((await act(app, a, {
+      type: 'table_action', action: 'stand', table: id, revision: aRef!.revision, requestId: 'a-stand',
+    })).status).toBe(200);
+    const bRef = await myTable(app, b);
+    expect((await act(app, b, {
+      type: 'table_action', action: 'stand', table: id, revision: bRef!.revision, requestId: 'b-stand',
+    })).status).toBe(200);
+
+    // 结束 = 下桌：不再给私视图，但结果桌还留着给结果页看。
+    const ended = await get(app.url, '/v1/room?limit=1', a);
+    expect(ended.body.tablePrivate).toBeNull();
+    expect((ended.body.table as { id: string; status: string }).id).toBe(id);
+    expect((ended.body.table as { status: string }).status).toBe('ended');
+
+    // 不带桌号的退桌：现在诚实地说「不在牌桌上」，不会假装离开成功。
+    const late = await act(app, a, { type: 'table_leave', requestId: 'late-leave' });
+    expect(late.status).toBe(400);
+    expect(String(late.body.error)).toContain('不在任何牌桌');
+
+    // 结束后不带桌号的游戏动作也不能打到那张结果桌上。
+    const stray = await act(app, a, {
+      type: 'ddz_action', move: 'bid', call: false, requestId: 'stray-act',
+    });
+    expect(stray.status).toBe(404);
+
+    // 不带桌号开新桌：直接可以；私视图指向新桌，不被上一局盖住。
+    const next = await act(app, a, { type: 'table_open', game: 'ddz', requestId: 'new-table' });
+    expect(next.status).toBe(200);
+    const after = await get(app.url, '/v1/room?limit=1', a);
+    expect((after.body.tablePrivate as { tableId: string }).tableId).toBe(next.body.tableId as string);
+  });
+
+  it('退桌回执带 closed：开桌的人收桌，另一个人只是离桌', async () => {
+    const app = await start();
+    const a = await enter(app, A, '阿岚');
+    const b = await enter(app, B, '小满');
+    const opened = await act(app, a, { type: 'table_open', game: 'dice', requestId: 'open-flag' });
+    const id = opened.body.tableId as string;
+    await act(app, b, { type: 'table_join', table: id, requestId: 'join-flag' });
+
+    const left = await act(app, b, { type: 'table_leave', table: id, requestId: 'b-leave' });
+    expect(left.status).toBe(200);
+    expect(left.body.closed).toBe(false);
+    const closed = await act(app, a, { type: 'table_leave', table: id, requestId: 'a-leave' });
+    expect(closed.status).toBe(200);
+    expect(closed.body.closed).toBe(true);
+  });
+});

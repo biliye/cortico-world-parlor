@@ -187,6 +187,8 @@ export interface ActionResponse {
   turn?: string;
   /** 大富翁动作之后本人看到的私视图；别的游戏不带。 */
   text?: string;
+  /** 退桌：这次离开是不是把整张桌子收掉了（开桌的人退桌 = 收桌）。 */
+  closed?: boolean;
 }
 
 export interface RoomSnapshot {

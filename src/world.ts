@@ -469,7 +469,9 @@ export class ParlorWorld implements World {
       tool('parlor_table_leave', (args) => this.tableRequest({
         type: 'table_leave',
         ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
-      }, '离开牌桌了（开桌的人离开等于把桌子收起来）。')),
+      }, (result) => result.closed
+        ? '离开牌桌了；这张桌是你开的，所以一起收起来了。'
+        : '离开牌桌了。')),
       tool('parlor_table_start', (args) => this.tableRequest({
         type: 'table_start',
         ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
@@ -726,6 +728,9 @@ export class ParlorWorld implements World {
       try {
         await this.client?.stream(
           this.token, this.lastSeq, (event) => this.onRoomEvent(event), signal, this.roomArg(),
+          // 连上了就说明上一次退避已经过期：别让「断过很久」留下的 60 秒等待
+          // 拖到下一次掉线。下一次真的断了，从 1 秒重试开始。
+          () => { backoff = 1000; },
         );
         clean = true;
       } catch (error) {
@@ -1514,7 +1519,10 @@ export class ParlorWorld implements World {
     }
   }
 
-  private async tableRequest(body: ActionRequest, done: string): Promise<string | ToolOutcome> {
+  private async tableRequest(
+    body: ActionRequest,
+    done: string | ((result: ActionResponse) => string),
+  ): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const type = (body as { type: string }).type;
     const explicit = typeof (body as { table?: unknown }).table === 'string'
@@ -1539,7 +1547,7 @@ export class ParlorWorld implements World {
         result = await send();
       }
       await this.refreshFocus();
-      return this.receipt(result, done);
+      return this.receipt(result, typeof done === 'function' ? done(result) : done);
     } catch (error) {
       return this.failed(messageOf(error));
     }

@@ -1921,7 +1921,9 @@ function renderLobby() {
     ui.lobbyTitle.textContent = mine.status === 'playing' || mine.status === 'bidding'
       ? gameLabel(hero) + '正打着。'
       : mine.status === 'ended' ? '这一局打完了。' : gameLabel(hero) + '桌还开着。';
-    ui.lobbySub.textContent = on ? '桌上：' + on + '。' : '三个人就能开。';
+    ui.lobbySub.textContent = mine.status === 'ended'
+      ? (on ? '这局是 ' + on + ' 打的。' : '三个人就能开。')
+      : (on ? '桌上：' + on + '。' : '三个人就能开。');
   } else if (legacy) {
     ui.lobbyTitle.textContent = '先把桌上这局打完。';
     ui.lobbySub.textContent = gameLabel(legacy.game) + ' 先收起了，但这局还能打完。';
@@ -1993,7 +1995,10 @@ function lobbyCard(game) {
   if (mine) kicker.append(el('span', 'muted', (mine.seats || []).length + ' 人'));
   body.append(kicker, el('h2', '', def.label));
   let sub;
-  if (mine) {
+  if (mine && mine.status === 'ended') {
+    // 结束就是下桌了：别再说「在桌上」，也别让人以为还得先退桌。
+    sub = '这局打完了。开一张新桌就能再来一局。';
+  } else if (mine) {
     sub = (mine.seats || []).map((seat) => names.get(seat.id) || seat.name).join('、')
       + ' 在桌上 · ' + (STATUS_LABELS[mine.status] || mine.status);
   } else if (other) {
@@ -2989,7 +2994,10 @@ setInterval(() => {
 }, 20000);
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) scheduleRefresh();
+  if (document.hidden) return;
+  // 手机/浏览器切回来时 EventSource 可能已经悄悄断了；没开着就立刻重连，别等 3 秒定时器。
+  if (state.cfg && (!state.stream || state.stream.readyState !== EventSource.OPEN)) connect();
+  scheduleRefresh();
 });
 window.addEventListener('focus', () => scheduleRefresh());
 

@@ -235,22 +235,38 @@ export class TableHost {
     this.recoverLiveTables();
   }
 
-  /** 这个 coo 现在参与的那张桌（没有返回 null）。 */
+  /**
+   * 这个 coo 现在参与的那张**未结束**的桌（没有返回 null）。
+   *
+   * 结束的桌不算：牌局一结束人就已经离桌，只剩一张可以回看的结果桌。
+   * 不这样区分的话，上一局的 ended 桌会一直被当成「我的桌」——不带桌号的
+   * join/leave 都打到它身上，报「已经开始了/已经结束了」，人却退不出去。
+   */
   tableOf(cooId: string): LiveTable | null {
     const row = this.db.prepare(
       'SELECT table_id FROM active_table_players WHERE coo_id = ?',
     ).get(cooId) as { table_id: string } | undefined;
     if (row) {
       const table = this.tables.get(row.table_id);
-      if (table) return table;
+      if (table && isLive(table.engine.status)) return table;
     }
-    // 兜底：看引擎里有没有这个 coo 的活跃席位（恢复失败/旧数据/刚结束的那桌）。
+    // 兜底：看引擎里有没有这个 coo 的活跃席位（恢复失败/旧数据）。
     const seat = this.seats.activeSeat(cooId);
     if (!seat) return null;
     for (const table of this.tables.values()) {
-      if (table.engine.has(seat.id)) return table;
+      if (isLive(table.engine.status) && table.engine.has(seat.id)) return table;
     }
     return null;
+  }
+
+  /** 这个 coo 最近打完的那张桌；只给结果页用，不算「我的桌」。 */
+  private lastEndedTableOf(cooId: string): LiveTable | null {
+    const seat = this.seats.activeSeat(cooId);
+    if (!seat) return null;
+    const ended = [...this.tables.values()]
+      .filter((table) => table.engine.status === 'ended' && table.engine.has(seat.id))
+      .sort((left, right) => right.createdAt - left.createdAt);
+    return ended[0] ?? null;
   }
 
   /** 这个 coo 是否被一张未结束的牌桌锁住。 */
@@ -286,11 +302,10 @@ export class TableHost {
   /** 我的桌；不传 cooId 时退回「只有一张未结束的桌」。 */
   public(cooId?: string): TableSummary | undefined {
     const mine = cooId ? this.tableOf(cooId) : null;
-    if (mine && mine.engine.status === 'ended') {
-      // 打完的那张也还在：结果页还要看。
-      return this.summaryOf(mine);
-    }
     if (mine) return this.summaryOf(mine);
+    // 刚打完的那张：人已经离桌，但结果页还要看。
+    const last = cooId ? this.lastEndedTableOf(cooId) : null;
+    if (last) return this.summaryOf(last);
     const live = this.liveTables();
     if (live.length === 1) return this.summaryOf(live[0]);
     if (live.length > 1) return undefined;
@@ -302,6 +317,8 @@ export class TableHost {
 
   private(seatId: string): TablePrivateSummary | null {
     for (const table of this.tables.values()) {
+      // 结束的桌不再给私视图：否则「我还在桌上」、旧桌还会盖住新桌的手牌。
+      if (!isLive(table.engine.status)) continue;
       if (!table.engine.has(seatId)) continue;
       const text = table.engine.privateText(seatId, this.now());
       if (!text) continue;
@@ -825,6 +842,9 @@ export class TableHost {
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
     ).run(table.id, entry.id, now, JSON.stringify({ winners, participants, stake, pot }));
+    // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
+    // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
+    this.markTableSeatsLeft(table.id, now);
     this.clearActivePlayers(table.id);
   }
 

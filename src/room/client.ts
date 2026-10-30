@@ -233,13 +233,14 @@ export class ParlorClient {
     return this.parse<InviteResponse>(response);
   }
 
-  /** 读 SSE，直到 signal 中止或连接结束。 */
+  /** 读 SSE，直到 signal 中止或连接结束。`onOpen` 只在拿到 200 响应时调一次。 */
   async stream(
     token: string,
     since: number,
     onEvent: (event: RoomEvent) => void,
     signal?: AbortSignal,
     roomId?: string,
+    onOpen?: () => void,
   ): Promise<void> {
     const query = new URLSearchParams({ since: String(since) });
     const response = await fetch(`${this.path('stream', roomId)}?${query}`, {
@@ -249,6 +250,7 @@ export class ParlorClient {
     if (!response.ok || !response.body) {
       throw new ParlorHttpError(response.status, await errorText(response));
     }
+    onOpen?.();
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';

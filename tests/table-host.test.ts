@@ -113,7 +113,9 @@ describe('客厅牌桌（骰子）', () => {
     const all = host.history(B, { since: 0, limit: 200 });
     expect(all.some((event) => event.type === 'parlor.table.end')).toBe(true);
     expect(host.tablePublic()?.status).toBe('ended');
-    expect(host.tablePrivate(a.seat.id)?.text).toContain('结束了');
+    // 结束就是下桌：不再有私视图；结果仍留在公开摘要与事件里。
+    expect(host.tablePrivate(a.seat.id)).toBeNull();
+    expect(host.tablePublic()?.text).toContain('结束');
   });
 
   it('押注：开局各扣一份，赢家拿走底池', () => {
@@ -245,9 +247,11 @@ describe('客厅牌桌（斗地主）与桌聊', () => {
     clock.now += 100;
     act(host, B, { type: 'stand' }, 'stand-b');
 
-    expect(() => host.tableSay(A, '结束了还说')).toThrow(/已经结束/);
+    // 打完就下桌：桌聊也按「不在桌上」拒绝（不是「这桌结束了」）。
+    expect(() => host.tableSay(A, '结束了还说')).toThrow(/不在任何牌桌上/);
     const snapshot = host.snapshot(A, {});
     expect(snapshot.table?.status).toBe('ended');
+    expect(snapshot.tablePrivate).toBeNull();
     expect(snapshot.ledger?.games).toBe(1);
   });
 });
