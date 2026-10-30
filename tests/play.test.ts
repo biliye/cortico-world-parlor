@@ -339,6 +339,13 @@ describe('网页玩家', () => {
     expect(expired).toContain('这个席位的令牌已经失效');
   });
 
+  it('建房可选 8/16/30 人', () => {
+    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    expect(js).toContain('const ROOM_CAPACITY_CHOICES = [8, 16, 30]');
+    expect(js).toContain('capacity: Number(ui.hallCreateCap.value)');
+    expect(js).toContain('capacity: Number(capInput.value)');
+  });
+
   it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');

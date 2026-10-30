@@ -19,6 +19,20 @@ const RULES = {
 
 /** 这版大厅只露出斗地主；哪些游戏露出来由 games/registry.js 的 enabled 决定。 */
 
+/** 建厅时的人数上限（普通客厅最多 30；大厅的 400 不在这里选）。 */
+const ROOM_CAPACITY_CHOICES = [8, 16, 30];
+
+function capacitySelect() {
+  const select = el('select');
+  select.setAttribute('aria-label', '人数上限');
+  for (const value of ROOM_CAPACITY_CHOICES) {
+    const option = el('option', '', `${value} 人`);
+    option.value = String(value);
+    select.append(option);
+  }
+  return select;
+}
+
 const state = {
   cfg: readStore(),
   snap: null,
@@ -769,9 +783,10 @@ function buildShell() {
     option.value = value;
     hallCreateVis.append(option);
   }
+  const hallCreateCap = capacitySelect();
   const hallCreateBtn = btn('开一间', () => { void createHallRoom(); }, { primary: true, small: true });
   const hallCreateRow = el('div', 'hall-create-row');
-  hallCreateRow.append(hallCreateName, hallCreateVis, hallCreateBtn);
+  hallCreateRow.append(hallCreateName, hallCreateVis, hallCreateCap, hallCreateBtn);
   hallCreate.append(el('h2', '', '开一间新的'), hallCreateRow,
     el('p', 'muted hall-note', '公开的客厅会出现在别人的目录里；不公开的只有成员看得到。'));
   viewHall.append(hallHead, hallPeople, hallRooms, hallCreate);
@@ -892,7 +907,7 @@ function buildShell() {
     tablesCard, roomCard, chatEyebrow,
     viewTable, viewLobby, viewHall, tableHead, mobileTicker, game, ticker,
     lobbyEyebrow, lobbyTitle, lobbySub, gameGrid, guide, lobbyNotice, membersCount, memberRow,
-    hallPeopleCount, hallPeopleRow, hallRoomsList, hallCreateName, hallCreateVis, hallCreateBtn,
+    hallPeopleCount, hallPeopleRow, hallRoomsList, hallCreateName, hallCreateVis, hallCreateCap, hallCreateBtn,
     chatPanel, markRead, backRoom, tabRoom, tabTable, tabMail,
     logRoom, logTable, mailList, composer, scopeText, sayInput, sendBtn, mailNote,
     infoGame, infoStake, infoStatus, infoTurn, ruleNote, infoClock,
@@ -1653,7 +1668,11 @@ async function createHallRoom() {
     const created = await api('/v1/rooms', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, visibility: ui.hallCreateVis.value }),
+      body: JSON.stringify({
+        name,
+        visibility: ui.hallCreateVis.value,
+        capacity: Number(ui.hallCreateCap.value),
+      }),
     });
     ui.hallCreateName.value = '';
     await goRoom(created.room.id);
@@ -2106,6 +2125,7 @@ function ensureRoomsDialog() {
     option.value = value;
     visInput.append(option);
   }
+  const capInput = capacitySelect();
   const createBtn = btn('开一间', async () => {
     const name = nameInput.value.trim();
     if (name.length < 2) {
@@ -2117,7 +2137,11 @@ function ensureRoomsDialog() {
       const created = await api('/v1/rooms', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name, visibility: visInput.value }),
+        body: JSON.stringify({
+          name,
+          visibility: visInput.value,
+          capacity: Number(capInput.value),
+        }),
       });
       await goRoom(created.room.id);
     } catch (error) {
@@ -2126,7 +2150,7 @@ function ensureRoomsDialog() {
       createBtn.disabled = false;
     }
   }, { small: true, primary: true });
-  create.append(nameInput, visInput, createBtn);
+  create.append(nameInput, visInput, capInput, createBtn);
   box.append(head, roomsStatus, roomsList, create);
   roomsDialog.append(box);
   roomsDialog.addEventListener('click', (event) => {
