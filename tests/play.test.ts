@@ -320,6 +320,10 @@ describe('网页玩家', () => {
     const parent = readFileSync(new URL('../src/web/parent.js', import.meta.url), 'utf8');
     expect(parent).toContain('playAsParent');
     expect(parent).toContain("localStorage.setItem('parlor-play-v1'");
+    // 家长页能改名字：一个接口同时改账户名、玩家身份名、当前席位名。
+    expect(parent).toContain('openRename');
+    expect(parent).toContain("'/v1/parent/rename'");
+    expect(parent).toContain('改名字');
   });
 
   it('加入页不会被空刷新重画：窗口一获得焦点，正在填的名字就没了', () => {

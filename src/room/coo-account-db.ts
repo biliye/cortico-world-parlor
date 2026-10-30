@@ -254,6 +254,14 @@ export class CooAccountDb {
     return row ? row.display_name : '';
   }
 
+  /** 改 coo 的显示名（不动 secret、不动身份）。 */
+  renameCooDisplay(cooId: string, displayName: string): boolean {
+    const name = cleanName(displayName);
+    if (!name) return false;
+    const result = this.db.prepare('UPDATE coos SET display_name = ? WHERE id = ?').run(name, cooId);
+    return Number(result.changes) > 0;
+  }
+
   bindPlayerCoo(accountId: string, cooId: string): void {
     this.db.prepare('UPDATE accounts SET player_coo_id = ? WHERE id = ?').run(cooId, accountId);
   }

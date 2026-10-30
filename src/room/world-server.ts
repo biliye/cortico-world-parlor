@@ -18,7 +18,7 @@ import { gameByActionType } from './games/registry.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken, listRooms, memberOf,
-  resolveRoom, seatByTokenHash, type RoomRow,
+  renameSeat, resolveRoom, seatByTokenHash, type RoomRow,
 } from './room-seat-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
@@ -438,6 +438,13 @@ export class WorldServer {
       const session = this.parentSession(req);
       const body = await readJson(req);
       json(res, 200, this.parentPlay(session.account, body));
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/parent/rename') {
+      const session = this.parentSession(req);
+      const body = await readJson(req);
+      json(res, 200, this.parentRename(session.account, body));
       return;
     }
 
@@ -1003,6 +1010,35 @@ export class WorldServer {
       token,
       identity: { cooId: player.cooId, cooSecret: player.secret },
       player: true,
+    };
+  }
+
+  /**
+   * 家长改名字：账户显示名 + 玩家身份名 + 当前席位名一次改完。
+   * 还没下过场就顺手把玩家身份建出来，免得第一次下场又回到默认名。
+   */
+  private parentRename(account: ParentAccount, body: Record<string, unknown>): Record<string, unknown> {
+    const raw = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
+    if (!raw) throw new HttpError(400, '名字不能为空');
+    if (raw.length > 24) throw new HttpError(400, '名字最多 24 个字');
+
+    const playerId = this.coo.playerCooOf(account.id);
+    let seat: { room: string; id: string; name: string } | null = null;
+    if (playerId) {
+      const active = activeSeatForCoo(this.db, playerId);
+      if (active) {
+        // 同厅重名会抛 RoomSeatError('name_taken')，由 statusOf 转成 409。
+        renameSeat(this.db, active.roomId, active.id, raw);
+        seat = { room: active.roomId, id: active.id, name: raw };
+      }
+      this.coo.renameCooDisplay(playerId, raw);
+    }
+    const renamed = this.coo.rename(account.id, raw);
+    if (!renamed) throw new HttpError(409, '改不了名字');
+    if (!playerId) this.ensurePlayerCoo(renamed, raw);
+    return {
+      account: { id: renamed.id, cooId: renamed.cooId, displayName: renamed.displayName },
+      seat,
     };
   }
 

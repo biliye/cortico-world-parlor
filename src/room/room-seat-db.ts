@@ -598,6 +598,28 @@ export const updateSeatToken = (db: Db, roomId: string, seatId: string, tokenHas
     .run(tokenHash, roomId, seatId);
 };
 
+/** 改席位名；同厅已有同名活跃席位时 name_taken（改成自己原来的名字不算冲突）。 */
+export const renameSeat = (db: Db, roomId: string, seatId: string, name: string): SeatRow => {
+  const clean = cleanSeatName(name);
+  return withTransaction(db, () => {
+    const seat = seatRow(db, roomId, seatId);
+    if (!seat || seat.releasedAt !== null) throw new RoomSeatError('seat_not_found', '席位不存在或已经离开');
+    if (seat.name.toLowerCase() !== clean.toLowerCase() && activeNameTaken(db, roomId, clean)) {
+      throw new RoomSeatError('name_taken', `已经有叫「${clean}」的活跃席位`);
+    }
+    try {
+      db.prepare('UPDATE room_seats SET name = ? WHERE room_id = ? AND id = ?').run(clean, roomId, seatId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('room_seats.room_id, room_seats.name')) {
+        throw new RoomSeatError('name_taken', `已经有叫「${clean}」的活跃席位`);
+      }
+      throw error;
+    }
+    return seatRow(db, roomId, seatId)!;
+  });
+};
+
 /** 可见区间查询；scope 过滤不在这里做。席位不存在返回 null。 */
 export const seatInterval = (db: Db, roomId: string, seatId: string): SeatInterval | null => {
   const row = db.prepare(

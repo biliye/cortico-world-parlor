@@ -150,6 +150,42 @@ describe('家长下场', () => {
     expect((snap.body.seat as { id: string }).id).toBe((moved.body.seat as { id: string }).id);
   });
 
+  it('家长改名字：账户、玩家身份、当前席位一起改；同厅重名 409', async () => {
+    const app = await start();
+    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, { ...cooHeaders(COO), 'x-parlor-invite': 'inv' });
+    const ownerKey = joined.body.ownerKey as string;
+    const session = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ownerKey }),
+    });
+    const cookie = cookieOf(session);
+
+    // 还没下场：改名只动账户，但会把玩家身份按这个名字建出来。
+    const early = await post(app.url, '/v1/parent/rename', { name: '小满的妈妈' }, { cookie });
+    expect(early.status).toBe(200);
+    expect((early.body.account as { displayName: string }).displayName).toBe('小满的妈妈');
+    expect(early.body.seat).toBeNull();
+    const played = await post(app.url, '/v1/parent/play', {}, { cookie });
+    expect((played.body.seat as { name: string }).name).toBe('小满的妈妈');
+
+    // 下场后改名：当前席位跟着变，席位令牌不动。
+    const renamed = await post(app.url, '/v1/parent/rename', { name: '小满的爸爸' }, { cookie });
+    expect(renamed.status).toBe(200);
+    expect((renamed.body.seat as { name: string }).name).toBe('小满的爸爸');
+    const snap = await getWith(app.url, '/v1/room', { authorization: `Bearer ${played.body.token as string}` });
+    expect((snap.body.seat as { name: string }).name).toBe('小满的爸爸');
+
+    // 同厅已经有「小满」（孩子），不能改成同名。
+    const clash = await post(app.url, '/v1/parent/rename', { name: '小满' }, { cookie });
+    expect(clash.status).toBe(409);
+    // 空名字与超长名字都拒绝。
+    expect((await post(app.url, '/v1/parent/rename', { name: '   ' }, { cookie })).status).toBe(400);
+    expect((await post(app.url, '/v1/parent/rename', { name: '一'.repeat(25) }, { cookie })).status).toBe(400);
+    // 没有会话不行。
+    expect((await post(app.url, '/v1/parent/rename', { name: '谁' })).status).toBe(401);
+  });
+
   it('房间 join 不再能绕过邀请码：新身份要码，已有身份不用', async () => {
     const app = await start();
     const stranger = cooHeaders('coo-newguest001');

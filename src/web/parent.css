@@ -66,6 +66,19 @@ body {
 .account .btn:hover:not(:disabled) { filter: brightness(1.04); }
 .account .btn:disabled { opacity: .6; cursor: default; }
 
+.rename {
+  display: flex; align-items: center; gap: 8px;
+  width: min(1040px, 100%);
+  margin: 10px auto 0;
+  padding: 0 clamp(12px, 3vw, 24px);
+}
+.rename input {
+  flex: 0 1 320px; min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: #fff; color: inherit; font: inherit;
+}
+
 .layout {
   display: grid; gap: 14px;
   width: min(1040px, 100%);

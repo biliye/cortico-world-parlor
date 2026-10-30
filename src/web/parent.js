@@ -75,12 +75,17 @@ function showView(account) {
   ui.gate.hidden = true;
   ui.view.hidden = false;
   clear(ui.account);
-  ui.account.append(el('span', '', account.displayName || '家长'));
+  const who = el('span', 'who', account.displayName || '家长');
+  ui.account.append(who);
   const play = el('button', 'btn primary small', '下场玩');
   play.type = 'button';
   play.title = '以家长身份进客厅；和孩子的账本分开';
   play.addEventListener('click', () => { void playAsParent(play); });
   ui.account.append(play);
+  const rename = el('button', 'link', '改名字');
+  rename.type = 'button';
+  rename.addEventListener('click', () => openRename(account, who));
+  ui.account.append(rename);
   const logout = el('button', 'link', '退出');
   logout.type = 'button';
   logout.addEventListener('click', async () => {
@@ -88,6 +93,51 @@ function showView(account) {
     showGate('已经退出。');
   });
   ui.account.append(logout);
+}
+
+/** 改名字：账户显示名、玩家身份名、当前席位名一起改（服务器一个接口）。 */
+function openRename(account, who) {
+  const open = document.getElementById('rename-box');
+  if (open) {
+    open.remove();
+    return;
+  }
+  const box = el('form', 'rename');
+  box.id = 'rename-box';
+  const input = el('input');
+  input.value = account.displayName || '';
+  input.maxLength = 24;
+  input.placeholder = '比如：塞斯普瑞家的家长';
+  input.setAttribute('aria-label', '新名字');
+  const save = el('button', 'btn primary small', '保存');
+  save.type = 'submit';
+  const cancel = el('button', 'link', '取消');
+  cancel.type = 'button';
+  cancel.addEventListener('click', () => box.remove());
+  box.append(input, save, cancel);
+  box.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      const result = await api('/v1/parent/rename', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: input.value }),
+      });
+      account.displayName = result.account.displayName;
+      who.textContent = account.displayName;
+      box.remove();
+      toast('名字改好了');
+      await loadView();
+    } catch (error) {
+      toast(error.message || '改不了名字');
+    } finally {
+      save.disabled = false;
+    }
+  });
+  ui.account.parentElement.after(box);
+  input.focus();
+  input.select();
 }
 
 /** 家长下场：借家长会话领一个 human 席位，把席位令牌写进 localStorage，再去 /play。 */
