@@ -27,6 +27,8 @@ const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
 const SEAT_SECRET = 'PARLOR_SEAT_TOKEN';
 const OWNER_SECRET = 'PARLOR_OWNER_TOKEN';
+/** 运营者开关：是否在面板给出可转发的网页访客链接。不放进扩展设置页。 */
+const GUEST_JOIN_SECRET = 'PARLOR_ALLOW_GUEST_JOIN';
 /** 当前客厅；换房后写回，重启时用它找回席位。 */
 const CURRENT_ROOM_SECRET = 'PARLOR_CURRENT_ROOM';
 const CURSOR_NAME = 'parlor-cursor.json';
@@ -367,11 +369,15 @@ export class ParlorWorld implements World {
   private readonly wakeTimes: number[] = [];
   private lastLinkAt = 0;
   private stopped = false;
+  /** 访客入口由运营者在部署 .env 里控制；默认关。 */
+  private readonly allowGuestJoin: boolean;
 
   constructor(ctx: WorldContext<ParlorConfigSection>) {
     this.ctx = ctx;
     this.cursorFile = join(ctx.dataDir, CURSOR_NAME);
     this.identityFile = join(ctx.dataDir, IDENTITY_FILE);
+    const flag = ctx.secret(GUEST_JOIN_SECRET).trim().toLowerCase();
+    this.allowGuestJoin = ['1', 'true', 'yes', 'on'].includes(flag);
   }
 
   envPromptVars(): Record<string, string> {
@@ -420,7 +426,7 @@ export class ParlorWorld implements World {
     const links = this.baseUrl
       ? [
         // 访客入口默认关；关了就不给可转发的公开链接，只留带钥匙的那两条。
-        ...(this.ctx.cfg.allowGuestJoin
+        ...(this.allowGuestJoin
           ? [{ label: '客厅 · 网页牌桌（可发给群友）', href: `${this.baseUrl}/play`, inheritTheme: true }]
           : []),
         // 带钥匙的那条只给自己：点开就换家长会话并下场，不能转发。

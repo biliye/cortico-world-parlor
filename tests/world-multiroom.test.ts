@@ -60,11 +60,13 @@ const startWorld = async (): Promise<{
 }> => {
   server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
   await server.listen();
-  const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+  const secrets: Record<string, string> = {
+    PARLOR_INVITE_CODE: 'inv',
+    PARLOR_ALLOW_GUEST_JOIN: '1',
+  };
   const ctx = makeContext(secrets);
   ctx.cfg.serverUrl = server.url;
   ctx.cfg.seatName = '小满';
-  ctx.cfg.allowGuestJoin = true;
   world = PARLOR.create(ctx);
   const host = new FakeHost();
   await world.start(host);
