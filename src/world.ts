@@ -555,7 +555,7 @@ export class ParlorWorld implements World {
       source: this.id,
       origin: 'internal',
       senderKey: this.id,
-      text: `客厅「${this.currentRoom || 'lobby'}」已连接。席位：${this.seat?.name ?? '未知'}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_mail 看。` : ''}`,
+      text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_mail 看。` : ''}`,
       meta: { room: this.currentRoom, seat: this.seat?.id, address: this.baseUrl },
     }, { trigger: 'flush' });
   }

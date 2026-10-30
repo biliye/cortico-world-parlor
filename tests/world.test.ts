@@ -68,6 +68,8 @@ describe('客厅 World', () => {
     const host = new FakeHost();
     await world.start(host);
     expect(host.events[0]?.type).toBe('parlor.started');
+    expect(host.events[0]?.text).toContain('客厅已连接');
+    expect(host.events[0]?.text).not.toContain('「');
 
     const client = new ParlorClient(server.url);
     const friend = await client.join('inv', { name: '阿岚' });

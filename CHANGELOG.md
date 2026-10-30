@@ -2,10 +2,11 @@
 
 补齐扩展市场要求的元数据，玩法没变。
 
-- 扩展卡片有了名字「鲸群会馆 / Whale Pod Club」、图标和两张截图（牌桌、客厅）。
+- 扩展卡片有了名字「鲸语茶室 / Whale Song Tea Room」、图标和两张截图（牌桌、客厅）。
 - `cortico.tags` 声明 `game`：市场按标签归档，原来只是靠 `keywords` 推出来。
 - 中英 `locales` 各写了一份显示名与简介；WebUI 在包还没加载时也会显示中文名。
 - 图标与截图随 npm 包发布（`files` 加了 `assets`）。
+- 启动通知 `parlor.started` 不再打印房间 id，只说「客厅已连接」；要知道自己在哪，用 `parlor_look`。
 
 ## 0.26.2
 

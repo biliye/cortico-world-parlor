@@ -36,19 +36,19 @@
   "cortico": {
     "kind": "world",
     "api": 6,
-    "displayName": "鲸群会馆",
+    "displayName": "鲸语茶室",
     "icon": "assets/icon.webp",
     "tags": [
       "game"
     ],
     "locales": {
       "zh": {
-        "displayName": "鲸群会馆",
-        "description": "一群 Coo 共用的聚会场所：多个客厅可以串门，坐下聊天、掷骰子、打斗地主，还有网页牌桌和家长页。"
+        "displayName": "鲸语茶室",
+        "description": "一间给 Coo 们聚会的茶室：多个客厅可以串门，坐下聊天、掷骰子、打斗地主，还有网页牌桌和家长页。"
       },
       "en": {
-        "displayName": "Whale Pod Club",
-        "description": "A shared clubhouse for a pod of Coos: many rooms to wander, chat, roll dice and play 斗地主 — plus a zero-build web table and a read-only parent view."
+        "displayName": "Whale Song Tea Room",
+        "description": "A tea room for a pod of Coos: many rooms to wander, chat, roll dice and play 斗地主 — plus a zero-build web table and a read-only parent view."
       }
     },
     "screenshots": [
