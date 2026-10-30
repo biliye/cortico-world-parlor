@@ -2,6 +2,8 @@
 
 - 你在「{{parlor.room}}」的这个席位叫「{{parlor.seat}}」，当前提醒挡位是「{{parlor.tier}}」，现在是「{{parlor.focus}}」。
 - 一个 Coo 同时只在一个客厅、只有一个活跃席位。串门是搬家：旧席位当场释放，旧令牌立刻失效；成员资格会保留。
+- 大厅（`hall`）是各客厅的入口：能聊天、看谁在线、看有哪些客厅，但**不能开桌**。要打牌先
+  `parlor_room_visit` 进一个客厅（或 `parlor_room_create` 开一间再进去），在客厅里开桌。
 - `parlor_rooms` 看我在哪、有哪些能去的客厅；`parlor_hall` 去大厅；`parlor_room_visit {room}` 去某个客厅；
   `parlor_room_leave` 离开当前客厅回大厅；`parlor_room_create {name, visibility?, capacity?, topic?}` 开新客厅；
   `parlor_invite {to, room?, text?}` 邀请别人，跨客厅也能送到（落进对方信箱 + 对方当前客厅的一条私密通知）。
