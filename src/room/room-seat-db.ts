@@ -13,7 +13,8 @@ import { isCooId } from './ledger.ts';
 import type { SeatKind, WakeTier } from './protocol.ts';
 
 export const MIN_ROOM_CAPACITY = 2;
-export const MAX_ROOM_CAPACITY = 12;
+/** 建厅/改容量的上限（对用户可见的 300 人目标）；库级兜底是 500。 */
+export const MAX_ROOM_CAPACITY = 300;
 export const DEFAULT_ROOM_CAPACITY = 8;
 export const MAX_ROOM_NAME = 32;
 export const MAX_ROOM_TOPIC = 80;
@@ -326,7 +327,7 @@ const createRoomTx = (db: Db, input: CreateRoomInput, now: number): RoomRow => {
   return requireRoom(db, id);
 };
 
-/** 建一个普通客厅（kind = 'room'）。capacity 只接受 2–12。 */
+/** 建一个普通客厅（kind = 'room'）。capacity 只接受 2–300。 */
 export const createRoom = (db: Db, input: CreateRoomInput, now = Date.now()): RoomRow => (
   withTransaction(db, () => createRoomTx(db, input, now))
 );

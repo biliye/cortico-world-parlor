@@ -13,6 +13,7 @@ import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
 import { CooAccountDb, type ParentAccount } from './coo-account-db.ts';
 import { migrate, openDb, type Db } from './db.ts';
+import { HALL_CAPACITY } from './schema.ts';
 import { MailDb } from './mail-db.ts';
 import { gameByActionType } from './games/registry.ts';
 import { HostError, RoomHost } from './room-host.ts';
@@ -284,8 +285,8 @@ export class WorldServer {
     const now = this.now();
     this.db.prepare(
       `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, topic, epoch, seq, created_at, last_active_at)
-       VALUES (?, 'hall', ?, NULL, 'public', 32, ?, ?, 0, ?, ?)`,
-    ).run('hall', '大厅', '所有客厅的入口：看谁在线、有哪些客厅、去哪串门。', randomUUID(), now, now);
+       VALUES (?, 'hall', ?, NULL, 'public', ?, ?, ?, 0, ?, ?)`,
+    ).run('hall', '大厅', HALL_CAPACITY, '所有客厅的入口：看谁在线、有哪些客厅、去哪串门。', randomUUID(), now, now);
     return getRoom(this.db, 'hall')!;
   }
 

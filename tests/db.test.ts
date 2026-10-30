@@ -32,7 +32,7 @@ describe('SQLite 地基', () => {
   it('migrate 可重复执行，schema 版本写进 meta', () => {
     migrate(db);
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string };
-    expect(row.value).toBe('3');
+    expect(row.value).toBe('4');
     const mode = db.prepare('SELECT value FROM meta WHERE key = ?').get('storage_mode') as { value: string };
     expect(mode.value).toBe('sqlite');
   });
@@ -47,6 +47,84 @@ describe('SQLite 地基', () => {
     expect(cols).toContain('from_coo_id');
     const index = db.prepare("SELECT name FROM sqlite_master WHERE name = 'ix_mail_peer'").get();
     expect(index).toBeTruthy();
+  });
+
+  it('老库 capacity CHECK 只有 64：迁移重建 rooms，数据与外键都保住', () => {
+    const oldDb = openDb();
+    try {
+      // 0.20/0.21 时代的 rooms 建表（CHECK 2–64）；coos 先建出来，后面要插外键。
+      oldDb.exec(`
+        CREATE TABLE coos (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          secret_hash TEXT,
+          created_at INTEGER NOT NULL,
+          last_seen_at INTEGER,
+          status TEXT NOT NULL DEFAULT 'active'
+        );
+        CREATE TABLE rooms (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('hall','room')),
+          name TEXT NOT NULL,
+          owner_coo_id TEXT REFERENCES coos(id),
+          visibility TEXT NOT NULL CHECK (visibility IN ('public','unlisted','private')),
+          capacity INTEGER NOT NULL CHECK (capacity BETWEEN 2 AND 64),
+          topic TEXT,
+          invite_code_hash TEXT,
+          epoch TEXT NOT NULL,
+          seq INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0),
+          created_at INTEGER NOT NULL,
+          last_active_at INTEGER NOT NULL,
+          archived_at INTEGER,
+          CHECK (kind = 'hall' OR owner_coo_id IS NOT NULL),
+          CHECK (kind = 'room' OR owner_coo_id IS NULL)
+        );
+      `);
+      oldDb.prepare('INSERT INTO coos(id, kind, display_name, created_at) VALUES (?, ?, ?, ?)')
+        .run('coo-aaaaaaaa', 'human', '爸爸', 1);
+      oldDb.prepare(
+        `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, epoch, seq, created_at, last_active_at)
+         VALUES ('hall', 'hall', '大厅', NULL, 'public', 32, 'e-hall', 0, 1, 1)`,
+      ).run();
+      oldDb.prepare(
+        `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, epoch, seq, created_at, last_active_at)
+         VALUES ('big', 'room', '大房', 'coo-aaaaaaaa', 'public', 64, 'e-big', 0, 1, 1)`,
+      ).run();
+
+      migrate(oldDb);
+
+      // 大厅从 32 抬到 400；原有的 64 人房保留。
+      const hall = oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get() as { capacity: number };
+      expect(hall.capacity).toBe(400);
+      const big = oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'big'").get() as { capacity: number };
+      expect(big.capacity).toBe(64);
+
+      // 新 CHECK 允许 300，拒绝 501。
+      oldDb.prepare("UPDATE rooms SET capacity = 300 WHERE id = 'big'").run();
+      expect(() => oldDb.prepare("UPDATE rooms SET capacity = 501 WHERE id = 'big'").run())
+        .toThrow(/CHECK/);
+
+      // 外键、索引与触发器都还在。
+      expect(oldDb.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      const indexes = (oldDb.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'rooms'",
+      ).all() as { name: string }[]).map((row) => row.name);
+      expect(indexes).toEqual(expect.arrayContaining([
+        'ux_rooms_hall', 'ux_rooms_invite', 'ix_rooms_directory', 'ix_rooms_owner',
+      ]));
+      oldDb.prepare(
+        `INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, visible_from_seq)
+         VALUES ('big', 's1', 'coo-aaaaaaaa', 'human', '爸爸', 'full', 'token-1', 1, 0)`,
+      ).run();
+      expect(oldDb.prepare("SELECT COUNT(*) AS n FROM room_seats WHERE room_id = 'big'").get())
+        .toEqual({ n: 1 });
+
+      const version = oldDb.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string };
+      expect(version.value).toBe('4');
+    } finally {
+      oldDb.close();
+    }
   });
 
   it('身份 → 账户 → 客厅 → 席位的基本写入', () => {

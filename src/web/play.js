@@ -261,7 +261,7 @@ async function refreshSnapshot() {
   state.offset = snapshot.now - Date.now();
 }
 
-function scheduleRefresh() {
+function scheduleRefresh(delay = 120) {
   // 加入页还没有席位：没有可刷的东西，而未带令牌的刷新会 401、把整块表单重画掉。
   if (!state.cfg) return;
   if (state.refreshTimer) return;
@@ -275,7 +275,20 @@ function scheduleRefresh() {
         void handleExpiredSeat(state.cfg ? state.cfg.token : '');
       }
     }
-  }, 120);
+  }, delay);
+}
+
+/**
+ * 大厅的「谁在线」用一份单独的目录数据。它比整份快照还贵（还带客厅列表），
+ * 所以加入/离开的高峰期只允许 1.2 秒刷一次：300 个人同时点链接时，
+ * 不能让每个浏览器对每条 joined 都打一次 /v1/hall。
+ */
+function scheduleHallRefresh() {
+  if (!state.cfg || state.hallTimer) return;
+  state.hallTimer = setTimeout(() => {
+    state.hallTimer = null;
+    void loadHall(true);
+  }, 1200);
 }
 
 async function act(body) {
@@ -360,14 +373,16 @@ function handleEvent(event) {
   pushLog(event);
   const type = event.type || '';
   if (type === 'parlor.say' || type === 'parlor.table.say') return;
+  const seatChange = type === 'parlor.joined' || type === 'parlor.left';
   if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')
-    || type === 'parlor.joined' || type === 'parlor.left'
     || type === 'parlor.ledger' || type === 'parlor.whisper') {
     scheduleRefresh();
+  } else if (seatChange && state.view === 'lobby') {
+    // 人名单只在客厅页显示；别的页面没必要为了别人进出重拉整份快照。
+    // 1 秒的防抖把「几百人同时进来」放大成的事件流压成每个浏览器每秒一次。
+    scheduleRefresh(1000);
   }
-  if (state.view === 'hall' && (type === 'parlor.joined' || type === 'parlor.left')) {
-    void loadHall(true);
-  }
+  if (state.view === 'hall' && seatChange) scheduleHallRefresh();
   if (state.tab === 'mail'
     && (type === 'parlor.whisper' || type === 'parlor.ledger' || type === 'parlor.table.turn')) {
     loadMail(true);

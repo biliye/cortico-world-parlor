@@ -8,6 +8,38 @@
  * - 一个 Coo 全局最多一个活跃席位；一个客厅一个 Coo 一个活跃席位。
  * - 表顺序按外键依赖排；可重复执行。
  */
+/**
+ * 单房硬顶（库级 CHECK）。线上目标 300；这里留到 500 给压测与突发。
+ * 改这个值必须重建 rooms 表（SQLite 不能 ALTER CHECK），见 db.ts 的 migrate()。
+ */
+export const DB_MAX_ROOM_CAPACITY = 500;
+
+/** 大厅的默认容量。老库如果还停在最初的 32，迁移时抬到这个值。 */
+export const HALL_CAPACITY = 400;
+
+/**
+ * rooms 的建表语句。正常建库与迁移重建表共用这一份，避免两处 DDL 漂移。
+ * guard 只用于首次建库（`IF NOT EXISTS `）；重建时必须没有 guard。
+ */
+export const roomsTableSql = (table: string, guard = ''): string => `
+CREATE TABLE ${guard}${table} (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('hall','room')),
+  name TEXT NOT NULL,
+  owner_coo_id TEXT REFERENCES coos(id),
+  visibility TEXT NOT NULL CHECK (visibility IN ('public','unlisted','private')),
+  capacity INTEGER NOT NULL CHECK (capacity BETWEEN 2 AND ${DB_MAX_ROOM_CAPACITY}),
+  topic TEXT,
+  invite_code_hash TEXT,
+  epoch TEXT NOT NULL,
+  seq INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0),
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  archived_at INTEGER,
+  CHECK (kind = 'hall' OR owner_coo_id IS NOT NULL),
+  CHECK (kind = 'room' OR owner_coo_id IS NULL)
+);`;
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -38,23 +70,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled'))
 );
 
-CREATE TABLE IF NOT EXISTS rooms (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('hall','room')),
-  name TEXT NOT NULL,
-  owner_coo_id TEXT REFERENCES coos(id),
-  visibility TEXT NOT NULL CHECK (visibility IN ('public','unlisted','private')),
-  capacity INTEGER NOT NULL CHECK (capacity BETWEEN 2 AND 64),
-  topic TEXT,
-  invite_code_hash TEXT,
-  epoch TEXT NOT NULL,
-  seq INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0),
-  created_at INTEGER NOT NULL,
-  last_active_at INTEGER NOT NULL,
-  archived_at INTEGER,
-  CHECK (kind = 'hall' OR owner_coo_id IS NOT NULL),
-  CHECK (kind = 'room' OR owner_coo_id IS NULL)
-);
+${roomsTableSql('rooms', 'IF NOT EXISTS ')}
 CREATE UNIQUE INDEX IF NOT EXISTS ux_rooms_hall ON rooms(kind) WHERE kind = 'hall';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_rooms_invite ON rooms(invite_code_hash) WHERE invite_code_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_rooms_directory ON rooms(visibility, archived_at, last_active_at DESC);

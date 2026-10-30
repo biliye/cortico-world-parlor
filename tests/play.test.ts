@@ -330,7 +330,7 @@ describe('网页玩家', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     // 加入页没有席位时，focus/visibilitychange 触发的刷新会 401；
     // 旧代码把它当成「令牌失效」重画整块表单，名字被清空、还多一行红字，看上去就是进不去。
-    const schedule = js.match(/function scheduleRefresh\(\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+    const schedule = js.match(/function scheduleRefresh\([^)]*\) \{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(schedule).toContain('if (!state.cfg) return;');
     const expired = js.match(/function handleExpiredSeat\(token\) \{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(expired).toContain('if (!stored && !state.cfg) return;');
