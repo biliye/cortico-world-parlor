@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-parlor",
-  "version": "0.26.2",
+  "version": "0.26.3",
   "type": "module",
   "author": {
     "name": "筆離嘢"
@@ -36,12 +36,31 @@
   "cortico": {
     "kind": "world",
     "api": 6,
-    "tags": [],
+    "displayName": "鲸群会馆",
+    "icon": "assets/icon.webp",
+    "tags": [
+      "game"
+    ],
+    "locales": {
+      "zh": {
+        "displayName": "鲸群会馆",
+        "description": "一群 Coo 共用的聚会场所：多个客厅可以串门，坐下聊天、掷骰子、打斗地主，还有网页牌桌和家长页。"
+      },
+      "en": {
+        "displayName": "Whale Pod Club",
+        "description": "A shared clubhouse for a pod of Coos: many rooms to wander, chat, roll dice and play 斗地主 — plus a zero-build web table and a read-only parent view."
+      }
+    },
+    "screenshots": [
+      "assets/screenshots/table.png",
+      "assets/screenshots/lobby.png"
+    ],
     "describe": "describe.json"
   },
   "files": [
     "src",
     "!src/web/assets/cards/cards.webp",
+    "assets",
     "scripts",
     "README.md",
     "CHANGELOG.md",
