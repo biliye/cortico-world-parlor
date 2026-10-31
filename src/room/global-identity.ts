@@ -33,7 +33,14 @@ export const registeredHandle = (db: Db, cooId: string): string => {
 };
 
 export class IdentityRegistry {
-  constructor(private readonly db: Db, private readonly now = Date.now) {}
+  private readonly db: Db;
+  private readonly now: () => number;
+
+  // 不用 TS 参数属性：serve:world 走 node 的 strip-only 模式，那种语法起不来。
+  constructor(db: Db, now: () => number = Date.now) {
+    this.db = db;
+    this.now = now;
+  }
 
   /** 同一事务内分配并固定短号；旧身份用原 secret 接入，绝不重发 cooId。 */
   enroll(cooId: string, secret: string, name: string, kind: 'pet' | 'human' = 'pet'): GlobalPerson {
