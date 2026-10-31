@@ -979,7 +979,10 @@ function buildShell() {
   const lobbyTitle = el('h1', '', '灯还亮着。');
   const lobbySub = el('p');
   lobbyCopy.append(lobbyEyebrow, lobbyTitle, lobbySub);
-  lobbyHead.append(lobbyCopy, roomManage);
+  // 保留侧栏原入口；主区域另建按钮，不能移动同一个 DOM 节点。
+  const lobbyManage = btn('成员管理', () => { void openAccess(); }, { ghost: true, small: true });
+  lobbyManage.title = roomManage.title;
+  lobbyHead.append(lobbyCopy, lobbyManage);
   const gameGrid = el('div', 'game-grid');
   // 玩法说明由 registry 里的 guide 生成（见 renderGuides）；这里只留壳。
   const guide = el('section', 'panel ddz-guide');
