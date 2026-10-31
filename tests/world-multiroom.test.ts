@@ -1,6 +1,6 @@
 /** 多客厅 World：开客厅、串门、回大厅、邀请，以及专注 B。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolCallContext } from 'cortico/core/types.ts';
@@ -10,6 +10,7 @@ import { PARLOR } from '../src/definition.ts';
 import type { ParlorConfigSection } from '../src/config.ts';
 import { ParlorClient } from '../src/room/client.ts';
 import { WorldServer } from '../src/room/world-server.ts';
+import type { WakeTier } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
 const until = async (predicate: () => boolean, timeout = 5000): Promise<void> => {
@@ -55,8 +56,9 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
   return typeof result === 'string' ? result : result.text;
 };
 
-const startWorld = async (): Promise<{
+const startWorld = async (options: { room?: string; tier?: WakeTier } = {}): Promise<{
   host: FakeHost; friend: ParlorClient; friendToken: string; secrets: Record<string, string>;
+  ctx: WorldContext<ParlorConfigSection>;
 }> => {
   server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
   await server.listen();
@@ -68,7 +70,8 @@ const startWorld = async (): Promise<{
   ctx.cfg.serverUrl = server.url;
     ctx.cfg.identityUrl = server.url;
   // 这些用例考的是同房串门与牌桌，落在大厅开不了桌；默认值本身另有用例。
-  ctx.cfg.room = 'lobby';
+  ctx.cfg.room = options.room ?? 'lobby';
+  if (options.tier) ctx.cfg.wakeTier = options.tier;
   ctx.cfg.seatName = '小满';
   world = PARLOR.create(ctx);
   const host = new FakeHost();
@@ -77,9 +80,80 @@ const startWorld = async (): Promise<{
     cooId: 'coo-ffffffff',
     cooSecret: 'friend-secret-0123456789',
   });
-  const joined = await friend.join('inv', { name: '阿岚' });
-  return { host, friend, friendToken: joined.token, secrets };
+  const joined = await friend.join('inv', { name: '阿岚' }, ctx.cfg.room);
+  return { host, friend, friendToken: joined.token, secrets, ctx };
 };
+
+const visitAndLeave = async (room: string): Promise<number> => {
+  const visitor = new ParlorClient(server!.url, {
+    cooId: 'coo-visitor-0001', cooSecret: 'visitor-secret-0123456789',
+  });
+  const joined = await visitor.join('inv', { name: '来访家长', kind: 'human' }, room);
+  return (await visitor.leaveRoom(joined.token, room)).seq;
+};
+
+const pushedText = (host: FakeHost): string => host.events
+  .filter((event) => event.type === 'parlor.message' || event.type === 'parlor.digest')
+  .map((event) => event.text).join('\n');
+
+describe('大厅进出不主动推给 Coo', () => {
+  it.each(['full', 'digest', 'quiet', 'off'] as const)('%s：大厅进出不进推送或摘要，游标仍推进', async (tier) => {
+    const { host, friend, friendToken, ctx } = await startWorld({ room: 'hall', tier });
+    const leftSeq = await visitAndLeave('hall');
+    await until(() => {
+      try {
+        const cursor = JSON.parse(readFileSync(join(ctx.dataDir, 'parlor-cursor.json'), 'utf8'));
+        return cursor.rooms.hall >= leftSeq;
+      } catch { return false; }
+    });
+    const history = await friend.history(friendToken, 0, 50, 'hall');
+    const presence = history.events.filter((event) => event.data?.name === '来访家长');
+    expect(presence.map((event) => event.type)).toEqual(['parlor.joined', 'parlor.left']);
+    expect(pushedText(host)).not.toContain('进了大厅');
+    expect(pushedText(host)).not.toContain('离开了大厅');
+
+    if (tier === 'off') {
+      expect(pushedText(host)).toBe('');
+      return;
+    }
+    // 普通聊天仍按原挡位处理；被 @ 时也不能把过滤掉的进出事件夹带回来。
+    await friend.action(friendToken, { type: 'say', text: '大厅里仍可说话' }, 'hall');
+    await sleep(60);
+    await friend.action(friendToken, { type: 'say', text: '@小满 大厅点名仍收到' }, 'hall');
+    await until(() => pushedText(host).includes('大厅点名仍收到'));
+    expect(pushedText(host)).toContain('大厅里仍可说话');
+    expect(pushedText(host)).not.toContain('进了大厅');
+    expect(pushedText(host)).not.toContain('离开了大厅');
+    // 只停自动投递；主动查看与网页共用的历史仍保留记录。
+    expect(await call('parlor_look', { limit: 50 })).toContain('来访家长');
+  });
+
+  it.each(['full', 'digest', 'quiet'] as const)('%s：普通客厅仍按原挡位推送进出', async (tier) => {
+    const { host, friend, friendToken } = await startWorld({ tier });
+    await visitAndLeave('lobby');
+    await friend.action(friendToken, { type: 'say', text: '@小满 客厅点名' }, 'lobby');
+    await until(() => pushedText(host).includes('客厅点名'));
+    expect(pushedText(host)).toContain('来访家长 进了');
+    expect(pushedText(host)).toContain('来访家长 离开了');
+  });
+
+  it('重启补发的大厅进出也不混进消息', async () => {
+    const { ctx, host, friend, friendToken } = await startWorld({ room: 'hall', tier: 'quiet' });
+    await friend.action(friendToken, { type: 'say', text: '@小满 重启前确认' }, 'hall');
+    await until(() => pushedText(host).includes('重启前确认'));
+    await world!.stop();
+    world = undefined;
+    await visitAndLeave('hall');
+    await sleep(60);
+    await friend.action(friendToken, { type: 'say', text: '@小满 重启补发仍收到' }, 'hall');
+    world = PARLOR.create(ctx);
+    const resumed = new FakeHost();
+    await world.start(resumed);
+    await until(() => pushedText(resumed).includes('重启补发仍收到'));
+    expect(pushedText(resumed)).not.toContain('进了大厅');
+    expect(pushedText(resumed)).not.toContain('离开了大厅');
+  });
+});
 
 describe('World 多客厅', () => {
   it('首次加入存的是 ownerKey（不是空的 ownerToken），面板家长链接能换会话', async () => {
