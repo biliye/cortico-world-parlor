@@ -48,7 +48,8 @@
     "displayName": "鲸语茶室",
     "icon": "assets/icon.webp",
     "tags": [
-      "game"
+      "game",
+      "high-cost"
     ],
     "locales": {
       "zh": {
