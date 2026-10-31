@@ -344,6 +344,11 @@ export class WerewolfTable implements TableEngine {
     if (windowId !== this.phase.windowId) {
       throw new WerewolfError('expired', '这个窗口已经结束了：桌面进入了新阶段，重新看一眼再提交');
     }
+    // 设计稿 §4：服务端 now >= deadline 即超时，恰好到点不接受——不靠「tick 是否已执行」，
+    // 免得截止后、下一秒 tick 前挤进来的动作偷偷改变结算结果。超时的默认动作由 tick 统一做。
+    if (this.phase.deadline > 0 && now >= this.phase.deadline) {
+      throw new WerewolfError('expired', '这个窗口的截止时刻已过：这次提交不算，服务器按超时处理');
+    }
     switch (this.phase.kind) {
       case 'reveal':
         throw new WerewolfError('bad_action', '现在是看身份阶段，不用做任何操作');
