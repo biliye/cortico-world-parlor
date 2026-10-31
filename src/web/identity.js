@@ -28,10 +28,20 @@ async function enter() {
         name: (args.get('name') || '家长').slice(0,24) };
       localStorage.setItem('parlor-global-player', JSON.stringify(identity));
     }
-    const response = await fetch('/v1/identity/session', {
+    // 带旧家长会话来换身份；会话失效时降级成普通访客身份再试一次——
+    // 否则一台换过家长链接的浏览器想以访客加入会永远卡在「重试」。
+    let useParent = true;
+    let response = await fetch('/v1/identity/session', {
       method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(25_000),
-      body: JSON.stringify({ ...identity, kind: 'human', useParent: true, audience: target.origin }),
+      body: JSON.stringify({ ...identity, kind: 'human', useParent, audience: target.origin }),
     });
+    if (!response.ok && useParent) {
+      useParent = false;
+      response = await fetch('/v1/identity/session', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(25_000),
+        body: JSON.stringify({ ...identity, kind: 'human', useParent, audience: target.origin }),
+      });
+    }
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || '暂时无法准备身份');
     target.hash = new URLSearchParams({ identity: body.token, state }).toString();

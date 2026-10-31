@@ -179,6 +179,8 @@ export class WerewolfTable implements TableEngine {
   private deaths: DeathRecord[] = [];
   private pendingLastWords: number[] = [];
   private pendingShoots: number[] = [];
+  /** 遗言队列说完后的去向：true = 白天放逐后的遗言（接夜晚）；false = 天亮后的遗言（接白天发言）。 */
+  private lastWordsFromExile = false;
   private night: WorkingNight | null = null;
   private nightLog: NightRecord[] = [];
   private inspections: InspectionRecord[] = [];
@@ -720,7 +722,12 @@ export class WerewolfTable implements TableEngine {
     }
     if (phase.speechKind === 'day') return this.beginVote(now, events, 'day', []);
     if (phase.speechKind === 'pk') return this.beginVote(now, events, 'pk', phase.queue);
-    // 遗言说完 → 白天正常发言。
+    // 遗言说完：白天放逐后的遗言接下一夜（设计稿流程「放逐→遗言→入夜」）；
+    // 天亮后的首夜遗言接白天正常发言。不区分的话放逐后会在同一天原地再打一整轮。
+    if (this.lastWordsFromExile) {
+      this.lastWordsFromExile = false;
+      return this.toNextNight(now, events);
+    }
     return this.beginDaySpeech(now, events);
   }
 
@@ -818,6 +825,8 @@ export class WerewolfTable implements TableEngine {
   private resolveExile(now: number, events: TableEvent[], seatNo: number): TableStep {
     this.kill(seatNo, this.day, 'day', 'vote');
     this.pendingLastWords.push(seatNo);
+    // 这批遗言是白天放逐带来的：说完接下一夜，而不是原地再开一轮白天发言。
+    this.lastWordsFromExile = true;
     const seat = this.seatByNo(seatNo)!;
     if (seat.role === 'hunter' && !seat.shotUsed) {
       this.pendingShoots.push(seatNo);
@@ -903,6 +912,7 @@ export class WerewolfTable implements TableEngine {
       : this.seats.filter((seat) => factionOf(seat.role!) === (outcome === 'wolf' ? 'wolf' : 'good')).map((seat) => seat.id);
     this.result = { outcome, winners };
     this.status = 'ended';
+    this.lastWordsFromExile = false;
     this.phase = { kind: 'ended', queue: [], index: 0, stage: 'act', deadline: 0, readUntil: 0, windowId: this.nextWindowId() };
     const verdict = outcome === 'good'
       ? '好人阵营胜利：狼人全部出局！'
@@ -1422,6 +1432,7 @@ export class WerewolfTable implements TableEngine {
       deaths: this.deaths.map((entry) => ({ ...entry })),
       pendingLastWords: [...this.pendingLastWords],
       pendingShoots: [...this.pendingShoots],
+      lastWordsFromExile: this.lastWordsFromExile,
       night: this.night
         ? {
           ...this.night,
@@ -1526,6 +1537,7 @@ export class WerewolfTable implements TableEngine {
       : [];
     this.pendingLastWords = Array.isArray(raw.pendingLastWords) ? (raw.pendingLastWords as unknown[]).map(Number) : [];
     this.pendingShoots = Array.isArray(raw.pendingShoots) ? (raw.pendingShoots as unknown[]).map(Number) : [];
+    this.lastWordsFromExile = raw.lastWordsFromExile === true;
     this.night = raw.night && typeof raw.night === 'object'
       ? {
         day: Number((raw.night as Record<string, unknown>).day),

@@ -449,12 +449,10 @@ describe('狼人杀引擎', () => {
     const entry9 = data.entries.find((entry) => entry.seatNo === 9)!;
     expect(entry9.timeout).toBe(true);
     expect(entry9.target).toBe(null);
-    // 放逐者有遗言（白天出局），说完进入白天发言，投完票进第 2 夜。
+    // 放逐者有遗言（白天出局），说完直接入夜（流程 X→A），day 进到 2。
     expect(view(rig, 's1').phase).toBe('speech');
     expect(view(rig, 's1').speechKind).toBe('lastwords');
     runSpeeches(rig, () => '');
-    runSpeeches(rig, () => '');
-    runVote(rig, {});
     expect(view(rig, 's1').phase).toBe('night');
     expect(view(rig, 's1').day).toBe(2);
   });
@@ -1129,9 +1127,8 @@ describe('狼人杀·女巫早死与票保密(B3)', () => {
     runSpeeches(rig, () => '');
     const witch = idWithRole(rig, 'witch');
     voteExile(rig, seatNo(witch));
-    // 女巫遗言 → 白天发言 → 第二轮投票无人放逐 → 第 2 夜。
+    // 女巫遗言 → 直接入夜（放逐后流程 X→A）。
     runSpeeches(rig, () => '');
-    runVote(rig, {});
     expect(view(rig, 's1').phase).toBe('night');
     expect(view(rig, 's1').day).toBe(2);
     // 夜 A 到点:closeNightA 不给任何视图(女巫已死,夜 B 没人需要行动)。
@@ -1344,5 +1341,33 @@ describe('狼人杀·引擎面与恢复(B4/D1/D2)', () => {
     const d2 = view(rig, wolf).deadline as number;
     expect(d2).toBe(base + T + 150); // 第二次:在第一次结果上只按 50ms 平移
     expect(d2).not.toBe(base + T + 250); // 不是把第一次的 100ms 再叠一遍
+  });
+
+  it('白天放逐+遗言之后入夜:day 递增、夜晚事件出现,不再原地开第二轮白天发言(流程 X→A)', () => {
+    const rig = makeRig(7, 1);
+    startGame(rig);
+    runNightA(rig, { kill: null }); // 空刀
+    runNightB(rig, { choice: 'none' }); // 平安夜
+    runSpeeches(rig, () => ''); // 全员过麦
+    expect(view(rig, 's1').phase).toBe('vote');
+    // 全桌投 9 号(9 号自己投 1 号):唯一最高票 → 9 号放逐。
+    const votes: Record<number, number | '' | undefined> = {};
+    for (let no = 1; no <= 8; no++) votes[no] = 9;
+    votes[9] = 1;
+    runVote(rig, votes);
+    const exileEvent = eventType(rig, 'parlor.table.werewolf.vote').at(-1)!;
+    expect(exileEvent.data).toMatchObject({ exiled: 9, day: 1 });
+    // 遗言之后必须入夜(第 2 天),而不是原地再来一轮白天发言。
+    runSpeeches(rig, () => ''); // 遗言窗口(9 号过麦即可)
+    expect(view(rig, 's1').phase, '放逐遗言后应入夜').toBe('night');
+    expect(view(rig, 's1').day).toBe(2);
+    const types = rig.events.map((event) => event.type);
+    const exileIdx = types.lastIndexOf('parlor.table.werewolf.vote');
+    const nightIdx = types.indexOf('parlor.table.werewolf.night', exileIdx);
+    const daySpeechIdx = types.findIndex((type, i) => i > exileIdx
+      && type === 'parlor.table.werewolf.speech_open'
+      && (rig.events[i].data as { kind?: string }).kind === 'day');
+    expect(nightIdx, '夜晚事件应出现在放逐之后').toBeGreaterThan(exileIdx);
+    expect(daySpeechIdx, '放逐后不应再出现白天发言开窗').toBe(-1);
   });
 });

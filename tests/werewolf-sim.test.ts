@@ -213,6 +213,21 @@ const checkCommonInvariants = (sim: Sim, tag: string): void => {
     expect(JSON.stringify(event.data ?? {}), `${tag} 事件 ${event.type} 泄了 role`).not.toContain('"role"');
     expect(event.text, `${tag} 事件 ${event.type} 泄了狼聊`).not.toContain('[狼聊');
   }
+  // 流程不变量：白天放逐(+遗言)之后必须先入夜，不能原地再开一轮白天发言/投票。
+  let lastExileDay = -1;
+  let nightAfterExile = true;
+  for (const event of events.slice(0, endIdx)) {
+    const data = (event.data ?? {}) as { exiled?: number; day?: number; kind?: string };
+    if (event.type === 'parlor.table.werewolf.vote' && data.exiled !== undefined) {
+      lastExileDay = data.day ?? -1;
+      nightAfterExile = false;
+    } else if (event.type === 'parlor.table.werewolf.night') {
+      nightAfterExile = true;
+    } else if ((event.type === 'parlor.table.werewolf.speech_open' && data.kind === 'day')
+      || event.type === 'parlor.table.werewolf.vote_open') {
+      expect(nightAfterExile, `${tag}: 第${lastExileDay}天放逐后没入夜就又开了白天流程`).toBe(true);
+    }
+  }
 };
 
 describe('狼人杀随机对局模拟', () => {
