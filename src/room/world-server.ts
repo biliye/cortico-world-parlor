@@ -50,6 +50,8 @@ export interface WorldServerOptions {
   offlineReleaseHours?: number;
   /** Coo 的 pet 席位离线多少小时后释放；默认 6，0 = 关。 */
   cooOfflineReleaseHours?: number;
+  /** 牌桌每手/每窗时限基准（staging/测试调短用；不传用各游戏默认）。 */
+  tableTurnMs?: number;
   now?: () => number;
 }
 
@@ -192,6 +194,7 @@ export class WorldServer {
   private readonly allowGuestJoin: boolean;
   private readonly offlineReleaseMs: number;
   private readonly cooOfflineReleaseMs: number;
+  private readonly tableTurnMs?: number;
   private readonly hostName: string;
   private readonly port: number;
   private server?: Server;
@@ -229,6 +232,7 @@ export class WorldServer {
     this.allowGuestJoin = options.allowGuestJoin ?? false;
     this.offlineReleaseMs = Math.max(0, options.offlineReleaseHours ?? 6) * 3_600_000;
     this.cooOfflineReleaseMs = Math.max(0, options.cooOfflineReleaseHours ?? 6) * 3_600_000;
+    this.tableTurnMs = options.tableTurnMs !== undefined && options.tableTurnMs > 0 ? options.tableTurnMs : undefined;
     this.hostName = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
     this.ensureDefaultRoom();
@@ -346,7 +350,11 @@ export class WorldServer {
   private host(roomId: string): RoomHost {
     const existing = this.hosts.get(roomId);
     if (existing) return existing;
-    const host = new RoomHost(this.db, roomId, { now: this.now, recovery: this.recovery });
+    const host = new RoomHost(this.db, roomId, {
+      now: this.now,
+      ...(this.tableTurnMs !== undefined ? { turnMs: this.tableTurnMs } : {}),
+      recovery: this.recovery,
+    });
     this.hosts.set(roomId, host);
     return host;
   }

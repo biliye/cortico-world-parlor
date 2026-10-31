@@ -33,6 +33,8 @@ export { HostError, type HostErrorCode } from './host-error.ts';
 export interface RoomHostOptions {
   now?: () => number;
   token?: () => string;
+  /** 每手/每窗时限基准（测试与 staging 调短用；不传用各游戏默认）。 */
+  turnMs?: number;
   /** 启动恢复用的健康基准（由网关从 meta.last_healthy_at 读一次，所有客厅共用）。 */
   recovery?: { lastHealthyAt?: number; maxDowntimeMs?: number; minHumanMs?: number };
 }
@@ -166,6 +168,7 @@ export class RoomHost {
       now: this.now,
       ledger: this.ledger,
       mail: this.mail,
+      ...(options.turnMs !== undefined ? { turnMs: options.turnMs } : {}),
       seats: {
         activeSeat: (cooId) => this.seatOf(cooId),
         seats: () => this.seats(),

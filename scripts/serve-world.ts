@@ -12,6 +12,10 @@
  *   --offline-release-hours 12      或 PARLOR_OFFLINE_RELEASE_HOURS=12       （0 = 关）
  *   --coo-offline-release-hours 24  或 PARLOR_COO_OFFLINE_RELEASE_HOURS=24   （0 = 关）
  *
+ * 牌桌时限基准（狼人杀各窗口、骰子每回合、斗地主每手都按它缩放；默认用各游戏正式值）。
+ * staging / 本地测试想快点打完一局时用，生产别设：
+ *   --table-turn-ms 2000   或 PARLOR_TABLE_TURN_MS=2000
+ *
  * Node >= 22.13（node:sqlite 免 flag）。Node 24 默认支持类型剥离，可以去掉 --experimental-strip-types。
  */
 import { randomBytes } from 'node:crypto';
@@ -50,6 +54,15 @@ if (!Number.isFinite(cooOfflineHours) || cooOfflineHours < 0) {
   console.error('Coo 席位离线释放小时数不对');
   process.exit(2);
 }
+const tableTurnMsRaw = args.get('--table-turn-ms') ?? process.env.PARLOR_TABLE_TURN_MS;
+let tableTurnMs: number | undefined;
+if (tableTurnMsRaw !== undefined && tableTurnMsRaw !== '') {
+  tableTurnMs = Number(tableTurnMsRaw);
+  if (!Number.isFinite(tableTurnMs) || tableTurnMs <= 0) {
+    console.error('牌桌时限基准要是一个正的毫秒数');
+    process.exit(2);
+  }
+}
 
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
   console.error('端口不对');
@@ -62,6 +75,7 @@ const server = new WorldServer({
   publicUrl: args.get('--public-url') ?? process.env.PARLOR_PUBLIC_URL,
   offlineReleaseHours: offlineHours,
   cooOfflineReleaseHours: cooOfflineHours,
+  ...(tableTurnMs !== undefined ? { tableTurnMs } : {}),
 });
 
 try {
@@ -73,6 +87,7 @@ try {
   console.log(`网页访客加入：${allowGuestJoin ? '开' : '关（只用带钥匙的下场玩链接）'}`);
   console.log(`真人席位离线释放：${offlineHours > 0 ? `${offlineHours} 小时` : '关'}`);
   console.log(`Coo 席位离线释放：${cooOfflineHours > 0 ? `${cooOfflineHours} 小时` : '关'}`);
+  if (tableTurnMs !== undefined) console.log(`牌桌时限基准：${tableTurnMs} 毫秒（staging/测试用）`);
   console.log(`数据库：${dbFile}`);
   console.log(`网页：${address.url}/play`);
 } catch (error) {

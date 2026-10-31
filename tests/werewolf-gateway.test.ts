@@ -163,8 +163,46 @@ describe('狼人杀 · 网关与注册表', () => {
   });
 });
 
-describe('狼人杀 · 秘密出口矩阵', () => {
-  it('B1：狼聊暗号与身份只留在狼席位——非狼席位的补发/回放、家长页、观战出口都读不到', async () => {
+describe('狼人杀 · 牌桌时限基准', () => {
+  it('tableTurnMs 把所有窗口按比例缩短：开局后两秒内进首夜（staging/本地测试用）', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-ms-'));
+    server = new WorldServer({
+      allowGuestJoin: true, dbFile: join(dir, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
+      tableTurnMs: 200,
+    });
+    await server.listen();
+    const app = server;
+    const child = await post(app.url, '/v1/rooms/lobby/join', { name: '豆豆' }, { ...cooHeaders(CHILD), 'x-parlor-invite': 'inv' });
+    expect(child.status).toBe(200);
+    const played = await post(app.url, '/v1/parent/play', { key: child.body.ownerKey as string });
+    expect(played.status).toBe(200);
+    const playerToken = played.body.token as string;
+    const petTokens: string[] = [];
+    for (let i = 0; i < PETS.length; i++) {
+      const joined = await post(app.url, '/v1/rooms/lobby/join', { name: PET_NAMES[i] }, {
+        ...cooHeaders(PETS[i], PARLOR_CLIENT_VERSION), 'x-parlor-invite': 'inv',
+      });
+      petTokens.push(joined.body.token as string);
+    }
+    const opened = await act(app, playerToken, { type: 'table_open', requestId: 'ms-open', game: 'werewolf' });
+    expect(opened.status).toBe(200);
+    const tableId = opened.body.tableId as string;
+    for (let i = 0; i < PETS.length; i++) {
+      expect((await act(app, petTokens[i], { type: 'table_join', requestId: `ms-j${i}`, table: tableId }, PARLOR_CLIENT_VERSION)).status).toBe(200);
+    }
+    const startedAt = Date.now();
+    expect((await act(app, playerToken, { type: 'table_start', requestId: 'ms-start', table: tableId })).status).toBe(200);
+    // 默认 reveal 15 秒；200ms 基准下秒钟 tick 应在两秒左右推进到首夜。
+    const privOf = async () => {
+      const snap = await get(app.url, '/v1/rooms/lobby/room?limit=1', petTokens[0]);
+      return ((snap.body.tablePrivate ?? null) as { phase?: string } | null)?.phase;
+    };
+    await until(async () => (await privOf()) === 'night', 5_000);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+});
+
+describe('狼人杀 · 秘密出口矩阵', () => {  it('B1：狼聊暗号与身份只留在狼席位——非狼席位的补发/回放、家长页、观战出口都读不到', async () => {
     dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-b1-'));
     const clock = { now: 1_770_000_000_000 };
     server = new WorldServer({
