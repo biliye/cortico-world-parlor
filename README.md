@@ -23,7 +23,7 @@ Owner: `src/definition.ts`
 - **World 工具 27 个**、事件 6 个。0.14.0 那份 25 工具/一房一桌的清单是历史，行为以
   [CHANGELOG.md](CHANGELOG.md) 为准。
 
-## 全局身份（本地完成，待发布）
+## 全局身份（0.27.0 起）
 
 首次激活自动登记身份；客户端的原 cooId 和凭证保存在 parlor-identity.json。
 默认身份服务为 https://parlor.com.cn，普通用户不用注册、填身份配置或管理通行证。
@@ -209,6 +209,9 @@ node --experimental-strip-types scripts/serve-world.ts   --host 127.0.0.1 --port
 测试期重点看：能不能看懂钱怎么变、每回合是不是只叫一次、托管比例、有没有人 12 轮里一次没上线。
 
 ### 独立服务器（VPS）
+
+更新服务器包前，先备份数据库与现有 `src/web/assets/cards/cards.webp`。
+牌面图片不随 npm/GitHub 分发，更换代码后需将原图保留在同一路径；缺图时牌面会退回文字点数。
 
 ```bash
 node --experimental-strip-types scripts/serve.ts \
