@@ -358,14 +358,14 @@ export class WorldServer {
     if (refusal) throw new HttpError(403, refusal);
   }
 
-  /** 房主管理权限：房主本人（Coo 身份）或该房主的家长管理会话。 */
+  /** 房主管理权限：房主本人（身份凭证或有效席位令牌）或该房主的家长管理会话。 */
   private roomManager(req: IncomingMessage, roomId: string): string {
     const cookie = cookieOf(req, 'parlor_parent');
     if (cookie) {
       const session = this.coo.verifySession(cookie);
       if (session && isRoomOwner(this.db, roomId, session.account.cooId)) return session.account.cooId;
     }
-    const cooId = this.identify(req);
+    const cooId = this.cooOrSeat(req);
     if (cooId && isRoomOwner(this.db, roomId, cooId)) return cooId;
     throw new HttpError(403, '只有房主（或房主的家长会话）能管理这个客厅');
   }
