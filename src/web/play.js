@@ -1314,7 +1314,9 @@ function renderSeatCard() {
   clear(ui.seatName);
   ui.seatName.append(document.createTextNode(snap.seat.name), el('span', 'tag tag-you', '你'));
   const online = (snap.online || []).includes(snap.seat.id);
-  ui.seatSub.textContent = (KIND_LABELS[snap.seat.kind] || snap.seat.kind) + ' · ' + (online ? '在线' : '离线');
+  ui.seatSub.textContent = (KIND_LABELS[snap.seat.kind] || snap.seat.kind)
+    + ' · ' + (online ? '在线' : '离线')
+    + (snap.seat.handle ? ' · #' + snap.seat.handle : '');
   const games = ledger ? ledger.games : 0;
   const wins = ledger ? ledger.wins : 0;
   const losses = ledger ? ledger.losses : 0;
@@ -1914,7 +1916,7 @@ function hallSeatChip(seat) {
   const copy = el('span');
   copy.append(
     el('strong', '', seat.name + (state.snap && seat.id === state.snap.seat.id ? '（你）' : '')),
-    el('small', '', KIND_LABELS[seat.kind] || seat.kind),
+    el('small', '', (KIND_LABELS[seat.kind] || seat.kind) + (seat.handle ? ' · #' + seat.handle : '')),
   );
   chip.append(copy);
   if (seat.kind === 'pet') chip.append(el('span', 'tag tag-coo', 'Coo'));
@@ -2151,7 +2153,8 @@ function renderMembers() {
     if (isOnline) small.append(el('span', 'live-dot'));
     small.append(document.createTextNode(
       (isOnline ? '在线' : '离线') + (tableIds.has(seat.id) ? ' · 在牌桌' : '')
-      + (seat.kind === 'observer' ? ' · 观看' : ''),
+      + (seat.kind === 'observer' ? ' · 观看' : '')
+      + (seat.handle ? ' · #' + seat.handle : ''),
     ));
     copy.append(name, small);
     chip.append(copy);
@@ -2334,14 +2337,17 @@ function renderMail() {
     node.append(el('span', 'mail-seal' + (item.fromName === '系统' ? ' is-system' : '')));
     const copy = el('div', 'mail-copy');
     const meta = el('div', 'mail-meta');
-    meta.append(el('strong', '', item.fromName || '系统'), el('time', '', fmtClock(item.ts).slice(0, 5)));
+    meta.append(
+      el('strong', '', (item.fromName || '系统') + (item.fromHandle ? ` #${item.fromHandle}` : '')),
+      el('time', '', fmtClock(item.ts).slice(0, 5)),
+    );
     copy.append(meta, el('p', '', readable(item.text || '')), el('span', 'mail-sub', '只有你能看'));
     node.append(copy);
     if (unread) node.append(el('span', 'unread-dot'));
     if (item.kind === 'whisper' && item.fromCooId) {
       node.classList.add('is-dm');
       node.title = '点开私聊';
-      node.addEventListener('click', () => openDm(item.fromCooId, item.fromName));
+      node.addEventListener('click', () => openDm(item.fromCooId, item.fromName, item.fromHandle));
     }
     // 邀请：私密客厅的邀请要先「接受」才有权限，接受后直接过去；
     // 老式邀请（没有 invitationId）只带目的地，点「进去」走一次换房。
@@ -3112,7 +3118,7 @@ function toggleDm() {
   else openDm();
 }
 
-function openDm(peer = '', name = '') {
+function openDm(peer = '', name = '', handle = '') {
   if (!state.cfg) return;
   const view = ensureDmWindow();
   dm().open = true;
@@ -3121,7 +3127,7 @@ function openDm(peer = '', name = '') {
   paintDmThreads();
   paintDmPeople();
   void loadDmThreads();
-  if (peer) void openDmThread(peer, name);
+  if (peer) void openDmThread(peer, name, handle);
   else view.search.focus();
   startDmPolling();
 }
@@ -3173,7 +3179,7 @@ function ensureDmWindow() {
   const body = el('div', 'dm-body');
   const list = el('div', 'dm-list');
   const search = el('input', 'dm-search');
-  search.placeholder = '搜人 / 搜会话';
+  search.placeholder = '搜名字、#号 或会话';
   search.setAttribute('aria-label', '搜索用户');
   search.addEventListener('input', () => {
     dm().q = search.value.trim();
@@ -3293,8 +3299,8 @@ async function loadDmPeople() {
   } catch { /* 搜索失败就当没有 */ }
 }
 
-async function openDmThread(peer, name = '') {
-  dm().peer = { cooId: peer, name };
+async function openDmThread(peer, name = '', handle = '') {
+  dm().peer = { cooId: peer, name, handle };
   paintDmPeer();
   ui.dm.msgs.replaceChildren(el('p', 'chat-empty', '正在取聊天…'));
   await loadDmMessages(peer);
@@ -3307,6 +3313,7 @@ async function loadDmMessages(peer, quiet = false) {
     const data = await api('/v1/dm?peer=' + encodeURIComponent(peer) + '&limit=60');
     if (!dm().peer || dm().peer.cooId !== peer) return;
     if (data.peer && data.peer.name) dm().peer.name = data.peer.name;
+    if (data.peer && data.peer.handle) dm().peer.handle = data.peer.handle;
     dm().messages = data.messages || [];
     paintDmPeer();
     paintDmMessages(!quiet);
@@ -3364,6 +3371,7 @@ function paintDmThreads() {
     node.type = 'button';
     const who = el('span', 'dm-who');
     who.append(el('span', 'dm-name', thread.name || '某人'));
+    if (thread.handle) who.append(el('span', 'dm-handle', '#' + thread.handle));
     if (thread.online) who.append(el('span', 'dm-online', '在线'));
     if (thread.unread > 0) who.append(el('span', 'badge', String(thread.unread)));
     node.append(
@@ -3371,7 +3379,7 @@ function paintDmThreads() {
       el('span', 'dm-last', (thread.lastFromMe ? '我：' : '') + readable(thread.lastText || '')),
       el('time', 'dm-time', fmtClock(thread.lastTs).slice(0, 5)),
     );
-    node.addEventListener('click', () => { void openDmThread(thread.peer, thread.name); });
+    node.addEventListener('click', () => { void openDmThread(thread.peer, thread.name, thread.handle); });
     view.threadsBox.append(node);
   }
   updateDmBadge();
@@ -3383,7 +3391,7 @@ function paintDmPeople() {
   clear(view.peopleBox);
   if (!dm().q) return;
   if (!dm().people.length) {
-    view.peopleBox.append(el('p', 'chat-empty', '没有找到（只能搜在线的人和你聊过的人）'));
+    view.peopleBox.append(el('p', 'chat-empty', '没有找到（名字只搜在线或聊过的人；有 #号 可以直接搜）'));
     return;
   }
   view.peopleBox.append(el('p', 'dm-hint', '找人'));
@@ -3392,13 +3400,14 @@ function paintDmPeople() {
     node.type = 'button';
     const who = el('span', 'dm-who');
     who.append(el('span', 'dm-name', person.name || '某人'));
+    if (person.handle) who.append(el('span', 'dm-handle', '#' + person.handle));
     if (person.online) who.append(el('span', 'dm-online', '在线'));
     node.append(who);
     node.addEventListener('click', () => {
       view.search.value = '';
       dm().q = '';
       paintDmPeople();
-      void openDmThread(person.cooId, person.name);
+      void openDmThread(person.cooId, person.name, person.handle);
     });
     view.peopleBox.append(node);
   }
@@ -3416,6 +3425,8 @@ function paintDmPeer() {
   }
   view.peerBox.replaceChildren(el('strong', '', peer.name || '某人'));
   const thread = dm().threads.find((item) => item.peer === peer.cooId);
+  const handle = peer.handle || (thread && thread.handle) || '';
+  if (handle) view.peerBox.append(el('span', 'dm-handle', '#' + handle));
   if (thread && thread.online) view.peerBox.append(el('span', 'dm-online', '在线'));
   view.input.disabled = false;
   view.send.disabled = false;

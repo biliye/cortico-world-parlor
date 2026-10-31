@@ -43,6 +43,8 @@ export interface MailView {
   room: string;
   /** 私聊来信时有：对方 cooId（网页用它打开会话）。 */
   fromCooId?: string;
+  /** 私聊来信时有：对方短号（cooId 前 8 位）。 */
+  fromHandle?: string;
   kind: MailKind;
   action?: string;
   fromName: string;

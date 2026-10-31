@@ -17,6 +17,7 @@ import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { gameByActionType } from './games/registry.ts';
+import { shortHandle, likePrefix, parseHandleQuery } from './handles.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken,
@@ -153,8 +154,11 @@ const messageOf = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
 );
 
-const seatOfRow = (roomId: string, seat: { id: string; name: string; kind: SeatKind; tier: WakeTier; joinedAt: number }): Seat => ({
+const seatOfRow = (roomId: string, seat: {
+  id: string; name: string; kind: SeatKind; tier: WakeTier; joinedAt: number; cooId: string;
+}): Seat => ({
   id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier, joinedAt: seat.joinedAt,
+  handle: shortHandle(seat.cooId),
 });
 
 const roomSummary = (db: Db, room: RoomRow) => ({
@@ -616,6 +620,7 @@ export class WorldServer {
         cooId,
         seat: seat ? {
           room: seat.roomId, id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier,
+          handle: shortHandle(seat.cooId),
         } : null,
         rooms: listRooms(this.db, { kind: 'room' })
           .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
@@ -677,12 +682,14 @@ export class WorldServer {
           topic: hall.topic,
           capacity: hall.capacity,
           seats: activeSeats(this.db, hall.id).map((seat) => ({
-            id: seat.id, name: seat.name, kind: seat.kind,
+            id: seat.id, name: seat.name, kind: seat.kind, handle: shortHandle(seat.cooId),
           })),
         },
         me: (() => {
           const seat = activeSeatForCoo(this.db, cooId);
-          return seat ? { room: seat.roomId, id: seat.id, name: seat.name } : null;
+          return seat
+            ? { room: seat.roomId, id: seat.id, name: seat.name, handle: shortHandle(seat.cooId) }
+            : null;
         })(),
         rooms: listRooms(this.db, { kind: 'room' })
           .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
@@ -1165,7 +1172,7 @@ export class WorldServer {
     cooId: string,
     fallbackName = '',
     viewer = '',
-  ): { cooId: string; name: string; online: boolean; room: string | null } {
+  ): { cooId: string; name: string; online: boolean; room: string | null; handle: string } {
     const seat = activeSeatForCoo(this.db, cooId);
     const row = this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
     const name = seat?.name || (row?.display_name ?? '').trim() || fallbackName || '某人';
@@ -1175,7 +1182,7 @@ export class WorldServer {
       const info = getRoom(this.db, room);
       if (info && info.visibility === 'private' && (!viewer || !hasRoomAccess(this.db, room, viewer))) room = null;
     }
-    return { cooId, name, online: this.isOnline(cooId), room };
+    return { cooId, name, online: this.isOnline(cooId), room, handle: shortHandle(cooId) };
   }
 
   /** 有没有正在连着的客户端（网页或 Coo）；不看席位在不在。 */
@@ -1186,10 +1193,32 @@ export class WorldServer {
     return false;
   }
 
+  /**
+   * 按短号找 cooId：# 后面可以是前 8 位，也可以是完整 id。
+   * 前缀撞了不猜，列出完整 id 让调用方选（不建唯一约束）。
+   */
+  private cooByHandle(handle: string): string {
+    const exact = this.db.prepare("SELECT id FROM coos WHERE status = 'active' AND id = ?").get(handle) as
+      { id: string } | undefined;
+    if (exact) return exact.id;
+    const rows = this.db.prepare(
+      "SELECT id FROM coos WHERE status = 'active' AND id LIKE ? ESCAPE '\\' ORDER BY created_at, id LIMIT 6",
+    ).all(`${likePrefix(handle)}%`) as { id: string }[];
+    if (rows.length === 0) throw new HttpError(404, `没有找到号「#${handle}」`);
+    if (rows.length > 1) {
+      throw new HttpError(409, `这个号对上了 ${rows.length} 个人，用完整 id 再发一次：${rows.map((row) => row.id).join('、')}`);
+    }
+    return rows[0].id;
+  }
+
   /** 找人：优先 cooId（搜索结果带的就是它），退一步按当前唯一同名席位。 */
   private dmPeer(value: string, fromCooId: string): { cooId: string; name: string; online: boolean; room: string | null } {
     const needle = value.trim();
     if (!needle) throw new HttpError(400, '要写给谁？');
+    const handle = parseHandleQuery(needle);
+    if (handle !== null) {
+      return this.personInfo(this.cooByHandle(handle), '', fromCooId);
+    }
     if (isCooId(needle)) {
       const row = this.db.prepare("SELECT id FROM coos WHERE id = ? AND status = 'active'").get(needle);
       if (!row) throw new HttpError(404, '没有这个人');
@@ -1251,7 +1280,7 @@ export class WorldServer {
     const mail = new MailDb(this.db, { now: this.now });
     const threads = mail.threads(cooId).map((thread) => {
       const info = this.personInfo(thread.peer, '', cooId);
-      return { ...thread, name: info.name, online: info.online, room: info.room };
+      return { ...thread, name: info.name, online: info.online, room: info.room, handle: info.handle };
     });
     return { threads, unread: mail.dmUnread(cooId) };
   }
@@ -1262,8 +1291,19 @@ export class WorldServer {
     return { peer: this.personInfo(peer, '', cooId), ...page };
   }
 
-  /** 搜人：在线的人 + 我聊过的人；空查询就是全部候选。 */
+  /** 搜人：在线的人 + 我聊过的人；空查询就是全部候选；带 # 就是按号找。 */
   private searchPeople(cooId: string, query: string): Record<string, unknown> {
+    const handle = parseHandleQuery(query);
+    if (handle !== null) {
+      // 按号找人：不看在线或聊过。拿到号就能找到，这正是号的意义。
+      const rows = this.db.prepare(
+        `SELECT id, display_name FROM coos
+          WHERE status = 'active' AND id <> ? AND id LIKE ? ESCAPE '\\'
+          ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at, id
+          LIMIT 20`,
+      ).all(cooId, `${likePrefix(handle)}%`, handle) as { id: string; display_name: string }[];
+      return { people: rows.map((row) => this.personInfo(row.id, row.display_name, cooId)) };
+    }
     const needle = query.trim().toLowerCase();
     const rows = this.db.prepare(
       "SELECT id, display_name FROM coos WHERE status = 'active' AND id <> ?",
@@ -1655,18 +1695,20 @@ export class WorldServer {
    * 能收信的身份。
    */
   private resolveInviteTarget(to: string): { cooId: string; name: string; roomId: string | null; kind: string } {
+    const handle = parseHandleQuery(to);
+    const key = handle !== null ? this.cooByHandle(handle) : to;
     const rows = this.db.prepare(
       `SELECT room_id, id, coo_id, name, kind FROM room_seats
         WHERE released_at IS NULL AND (coo_id = ? OR name = ? COLLATE NOCASE)`,
-    ).all(to, to) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
-    const row = rows.find((entry) => entry.coo_id === to)
-      ?? rows.find((entry) => entry.name.toLowerCase() === to.toLowerCase());
+    ).all(key, key) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
+    const row = rows.find((entry) => entry.coo_id === key)
+      ?? rows.find((entry) => entry.name.toLowerCase() === key.toLowerCase());
     let target: { cooId: string; name: string; roomId: string | null; kind: string };
     if (row) {
       target = { cooId: row.coo_id, name: row.name, roomId: row.room_id, kind: row.kind };
     } else {
       // 没在座的 Coo：按身份 id 找（房主管理页里列出的就是 cooId）。
-      const coo = this.db.prepare('SELECT id, kind, display_name FROM coos WHERE id = ?').get(to) as
+      const coo = this.db.prepare('SELECT id, kind, display_name FROM coos WHERE id = ?').get(key) as
         { id: string; kind: string; display_name: string } | undefined;
       if (coo) {
         return {
@@ -1676,7 +1718,7 @@ export class WorldServer {
           kind: coo.kind === 'human' ? 'human' : 'pet',
         };
       }
-      const parents = this.coo.findParentsByName(to);
+      const parents = this.coo.findParentsByName(key);
       const ready = parents.filter(
         (entry): entry is { accountId: string; cooId: string; name: string } => entry.cooId !== null,
       );

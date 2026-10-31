@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { migrate, openDb, withTransaction, type Db } from './db.ts';
+import { shortHandle } from './handles.ts';
 import type { MailItem, MailKind, MailPage, MailView } from './mail.ts';
 
 /** 投递一封新信时需要的字段；id/seq/ts/read 由 store 填。 */
@@ -80,7 +81,9 @@ const toView = (row: Record<string, unknown>): MailView => ({
   seq: Number(row.seq),
   ts: Number(row.ts),
   room: String(row.room_id),
-  ...(typeof row.from_coo_id === 'string' ? { fromCooId: row.from_coo_id } : {}),
+  ...(typeof row.from_coo_id === 'string'
+    ? { fromCooId: row.from_coo_id, fromHandle: shortHandle(row.from_coo_id) }
+    : {}),
   kind: row.kind as MailKind,
   ...(typeof row.action === 'string' ? { action: row.action } : {}),
   fromName: String(row.from_name),

@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
 import { EventDb } from './event-db.ts';
+import { shortHandle } from './handles.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import {
@@ -120,6 +121,7 @@ const seatOfRow = (row: SeatRow): Seat => ({
   kind: row.kind,
   tier: row.tier,
   joinedAt: row.joinedAt,
+  handle: shortHandle(row.cooId),
 });
 
 const wrapSeatError = (error: unknown): never => {

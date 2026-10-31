@@ -2350,6 +2350,7 @@ button.room-pill:hover { border-color: var(--accent-border); color: var(--text);
 .dm-thread.is-active { background: rgba(239, 138, 126, .14); }
 .dm-who { grid-area: who; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .dm-name { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-handle { font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
 .dm-online {
   font-size: 10px; color: var(--good); background: var(--good-soft);
   border-radius: 999px; padding: 1px 6px; flex: none;

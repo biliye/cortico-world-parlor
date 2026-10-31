@@ -95,13 +95,13 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_whisper',
-    description: 'Send a private message to one person (seat name, seat id or Coo id). Works across rooms and when they are offline: it waits in their inbox. Only that person (and their parent view) can see it.',
+    description: 'Send a private message to one person (seat name, seat id, or a #号 such as #270fed72; the full Coo id also works). Works across rooms and when they are offline: it waits in their inbox. Only that person (and their parent view) can see it.',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        to: { type: 'string', description: 'Seat name or id.' },
+        to: { type: 'string', description: 'Seat name, seat id, or #号 (e.g. #270fed72).' },
         text: { type: 'string', description: 'What to say, at most 400 characters.' },
       },
       required: ['to', 'text'],
@@ -379,7 +379,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        to: { type: 'string', description: 'Seat name, Coo id, or a parent name (a parent can be invited while offline).' },
+        to: { type: 'string', description: 'Seat name, Coo id, #号 (e.g. #270fed72), or a parent name (a parent can be invited while offline).' },
         room: { type: 'string', description: 'Room id or name; default is your current room.' },
         text: { type: 'string', description: 'Optional short line, at most 200 characters.' },
       },
@@ -555,7 +555,7 @@ export class ParlorWorld implements World {
       source: this.id,
       origin: 'internal',
       senderKey: this.id,
-      text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_mail 看。` : ''}`,
+      text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.seat?.handle ? ` #${this.seat.handle}` : ''}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_mail 看。` : ''}`,
       meta: { room: this.currentRoom, seat: this.seat?.id, address: this.baseUrl },
     }, { trigger: 'flush' });
   }
@@ -1170,7 +1170,8 @@ export class ParlorWorld implements World {
         // 真人席位没有提醒挡位；写「人·离开」会让 Coo 误以为对方不在。
         const kind = KIND_LABELS[seat.kind] ?? seat.kind;
         const tier = seat.kind === 'human' ? '' : `·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}`;
-        return `- ${seat.name}（${kind}${tier}${online.has(seat.id) ? '·在线' : ''}）`;
+        const handle = seat.handle ? ` #${seat.handle}` : '';
+        return `- ${seat.name}${handle}（${kind}${tier}${online.has(seat.id) ? '·在线' : ''}）`;
       }),
       `最新游标 ${snapshot.latest}`,
     ];
@@ -1328,6 +1329,7 @@ export class ParlorWorld implements World {
       if (page.items.length === 0) lines.push('信箱是空的。');
       for (const item of page.items) {
         const who = item.fromName || '系统';
+        const handle = item.fromHandle ? ` #${item.fromHandle}` : '';
         const tag = item.kind === 'gift' ? '礼物'
           : item.kind === 'promise' ? '承诺'
             : item.kind === 'whisper' ? '私信'
@@ -1335,7 +1337,7 @@ export class ParlorWorld implements World {
         const invite = item.action === 'room_invite' && item.invitationId
           ? `（邀请号 ${item.invitationId}）`
           : '';
-        lines.push(`- ${this.ledgerTime(item.ts)} ${who}（${tag}）：${item.text}${invite}`);
+        lines.push(`- ${this.ledgerTime(item.ts)} ${who}${handle}（${tag}）：${item.text}${invite}`);
       }
       return lines.join('\n');
     } catch (error) {

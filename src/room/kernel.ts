@@ -11,6 +11,7 @@ import {
   type Seat, type SeatKind, type WakeTier,
 } from './protocol.ts';
 import { serverClock } from './clock.ts';
+import { parseHandleQuery, shortHandle } from './handles.ts';
 import { DiceTable } from './table.ts';
 import { DoudizhuTable } from './games/doudizhu-table.ts';
 import { MonopolyTable, PACE_LABELS, type MonopolyPace } from './games/monopoly-table.ts';
@@ -174,7 +175,12 @@ const dueOf = (value: unknown, now: number): number | undefined => {
 const dueLabel = (due: number): string => new Date(due).toISOString().slice(0, 10);
 
 const publicSeat = (seat: StoredSeat): Seat => ({
-  id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier, joinedAt: seat.joinedAt,
+  id: seat.id,
+  name: seat.name,
+  kind: seat.kind,
+  tier: seat.tier,
+  joinedAt: seat.joinedAt,
+  ...(seat.cooId && isCooId(seat.cooId) ? { handle: shortHandle(seat.cooId) } : {}),
 });
 
 const isKind = (value: unknown): value is SeatKind => value === 'pet' || value === 'human' || value === 'observer';
@@ -348,6 +354,13 @@ export class RoomKernel {
   }
 
   resolveSeat(value: string): StoredSeat | undefined {
+    const handle = parseHandleQuery(value);
+    if (handle !== null) {
+      const matches = this.seats.filter((seat) => seat.cooId !== undefined && seat.cooId.toLowerCase().startsWith(handle));
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) throw new RoomError('conflict', `这个号对上了 ${matches.length} 个人，用完整 id 或席位名`);
+      return undefined;
+    }
     const needle = value.trim().toLowerCase();
     return this.seats.find((seat) => seat.id === value.trim())
       ?? this.seats.find((seat) => seat.name.toLowerCase() === needle);

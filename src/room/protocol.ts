@@ -21,6 +21,8 @@ export interface Seat {
   kind: SeatKind;
   tier: WakeTier;
   joinedAt: number;
+  /** cooId 的前 8 位；老服务器不发这个字段。 */
+  handle?: string;
 }
 
 /**

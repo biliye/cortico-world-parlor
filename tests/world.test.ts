@@ -70,8 +70,12 @@ describe('客厅 World', () => {
     expect(host.events[0]?.type).toBe('parlor.started');
     expect(host.events[0]?.text).toContain('客厅已连接');
     expect(host.events[0]?.text).not.toContain('「');
+    expect(host.events[0]?.text).toMatch(/ #[0-9a-f]{8}/);
 
-    const client = new ParlorClient(server.url);
+    const client = new ParlorClient(server.url, {
+      cooId: 'coo-ffffffff',
+      cooSecret: 'friend-secret-0123456789',
+    });
     const friend = await client.join('inv', { name: '阿岚' });
     await until(() => server.onlineSeats().length >= 1);
     await client.action(friend.token, { type: 'say', text: '@小满 你好' });
@@ -93,6 +97,13 @@ describe('客厅 World', () => {
     expect(whispered).toContain('不代表对方读过');
     expect(whispered).not.toContain('已读：');
 
+    // 按短号也能找到同一个人（自建单间走的是旧内核的 resolveSeat）。
+    expect(friend.seat.handle).toMatch(/^[0-9a-z-]{8}$/);
+    const byHandle = String(await whisper.handler({
+      to: '#' + friend.seat.handle, text: '按号也能找到',
+    }, {} as ToolCallContext));
+    expect(byHandle).toContain('服务器已收下');
+
     const replay = world.tools().find((tool) => tool.name === 'parlor_replay')!;
     const replayText = String(await replay.handler({ limit: 50 }, {} as ToolCallContext));
     expect(replayText).toContain('【回放】最近 7 天');
@@ -102,6 +113,8 @@ describe('客厅 World', () => {
     const looked = String(await look.handler({}, {} as ToolCallContext));
     expect(looked).toContain('阿岚');
     expect(looked).toContain('小满');
+    expect(looked).toMatch(/- 阿岚 #[0-9a-z-]{8}/);
+    expect(looked).toMatch(/- 小满 #[0-9a-z-]{8}/);
 
     // 房间限速 50ms 一条；上面几步在本机很快，这里先等过去再发，别撞限速。
     await sleep(60);

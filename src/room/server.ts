@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, join } from 'node:path';
 import { COO_HEADER, COO_SECRET_HEADER, type CooIdentity } from './identity.ts';
 import { GAME_LABELS } from './game-labels.ts';
+import { shortHandle } from './handles.ts';
 import { RoomError, RoomKernel, type StoredSeat } from './kernel.ts';
 import { LedgerStore } from './ledger.ts';
 import { MailStore } from './mail.ts';
@@ -635,7 +636,12 @@ export class ParlorServer {
 }
 
 const publicSeatOf = (seat: StoredSeat): RoomSnapshot['seat'] => ({
-  id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier, joinedAt: seat.joinedAt,
+  id: seat.id,
+  name: seat.name,
+  kind: seat.kind,
+  tier: seat.tier,
+  joinedAt: seat.joinedAt,
+  ...(seat.cooId ? { handle: shortHandle(seat.cooId) } : {}),
 });
 
 const ownerHtml = (room: string, seatName: string): string => `<!doctype html>

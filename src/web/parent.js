@@ -221,7 +221,9 @@ function render(view) {
   const seat = view.seat;
   const room = view.room;
   ui.roomName.textContent = room ? (room.kind === 'hall' ? '大厅' : room.name) : '不在任何客厅';
-  ui.roomSeat.textContent = seat ? `席位 ${seat.name}` : '孩子现在没有活跃席位。';
+  ui.roomSeat.textContent = seat
+    ? `席位 ${seat.name}${seat.handle ? ` #${seat.handle}` : ''}`
+    : '孩子现在没有活跃席位。';
   ui.roomLive.textContent = room ? `${(view.events || []).length} 条可见` : '—';
   ui.latest.textContent = view.at ? `服务器 ${clock(view.now)}` : '';
 
