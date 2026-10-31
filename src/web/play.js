@@ -466,7 +466,7 @@ function scheduleHallRefresh() {
 
 /** 服务器按 requestId 去重的动作：网络掉线时可以原样重发一次。 */
 const IDEMPOTENT_ACTIONS = new Set([
-  'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'monopoly',
+  'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
 ]);
 
 /** 幂等键：优先 crypto.randomUUID；老浏览器退回 getRandomValues 拼一个 v4。 */
@@ -508,7 +508,7 @@ function withTableFields(body) {
     }
     return out;
   }
-  if (!type.startsWith('table_') && type !== 'ddz_action') return out;
+  if (!type.startsWith('table_') && type !== 'ddz_action' && type !== 'werewolf_action') return out;
   const mine = myTableId();
   if (mine && !out.table) out.table = mine;
   if (type === 'table_action' || type === 'ddz_action') {

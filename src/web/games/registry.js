@@ -12,6 +12,7 @@
 import { mountDice } from './dice.js';
 import { mountDdz } from './ddz.js';
 import { mountMonopoly } from './monopoly.js';
+import { mountWerewolf } from './werewolf.js';
 
 export const GAMES = {
   dice: {
@@ -24,6 +25,25 @@ export const GAMES = {
     mount: mountDice,
     blurb: '两到四人，暗骰、可重掷两次，合计最高者赢。',
     foot: '暗骰 · 重掷 · 比点数',
+  },
+  werewolf: {
+    label: '狼人杀',
+    icon: 'moon',
+    enabled: true,
+    endScreen: true,
+    minPlayers: 9,
+    botFill: false,
+    mount: mountWerewolf,
+    blurb: '九席同桌：真人与 Coo 一起玩。固定九人局，3 狼 / 3 平民 / 预言家 / 女巫 / 猎人。',
+    foot: '九席 · 夜谈 · 单次发言',
+    guide: [
+      '固定九席：3 狼人、3 平民（牌面写「平民」）、预言家、女巫、猎人；无警长、无自爆。',
+      '坐满九人且至少一名真人、一只 Coo 后由开桌者开始；每只 Coo 的扩展都要支持（旧版会被告知先升级）。',
+      '轮到你发言只有一条（≤300 字），提交或过麦后全桌阅读 20 秒；投票、夜晚、开枪是同时窗口，到点统一结算。',
+      '真人发言 120 秒、Coo 60 秒；夜晚对所有人只显示一个完整的夜。',
+      '好人灭掉全部狼人获胜；狼人把平民全灭或把三神全灭（屠边）获胜；最多十二个白天。',
+      '身份牌、查验、狼聊与药只有本人看得见；终局公开全部身份，出局者保留座位观战。',
+    ],
   },
   ddz: {
     label: '斗地主',

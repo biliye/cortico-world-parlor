@@ -2424,3 +2424,234 @@ button.room-pill:hover { border-color: var(--accent-border); color: var(--text);
 
 /* 同名时直接展开号，手机也能分清。 */
 .member-chip.has-same-name .member-handle { display: inline; }
+
+/* ===================== 狼人杀（九席像素木桌） ===================== */
+/* 奶油客厅的延续：白天暖光木桌、夜晚压暗加星点；像素感用无模糊的阶梯阴影表达。 */
+.game-werewolf { display: flex; flex-direction: column; gap: 12px; }
+
+.wf-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wf-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 999px;
+  background: var(--paper-2, #f6ead8); border: 1px solid rgba(0,0,0,.08);
+  font-weight: 600;
+}
+.wf-pill.live { border-color: var(--accent); color: var(--accent); }
+.wf-day { color: var(--ink-2, #6b5a4a); font-weight: 600; }
+.wf-clock { color: var(--ink-2, #6b5a4a); font-variant-numeric: tabular-nums; }
+
+.wf-main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(260px, .85fr); gap: 12px; align-items: start; }
+
+/* 九席环：座号方向所有端一致。 */
+.wf-ring-wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wf-ring {
+  display: grid; gap: 6px; padding: 12px;
+  grid-template-areas:
+    'a1 a2 a3'
+    'a9 core a4'
+    'a8 core a5'
+    'a7 a6 a6';
+  grid-template-columns: 1fr minmax(90px, 1.4fr) 1fr;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 244, 214, .5), rgba(255, 244, 214, 0) 60%),
+    repeating-linear-gradient(90deg, rgba(122, 82, 46, .10) 0 6px, rgba(122, 82, 46, .04) 6px 12px),
+    linear-gradient(160deg, #b98a55, #8a5c33);
+  box-shadow: inset 0 0 0 4px rgba(70, 44, 20, .55), inset 0 0 0 6px rgba(255, 235, 200, .28), 0 10px 24px rgba(70, 44, 20, .18);
+}
+.game-werewolf.is-night .wf-ring {
+  background:
+    radial-gradient(1.5px 1.5px at 12% 20%, rgba(255,255,255,.85) 45%, transparent 55%),
+    radial-gradient(1.5px 1.5px at 32% 68%, rgba(255,255,255,.7) 45%, transparent 55%),
+    radial-gradient(2px 2px at 58% 14%, rgba(255,255,255,.8) 45%, transparent 55%),
+    radial-gradient(1.5px 1.5px at 78% 44%, rgba(255,255,255,.75) 45%, transparent 55%),
+    radial-gradient(1.5px 1.5px at 88% 82%, rgba(255,255,255,.65) 45%, transparent 55%),
+    radial-gradient(120% 90% at 50% 0%, rgba(86, 96, 160, .28), rgba(30, 34, 70, 0) 60%),
+    repeating-linear-gradient(90deg, rgba(34, 28, 58, .22) 0 6px, rgba(34, 28, 58, .08) 6px 12px),
+    linear-gradient(160deg, #4b4470, #2c2748);
+  box-shadow: inset 0 0 0 4px rgba(20, 16, 38, .65), inset 0 0 0 6px rgba(190, 200, 255, .16), 0 10px 24px rgba(20, 16, 38, .28);
+}
+.wf-table-core {
+  grid-area: core; align-self: center; justify-self: center;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 14px 10px; text-align: center;
+  color: #fff7e8; text-shadow: 0 1px 0 rgba(60, 34, 12, .5);
+}
+.wf-core-day { font-weight: 800; font-size: 15px; }
+.wf-core-sub { font-size: 11px; opacity: .85; }
+
+.wf-seat {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 7px 4px 6px; min-height: 44px;
+  border-radius: 10px; border: 1.5px solid rgba(60, 38, 16, .35);
+  background: rgba(255, 248, 233, .92); color: var(--ink, #3c2c1c);
+  font: inherit; cursor: default; text-align: center; min-width: 0;
+}
+button.wf-seat { cursor: pointer; }
+.wf-seat.is-me { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(239, 138, 126, .25); }
+.wf-seat.is-speaking { border-color: var(--accent); background: #fff3df; box-shadow: 0 0 0 2px rgba(239, 138, 126, .35); }
+.wf-seat.is-dead { opacity: .55; filter: saturate(.4); }
+.wf-seat.is-offline:not(.is-dead) { opacity: .72; }
+.wf-seat.is-targetable { cursor: pointer; border-style: dashed; border-color: var(--accent-2, #5fb8a0); }
+.wf-seat.is-targetable:hover, .wf-seat.is-targetable:focus-visible { background: #eef8f4; }
+.wf-seat-empty { border-radius: 10px; min-height: 44px; }
+.wf-seat-head { display: flex; align-items: center; gap: 4px; }
+.wf-seatno { font-weight: 800; font-size: 11px; }
+.wf-seatname { font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-seat-tags { display: flex; gap: 4px; font-size: 10px; align-items: center; }
+.wf-kind {
+  padding: 0 4px; border-radius: 4px; font-size: 10px;
+  background: rgba(107, 90, 74, .14); color: var(--ink-2, #6b5a4a);
+}
+.wf-mark.dead { color: #b3543f; font-weight: 700; }
+.wf-mark.off { color: #8a8a8a; }
+.wf-deadline { font-size: 11px; color: var(--ink-2, #6b5a4a); }
+
+/* 右侧文字区：发言卡、历史、票型。 */
+.wf-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.wf-panel {
+  border: 1px solid rgba(0,0,0,.08); border-radius: 12px;
+  background: var(--paper-1, #fffaf1); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+}
+.wf-panel-title { margin: 0; font-size: 12px; color: var(--ink-2, #6b5a4a); font-weight: 700; }
+.wf-hint { margin: 0; font-size: 12px; color: var(--ink-2, #6b5a4a); }
+.wf-tabs { display: flex; gap: 6px; }
+.wf-tab {
+  padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(0,0,0,.12);
+  background: transparent; font: inherit; font-size: 12px; cursor: pointer;
+}
+.wf-tab.is-active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.wf-tabbody { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+.wf-people { display: flex; flex-wrap: wrap; gap: 4px; }
+.wf-chip {
+  padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,.14);
+  background: transparent; font: inherit; font-size: 12px; cursor: pointer;
+}
+.wf-chip.is-active { background: var(--accent-2, #5fb8a0); border-color: var(--accent-2, #5fb8a0); color: #fff; font-weight: 700; }
+
+.wf-speech { border: 1px solid rgba(0,0,0,.08); border-radius: 10px; padding: 8px 10px; background: #fff; }
+.wf-speech.is-live { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(239, 138, 126, .18); }
+.wf-speech.is-pass { opacity: .7; }
+.wf-speech-head { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--ink-2, #6b5a4a); }
+.wf-speech-day { font-weight: 700; }
+.wf-speech-who { display: inline-flex; gap: 4px; align-items: center; font-weight: 600; color: var(--ink, #3c2c1c); }
+.wf-speech-text { margin: 6px 0 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+
+.wf-votes { border: 1px dashed rgba(0,0,0,.12); border-radius: 10px; padding: 8px 10px; }
+.wf-votes-title { margin: 0 0 6px; font-size: 12px; }
+.wf-vote-line { display: flex; gap: 6px; font-size: 12px; align-items: baseline; }
+.wf-vote-from { font-weight: 700; }
+.wf-vote-arrow { color: var(--ink-2, #6b5a4a); }
+.wf-vote-to { color: var(--ink-2, #6b5a4a); }
+.wf-votes-note { margin: 6px 0 0; font-size: 12px; color: var(--accent); font-weight: 600; }
+
+/* 看身份：统一牌背 + 翻牌；角色牌用原画等比完整显示（禁止 pixelated）。 */
+.wf-reveal { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.wf-reveal-hint { margin: 0; font-size: 12px; color: var(--ink-2, #6b5a4a); max-width: 260px; }
+.wf-idflip { position: relative; width: 120px; height: 168px; flex: none; }
+.wf-card-back, .wf-card-face {
+  position: absolute; inset: 0; border-radius: 10px; overflow: hidden;
+  backface-visibility: hidden; transition: transform .45s ease;
+}
+.wf-card-back {
+  border: 2px solid #caa04f; background:
+    radial-gradient(60% 45% at 50% 38%, rgba(255, 226, 160, .32), transparent 70%),
+    repeating-linear-gradient(45deg, rgba(202, 160, 79, .30) 0 6px, transparent 6px 12px),
+    linear-gradient(160deg, #6d4a86, #38265c);
+  color: #ffe9b3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  font: inherit; cursor: pointer; transform: rotateY(0deg); box-shadow: 0 4px 0 rgba(60, 34, 12, .35);
+}
+.wf-card-back-inner { font-weight: 800; letter-spacing: 2px; font-size: 14px; }
+.wf-card-back-hint { font-size: 10px; opacity: .85; }
+.wf-card-face {
+  transform: rotateY(180deg);
+  border: 2px solid #caa04f; background: #17131f;
+  display: flex; flex-direction: column; padding: 6px; gap: 4px;
+}
+.wf-idflip.is-open .wf-card-back { transform: rotateY(180deg); }
+.wf-idflip.is-open .wf-card-face { transform: rotateY(0deg); }
+.wf-roleart { flex: 1; min-height: 0; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #1a1622; }
+.wf-roleart.is-missing::after { content: '牌图加载失败'; color: #b9a9d8; font-size: 10px; }
+.wf-roleimg { width: 100%; height: 100%; object-fit: contain; display: block; }
+.wf-role-name { font-size: 11px; font-weight: 800; color: #ffe9b3; text-align: center; }
+.wf-role-skill { margin: 0; font-size: 10px; line-height: 1.4; color: #d8cdea; max-height: 5.6em; overflow: hidden; }
+.wf-role-mates { margin: 0; font-size: 12px; color: var(--ink-2, #6b5a4a); }
+.wf-id-drawer {
+  border: 1px solid rgba(202, 160, 79, .6); border-radius: 12px; padding: 10px;
+  background: linear-gradient(160deg, #2a2140, #17131f); color: #efe7ff;
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+}
+.wf-id-drawer .wf-idflip, .wf-id-drawer .wf-card-face { position: static; width: 150px; height: 210px; }
+.wf-id-drawer .wf-card-face { transform: none; }
+.wf-id-drawer .wf-role-skill { color: #cfc3ec; }
+.wf-id-toggle {
+  padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(202, 160, 79, .7);
+  background: rgba(202, 160, 79, .12); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+
+/* 操作区。 */
+.wf-actionbar { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed rgba(0,0,0,.12); padding-top: 10px; }
+.wf-mebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wf-actions { display: flex; flex-direction: column; gap: 8px; }
+.wf-wait { font-size: 12px; color: var(--ink-2, #6b5a4a); }
+.wf-composer { display: flex; flex-direction: column; gap: 8px; }
+.wf-composer-hint, .wf-composer-note { margin: 0; font-size: 12px; color: var(--ink-2, #6b5a4a); }
+.wf-draft { display: flex; gap: 8px; align-items: stretch; }
+.wf-draft-main { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wf-input {
+  width: 100%; min-height: 72px; resize: vertical; font: inherit; font-size: 14px;
+  border-radius: 10px; border: 1px solid rgba(0,0,0,.16); padding: 8px 10px; background: #fff;
+}
+.wf-input:focus { outline: 2px solid var(--focus, #e0a499); outline-offset: 1px; }
+.wf-draft-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-2, #6b5a4a); font-variant-numeric: tabular-nums; }
+.wf-count.is-over { color: #b3543f; font-weight: 800; }
+.wf-targets { display: flex; flex-wrap: wrap; gap: 4px; }
+.wf-confirm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* 终局。 */
+.wf-end { display: flex; flex-direction: column; gap: 12px; }
+.wf-end-banner {
+  border-radius: 14px; padding: 14px 16px;
+  background: linear-gradient(160deg, #3b3160, #241d3d); color: #ffe9b3;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.wf-end-kicker { font-size: 11px; opacity: .8; letter-spacing: 2px; }
+.wf-end-banner h2 { margin: 0; font-size: 20px; }
+.wf-end-sub { margin: 0; font-size: 12px; color: #d8cdea; }
+.wf-end-seats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.wf-endcard {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px;
+  border: 1px solid rgba(202, 160, 79, .5); border-radius: 10px; background: #201a30;
+  color: #efe7ff; font: inherit; cursor: zoom-in; min-width: 0;
+}
+.wf-endcard.is-winner { border-color: #ffd97a; box-shadow: 0 0 0 2px rgba(255, 217, 122, .3); }
+.wf-endcard-art { width: 100%; aspect-ratio: 5 / 7; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #17131f; }
+.wf-endcard-art.is-missing::after { content: '牌图缺失'; font-size: 10px; color: #b9a9d8; }
+.wf-endcard-art img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.wf-endcard-name { font-size: 11px; font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-endcard-role { font-size: 10px; color: #d8cdea; }
+.wf-end-actions { display: flex; gap: 8px; }
+.wf-enlarge {
+  position: fixed; inset: 0; z-index: 60; background: rgba(12, 8, 20, .78);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.wf-enlarge-card {
+  max-width: min(420px, 92vw); max-height: 92vh; display: flex; flex-direction: column; gap: 8px;
+  background: #17131f; border: 2px solid #caa04f; border-radius: 14px; padding: 10px;
+}
+.wf-enlarge-card img { max-width: 100%; max-height: calc(92vh - 60px); object-fit: contain; }
+
+@media (max-width: 1100px) {
+  .wf-main { grid-template-columns: 1fr; }
+  .wf-tabbody { max-height: 260px; }
+}
+@media (max-width: 820px) {
+  .wf-ring { gap: 4px; padding: 8px; }
+  .wf-seat { padding: 5px 2px; min-height: 44px; }
+  .wf-seatname { font-size: 10px; }
+  .wf-table-core { padding: 8px 4px; }
+  .wf-core-day { font-size: 13px; }
+  .wf-end-seats { grid-template-columns: repeat(3, 1fr); }
+  .wf-idflip { width: 104px; height: 146px; }
+}
