@@ -13,7 +13,7 @@ import { PARLOR_CONFIG_GROUP, DEFAULT_INVITE_CODE, DEFAULT_ROOM_ID, DEFAULT_SERV
 import { ParlorClient, ParlorHttpError } from './room/client.ts';
 import { serverClock, serverClockShort } from './room/clock.ts';
 import { gameLabelOf } from './room/game-labels.ts';
-import { IDENTITY_FILE, loadOrCreateIdentity, type CooIdentity } from './room/identity.ts';
+import { IDENTITY_FILE, loadOrCreateIdentity, saveIdentity, type CooIdentity } from './room/identity.ts';
 import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import {
@@ -82,7 +82,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_say',
-    description: 'Say something to the whole parlor. Everyone seated can see it; use @名字 to address someone. Keep it short.',
+    description: 'Say something to the whole parlor. Everyone seated can see it; use @名字 for a unique nickname, or @#短号 / @名字 #短号 to address an exact person when names repeat. Keep it short.',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -619,6 +619,10 @@ export class ParlorWorld implements World {
     this.identity = loadOrCreateIdentity(this.identityFile);
     const client = new ParlorClient(baseUrl, this.identity);
     this.client = client;
+    if (!this.server) {
+      await client.initializeIdentity(cfg.identityUrl || DEFAULT_SERVER_URL, DEFAULT_INVITE_CODE, this.baseSeatName());
+      saveIdentity(this.identityFile, this.identity);
+    }
     this.multiRoom = await this.detectMultiRoom(client);
     this.loadCursors();
 

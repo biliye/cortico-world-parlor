@@ -10,7 +10,8 @@
 import { randomBytes } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
 import { EventDb } from './event-db.ts';
-import { shortHandle } from './handles.ts';
+import { parseHandleQuery } from './handles.ts';
+import { registeredHandle } from './global-identity.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { mentionsInText } from './mentions.ts';
@@ -116,13 +117,13 @@ const SAY_GAP_MS = 50;
 
 const makeToken = (): string => randomBytes(24).toString('base64url');
 
-const seatOfRow = (row: SeatRow): Seat => ({
+const seatOfRow = (db: Db, row: SeatRow): Seat => ({
   id: row.id,
   name: row.name,
   kind: row.kind,
   tier: row.tier,
   joinedAt: row.joinedAt,
-  handle: shortHandle(row.cooId),
+  handle: registeredHandle(db, row.cooId),
 });
 
 const wrapSeatError = (error: unknown): never => {
@@ -500,8 +501,8 @@ export class RoomHost {
     return {
       id: this.roomId,
       name: room.name,
-      seat: seatOfRow(seat),
-      seats: this.seats().map(seatOfRow),
+      seat: seatOfRow(this.db, seat),
+      seats: this.seats().map((row) => seatOfRow(this.db, row)),
       maxSeats: room.capacity,
       latest,
       now,
@@ -900,14 +901,19 @@ export class RoomHost {
   private resolveSeat(value: string): SeatRow {
     const needle = value.trim().toLowerCase();
     const seats = this.seats();
-    const seat = seats.find((item) => item.id === value.trim())
-      ?? seats.find((item) => item.name.toLowerCase() === needle);
-    if (!seat) throw new HostError('not_found', `客厅里没有叫「${value}」的席位`);
+    const handle = parseHandleQuery(value) ?? (value.includes(' #') ? parseHandleQuery('#' + value.split(' #').pop()) : null);
+    const exact = seats.find((item) => item.id === value.trim() || item.cooId === value.trim());
+    if (exact) return exact;
+    const hits = handle ? seats.filter((item) => registeredHandle(this.db, item.cooId) === handle || item.cooId.toLowerCase() === handle)
+      : seats.filter((item) => item.name.toLowerCase() === needle);
+    if (hits.length > 1) throw new HostError('conflict', '有多个同名席位，请用 #短号');
+    const seat = hits[0];
+    if (!seat) throw new HostError('not_found', '客厅里没有这个席位：' + value);
     return seat;
   }
 
   private mentionsIn(text: string, from: SeatRow): string[] {
-    return mentionsInText(text, this.seats().filter((seat) => seat.id !== from.id));
+    return mentionsInText(text, this.seats().map((seat) => ({ ...seat, handle: registeredHandle(this.db, seat.cooId) }))).filter((id) => id !== from.id);
   }
 
   private latestInterval(cooId: string): { visibleFromSeq: number; visibleUntilSeq: number | null } | null {

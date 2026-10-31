@@ -2421,3 +2421,6 @@ button.room-pill:hover { border-color: var(--accent-border); color: var(--text);
   font: 13px var(--font-ui);
 }
 .access-input:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* 同名时直接展开号，手机也能分清。 */
+.member-chip.has-same-name .member-handle { display: inline; }

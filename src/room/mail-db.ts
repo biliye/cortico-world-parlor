@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { migrate, openDb, withTransaction, type Db } from './db.ts';
-import { shortHandle } from './handles.ts';
+import { registeredHandle } from './global-identity.ts';
 import type { MailItem, MailKind, MailPage, MailView } from './mail.ts';
 
 /** 投递一封新信时需要的字段；id/seq/ts/read 由 store 填。 */
@@ -76,13 +76,13 @@ const clampPage = (limit: number, fallback: number): number => {
   return Math.max(1, Math.min(MAX_PAGE, value));
 };
 
-const toView = (row: Record<string, unknown>): MailView => ({
+const toView = (db: Db, row: Record<string, unknown>): MailView => ({
   id: String(row.id),
   seq: Number(row.seq),
   ts: Number(row.ts),
   room: String(row.room_id),
   ...(typeof row.from_coo_id === 'string'
-    ? { fromCooId: row.from_coo_id, fromHandle: shortHandle(row.from_coo_id) }
+    ? { fromCooId: row.from_coo_id, fromHandle: registeredHandle(db, row.from_coo_id) }
     : {}),
   kind: row.kind as MailKind,
   ...(typeof row.action === 'string' ? { action: row.action } : {}),
@@ -168,7 +168,7 @@ export class MailDb {
   appendOnce(key: string, input: MailInput): MailView {
     return this.tx(() => {
       const existing = this.db.prepare(`SELECT ${VIEW_COLUMNS} FROM mail WHERE key = ?`).get(key);
-      if (existing) return toView(existing);
+      if (existing) return toView(this.db, existing);
       return this.insert(input, key);
     });
   }
@@ -238,7 +238,7 @@ export class MailDb {
       return {
         unread,
         remaining: Math.max(0, unread - rows.length),
-        items: rows.map(toView),
+        items: rows.map((row) => toView(this.db, row)),
         marked: markRead && rows.length > 0,
         unreadByRoom: this.unreadByRoom(cooId),
       };
@@ -264,7 +264,7 @@ export class MailDb {
       : this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? ORDER BY seq DESC LIMIT ?`,
       ).all(cooId, room, size);
-    return rows.map(toView);
+    return rows.map((row) => toView(this.db, row));
   }
 
   /** 私聊会话摘要：每个对方一条，按最后一条排序。只算带 from_coo_id 的信。 */
@@ -363,7 +363,7 @@ export class MailDb {
     return {
       unread,
       remaining,
-      items: rows.map(toView),
+      items: rows.map((row) => toView(this.db, row)),
       marked: false,
       unreadByRoom: this.unreadByRoom(cooId),
       nextAfter: remaining > 0 ? last : null,

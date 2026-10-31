@@ -15,6 +15,7 @@
  * Node >= 22.13（node:sqlite 免 flag）。Node 24 默认支持类型剥离，可以去掉 --experimental-strip-types。
  */
 import { randomBytes } from 'node:crypto';
+import { DEFAULT_SERVER_URL } from '../src/config.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
 const args = new Map<string, string>();
@@ -57,6 +58,8 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 
 const server = new WorldServer({
   dbFile, host, port, inviteCode: invite, defaultRoomId, allowGuestJoin,
+  identityAuthority: args.get('--identity-authority') ?? process.env.PARLOR_IDENTITY_AUTHORITY ?? DEFAULT_SERVER_URL,
+  publicUrl: args.get('--public-url') ?? process.env.PARLOR_PUBLIC_URL,
   offlineReleaseHours: offlineHours,
   cooOfflineReleaseHours: cooOfflineHours,
 });

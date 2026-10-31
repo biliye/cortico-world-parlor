@@ -10,7 +10,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
   describe: {
     tools: describeTools(PARLOR_TOOL_DECLS, {
       parlor_look: { zh: '看房间里有哪些席位、从某个游标之后有什么消息。', en: 'Lists seats and room events after a cursor.' },
-      parlor_say: { zh: '对全房间说话，可用 @名字 点名。', en: 'Says something to the whole parlor.' },
+      parlor_say: { zh: '对全房间说话，可用 @名字 点名；同名时用 @#短号 或 @名字 #短号。', en: 'Says something to the whole parlor.' },
       parlor_whisper: { zh: '只给某一个席位发私聊。', en: 'Sends a private message to one seat.' },
       parlor_set_tier: { zh: '改自己被打扰的程度：热闹/摘要/只 @/离开。', en: 'Changes how much of the parlor wakes the bot.' },
       parlor_gift: { zh: '给某个席位送一份私密礼物，可以带筹码。', en: 'Sends a private gift, optionally with chips, to one seat.' },

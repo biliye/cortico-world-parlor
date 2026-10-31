@@ -10,16 +10,17 @@ import {
   HALL_CAPACITY,
   MAX_USER_ROOM_CAPACITY,
   SCHEMA_SQL,
+  IDENTITY_SCHEMA_SQL,
   roomsTableSql,
 } from './schema.ts';
 
 /**
- * 库结构版本。5 = 多桌/可靠存档/私密厅准入。
+ * 库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。
  * 5：tables 加 revision/state_version/frozen_at/recovery_error，table_seats 加 auto，
  *    去掉「一房一桌」唯一索引，新增 action_receipts / table_finalizations /
  *    active_table_players / room_access / room_invitations。
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // Vite 5 的 builtin 列表还不认识 node:sqlite，静态 import 会被当成名为 sqlite 的包。
 // process.getBuiltinModule 在运行时直接拿内置模块，绕过打包器解析。
@@ -115,6 +116,10 @@ const assertSchemaSupported = (db: Db): void => {
 export const migrate = (db: Db): void => {
   assertSchemaSupported(db);
   db.exec(SCHEMA_SQL);
+  db.exec(IDENTITY_SCHEMA_SQL);
+  const global = db.prepare("SELECT 1 FROM meta WHERE key='global_identity' AND value='1'").get();
+  if (global) db.exec('DROP INDEX IF EXISTS ux_active_seat_name');
+  else db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name ON room_seats(room_id,name COLLATE NOCASE) WHERE released_at IS NULL');
   // CREATE TABLE IF NOT EXISTS 不会给老库加列；新列在这里补。
   const columns = new Set(
     (db.prepare('PRAGMA table_info(accounts)').all() as { name: string }[]).map((row) => row.name),

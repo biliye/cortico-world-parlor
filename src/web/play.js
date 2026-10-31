@@ -58,6 +58,7 @@ const state = {
   hallLoading: false,
   /** 服务端是否开放「用户名 + 邀请码」入口；默认按开处理，boot 时问 /healthz。 */
   guestJoin: true,
+  globalIdentity: null,
   /** 从 #key= 取到的钥匙；换席位失败时留着给「重试」用，成功就清掉。 */
   entryKey: '',
   dm: { open: false, peer: null, threads: [], people: [], messages: [], unread: 0, q: '', timer: 0, drag: null },
@@ -120,11 +121,25 @@ async function loadEntryPolicy() {
     if (!response.ok) return;
     const body = await response.json();
     if (body && body.guestJoin === false) state.guestJoin = false;
+    state.globalIdentity = body.globalIdentity || null;
   } catch { /* 连不上就保持默认；提交时服务器也会拒 */ }
 }
 
 async function boot() {
   startBootClock();
+  const identityArgs = new URLSearchParams(location.hash.slice(1));
+  if (identityArgs.has('identity')) {
+    history.replaceState(null, '', location.pathname + location.search);
+    try {
+      const pending = JSON.parse(sessionStorage.getItem('parlor-identity-pending') || 'null');
+      if (!pending || pending.state !== identityArgs.get('state')) throw new Error('身份连接已失效，请重新加入');
+      const body = await api('/v1/global/player/join', { method: 'POST', headers: { 'x-parlor-identity': identityArgs.get('identity') },
+        body: JSON.stringify({ invite: pending.invite, room: pending.room || 'hall', parent: pending.parent === true }) });
+      sessionStorage.removeItem('parlor-identity-pending');
+      writeStore({ room: body.room, seatId: body.seat.id, name: body.seat.name, token: body.token,
+        cooId: body.identity.cooId, cooSecret: body.identity.cooSecret });
+    } catch (error) { renderOffline(bootFailureText(error)); return; }
+  }
   // 带钥匙的「我下场玩」链接：钥匙只用来换会话，换完立刻从地址栏抹掉。
   // 钥匙是明确点开的意图，比这台设备存着的旧席位优先——旧席位可能是另一个家长身份，
   // 也可能早就失效了；先换钥匙，再谈旧席位。
@@ -204,6 +219,7 @@ async function tryParentEntry(key = '', options = {}) {
     });
     const body = await played.json().catch(() => ({}));
     if (!played.ok) throw new Error(body.error || (key ? '这个家长链接不对，或已经失效了' : '现在下不了场'));
+    if (body.globalEntry) { beginGlobalEntry(body.globalEntry, { room: body.room, parent: true }); return true; }
     if (options.hadSeat) {
       state.latest = 0;
       state.seen = new Set();
@@ -402,8 +418,10 @@ async function api(path, init = {}) {
   const headers = new Headers(init.headers || {});
   if (state.cfg) {
     headers.set('authorization', 'Bearer ' + state.cfg.token);
-    headers.set('x-parlor-coo', state.cfg.cooId);
-    headers.set('x-parlor-coo-secret', state.cfg.cooSecret);
+    if (state.cfg.cooSecret !== 'seat-only') {
+      headers.set('x-parlor-coo', state.cfg.cooId);
+      headers.set('x-parlor-coo-secret', state.cfg.cooSecret);
+    }
   }
   const response = await fetch(roomPath(path), { ...init, headers, ...timeoutSignal(init.signal) });
   let body = null;
@@ -1901,7 +1919,11 @@ function renderHall() {
   const seats = hall.seats || [];
   ui.hallPeopleCount.textContent = seats.length + ' 人';
   if (!seats.length) ui.hallPeopleRow.append(el('p', 'muted', '大厅里现在没人。'));
-  for (const seat of seats) ui.hallPeopleRow.append(hallSeatChip(seat));
+  for (const seat of seats) {
+    const chip = hallSeatChip(seat);
+    if (seats.filter(other => other.name.toLowerCase() === seat.name.toLowerCase()).length > 1) chip.classList.add('has-same-name');
+    ui.hallPeopleRow.append(chip);
+  }
   const rooms = (data.rooms || []).filter((room) => !room.archived);
   if (!rooms.length) {
     ui.hallRoomsList.append(el('p', 'muted', '还没有公开的客厅；开一间吧。'));
@@ -2147,6 +2169,7 @@ function renderMembers() {
   ui.membersCount.textContent = active.length + ' 人在座' + (coos.length ? ' · ' + coos.length + ' 位 Coo' : '');
   for (const seat of snap.seats) {
     const chip = el('span', 'member-chip');
+    if (snap.seats.filter(other => other.name.toLowerCase() === seat.name.toLowerCase()).length > 1) chip.classList.add('has-same-name');
     chip.append(avatarNode(seat.id, 'avatar-xs'));
     const copy = el('span');
     const name = el('strong', '', seat.name + (seat.id === snap.seat.id ? '（你）' : ''));
@@ -2960,6 +2983,9 @@ function renderJoin(message = '') {
     }
     submit.disabled = true;
     try {
+      if (state.globalIdentity) {
+        beginGlobalEntry(state.globalIdentity.authority, { invite, room: wantedRoom || 'hall', name }); return;
+      }
       const response = await fetch('/v1/player/join', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-parlor-invite': invite },
@@ -3043,6 +3069,7 @@ async function parentPlay() {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || '现在下不了场');
+    if (body.globalEntry) { beginGlobalEntry(body.globalEntry, { room: body.room, parent: true }); return; }
     writeStore({
       room: body.room,
       seatId: body.seat.id,
@@ -3460,4 +3487,14 @@ function updateDmBadge() {
   const unread = dm().unread || 0;
   ui.dmBadge.textContent = String(unread);
   ui.dmBadge.hidden = unread <= 0;
+}
+
+function beginGlobalEntry(authority, input = {}) {
+  const target = new URL(authority);
+  if (target.protocol !== 'https:' && !(target.protocol === 'http:' && ['localhost','127.0.0.1','[::1]'].includes(target.hostname))) throw new Error('身份服务需要 HTTPS');
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  sessionStorage.setItem('parlor-identity-pending', JSON.stringify({ ...input, state: nonce }));
+  target.pathname = '/identity';
+  target.search = new URLSearchParams({ returnTo: location.origin + location.pathname + location.search, state: nonce, name: input.name || '' }).toString();
+  location.assign(target.href);
 }

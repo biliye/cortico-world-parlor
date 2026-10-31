@@ -17,7 +17,8 @@ import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { gameByActionType } from './games/registry.ts';
-import { shortHandle, likePrefix, parseHandleQuery } from './handles.ts';
+import { likePrefix, parseHandleQuery } from './handles.ts';
+import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken,
@@ -35,6 +36,10 @@ import { sendWebAsset } from './web-assets.ts';
 
 export interface WorldServerOptions {
   dbFile?: string;
+  /** self = 本机提供统一身份；URL = 信任该身份服务；省略保留旧协议。 */
+  identityAuthority?: string;
+  /** 反向代理后的公开源地址；临时通行证只能用于这个目标。 */
+  publicUrl?: string;
   host?: string;
   port?: number;
   defaultRoomId?: string;
@@ -154,11 +159,11 @@ const messageOf = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
 );
 
-const seatOfRow = (roomId: string, seat: {
+const seatOfRow = (db: Db, roomId: string, seat: {
   id: string; name: string; kind: SeatKind; tier: WakeTier; joinedAt: number; cooId: string;
 }): Seat => ({
   id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier, joinedAt: seat.joinedAt,
-  handle: shortHandle(seat.cooId),
+  handle: registeredHandle(db, seat.cooId),
 });
 
 const roomSummary = (db: Db, room: RoomRow) => ({
@@ -175,6 +180,11 @@ const roomSummary = (db: Db, room: RoomRow) => ({
 
 export class WorldServer {
   private readonly db: Db;
+  private readonly identityAuthority?: string;
+  private readonly publicUrl?: string;
+  private readonly registry: IdentityRegistry;
+  private readonly verifiedPeople = new WeakMap<IncomingMessage, GlobalPerson>();
+  private readonly identityRates = new Map<string, { until: number; count: number }>();
   private readonly coo: CooAccountDb;
   private readonly now: () => number;
   private readonly defaultRoomId: string;
@@ -209,6 +219,11 @@ export class WorldServer {
     migrate(this.db);
     this.now = options.now ?? Date.now;
     this.coo = new CooAccountDb(this.db, { now: this.now });
+    this.identityAuthority = options.identityAuthority === 'self' ? 'self'
+      : options.identityAuthority ? identityOrigin(options.identityAuthority) : undefined;
+    this.publicUrl = options.publicUrl ? identityOrigin(options.publicUrl) : undefined;
+    this.registry = new IdentityRegistry(this.db, this.now);
+    if (this.identityAuthority) enableGlobalIdentity(this.db);
     this.defaultRoomId = options.defaultRoomId ?? 'lobby';
     this.inviteCode = options.inviteCode ?? '';
     this.allowGuestJoin = options.allowGuestJoin ?? false;
@@ -449,10 +464,76 @@ export class WorldServer {
   }
 
   /** Coo 身份：缺行就自动注册；secret 不匹配拒绝。 */
-  private cooAuth(req: IncomingMessage, name = ''): string {
+  private audienceUrl(): string { return this.publicUrl ?? this.baseUrl; }
+  private authorityUrl(): string { return this.identityAuthority === 'self' ? this.audienceUrl() : this.identityAuthority!; }
+
+  private async identityRoute(req: IncomingMessage, res: ServerResponse, path: string, method: string): Promise<void> {
+    if (!this.identityAuthority || this.identityAuthority !== 'self') throw new HttpError(404, '此服务器不是统一身份服务');
+    if (method !== 'POST') throw new HttpError(405, '需要 POST');
+    const body = await readJson(req);
+    if (path === '/v1/identity/session') {
+      const now = this.now();
+      for (const [key, rate] of this.identityRates) if (rate.until <= now) this.identityRates.delete(key);
+      const address = req.socket.remoteAddress ?? '';
+      const rate = this.identityRates.get(address) ?? { until: now + 60_000, count: 0 };
+      if (rate.count >= 120 || (!this.identityRates.has(address) && this.identityRates.size >= 2000)) throw new HttpError(429, '身份请求太频繁，请稍后重试');
+      rate.count += 1; this.identityRates.set(address, rate);
+      try {
+        const audience = identityOrigin(String(body.audience ?? ''));
+        let cooId = String(body.cooId ?? ''), secret = String(body.cooSecret ?? ''), name = String(body.name ?? '');
+        let kind: 'pet' | 'human' = body.kind === 'human' ? 'human' : 'pet';
+        if (body.useParent === true && cookieOf(req, 'parlor_parent')) {
+          if (headerValue(req, 'origin') !== this.audienceUrl()) throw new HttpError(403, '来源不对');
+          const player = this.ensurePlayerCoo(this.parentSession(req).account);
+          cooId = player.cooId; secret = player.secret; name = player.name; kind = 'human';
+        }
+        const person = this.registry.enroll(cooId, secret, name, kind);
+        json(res, 200, this.registry.issue(person, audience));
+      } catch (error) { throw new HttpError(403, messageOf(error)); }
+      return;
+    }
+    if (path === '/v1/identity/verify') {
+      const person = this.registry.verify(headerValue(req, GLOBAL_HEADER), String(body.audience ?? ''));
+      if (!person) throw new HttpError(401, '身份通行证无效、已过期或目标不匹配');
+      json(res, 200, { person }); return;
+    }
+    throw new HttpError(404, '没有这个身份接口');
+  }
+
+  private async prepareIdentity(req: IncomingMessage): Promise<void> {
+    if (!this.identityAuthority) throw new HttpError(401, '此服务器不支持统一身份');
+    const token = headerValue(req, GLOBAL_HEADER);
+    let person: GlobalPerson | null;
+    try {
+      person = this.identityAuthority === 'self' ? this.registry.verify(token, this.audienceUrl())
+        : (await identityRequest<{ person: GlobalPerson }>(this.authorityUrl(), '/v1/identity/verify', { audience: this.audienceUrl() }, token)).person;
+    } catch { throw new HttpError(401, '无法验证统一身份，请重试'); }
+    if (!person || !isCooId(person.cooId) || !/^[a-z0-9_-]{8,64}$/.test(person.handle)
+      || !['pet','human'].includes(person.kind)) throw new HttpError(401, '统一身份无效');
+    const existing = this.coo.findCoo(person.cooId);
+    if (existing?.status === 'disabled') throw new HttpError(403, '身份已在本服务器停用');
+    withTransaction(this.db, () => {
+      this.db.prepare(`INSERT INTO coos(id,kind,display_name,created_at,last_seen_at) VALUES (?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,last_seen_at=excluded.last_seen_at`)
+        .run(person!.cooId, person!.kind, person!.name, this.now(), this.now());
+      this.db.prepare('INSERT INTO global_handles(coo_id,handle) VALUES (?,?) ON CONFLICT(coo_id) DO UPDATE SET handle=excluded.handle')
+        .run(person!.cooId, person!.handle);
+    });
+    this.verifiedPeople.set(req, person);
+  }
+
+  private cooAuth(req: IncomingMessage, name = '', allowSeat = true): string {
+    const seatToken = bearer(req);
+    if (seatToken && allowSeat) {
+      const seat = seatByTokenHash(this.db, hashSeatToken(seatToken));
+      if (seat && seat.releasedAt === null) return seat.cooId;
+    }
+    const global = this.verifiedPeople.get(req);
+    if (global) return global.cooId;
     const cooId = headerValue(req, 'x-parlor-coo').trim();
     const secret = headerValue(req, 'x-parlor-coo-secret').trim();
     if (!isCooId(cooId) || !isCooSecret(secret)) throw new HttpError(400, '账本身份格式不对');
+    if (this.identityAuthority && this.identityAuthority !== 'self') throw new HttpError(401, '请使用统一身份通行证');
     const claim = this.coo.claimIdentity(cooId, secret);
     if (claim === 'mismatch') throw new HttpError(403, '这个账本身份已经被占用了');
     if (claim === 'invalid') {
@@ -460,12 +541,16 @@ export class WorldServer {
       if (created === 'mismatch') throw new HttpError(403, '这个账本身份已经被占用了');
       if (created !== 'ok') throw new HttpError(400, '账本身份格式不对');
     }
+    if (this.identityAuthority === 'self') this.registry.enroll(cooId, secret, name);
     return cooId;
   }
 
   private identify(req: IncomingMessage): string | null {
+    const global = this.verifiedPeople.get(req);
+    if (global) return global.cooId;
     const cooId = headerValue(req, 'x-parlor-coo').trim();
     const secret = headerValue(req, 'x-parlor-coo-secret').trim();
+    if (this.identityAuthority && this.identityAuthority !== 'self') return null;
     if (!isCooId(cooId) || !isCooSecret(secret)) return null;
     return this.coo.claimIdentity(cooId, secret) === 'ok' ? cooId : null;
   }
@@ -502,6 +587,10 @@ export class WorldServer {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
 
+    if (url.pathname.startsWith('/v1/identity/')) {
+      await this.identityRoute(req, res, url.pathname, method); return;
+    }
+    if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
     if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
 
     if (method === 'GET' && url.pathname === '/healthz') {
@@ -511,6 +600,7 @@ export class WorldServer {
         room: this.defaultRoomId,
         version: PACKAGE_VERSION,
         protocol: 2,
+        ...(this.identityAuthority ? { globalIdentity: { authority: this.authorityUrl(), audience: this.audienceUrl() } } : {}),
         guestJoin: this.allowGuestJoin,
         offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
         cooOfflineReleaseHours: this.cooOfflineReleaseMs / 3_600_000,
@@ -571,11 +661,11 @@ export class WorldServer {
         const fresh = this.coo.createSession(account.id);
         if (!fresh) throw new HttpError(403, '这个家长账户被停用了');
         res.setHeader('set-cookie', this.parentCookie(fresh.token, req));
-        json(res, 200, this.parentPlay(account, body));
+        json(res, 200, await this.parentPlay(account, body));
         return;
       }
       const session = this.parentSession(req);
-      json(res, 200, this.parentPlay(session.account, body));
+      json(res, 200, await this.parentPlay(session.account, body));
       return;
     }
 
@@ -595,7 +685,7 @@ export class WorldServer {
     }
 
     if (method === 'POST' && url.pathname === '/v1/me/owner-key/rotate') {
-      const cooId = this.cooAuth(req);
+      const cooId = this.cooAuth(req, '', false);
       let account = this.coo.byCooId(cooId);
       if (!account) {
         // 迁移过来的老 Coo 可能还没有 accounts 行：第一次要 key 时建一个。
@@ -620,7 +710,7 @@ export class WorldServer {
         cooId,
         seat: seat ? {
           room: seat.roomId, id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier,
-          handle: shortHandle(seat.cooId),
+          handle: registeredHandle(this.db, seat.cooId),
         } : null,
         rooms: listRooms(this.db, { kind: 'room' })
           .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
@@ -682,13 +772,13 @@ export class WorldServer {
           topic: hall.topic,
           capacity: hall.capacity,
           seats: activeSeats(this.db, hall.id).map((seat) => ({
-            id: seat.id, name: seat.name, kind: seat.kind, handle: shortHandle(seat.cooId),
+            id: seat.id, name: seat.name, kind: seat.kind, handle: registeredHandle(this.db, seat.cooId),
           })),
         },
         me: (() => {
           const seat = activeSeatForCoo(this.db, cooId);
           return seat
-            ? { room: seat.roomId, id: seat.id, name: seat.name, handle: shortHandle(seat.cooId) }
+            ? { room: seat.roomId, id: seat.id, name: seat.name, handle: registeredHandle(this.db, seat.cooId) }
             : null;
         })(),
         rooms: listRooms(this.db, { kind: 'room' })
@@ -1070,6 +1160,29 @@ export class WorldServer {
       return;
     }
 
+    if (url.pathname === '/v1/global/player/join' && method === 'POST') {
+      const person = this.verifiedPeople.get(req);
+      if (!person || person.kind !== 'human') throw new HttpError(401, '需要玩家的统一身份');
+      const body = await readJson(req);
+      const parent = body.parent === true ? this.parentSession(req).account : null;
+      if (!this.allowGuestJoin && !parent) throw new HttpError(403, '请用家长的下场玩链接');
+      if (!parent) this.checkInvite(req, body);
+      if (parent) {
+        const previous = this.coo.playerCooOf(parent.id);
+        if (previous && previous !== person.cooId) throw new HttpError(409, '此家长已有另一份玩家身份；请保留旧记录，暂不能自动合并');
+        this.coo.bindPlayerCoo(parent.id, person.cooId);
+      }
+      const wanted = typeof body.room === 'string' ? body.room : this.hallId;
+      const target = getRoom(this.db, wanted);
+      if (!target) throw new HttpError(404, '客厅不存在');
+      this.assertRoomEntry(target.id, person.cooId);
+      const current = activeSeatForCoo(this.db, person.cooId);
+      const joined = current ? current.roomId === target.id ? this.host(target.id).reissueSeatToken(person.cooId)
+        : this.host(current.roomId).switchTo(person.cooId, target.id, { name: person.name })
+        : this.host(target.id).join(person.cooId, { name: person.name, kind: 'human', tier: 'off' });
+      json(res, 200, { room: target.id, token: joined.token, seat: seatOfRow(this.db, target.id, joined.seat),
+        identity: { cooId: person.cooId, cooSecret: 'seat-only' } }); return;
+    }
     const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream|replay)$/);
     if (route) {
       const roomId = route[1];
@@ -1094,7 +1207,7 @@ export class WorldServer {
       const account = this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: this.defaultRoomId,
-        seat: seatOfRow(this.defaultRoomId, joined.seat),
+        seat: seatOfRow(this.db, this.defaultRoomId, joined.seat),
         token: joined.token,
         ownerToken: '',
         maxSeats: host.room().capacity,
@@ -1104,6 +1217,7 @@ export class WorldServer {
     }
 
     if (url.pathname === '/v1/player/join' && method === 'POST') {
+      if (this.identityAuthority && this.identityAuthority !== 'self') throw new HttpError(409, '请通过网页的统一身份入口加入');
       if (!this.allowGuestJoin) {
         throw new HttpError(403, '这个入口已经关闭；请用带钥匙的「下场玩」链接');
       }
@@ -1117,13 +1231,14 @@ export class WorldServer {
       const cooId = randomUUID();
       const secret = randomBytes(32).toString('base64url');
       this.coo.registerCoo(cooId, secret, 'human', name);
+      if (this.identityAuthority === 'self') this.registry.enroll(cooId, secret, name, 'human');
       this.assertRoomEntry(room.id, cooId);
       const host = this.host(room.id);
       const joined = host.join(cooId, { name, kind: 'human', tier: 'off' });
       json(res, 200, {
         room: room.id,
         roomName: room.name,
-        seat: seatOfRow(room.id, joined.seat),
+        seat: seatOfRow(this.db, room.id, joined.seat),
         token: joined.token,
         maxSeats: room.capacity,
         identity: { cooId, cooSecret: secret },
@@ -1182,7 +1297,7 @@ export class WorldServer {
       const info = getRoom(this.db, room);
       if (info && info.visibility === 'private' && (!viewer || !hasRoomAccess(this.db, room, viewer))) room = null;
     }
-    return { cooId, name, online: this.isOnline(cooId), room, handle: shortHandle(cooId) };
+    return { cooId, name, online: this.isOnline(cooId), room, handle: registeredHandle(this.db, cooId) };
   }
 
   /** 有没有正在连着的客户端（网页或 Coo）；不看席位在不在。 */
@@ -1198,9 +1313,13 @@ export class WorldServer {
    * 前缀撞了不猜，列出完整 id 让调用方选（不建唯一约束）。
    */
   private cooByHandle(handle: string): string {
+    const assigned = this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
+    if (assigned) return assigned.coo_id;
     const exact = this.db.prepare("SELECT id FROM coos WHERE status = 'active' AND id = ?").get(handle) as
       { id: string } | undefined;
     if (exact) return exact.id;
+    // 全局短号是登记值；不能把别人的已分配短号当作本地某个 ID 的前缀。
+    if (this.identityAuthority) throw new HttpError(404, `这台服务器尚不认识短号「#${handle}」`);
     const rows = this.db.prepare(
       "SELECT id FROM coos WHERE status = 'active' AND id LIKE ? ESCAPE '\\' ORDER BY created_at, id LIMIT 6",
     ).all(`${likePrefix(handle)}%`) as { id: string }[];
@@ -1232,6 +1351,7 @@ export class WorldServer {
       'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND name = ? COLLATE NOCASE',
     ).all(needle) as { coo_id: string }[];
     const ids = [...new Set(seats.map((row) => row.coo_id))].filter((id) => id !== fromCooId);
+    if (this.identityAuthority && seats.length > 1) throw new HttpError(409, '有多个同名的人，请用 #短号');
     if (ids.length === 1) return this.personInfo(ids[0], '', fromCooId);
     if (ids.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
     // 不在座的人：按 coo 显示名再找一次，这样 Coo 能回已经走开的私聊。
@@ -1239,6 +1359,7 @@ export class WorldServer {
       "SELECT id FROM coos WHERE status = 'active' AND display_name = ? COLLATE NOCASE",
     ).all(needle) as { id: string }[];
     const names = [...new Set(coos.map((row) => row.id))].filter((id) => id !== fromCooId);
+    if (this.identityAuthority && coos.length > 1) throw new HttpError(409, '有多个同名的人，请用 #短号');
     if (names.length === 1) return this.personInfo(names[0], '', fromCooId);
     if (names.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
     throw new HttpError(404, `没有找到「${needle}」（离线的人要用搜索结果选）`);
@@ -1296,6 +1417,12 @@ export class WorldServer {
     const handle = parseHandleQuery(query);
     if (handle !== null) {
       // 按号找人：不看在线或聊过。拿到号就能找到，这正是号的意义。
+      const assigned = this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
+      if (assigned) return { people: assigned.coo_id === cooId ? [] : [this.personInfo(assigned.coo_id)] };
+      if (this.identityAuthority) {
+        const exact = this.db.prepare("SELECT id FROM coos WHERE id=? AND status='active'").get(handle) as { id: string } | undefined;
+        return { people: exact && exact.id !== cooId ? [this.personInfo(exact.id)] : [] };
+      }
       const rows = this.db.prepare(
         `SELECT id, display_name FROM coos
           WHERE status = 'active' AND id <> ? AND id LIKE ? ESCAPE '\\'
@@ -1354,7 +1481,7 @@ export class WorldServer {
       const account = this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: roomId,
-        seat: seatOfRow(roomId, joined.seat),
+        seat: seatOfRow(this.db, roomId, joined.seat),
         token: joined.token,
         maxSeats: host.room().capacity,
         ...(account.created && account.ownerKey ? { ownerKey: account.ownerKey } : {}),
@@ -1375,7 +1502,7 @@ export class WorldServer {
       json(res, 200, {
         ok: true,
         room: target.id,
-        seat: seatOfRow(target.id, moved.seat),
+        seat: seatOfRow(this.db, target.id, moved.seat),
         token: moved.token,
         leaveSeq: moved.leaveEvent.seq,
         joinSeq: moved.joinEvent.seq,
@@ -1703,6 +1830,9 @@ export class WorldServer {
     ).all(key, key) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
     const row = rows.find((entry) => entry.coo_id === key)
       ?? rows.find((entry) => entry.name.toLowerCase() === key.toLowerCase());
+    if (handle === null && !rows.some((entry) => entry.coo_id === key) && rows.length > 1) {
+      throw new HttpError(409, '有多个同名的人，请用 #短号');
+    }
     let target: { cooId: string; name: string; roomId: string | null; kind: string };
     if (row) {
       target = { cooId: row.coo_id, name: row.name, roomId: row.room_id, kind: row.kind };
@@ -1745,7 +1875,7 @@ export class WorldServer {
    * 玩家身份固定在 `accounts.player_coo_id` 上——同一个家长链接在任何浏览器都是同一个人；
    * 账本/筹码与孩子那份分开（孩子是 Coo 的 cooId，家长玩家是另一个 human coo）。
    */
-  private parentPlay(account: ParentAccount, body: Record<string, unknown>): Record<string, unknown> {
+  private async parentPlay(account: ParentAccount, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const requested = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : '';
     const childSeat = activeSeatForCoo(this.db, account.cooId);
     const wanted = requested || childSeat?.roomId || this.defaultRoomId;
@@ -1753,7 +1883,11 @@ export class WorldServer {
     if (!target) throw new HttpError(404, `客厅不存在：${wanted}`);
     if (target.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
 
+    if (this.identityAuthority && this.identityAuthority !== 'self') {
+      return { globalEntry: this.authorityUrl(), room: target.id };
+    }
     const player = this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
+    if (this.identityAuthority === 'self') this.registry.enroll(player.cooId, player.secret, player.name, 'human');
     // 家长作为玩家也要按自己的身份准入（孩子被邀请不等于家长玩家也是成员）。
     this.assertRoomEntry(target.id, player.cooId);
     let seat = activeSeatForCoo(this.db, player.cooId);
@@ -1776,9 +1910,9 @@ export class WorldServer {
     return {
       room: target.id,
       roomName: target.name,
-      seat: seatOfRow(target.id, seat),
+      seat: seatOfRow(this.db, target.id, seat),
       token,
-      identity: { cooId: player.cooId, cooSecret: player.secret },
+      identity: { cooId: player.cooId, cooSecret: this.identityAuthority ? 'seat-only' : player.secret },
       player: true,
     };
   }
@@ -1805,7 +1939,7 @@ export class WorldServer {
     }
     const renamed = this.coo.rename(account.id, raw);
     if (!renamed) throw new HttpError(409, '改不了名字');
-    if (!playerId) this.ensurePlayerCoo(renamed, raw);
+    if (!playerId && (!this.identityAuthority || this.identityAuthority === 'self')) this.ensurePlayerCoo(renamed, raw);
     return {
       account: { id: renamed.id, cooId: renamed.cooId, displayName: renamed.displayName },
       seat,
@@ -1927,6 +2061,9 @@ export class WorldServer {
 
   /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
   private serveWeb(pathname: string, req: IncomingMessage, res: ServerResponse): boolean {
+    if (pathname === '/identity' && this.identityAuthority === 'self') {
+      this.sendWeb('identity.html', req, res, true); return true;
+    }
     if (pathname === '/play' || pathname === '/play/') {
       this.sendWeb('play.html', req, res, true);
       return true;

@@ -49,6 +49,7 @@ describe('席位被释放后的自动重入', () => {
       storeSecret: (name, value) => { secrets[name] = value; },
     };
     ctx.cfg.serverUrl = server.url;
+    ctx.cfg.identityUrl = server.url;
     ctx.cfg.seatName = '小满';
     ctx.cfg.room = 'hall';
     world = PARLOR.create(ctx);

@@ -10,6 +10,8 @@ import { isCooId, isCooSecret } from './ledger.ts';
 export interface CooIdentity {
   cooId: string;
   cooSecret: string;
+  authority?: string;
+  handle?: string;
 }
 
 export const IDENTITY_FILE = 'parlor-identity.json';
@@ -37,4 +39,10 @@ export function loadOrCreateIdentity(file: string): CooIdentity {
     writeFileSync(file, `${JSON.stringify(identity)}\n`, { encoding: 'utf8', mode: 0o600 });
   } catch { /* 假上下文或不可写：本次运行用它，重启会换 */ }
   return identity;
+}
+
+/** 身份升级后必须持久保存；写失败直接报告，避免悄悄换号。 */
+export function saveIdentity(file: string, identity: CooIdentity): void {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(identity) + '\n', { encoding: 'utf8', mode: 0o600 });
 }

@@ -16,7 +16,8 @@ export const shortHandle = (cooId: string): string => cooId.slice(0, HANDLE_LENG
  * 夹了别的字符）返回 null。全角＃也认。
  */
 export const parseHandleQuery = (value: string): string | null => {
-  const text = value.trim().replace(/^＃/, '#');
+  let text = value.trim().replace(/＃/g, '#');
+  if (!text.startsWith('#') && text.includes(' #')) text = text.slice(text.lastIndexOf(' #') + 1);
   if (!text.startsWith('#')) return null;
   const rest = text.slice(1).toLowerCase();
   return HANDLE_QUERY.test(rest) ? rest : null;

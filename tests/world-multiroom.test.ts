@@ -66,6 +66,7 @@ const startWorld = async (): Promise<{
   };
   const ctx = makeContext(secrets);
   ctx.cfg.serverUrl = server.url;
+    ctx.cfg.identityUrl = server.url;
   // 这些用例考的是同房串门与牌桌，落在大厅开不了桌；默认值本身另有用例。
   ctx.cfg.room = 'lobby';
   ctx.cfg.seatName = '小满';
@@ -107,6 +108,7 @@ describe('World 多客厅', () => {
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx1 = makeContext(secrets);
     ctx1.cfg.serverUrl = server.url;
+    ctx1.cfg.identityUrl = server.url;
     ctx1.cfg.room = 'lobby';
     ctx1.cfg.seatName = '小满';
     const first = PARLOR.create(ctx1);
@@ -126,6 +128,7 @@ describe('World 多客厅', () => {
     delete secrets.PARLOR_SEAT_TOKEN;
     const ctx2 = makeContext(secrets);
     ctx2.cfg.serverUrl = server.url;
+    ctx2.cfg.identityUrl = server.url;
     ctx2.cfg.room = 'lobby';
     ctx2.cfg.seatName = '小满';
     world = PARLOR.create(ctx2);
@@ -220,6 +223,7 @@ describe('默认落在大厅', () => {
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx = makeContext(secrets);
     ctx.cfg.serverUrl = server.url;
+    ctx.cfg.identityUrl = server.url;
     ctx.cfg.seatName = '小满';
     world = PARLOR.create(ctx);
     const host = new FakeHost();

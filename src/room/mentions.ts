@@ -7,11 +7,18 @@
  */
 const ASCII_WORD = /[A-Za-z0-9_]/;
 
-export const mentionsInText = (text: string, seats: { id: string; name: string }[]): string[] => {
+export const mentionsInText = (text: string, seats: { id: string; name: string; handle?: string }[]): string[] => {
   const found = new Set<string>();
   const sorted = [...seats].sort((left, right) => right.name.length - left.name.length);
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] !== '@') continue;
+    // 显式 @#号 / @名字 #号 优先；同名的裸 @名字 不猜对象。
+    const explicit = seats.map((seat) => ({ seat, tokens: seat.handle ? [`#${seat.handle}`, `${seat.name} #${seat.handle}`] : [] }))
+      .flatMap(({ seat, tokens }) => tokens.map((token) => ({ seat, token })))
+      .sort((a, b) => b.token.length - a.token.length)
+      .find(({ token }) => text.startsWith('@' + token, index)
+        && !/[A-Za-z0-9_-]/.test(text[index + token.length + 1] ?? ''));
+    if (explicit) { found.add(explicit.seat.id); index += explicit.token.length; continue; }
     const hit = sorted.find((seat) => {
       const token = `@${seat.name}`;
       if (!text.startsWith(token, index)) return false;
@@ -20,7 +27,7 @@ export const mentionsInText = (text: string, seats: { id: string; name: string }
       return !ASCII_WORD.test(seat.name[seat.name.length - 1] ?? '');
     });
     if (!hit) continue;
-    found.add(hit.id);
+    if (seats.filter((seat) => seat.name.toLowerCase() === hit.name.toLowerCase()).length === 1) found.add(hit.id);
     // 跳过名字；for 的 +1 再把 @ 后面的下一格跳掉。
     index += hit.name.length;
   }

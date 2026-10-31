@@ -1,3 +1,4 @@
+import { globalIdentityEnabled } from './global-identity.ts';
 /**
  * 客厅、成员、席位与可见区间的 SQLite store。
  *
@@ -468,7 +469,7 @@ const suffixedSeatName = (base: string, index: number): string => {
  * 真人/观看者仍然报 name_taken，让网页用户自己换一个。
  */
 const resolveJoinName = (db: Db, roomId: string, kind: SeatKind, base: string): string => {
-  if (!activeNameTaken(db, roomId, base)) return base;
+  if (globalIdentityEnabled(db) || !activeNameTaken(db, roomId, base)) return base;
   if (kind !== 'pet') throw new RoomSeatError('name_taken', `已经有叫「${base}」的活跃席位`);
   for (let index = 2; index <= MAX_NAME_SUFFIX + 1; index += 1) {
     const candidate = suffixedSeatName(base, index);
@@ -661,7 +662,7 @@ export const renameSeat = (db: Db, roomId: string, seatId: string, name: string)
   return withTransaction(db, () => {
     const seat = seatRow(db, roomId, seatId);
     if (!seat || seat.releasedAt !== null) throw new RoomSeatError('seat_not_found', '席位不存在或已经离开');
-    if (seat.name.toLowerCase() !== clean.toLowerCase() && activeNameTaken(db, roomId, clean)) {
+    if (!globalIdentityEnabled(db) && seat.name.toLowerCase() !== clean.toLowerCase() && activeNameTaken(db, roomId, clean)) {
       throw new RoomSeatError('name_taken', `已经有叫「${clean}」的活跃席位`);
     }
     try {

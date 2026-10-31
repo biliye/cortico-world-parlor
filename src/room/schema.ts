@@ -107,8 +107,6 @@ CREATE TABLE IF NOT EXISTS room_seats (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_one_active_seat_per_coo
   ON room_seats(coo_id) WHERE released_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name
-  ON room_seats(room_id, name COLLATE NOCASE) WHERE released_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_room_seats_active ON room_seats(room_id, released_at);
 CREATE INDEX IF NOT EXISTS ix_room_seats_coo ON room_seats(coo_id, joined_at);
 
@@ -403,4 +401,17 @@ WHEN NEW.released_at IS NULL AND NEW.kind <> 'observer'
 BEGIN
   SELECT RAISE(ABORT, 'room_full');
 END;
+`;
+
+/** 全局短号和临时通行证与原身份一起持久化。 */
+export const IDENTITY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS global_handles (
+ coo_id TEXT PRIMARY KEY REFERENCES coos(id), handle TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS identity_tickets (
+ token_hash TEXT PRIMARY KEY, coo_id TEXT NOT NULL REFERENCES coos(id),
+ audience TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_identity_tickets_expiry ON identity_tickets(expires_at);
+CREATE INDEX IF NOT EXISTS ix_identity_tickets_coo ON identity_tickets(coo_id,audience);
 `;

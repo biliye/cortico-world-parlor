@@ -1,6 +1,7 @@
 /** 客厅客户端：World 用它与服务器说话。只发请求，不判断可见性。 */
 import type { CooIdentity } from './identity.ts';
 import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
+import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } from './global-identity.ts';
 import type { MailPage } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type {
@@ -31,6 +32,46 @@ export class ParlorHttpError extends Error {
 export class ParlorClient {
   readonly baseUrl: string;
   private readonly identity?: CooIdentity;
+  private global?: { authority: string; audience: string; invite: string; name: string };
+  private ticket?: IdentityTicket;
+  private refreshing?: Promise<IdentityTicket>;
+
+  /** 先探测能力；长期密钥只交给配置里信任的身份服务。 */
+  async initializeIdentity(authority: string, invite: string, name: string): Promise<void> {
+    const response = await fetch(this.url('/healthz'), { redirect: 'error', signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new ParlorHttpError(response.status, '读取服务器能力失败');
+    const health = await response.json() as { globalIdentity?: { authority: string; audience: string } };
+    if (!health.globalIdentity) {
+      if (this.identity?.authority || identityOrigin(this.baseUrl) !== identityOrigin(authority)) {
+        throw new Error('目标服务器尚未支持全局身份；请先升级服务器');
+      }
+      return;
+    }
+    authority = identityOrigin(authority);
+    if (this.identity?.authority && this.identity.authority !== authority) throw new Error('已有身份属于另一统一身份服务，请保持原身份服务地址');
+    const audience = identityOrigin(health.globalIdentity.audience);
+    if (identityOrigin(health.globalIdentity.authority) !== authority || audience !== identityOrigin(this.baseUrl)) {
+      throw new Error('目标服务器的身份服务或公开地址与配置不一致');
+    }
+    this.global = { authority, audience, invite, name };
+    await this.globalTicket();
+  }
+
+  private async globalTicket(): Promise<IdentityTicket> {
+    if (this.ticket && this.ticket.expiresAt > Date.now() + 60_000) return this.ticket;
+    if (!this.global || !this.identity) throw new Error('尚未初始化统一身份');
+    const cfg = this.global;
+    this.refreshing ??= identityRequest<IdentityTicket>(cfg.authority, '/v1/identity/session', {
+      cooId: this.identity.cooId, cooSecret: this.identity.cooSecret,
+      name: cfg.name, audience: cfg.audience, invite: cfg.invite,
+    });
+    try {
+      this.ticket = await this.refreshing;
+      this.identity.authority = cfg.authority;
+      this.identity.handle = this.ticket.person.handle;
+      return this.ticket;
+    } finally { this.refreshing = undefined; }
+  }
 
   constructor(baseUrl: string, identity?: CooIdentity) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -40,7 +81,7 @@ export class ParlorClient {
   async join(invite: string, request: JoinRequest, roomId?: string): Promise<JoinResponse> {
     const response = await fetch(this.path('join', roomId), {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json', 'x-parlor-invite': invite }),
+      headers: await this.headers({ 'content-type': 'application/json', 'x-parlor-invite': invite }),
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(15_000),
     });
@@ -50,7 +91,7 @@ export class ParlorClient {
   async snapshot(token: string, since = 0, limit = 30, roomId?: string): Promise<RoomSnapshot> {
     const query = new URLSearchParams({ since: String(since), limit: String(limit) });
     const response = await fetch(`${this.path('room', roomId)}?${query}`, {
-      headers: this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<RoomSnapshot>(response);
@@ -64,7 +105,7 @@ export class ParlorClient {
   ): Promise<{ latest: number; events: RoomEvent[] }> {
     const query = new URLSearchParams({ since: String(since), limit: String(limit) });
     const response = await fetch(`${this.path('history', roomId)}?${query}`, {
-      headers: this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ latest: number; events: RoomEvent[] }>(response);
@@ -78,7 +119,7 @@ export class ParlorClient {
       ...(all ? { all: '1' } : {}),
     });
     const response = await fetch(`${this.path('mail', roomId)}?${query}`, {
-      headers: this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailPage>(response);
@@ -95,7 +136,7 @@ export class ParlorClient {
       ...(roomId ? { room: roomId } : {}),
     });
     const response = await fetch(`${this.url('/v1/me/mail')}?${query}`, {
-      headers: this.headers({}),
+      headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailPage>(response);
@@ -104,7 +145,7 @@ export class ParlorClient {
   /** 身份级账本摘要。 */
   async ledgerAsIdentity(): Promise<{ ledger: unknown }> {
     const response = await fetch(this.url('/v1/me/ledger'), {
-      headers: this.headers({}),
+      headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ ledger: unknown }>(response);
@@ -118,7 +159,7 @@ export class ParlorClient {
       ...(before ? { before: String(before) } : {}),
     });
     const response = await fetch(`${this.url('/v1/me/replay')}?${query}`, {
-      headers: this.headers({}),
+      headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<ReplayResponse>(response);
@@ -132,7 +173,7 @@ export class ParlorClient {
   ): Promise<{ ok: boolean; room?: string }> {
     const response = await fetch(`${this.url('/v1/invitations')}/${encodeURIComponent(id)}/${action}`, {
       method: 'POST',
-      headers: this.headers({
+      headers: await this.headers({
         'content-type': 'application/json',
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       }),
@@ -146,7 +187,7 @@ export class ParlorClient {
   async replay(token: string, limit = 30, before?: number, roomId?: string): Promise<ReplayResponse> {
     const query = new URLSearchParams({ limit: String(limit), ...(before ? { before: String(before) } : {}) });
     const response = await fetch(`${this.path('replay', roomId)}?${query}`, {
-      headers: this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<ReplayResponse>(response);
@@ -155,7 +196,7 @@ export class ParlorClient {
   async action(token: string, body: ActionRequest, roomId?: string): Promise<ActionResponse> {
     const response = await fetch(this.path('action', roomId), {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
+      headers: await this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
     });
@@ -165,7 +206,7 @@ export class ParlorClient {
   /** 我在哪：当前席位与能看到的客厅目录。 */
   async me(): Promise<MeView> {
     const response = await fetch(this.url('/v1/me'), {
-      headers: this.headers({}),
+      headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MeView>(response);
@@ -174,7 +215,7 @@ export class ParlorClient {
   /** 大厅：谁在大厅、公开目录、我在哪。 */
   async hall(): Promise<HallView> {
     const response = await fetch(this.url('/v1/hall'), {
-      headers: this.headers({}),
+      headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<HallView>(response);
@@ -182,7 +223,7 @@ export class ParlorClient {
 
   async rooms(all = true): Promise<{ rooms: RoomSummary[] }> {
     const response = await fetch(this.url(`/v1/rooms${all ? '?all=1' : ''}`), {
-      headers: this.headers({}),
+      headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ rooms: RoomSummary[] }>(response);
@@ -193,7 +234,7 @@ export class ParlorClient {
   }): Promise<{ room: RoomSummary }> {
     const response = await fetch(this.url('/v1/rooms'), {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json' }),
+      headers: await this.headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(15_000),
     });
@@ -204,7 +245,7 @@ export class ParlorClient {
   async switchTo(token: string, fromRoom: string, to: string, name?: string): Promise<SwitchResponse> {
     const response = await fetch(this.path('switch', fromRoom), {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
+      headers: await this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
       body: JSON.stringify({ to, ...(name ? { name } : {}) }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -215,7 +256,7 @@ export class ParlorClient {
   async leaveRoom(token: string, roomId: string): Promise<{ ok: true; seq: number; at: string }> {
     const response = await fetch(this.path('leave', roomId), {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
+      headers: await this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
       body: '{}',
       signal: AbortSignal.timeout(15_000),
     });
@@ -226,7 +267,7 @@ export class ParlorClient {
   async invite(to: string, room?: string, text?: string): Promise<InviteResponse> {
     const response = await fetch(this.url('/v1/invite'), {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json' }),
+      headers: await this.headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ to, ...(room ? { room } : {}), ...(text ? { text } : {}) }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -244,7 +285,7 @@ export class ParlorClient {
   ): Promise<void> {
     const query = new URLSearchParams({ since: String(since) });
     const response = await fetch(`${this.path('stream', roomId)}?${query}`, {
-      headers: this.headers({ authorization: `Bearer ${token}`, accept: 'text/event-stream' }),
+      headers: await this.headers({ authorization: `Bearer ${token}`, accept: 'text/event-stream' }),
       signal,
     });
     if (!response.ok || !response.body) {
@@ -278,8 +319,12 @@ export class ParlorClient {
     }
   }
 
-  private headers(extra: Record<string, string>): Record<string, string> {
+  private async headers(extra: Record<string, string>): Promise<Record<string, string>> {
     if (!this.identity) return extra;
+    if (this.global) {
+      if (extra.authorization) return extra;
+      return { ...extra, [GLOBAL_HEADER]: (await this.globalTicket()).token };
+    }
     return {
       ...extra,
       [COO_HEADER]: this.identity.cooId,

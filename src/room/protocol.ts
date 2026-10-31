@@ -21,7 +21,7 @@ export interface Seat {
   kind: SeatKind;
   tier: WakeTier;
   joinedAt: number;
-  /** cooId 的前 8 位；老服务器不发这个字段。 */
+  /** 统一身份登记的稳定短号（默认 8 位，碰撞时延长）；旧协议用前 8 位。 */
   handle?: string;
 }
 

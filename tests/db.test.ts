@@ -32,7 +32,7 @@ describe('SQLite 地基', () => {
   it('migrate 可重复执行，schema 版本写进 meta', () => {
     migrate(db);
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string };
-    expect(row.value).toBe('5');
+    expect(row.value).toBe('6');
     const mode = db.prepare('SELECT value FROM meta WHERE key = ?').get('storage_mode') as { value: string };
     expect(mode.value).toBe('sqlite');
   });
@@ -126,7 +126,7 @@ describe('SQLite 地基', () => {
         .toEqual({ n: 1 });
 
       const version = oldDb.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string };
-      expect(version.value).toBe('5');
+      expect(version.value).toBe('6');
     } finally {
       oldDb.close();
     }

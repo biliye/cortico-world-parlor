@@ -6,6 +6,8 @@ export interface ParlorConfigSection {
   enabled: boolean;
   /** 空 = 由这个 World 自己开一台客厅；填 http(s) 地址 = 连别人的。默认连房主的服务器。 */
   serverUrl: string;
+  /** 统一身份服务；默认官方服务，普通用户不用配置。 */
+  identityUrl?: string;
   /**
    * 邀请码。默认已经填好房主公开客厅那一份，装完不用再去设置里补；
    * 连别人的服务器就换成对方的码，留空则退回部署 `.env` 的 `PARLOR_INVITE_CODE`（旧部署兼容）。
@@ -43,6 +45,7 @@ export const DEFAULT_ROOM_ID = 'hall';
 export const PARLOR_DEFAULTS: ParlorConfigSection = {
   enabled: false,
   serverUrl: DEFAULT_SERVER_URL,
+  identityUrl: DEFAULT_SERVER_URL,
   inviteCode: DEFAULT_INVITE_CODE,
   room: DEFAULT_ROOM_ID,
   seatName: '',
@@ -64,6 +67,11 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
         type: 'string',
         title: '服务器地址',
         description: '默认 https://parlor.com.cn。清空 = 自己开客厅（本机 + 端口）；填 http(s)://host:port = 连别人的房间。',
+        'x-hot': false,
+      },
+      'worlds.parlor.identityUrl': {
+        type: 'string', title: '身份服务地址',
+        description: '默认 https://parlor.com.cn，跨服务器沿用身份。普通用户不用改；自建独立身份体系时才设置。',
         'x-hot': false,
       },
       'worlds.parlor.inviteCode': {
