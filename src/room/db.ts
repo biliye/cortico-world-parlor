@@ -12,6 +12,7 @@ import {
   SCHEMA_SQL,
   IDENTITY_SCHEMA_SQL,
   roomsTableSql,
+  tablesTableSql,
 } from './schema.ts';
 
 /**
@@ -93,6 +94,50 @@ const rebuildRooms = (db: Db): void => {
   }
 };
 
+/** 老库的 tables.game CHECK 还不含这些游戏；含了就不用重建（看实际 DDL，不靠版本号）。 */
+const GAME_CHECK_MIN_GAMES = ['werewolf'];
+
+const tablesGameCheckMissing = (db: Db): boolean => {
+  const row = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tables'",
+  ).get() as { sql?: string } | undefined;
+  if (!row?.sql) return false;
+  return GAME_CHECK_MIN_GAMES.some((game) => !row.sql!.includes(`'${game}'`));
+};
+
+/**
+ * SQLite 不能 ALTER CHECK：game 清单加新游戏时，tables 表要整表重建。
+ * tables 被 table_seats / active_table_players / action_receipts / table_finalizations /
+ * monopoly_* 用外键指着，所以照 rebuildRooms 的路数：关外键 → 事务里建新表/搬数据/
+ * 删旧表/改名/补索引 → 开外键 → foreign_key_check。
+ */
+const rebuildTables = (db: Db): void => {
+  const indexes = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tables' AND sql IS NOT NULL",
+  ).all() as { sql: string }[];
+  const columns = (db.prepare('PRAGMA table_info(tables)').all() as { name: string }[]).map((row) => row.name).join(', ');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    db.exec('DROP TABLE IF EXISTS tables_new');
+    db.exec(tablesTableSql('tables_new'));
+    db.exec(`INSERT INTO tables_new(${columns}) SELECT ${columns} FROM tables`);
+    db.exec('DROP TABLE tables');
+    db.exec('ALTER TABLE tables_new RENAME TO tables');
+    for (const index of indexes) db.exec(index.sql);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* 已经回滚/连接坏了 */ }
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+  const problems = db.prepare('PRAGMA foreign_key_check').all();
+  if (problems.length > 0) {
+    throw new Error(`重建 tables 后外键检查不干净：${JSON.stringify(problems).slice(0, 300)}`);
+  }
+};
+
 /**
  * 打开库之前先看版本：比本程序新的库不能碰。
  * 这条检查必须在任何 DDL 之前跑（老库没有 meta 表时跳过）。
@@ -161,6 +206,9 @@ export const migrate = (db: Db): void => {
   // 老库的 rooms.capacity CHECK 还是 2–64；放宽的唯一办法是重建表。
   // 用实际 DDL 判断（而不是只看版本号），新库与已升级的库都不会白重建一次。
   if (roomsCapacityMax(db) !== DB_MAX_ROOM_CAPACITY) rebuildRooms(db);
+
+  // tables.game 的 CHECK 加了新游戏（狼人杀）；老库照 rooms 的先例整表重建。
+  if (tablesGameCheckMissing(db)) rebuildTables(db);
 
   // 大厅最初写死 32；只抬这个默认值，手工改过的不动。
   db.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity = ?')

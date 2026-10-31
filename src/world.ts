@@ -57,13 +57,21 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** 注册表里的每张桌子各出一个动作工具；顺序与 GAME_LIST 一致。 */
-const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.map((game) => ({
-  name: game.tool.name,
-  description: game.tool.description,
-  tags: ['write'],
-  parameters: game.tool.parameters,
-}));
+/** 注册表里的每张桌子各出一个动作工具（含 extraTools 的查询工具）；顺序与 GAME_LIST 一致。 */
+const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.flatMap((game) => [
+  {
+    name: game.tool.name,
+    description: game.tool.description,
+    tags: ['write' as const],
+    parameters: game.tool.parameters,
+  },
+  ...(game.extraTools ?? []).map((decl) => ({
+    name: decl.name,
+    description: decl.description,
+    tags: ['read' as const],
+    parameters: decl.parameters,
+  })),
+]);
 
 /** 全部工具的声明；定义里的 describe 与 `tools()` 都取它。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
@@ -478,6 +486,16 @@ export class ParlorWorld implements World {
       tool('parlor_table_view', (args) => this.tableView(args)),
       tool('parlor_table_say', (args) => this.tableSay(args)),
       ...GAME_LIST.map((game) => tool(game.tool.name, (args) => this.gameAct(game, args))),
+      // 同一游戏的查询工具（狼人杀的历史/复盘）：只有 werewolf 目前有。
+      ...GAME_LIST.flatMap((game) => (game.extraTools ?? []).map((decl) => tool(decl.name, async (args) => {
+        let body: Record<string, unknown>;
+        try {
+          body = decl.toBody(args);
+        } catch (error) {
+          return this.failed(messageOf(error));
+        }
+        return await this.werewolfLog(body);
+      }))),
       tool('parlor_monopoly', (args) => this.monopolyAct(args)),
       tool('parlor_rooms', () => this.rooms()),
       tool('parlor_hall', () => this.goHall()),
@@ -750,12 +768,14 @@ export class ParlorWorld implements World {
     });
   }
 
-  private async refreshFocus(): Promise<void> {
-    if (!this.client || !this.token) return;
+  private async refreshFocus(): Promise<RoomSnapshot | null> {
+    if (!this.client || !this.token) return null;
     try {
       const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
       this.applySnapshot(snapshot);
+      return snapshot;
     } catch { /* 下一轮再说；专注状态不因此误改 */ }
+    return null;
   }
 
   private saveCursor(): void {
@@ -833,6 +853,8 @@ export class ParlorWorld implements World {
 
     // 牌桌事件会改桌面版本：合并刷新一次快照，免得下一次动作拿着旧版本被拒。
     if (event.type.startsWith('parlor.table.')) this.scheduleFocusRefresh();
+    // 窗口制的纯桌面刷新（队友交了刀票/发言）不是行动请求：快照刷新即可，不叫醒。
+    if (event.type === 'parlor.table.turn' && event.data?.decision === false) return;
 
     // 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒进 focusBacklog；
     // @ / 私聊 / 桌聊 / 轮到本人照常叫醒；本桌散了才一次性给一份摘要。
@@ -949,6 +971,14 @@ export class ParlorWorld implements World {
         case 'parlor.table.join':
         case 'parlor.table.start':
         case 'parlor.table.action':
+        case 'parlor.table.werewolf.night':
+        case 'parlor.table.werewolf.dawn':
+        case 'parlor.table.werewolf.speech_open':
+        case 'parlor.table.werewolf.speech':
+        case 'parlor.table.werewolf.vote_open':
+        case 'parlor.table.werewolf.vote':
+        case 'parlor.table.werewolf.hunter':
+        case 'parlor.table.werewolf.shot':
         case 'parlor.table.end': lines.push(`（桌子）${event.text}`); break;
         default: lines.push(event.text);
       }
@@ -1508,7 +1538,9 @@ export class ParlorWorld implements World {
     } catch (error) {
       return this.failed(messageOf(error));
     }
-    return this.tableRequest(body as ActionRequest, game.tool.done(body));
+    // 狼人杀：动作后桌面还欠你动作、或你的秘密刚变化（查验/用药/狼聊）时，
+    // 把最新私视图附在回执里——不用等下一次叫醒就能读到结果。
+    return this.tableRequest(body as ActionRequest, game.tool.done(body), game.id === 'werewolf');
   }
 
   private async monopolyAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -1577,6 +1609,7 @@ export class ParlorWorld implements World {
   private async tableRequest(
     body: ActionRequest,
     done: string | ((result: ActionResponse) => string),
+    attachPrivate = false,
   ): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const type = (body as { type: string }).type;
@@ -1591,6 +1624,7 @@ export class ParlorWorld implements World {
     if ((type === 'table_action' || type === 'ddz_action') && this.myTableRevision !== undefined) {
       payload.revision = this.myTableRevision;
     }
+    // 狼人杀是窗口制：revision 不参与校验，故意不带，免得让模型误以为它是乐观锁。
     const send = () => this.client!.action(this.token, payload as ActionRequest, this.roomArg());
     try {
       let result;
@@ -1601,8 +1635,13 @@ export class ParlorWorld implements World {
         if (!(error instanceof TypeError)) throw error;
         result = await send();
       }
-      await this.refreshFocus();
-      return this.receipt(result, typeof done === 'function' ? done(result) : done);
+      const snapshot = await this.refreshFocus();
+      let doneText = typeof done === 'function' ? done(result) : done;
+      const priv = attachPrivate ? snapshot?.tablePrivate : undefined;
+      if (priv && (priv.canAct === true || priv.freshResult === true) && typeof priv.text === 'string' && priv.text) {
+        doneText += `\n\n【你的桌面（服务器现读）】\n${priv.text}`;
+      }
+      return this.receipt(result, doneText);
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -1647,9 +1686,83 @@ export class ParlorWorld implements World {
     }
   }
 
+  /** 狼人杀历史：公开发言/票型/死亡；终局后参与者可带 review 读夜间复盘。 */
+  private async werewolfLog(body: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      const response = await this.client.tableLog(this.token, {
+        ...(typeof body.table === 'string' && body.table ? { table: body.table } : {}),
+        ...(typeof body.day === 'number' ? { day: body.day } : {}),
+        ...(typeof body.seatNo === 'number' ? { seatNo: body.seatNo } : {}),
+        ...(typeof body.limit === 'number' ? { limit: body.limit } : {}),
+        ...(body.review === true ? { review: true } : {}),
+      }, this.roomArg());
+      const log = response.log as {
+        status?: string;
+        day?: number;
+        speeches?: Array<{ day: number; kind: string; seatNo: number; text: string; passed: boolean }>;
+        votes?: Array<{
+          day: number; variant: string;
+          entries: Array<{ seatNo: number; target: number | null; timeout: boolean }>;
+          exiled?: number; tie?: number[];
+        }>;
+        deaths?: Array<{ seatNo: number; day: number; phase: string; cause?: string }>;
+        nights?: Array<{
+          day: number; kill: number | null; saved: boolean; poison?: number;
+          wolfChats: Array<{ seatNo: number; name: string; text: string }>;
+          killVotes: Array<[number, number | null]>;
+          inspections: Array<{ target: number; result: string }>;
+          deaths: Array<{ seatNo: number; cause: string }>;
+        }>;
+        potionLog?: Array<{ day: number; choice: string; target: number }>;
+        result?: { outcome: string };
+      };
+      const kindLabel = (kind: string): string => (kind === 'lastwords' ? '遗言' : kind === 'pk' ? 'PK' : '发言');
+      const lines: string[] = [`狼人杀历史（服务器时刻 ${response.at}）：`];
+      if (log.result) {
+        lines.push(`终局：${log.result.outcome === 'good' ? '好人胜' : log.result.outcome === 'wolf' ? '狼人胜' : '平局'}。`);
+      }
+      for (const speech of log.speeches ?? []) {
+        lines.push(speech.passed
+          ? `第${speech.day}天·${kindLabel(speech.kind)} ${speech.seatNo}号：（过麦）`
+          : `第${speech.day}天·${kindLabel(speech.kind)} ${speech.seatNo}号：${speech.text}`);
+      }
+      for (const round of log.votes ?? []) {
+        const detail = round.entries
+          .map((entry) => `${entry.seatNo}号→${entry.target === null ? (entry.timeout ? '超时弃' : '弃') : `${entry.target}号`}`)
+          .join('，');
+        lines.push(`第${round.day}天${round.variant === 'pk' ? '复投' : '投票'}：${detail}${round.exiled !== undefined ? `。放逐 ${round.exiled}号` : round.tie ? `。平票 ${round.tie.join('/')}号` : '。无人放逐'}`);
+      }
+      for (const death of log.deaths ?? []) {
+        lines.push(`第${death.day}${death.phase === 'night' ? '夜' : '天'}：${death.seatNo}号出局${death.cause ? `（${death.cause === 'wolf' ? '被刀' : death.cause === 'poison' ? '被毒' : death.cause === 'wolf_poison' ? '刀毒同中' : death.cause === 'vote' ? '被放逐' : '被枪带走'}）` : ''}。`);
+      }
+      for (const night of log.nights ?? []) {
+        const parts = [`第${night.day}夜复盘：`];
+        parts.push(night.kill === null ? '空刀' : `刀口 ${night.kill}号${night.saved ? '（被救）' : ''}`);
+        if (night.poison !== undefined) parts.push(`毒 ${night.poison}号`);
+        if (night.inspections.length > 0) {
+          parts.push(night.inspections.map((entry) => `查验 ${entry.target}号=${entry.result}`).join('、'));
+        }
+        if (night.killVotes.length > 0) {
+          parts.push(`刀票：${night.killVotes.map(([voter, target]) => `${voter}号→${target === null ? '弃' : `${target}号`}`).join('，')}`);
+        }
+        for (const chat of night.wolfChats) {
+          parts.push(`${chat.name}（${chat.seatNo}号）狼聊：「${chat.text}」`);
+        }
+        if (night.deaths.length > 0) {
+          parts.push(`死亡：${night.deaths.map((entry) => `${entry.seatNo}号(${entry.cause})`).join('、')}`);
+        }
+        lines.push(parts.join(' '));
+      }
+      if (lines.length === 1) lines.push('还没有可看的记录。');
+      return lines.join('\n');
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
   /** 动作回执：统一成「服务器已收下 #游标 · 服务器时刻」，再补这次动作的具体结果。 */
-  private receipt(result: ActionResponse, done: string): string {
-    const lines = [`服务器已收下 #${result.seq} · ${result.at}（服务器时刻 UTC+8）。`, done];
+  private receipt(result: ActionResponse, done: string): string {    const lines = [`服务器已收下 #${result.seq} · ${result.at}（服务器时刻 UTC+8）。`, done];
     if (result.delivered && result.delivered.length > 0) {
       const inboxes = result.delivered
         .map((delivery) => `${delivery.to} 的信箱（${delivery.at}）`)

@@ -1200,7 +1200,7 @@ export class WorldServer {
       json(res, 200, { room: target.id, token: joined.token, seat: seatOfRow(this.db, target.id, joined.seat),
         identity: { cooId: person.cooId, cooSecret: 'seat-only' } }); return;
     }
-    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream|replay)$/);
+    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream|replay|table-log)$/);
     if (route) {
       const roomId = route[1];
       const action = route[2];
@@ -1388,6 +1388,12 @@ export class WorldServer {
     if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再发私聊');
     const peer = this.dmPeer(typeof body.to === 'string' ? body.to : '', cooId);
     if (peer.cooId === cooId) throw new HttpError(400, '不能给自己发私聊');
+    // 狼人杀进行中：同桌参与者之间不能私聊（防绕开单次发言与狼聊限制）。
+    // 只拦「两端都在同一张进行中的狼人杀桌」；桌外人不受影响。
+    const roomHost = this.hosts.get(seat.roomId);
+    if (roomHost && roomHost.chatLockedFor(cooId) && roomHost.lockedTablePeerCooIds(cooId).has(peer.cooId)) {
+      throw new HttpError(409, '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
+    }
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) throw new HttpError(400, '消息不能是空的');
     if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
@@ -1562,7 +1568,8 @@ export class WorldServer {
       const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
       // 牌桌修改一律要幂等键：旧客户端在这里拿到明确的升级提示，不会开出一张打不了的桌。
       const tableMutation = type === 'table_open' || type === 'table_join' || type === 'table_leave'
-        || type === 'table_start' || type === 'table_action' || type === 'ddz_action';
+        || type === 'table_start' || type === 'table_action' || type === 'ddz_action'
+        || type === 'werewolf_action';
       if (tableMutation && !requestId) {
         throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
       }
@@ -1624,6 +1631,7 @@ export class WorldServer {
         const opened = host.openTable(seat.cooId, {
           game: typeof body.game === 'string' ? body.game : undefined,
           stake: body.stake,
+          clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
         }, requestId);
         tableId = opened.tableId;
         revision = opened.receipt.revision;
@@ -1631,7 +1639,9 @@ export class WorldServer {
         deadline = opened.receipt.deadline;
         turn = opened.receipt.turn;
       } else if (type === 'table_join') {
-        const joined = host.joinTable(seat.cooId, tableArg, requestId);
+        // 客户端自报协议能力版本（狼人杀开局前用它校验每只 Coo）；旧版不带 = 旧版。
+        const clientVersion = headerValue(req, 'x-parlor-client').trim() || undefined;
+        const joined = host.joinTable(seat.cooId, tableArg, requestId, clientVersion);
         tableId = joined.tableId;
         revision = joined.receipt.revision;
         receiptSeq = joined.receipt.seq;
@@ -1695,6 +1705,20 @@ export class WorldServer {
         ...(text ? { text } : {}),
         ...(closed !== undefined ? { closed } : {}),
       });
+      return;
+    }
+
+    if (action === 'table-log' && method === 'GET') {
+      const seat = this.seatAuth(req, roomId);
+      const tableArg = url.searchParams.get('table')?.trim() || undefined;
+      const query = {
+        ...(url.searchParams.get('day') !== null ? { day: Number(url.searchParams.get('day')) } : {}),
+        ...(url.searchParams.get('seatNo') !== null ? { seatNo: Number(url.searchParams.get('seatNo')) } : {}),
+        ...(url.searchParams.get('limit') !== null ? { limit: Number(url.searchParams.get('limit')) } : {}),
+        review: url.searchParams.get('review') === '1',
+      };
+      const log = this.host(roomId).tableLog(seat.cooId, tableArg, query);
+      json(res, 200, { ok: true, at: serverClock(this.now()), log });
       return;
     }
 

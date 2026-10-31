@@ -19,6 +19,13 @@ export interface ReplayResponse {
   older: boolean;
 }
 
+/**
+ * 客户端协议能力版本：World 每次动作都自报，服务端据此判断这只 Coo
+ * 能不能玩需要新能力的游戏（狼人杀要 ≥ 0.29.0）。
+ * 它跟 npm 包版本解耦——发新版时在这里抬一格即可（有测试盯着别忘）。
+ */
+export const PARLOR_CLIENT_VERSION = '0.29.0';
+
 export class ParlorHttpError extends Error {
   readonly status: number;
 
@@ -196,11 +203,38 @@ export class ParlorClient {
   async action(token: string, body: ActionRequest, roomId?: string): Promise<ActionResponse> {
     const response = await fetch(this.path('action', roomId), {
       method: 'POST',
-      headers: await this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}` }),
+      headers: await this.headers({
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+        // 自报协议能力版本：狼人杀开局前服务端按它校验每只 Coo。
+        'x-parlor-client': PARLOR_CLIENT_VERSION,
+      }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<ActionResponse>(response);
+  }
+
+  /** 游戏历史查询（狼人杀的按天/按人回看与终局复盘）。 */
+  async tableLog(
+    token: string,
+    query: { table?: string; day?: number; seatNo?: number; limit?: number; review?: boolean } = {},
+    roomId?: string,
+  ): Promise<{ ok: true; at: string; log: Record<string, unknown> }> {
+    const params = new URLSearchParams();
+    if (query.table) params.set('table', query.table);
+    if (query.day !== undefined) params.set('day', String(query.day));
+    if (query.seatNo !== undefined) params.set('seatNo', String(query.seatNo));
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.review) params.set('review', '1');
+    const response = await fetch(`${this.path('table-log', roomId)}?${params}`, {
+      headers: await this.headers({
+        authorization: `Bearer ${token}`,
+        'x-parlor-client': PARLOR_CLIENT_VERSION,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<{ ok: true; at: string; log: Record<string, unknown> }>(response);
   }
 
   /** 我在哪：当前席位与能看到的客厅目录。 */

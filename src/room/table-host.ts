@@ -22,6 +22,7 @@ import {
   TableError,
   type TableEngine,
   type TableEvent,
+  type TableLogQuery,
   type TablePrivateSummary,
   type TableStatus,
   type TableStep,
@@ -40,6 +41,8 @@ export const MAX_DOWNTIME_MS = 30 * 60_000;
 const MIN_HUMAN_RESUME_MS = 10_000;
 /** 结束的桌子在内存里留几张给「刚打完」的页面看。 */
 const KEEP_ENDED = 3;
+/** 席位最近活跃晚于这个阈值才算「在线」；离线决策留无秘密的提醒信。 */
+const OFFLINE_REMINDER_MS = 90_000;
 
 export interface TableHostOptions {
   db: Db;
@@ -336,7 +339,7 @@ export class TableHost {
 
   // —— 开桌 / 坐下 / 开始 / 动作 / 收桌 ——
 
-  open(cooId: string, input: { game?: string; stake?: unknown } = {}, requestId?: string): TableOpenResult {
+  open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string } = {}, requestId?: string): TableOpenResult {
     const seat = this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能开桌');
     if (this.liveTables().length >= MAX_LIVE_TABLES) {
@@ -372,7 +375,12 @@ export class TableHost {
     }
     const now = this.now();
     const engine = def.create({
-      host: { id: seat.id, name: seat.name },
+      host: {
+        id: seat.id,
+        name: seat.name,
+        kind: seat.kind === 'human' ? 'human' : 'pet',
+        ...(typeof input.clientVersion === 'string' && input.clientVersion ? { clientVersion: input.clientVersion } : {}),
+      },
       now,
       ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
     });
@@ -415,7 +423,7 @@ export class TableHost {
     return { tableId: table.id, event, receipt };
   }
 
-  join(cooId: string, tableId?: string, requestId?: string): TableJoinResult {
+  join(cooId: string, tableId?: string, requestId?: string, clientVersion?: string): TableJoinResult {
     const seat = this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能上桌');
     const mine = this.tableOf(cooId);
@@ -447,7 +455,13 @@ export class TableHost {
     const draft = this.draft(table);
     let event: TableEvent;
     try {
-      event = draft.join({ id: seat.id, name: seat.name });
+      event = draft.join({
+        id: seat.id,
+        name: seat.name,
+        // 玩家类型从服务端席位行来，不信客户端自报；版本由 World 连接头带来。
+        kind: seat.kind === 'human' ? 'human' : 'pet',
+        ...(clientVersion ? { clientVersion } : {}),
+      });
     } catch (error) {
       return asHostError(error);
     }
@@ -613,11 +627,17 @@ export class TableHost {
     if (!requestId) {
       throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展后再打牌');
     }
-    if (options.revision === undefined) {
-      throw new HostError('invalid', '缺少牌桌版本：请刷新页面/升级客厅扩展后再打牌');
-    }
-    if (options.revision !== table.revision) {
-      throw new HostError('conflict', '这一手已经过去了：你看到的是旧桌面，刷新后再来');
+    // 并发策略按游戏注册：骰子/斗地主仍是整桌 revision 乐观锁；狼人杀是窗口制——
+    // 同一窗口多人各自有动作槽，revision 只当参考，windowId 与槽位由引擎在
+    // 事务内对「最新已提交快照」校验，先交的人不会把别人的票顶成 409。
+    const definition = gameById(table.game);
+    if (definition?.revisionMode !== 'window') {
+      if (options.revision === undefined) {
+        throw new HostError('invalid', '缺少牌桌版本：请刷新页面/升级客厅扩展后再打牌');
+      }
+      if (options.revision !== table.revision) {
+        throw new HostError('conflict', '这一手已经过去了：你看到的是旧桌面，刷新后再来');
+      }
     }
     const now = this.now();
     const draft = this.draft(table);
@@ -676,6 +696,10 @@ export class TableHost {
     const seat = this.requireSeat(cooId);
     if (table.engine.status === 'ended') throw new HostError('invalid', '这张桌子已经结束了，回客厅说吧');
     if (!table.engine.has(seat.id)) throw new HostError('invalid', '你不在这一桌，回客厅说吧');
+    // 狼人杀进行中锁普通桌聊：发言次数/狼聊限制走游戏动作，不能从桌聊绕过去。
+    if (table.engine.chatLocked?.()) {
+      throw new HostError('conflict', `${table.engine.label}进行中，桌上的发言走游戏动作（发言机会只有一次），不能用普通桌聊`);
+    }
     const body = clampText(text);
     const seats = table.engine.seatIds().filter((seatId) => this.seatById(seatId) !== undefined);
     return this.events.append(this.roomId, {
@@ -720,6 +744,44 @@ export class TableHost {
     return true;
   }
 
+  /** 这个 coo 是否被一张进行中的游戏锁了普通聊天（狼人杀发言走游戏动作）。 */
+  chatLockedFor(cooId: string): boolean {
+    const table = this.tableOf(cooId);
+    if (!table || table.frozen) return false;
+    return table.engine.chatLocked?.() === true;
+  }
+
+  /**
+   * 同一张锁聊游戏桌上的全部真实身份（含本人）。
+   * 私聊封堵用：两端都在这张桌上才拦，桌外人不受影响。
+   */
+  lockedTablePeerCooIds(cooId: string): Set<string> {
+    const ids = new Set<string>();
+    const table = this.tableOf(cooId);
+    if (!table || table.frozen || table.engine.chatLocked?.() !== true) return ids;
+    for (const row of this.tableSeatRows(table.id)) {
+      if (row.left_at === null && row.coo_id) ids.add(row.coo_id);
+    }
+    return ids;
+  }
+
+  /**
+   * 游戏历史查询（狼人杀的按天/按人回看与终局复盘）。
+   * 公开部分任何房间成员可读；`review`（夜间内部记录）只给本局参与者、且已终局。
+   */
+  tableLog(cooId: string, tableId: string | undefined, query: TableLogQuery): unknown {
+    const table = tableId ? this.tables.get(tableId) : this.tableOf(cooId);
+    if (!table) throw new HostError('not_found', '没有这张桌子（刚打完的桌用带桌号的方式查）');
+    if (table.frozen) throw new HostError('conflict', '这张桌子已经被隔离');
+    const seatId = this.seats.activeSeat(cooId)?.id ?? '';
+    const onTable = seatId !== '' && table.engine.has(seatId);
+    if (query.review && !onTable) {
+      throw new HostError('forbidden', '夜间复盘只给这局的参与者看');
+    }
+    if (!table.engine.tableLog) throw new HostError('invalid', '这张桌子没有历史记录可查');
+    return table.engine.tableLog(query, { seatId, onTable });
+  }
+
   /** 公开视图（给网关判断桌子类型/取桌号）。 */
   tableSummary(tableId?: string, cooId?: string): TableSummary | undefined {
     if (tableId) {
@@ -750,22 +812,57 @@ export class TableHost {
       this.appendTableEvent(table, event, now);
       if (event.type === 'parlor.table.end') ended = event;
     }
-    for (const seatId of step.views) {
+    const writeTurn = (seatId: string, decision: boolean): void => {
       // 脚本陪练不是房间席位：它们的视图不进事件流。
-      if (!this.seatById(seatId)) continue;
-      const view = engine.view(seatId);
+      if (!this.seatById(seatId)) return;
+      const view = engine.view(seatId) as Record<string, unknown> | null;
       const text = engine.privateText(seatId, now);
-      if (!view || !text) continue;
+      if (!view || !text) return;
       this.events.append(this.roomId, {
         type: 'parlor.table.turn',
         ts: now,
         from: 'system',
         scope: { kind: 'seat', seatId },
         text,
-        data: { table: view, tableId: table.id, game: engine.game },
+        data: {
+          table: view,
+          tableId: table.id,
+          game: engine.game,
+          // decision:false = 只是桌面更新（队友交了刀票/发言），不当成新的行动请求；
+          // World 侧据此跳过叫醒，只刷新快照。
+          ...(decision ? {} : { decision: false }),
+        },
       });
-    }
+      // 决策唤醒才考虑离线提醒；正文不带任何角色/阵营/目标信息。
+      if (decision) this.mailOfflineReminder(table, seatId, String(view.windowId ?? ''));
+    };
+    for (const seatId of step.views) writeTurn(seatId, true);
+    for (const seatId of step.refreshViews ?? []) writeTurn(seatId, false);
     if (ended) this.settle(table, ended, now);
+  }
+
+  /**
+   * 决策窗口开始时，人不在的席位留一封无秘密的信：「你的牌桌需要操作」。
+   * 幂等键带窗口号：同一窗口只提醒一次；在线判断用席位最近活跃时刻。
+   */
+  private mailOfflineReminder(table: LiveTable, seatId: string, windowId: string): void {
+    if (!windowId) return;
+    const seat = this.seatById(seatId);
+    if (!seat) return;
+    const lastSeen = seat.lastSeenAt ?? 0;
+    if (lastSeen > this.now() - OFFLINE_REMINDER_MS) return;
+    try {
+      this.mail.appendOnce(`${table.id}/${windowId}/${seatId}`, {
+        room: this.roomId,
+        to: seat.cooId,
+        kind: 'ledger',
+        action: 'table',
+        fromName: '客厅',
+        text: '你的牌桌需要操作；回来看一眼（parlor_table_view）。这封信不含任何身份或目标信息。',
+      });
+    } catch (error) {
+      console.error('parlor: 牌桌离线提醒没写进信箱', error);
+    }
   }
 
   private appendTableEvent(table: LiveTable, event: TableEvent, now: number): RoomEvent {

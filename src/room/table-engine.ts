@@ -20,12 +20,24 @@ export interface TableStep {
   events: TableEvent[];
   /** 需要补发私视图的席位（含当前回合的席位）。 */
   views: string[];
+  /**
+   * 只刷新私视图、不当成决策请求的席位（狼人杀的窗口制：队友交了刀票/发言，
+   * 其他人该看到新桌面，但不该被再次叫醒）。
+   */
+  refreshViews?: string[];
   ended?: boolean;
 }
 
 export interface TableSeat {
   id: string;
   name: string;
+  /**
+   * 玩家类型：pet = Coo（引擎按它给 60 秒），human = 真人（120 秒）。
+   * 从服务端席位行带来，不信客户端自报；骰子/斗地主可以不理会。
+   */
+  kind?: 'pet' | 'human';
+  /** 客户端协议能力版本（World 连接时自报，服务端记录）；狼人杀开局前校验。 */
+  clientVersion?: string;
 }
 
 export interface TableEngine {
@@ -70,6 +82,25 @@ export interface TableEngine {
   privateText(seatId: string, now: number): string | null;
   /** 房间公开的一段话。 */
   publicText(): string;
+  /**
+   * 游戏进行中是否锁普通桌聊（狼人杀：发言要走游戏动作，封住次数旁路）。
+   * 可选；不实现 = 不锁。
+   */
+  chatLocked?(): boolean;
+  /**
+   * 公开历史查询（狼人杀的按天/按人回看与终局复盘）。
+   * query 由网关转交；`review` 只有本局参与者且已终局才给夜间内部记录。
+   * 可选；不实现 = 网关回 404。
+   */
+  tableLog?(query: TableLogQuery, requestor: { seatId: string; onTable: boolean }): unknown;
+}
+
+/** 狼人杀历史查询：公开发言/票型/死亡；`review` 才带夜间内部记录。 */
+export interface TableLogQuery {
+  day?: number;
+  seatNo?: number;
+  limit?: number;
+  review?: boolean;
 }
 
 export type TableErrorCode =

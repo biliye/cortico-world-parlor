@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS tables (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   room_epoch TEXT NOT NULL,
-  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly')),
+  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly','werewolf')),
   status TEXT NOT NULL CHECK (status IN ('open','bidding','playing','ended','abandoned')),
   host_seat_id TEXT,
   stake INTEGER NOT NULL DEFAULT 0 CHECK (stake >= 0),
@@ -402,6 +402,39 @@ BEGIN
   SELECT RAISE(ABORT, 'room_full');
 END;
 `;
+
+/**
+ * tables 的建表语句。正常建库与迁移重建共用这一份（SQLite 不能 ALTER CHECK，
+ * game 清单加了新游戏时老库要整表重建）。
+ * guard 只用于首次建库（`IF NOT EXISTS`）；重建时必须没有 guard。
+ */
+export const tablesTableSql = (table: string, guard = ''): string => `
+CREATE TABLE ${guard}${table} (
+  id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  room_epoch TEXT NOT NULL,
+  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly','werewolf')),
+  status TEXT NOT NULL CHECK (status IN ('open','bidding','playing','ended','abandoned')),
+  host_seat_id TEXT,
+  stake INTEGER NOT NULL DEFAULT 0 CHECK (stake >= 0),
+  state_json TEXT,
+  engine_version TEXT,
+  turn_seq INTEGER NOT NULL DEFAULT 0,
+  -- 每次已提交的状态变更 +1；客户端带着它来，旧视图的动作打不进新回合。
+  revision INTEGER NOT NULL DEFAULT 0,
+  -- 快照格式版本（引擎自己的 stateVersion），与 npm 包版本无关。
+  state_version INTEGER NOT NULL DEFAULT 0,
+  deadline_at INTEGER,
+  -- 恢复失败时隔离这一桌：不再推进、不再接受动作，等人处理。
+  frozen_at INTEGER,
+  recovery_error TEXT,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  ended_at INTEGER,
+  end_reason TEXT,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (room_id, host_seat_id) REFERENCES room_seats(room_id, id)
+);`;
 
 /** 全局短号和临时通行证与原身份一起持久化。 */
 export const IDENTITY_SCHEMA_SQL = `

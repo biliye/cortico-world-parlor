@@ -402,6 +402,10 @@ export class RoomHost {
 
   say(cooId: string, text: string): SayResult {
     const seat = this.requireSeat(cooId);
+    // 狼人杀进行中，参与者的普通客厅公开发言暂不允许：发言走游戏动作，次数才有意义。
+    if (this.tableHost.chatLockedFor(cooId)) {
+      throw new HostError('conflict', '你正在狼人杀桌上，局中发言走游戏动作；普通聊天等这局结束');
+    }
     const body = cleanText(text);
     this.checkSayGap(cooId);
     const mentions = this.mentionsIn(body, seat);
@@ -421,6 +425,11 @@ export class RoomHost {
     const seat = this.requireSeat(cooId);
     const target = this.resolveSeat(to);
     if (target.id === seat.id) throw new HostError('invalid', '不能对自己说私聊');
+    // 狼人杀进行中，同桌参与者之间的普通私聊暂不允许：防止绕开单次发言与狼聊限制。
+    // 只拦「两端都在同一张进行中狼人杀桌」的组合；桌外人与参与者私聊不受影响。
+    if (this.tableHost.chatLockedFor(cooId) && this.tableHost.lockedTablePeerCooIds(cooId).has(target.cooId)) {
+      throw new HostError('conflict', '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
+    }
     const body = cleanText(text);
     const now = this.now();
 
@@ -559,15 +568,15 @@ export class RoomHost {
     return this.tableHost.lockOf(cooId);
   }
 
-  openTable(cooId: string, input: { game?: string; stake?: unknown } = {}, requestId?: string): TableOpenResult {
+  openTable(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string } = {}, requestId?: string): TableOpenResult {
     if (this.requireRoom().kind === 'hall') {
       throw new HostError('conflict', '大厅是进场和选房的地方，不能开桌；先走进一个客厅');
     }
     return this.tableHost.open(cooId, input, requestId);
   }
 
-  joinTable(cooId: string, tableId?: string, requestId?: string) {
-    return this.tableHost.join(cooId, tableId, requestId);
+  joinTable(cooId: string, tableId?: string, requestId?: string, clientVersion?: string) {
+    return this.tableHost.join(cooId, tableId, requestId, clientVersion);
   }
 
   leaveTable(cooId: string, tableId?: string, requestId?: string): TableLeaveResult {
@@ -590,6 +599,21 @@ export class RoomHost {
 
   tablePublic(tableId?: string, cooId?: string) {
     return this.tableHost.tableSummary(tableId, cooId);
+  }
+
+  /** 游戏历史查询（狼人杀按天/按人回看与终局复盘）。 */
+  tableLog(cooId: string, tableId: string | undefined, query: { day?: number; seatNo?: number; limit?: number; review?: boolean }) {
+    return this.tableHost.tableLog(cooId, tableId, query);
+  }
+
+  /** 这个 coo 被进行中的游戏锁了普通聊天（狼人杀发言走游戏动作）。 */
+  chatLockedFor(cooId: string): boolean {
+    return this.tableHost.chatLockedFor(cooId);
+  }
+
+  /** 同一张锁聊桌上的全部真实身份（含本人）；两端都在桌上才拦私聊。 */
+  lockedTablePeerCooIds(cooId: string): Set<string> {
+    return this.tableHost.lockedTablePeerCooIds(cooId);
   }
 
   tablePrivate(seatId: string) {

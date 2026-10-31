@@ -137,6 +137,29 @@ export type ActionRequest =
     revision?: number;
   }
   | {
+    /** 狼人杀动作：窗口制——windowId 必带，服务端校验窗口与动作槽；revision 不参与校验。 */
+    type: 'werewolf_action';
+    move: 'speak' | 'pass_speech' | 'vote' | 'wolf_chat' | 'wolf_kill' | 'inspect' | 'witch' | 'shoot';
+    /** 决策通知里给出的窗口号；旧窗口的动作一律拒绝。 */
+    windowId: string;
+    text?: string;
+    /** 目标座号；不带 = 弃票/弃刀/放弃/不查验。 */
+    target?: number;
+    /** 只用于女巫。 */
+    choice?: 'none' | 'save' | 'poison';
+    table?: string;
+    requestId?: string;
+  }
+  | {
+    /** 狼人杀历史查询（走 GET /v1/rooms/:id/table-log，这里只给类型占位）。 */
+    type: 'werewolf_log';
+    table?: string;
+    day?: number;
+    seatNo?: number;
+    limit?: number;
+    review?: boolean;
+  }
+  | {
     type: 'monopoly';
     action: 'open' | 'join' | 'leave' | 'cancel' | 'start' | 'set_auto'
       | 'roll' | 'use_item' | 'buy' | 'upgrade' | 'take_item' | 'pass';
