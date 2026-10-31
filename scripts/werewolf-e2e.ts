@@ -337,10 +337,11 @@ const scenarioFast = async (): Promise<void> => {
           if (tableSay.status !== 409) throw new Error(`局中 table_say 应 409，实际 ${tableSay.status}`);
           const say = await post(server.base, '/v1/action', { type: 'say', text: '局中客厅喊话', requestId: 'bypass-say' }, { authorization: `Bearer ${seat.token}` });
           if (say.status !== 409) throw new Error(`局中 say 应 409，实际 ${say.status}`);
-          const whisper = await post(server.base, '/v1/action', { type: 'whisper', to: 'Coo1', text: '局中私聊' }, { authorization: `Bearer ${seat.token}` });
+          const peerName = seat.name === 'Coo1' ? 'Coo2' : 'Coo1';
+          const whisper = await post(server.base, '/v1/action', { type: 'whisper', to: peerName, text: '局中私聊' }, { authorization: `Bearer ${seat.token}` });
           if (whisper.status !== 409) throw new Error(`局中同桌 whisper 应 409，实际 ${whisper.status}：${JSON.stringify(whisper.body)}`);
           if (watcherToken) {
-            const outsider = await post(server.base, '/v1/action', { type: 'whisper', to: 'Coo1', text: '场外插一句' }, { authorization: `Bearer ${watcherToken}` });
+            const outsider = await post(server.base, '/v1/action', { type: 'whisper', to: seat.name === 'Coo1' ? 'Coo2' : 'Coo1', text: '场外插一句' }, { authorization: `Bearer ${watcherToken}` });
             if (outsider.status !== 200) throw new Error(`桌外 whisper 应放行，实际 ${outsider.status}`);
           }
           console.log('  ✓ 局中旁路封堵（桌聊/客厅/同桌私聊 409，场外放行）');
