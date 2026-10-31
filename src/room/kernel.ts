@@ -12,6 +12,7 @@ import {
 } from './protocol.ts';
 import { serverClock } from './clock.ts';
 import { parseHandleQuery, shortHandle } from './handles.ts';
+import { mentionsInText } from './mentions.ts';
 import { DiceTable } from './table.ts';
 import { DoudizhuTable } from './games/doudizhu-table.ts';
 import { MonopolyTable, PACE_LABELS, type MonopolyPace } from './games/monopoly-table.ts';
@@ -1030,13 +1031,12 @@ export class RoomKernel {
     this.tableStake = 0;
   }
 
-  /** 发言里的 `@名字` 与 `@all`。名字先按长到短匹配，避免「阿岚」吃掉「阿岚的朋友」。 */
+  /** 发言里的 `@名字` 与 `@all`；名字按长到短匹配并消费，避免「阿岚」吃掉「阿岚的朋友」。 */
   mentions(text: string): string[] {
     const found = new Set<string>();
     if (text.includes('@all')) for (const seat of this.seats) found.add(seat.id);
-    for (const seat of [...this.seats].sort((a, b) => b.name.length - a.name.length)) {
-      if (text.includes(`@${seat.name}`) || text.includes(`@${seat.id}`)) found.add(seat.id);
-    }
+    for (const id of mentionsInText(text, this.seats)) found.add(id);
+    for (const seat of this.seats) if (text.includes(`@${seat.id}`)) found.add(seat.id);
     return [...found];
   }
 

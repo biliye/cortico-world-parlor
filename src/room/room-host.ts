@@ -13,6 +13,7 @@ import { EventDb } from './event-db.ts';
 import { shortHandle } from './handles.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
+import { mentionsInText } from './mentions.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, getRoom, hashSeatToken, joinSeat, releaseSeat,
   seatByTokenHash, updateSeatToken, type RoomRow, type SeatRow,
@@ -906,12 +907,7 @@ export class RoomHost {
   }
 
   private mentionsIn(text: string, from: SeatRow): string[] {
-    const names = this.seats()
-      .filter((seat) => seat.id !== from.id)
-      .sort((left, right) => right.name.length - left.name.length);
-    return names
-      .filter((seat) => text.includes(`@${seat.name}`))
-      .map((seat) => seat.id);
+    return mentionsInText(text, this.seats().filter((seat) => seat.id !== from.id));
   }
 
   private latestInterval(cooId: string): { visibleFromSeq: number; visibleUntilSeq: number | null } | null {

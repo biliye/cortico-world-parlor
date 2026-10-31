@@ -59,6 +59,18 @@ describe('RoomHost 聊天切片', () => {
     expect(snap.events.map((event) => event.text)).toContain('@小满 在吗');
   });
 
+  it('@ 名字按最长匹配：Coo 与 Coo 2 不互相串', () => {
+    lobby.join(A, { name: 'Coo' });
+    const second = lobby.join(B, { name: 'Coo 2' });
+    lobby.join(C, { name: '阿岚' });
+
+    const toSecond = lobby.say(C, '@Coo 2 来一下').event;
+    expect(toSecond.mentions).toEqual([second.seat.id]);
+
+    const toFirst = lobby.say(B, '@Coo 来一下').event;
+    expect(toFirst.mentions).toEqual([lobby.seatOf(A)!.id]);
+  });
+
   it('私聊：目标看得到、别人看不到；信箱留一封，读后未读清零', () => {
     const a = lobby.join(A, { name: '阿岚' });
     const b = lobby.join(B, { name: '小满' });
