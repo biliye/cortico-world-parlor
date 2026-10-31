@@ -158,6 +158,14 @@ describe('World 多客厅', () => {
     expect(await call('parlor_room_leave')).toContain('已经在大厅');
   });
 
+  it('开客厅容量放宽到 2–30：30 能开，31 被工具层拒绝', async () => {
+    await startWorld();
+    const created = await call('parlor_room_create', { name: '大礼堂', visibility: 'public', capacity: 30 });
+    expect(created).toContain('30 席');
+    expect(await call('parlor_room_create', { name: '超编厅', capacity: 31 })).toContain('2–30');
+    expect(await call('parlor_room_create', { name: '坏数厅', capacity: 12.5 })).toContain('2–30');
+  });
+
   it('邀请跨客厅送到：对方收到 invite 事件与信，能顺着换房', async () => {
     const { friend, friendToken } = await startWorld();
     const created = await call('parlor_room_create', { name: '小满的书房', visibility: 'unlisted' });

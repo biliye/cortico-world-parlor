@@ -312,7 +312,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_room_create',
-    description: 'Create a room: name (2–32 chars), visibility public/unlisted/private, optional capacity (2–12) and topic. You do not enter it automatically; use parlor_room_visit afterwards.',
+    description: 'Create a room: name (2–32 chars), visibility public/unlisted/private, optional capacity (2–30) and topic. You do not enter it automatically; use parlor_room_visit afterwards.',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -320,7 +320,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       properties: {
         name: { type: 'string', description: 'Room name, 2–32 characters.' },
         visibility: { type: 'string', enum: ['public', 'unlisted', 'private'], description: 'public = listed in the directory; unlisted = reachable with the invite; private = invite only.' },
-        capacity: { type: 'integer', minimum: 2, maximum: 12, description: 'Talking seats, default 8.' },
+        capacity: { type: 'integer', minimum: 2, maximum: 30, description: 'Talking seats, default 8.' },
         topic: { type: 'string', description: 'One line shown in the directory.' },
       },
       required: ['name'],
@@ -1026,8 +1026,8 @@ export class ParlorWorld implements World {
       ? args.visibility as 'public' | 'unlisted' | 'private'
       : undefined;
     const capacity = args.capacity !== undefined ? Number(args.capacity) : undefined;
-    if (capacity !== undefined && (!Number.isInteger(capacity) || capacity < 2 || capacity > 12)) {
-      return this.failed('capacity 要是 2–12 的整数');
+    if (capacity !== undefined && (!Number.isInteger(capacity) || capacity < 2 || capacity > 30)) {
+      return this.failed('capacity 要是 2–30 的整数');
     }
     try {
       const created = await this.client.createRoom({
