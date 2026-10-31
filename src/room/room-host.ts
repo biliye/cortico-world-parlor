@@ -326,7 +326,7 @@ export class RoomHost {
    * 房主移除成员：立刻停止这一房的访问并释放席位；牌桌锁不拦（牌局由服务器托管到结算）。
    * 调用方先 `markTableAuto`，这里只管席位与事件。
    */
-  remove(cooId: string, now = this.now()): LeaveResult | null {
+  remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' = 'removed'): LeaveResult | null {
     const seat = this.seatOf(cooId);
     if (!seat) return null;
     return withTransaction(this.db, () => {
@@ -335,8 +335,8 @@ export class RoomHost {
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: `${seat.name} 被房主移出了${this.placeOf(this.roomId)}。`,
-        data: { seatId: seat.id, name: seat.name, reason: 'removed' },
+        text: reason === 'room_deleted' ? '房主删除了客厅，席位已释放，请回大厅。' : `${seat.name} 被房主移出了${this.placeOf(this.roomId)}。`,
+        data: { seatId: seat.id, name: seat.name, reason },
       });
       const released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
       return { seat: released, event };

@@ -166,8 +166,8 @@ export const migrate = (db: Db): void => {
   db.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity = ?')
     .run(HALL_CAPACITY, 'hall', 32);
 
-  // 普通客厅单间上限 30；以前建过的大房按新口径收回来（大厅不动）。
-  db.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity > ?')
+  // 所有普通客厅固定 30 席，含归档厅；大厅不动。
+  db.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity <> ?')
     .run(MAX_USER_ROOM_CAPACITY, 'room', MAX_USER_ROOM_CAPACITY);
 
   const stmt = db.prepare(

@@ -156,6 +156,26 @@ describe('大厅进出不主动推给 Coo', () => {
 });
 
 describe('World 多客厅', () => {
+  it('删除所在客厅后自动回大厅，并能重启继续用同一身份聊天', async () => {
+    const { host, secrets, ctx } = await startWorld();
+    const created = await call('parlor_room_create', { name: '将删除的厅', visibility: 'public' });
+    const roomId = /（(r-[A-Za-z0-9_-]+)）/.exec(created)![1];
+    expect(await call('parlor_room_visit', { room: roomId })).toContain('将删除的厅');
+    const oldToken = secrets.PARLOR_SEAT_TOKEN;
+    const res = await fetch(server!.url + '/v1/rooms/' + roomId + '/delete', {
+      method: 'POST', headers: { authorization: 'Bearer ' + oldToken },
+    });
+    expect(res.status).toBe(200);
+    await until(() => secrets.PARLOR_CURRENT_ROOM === 'hall', 8000);
+    expect(secrets.PARLOR_SEAT_TOKEN).not.toBe(oldToken);
+    expect(host.events.some(e => e.type === 'parlor.link' && e.text.includes('已回到大厅'))).toBe(true);
+    expect(await call('parlor_say', { text: '回到大厅还能说话' })).not.toContain('失败');
+    await world!.stop();
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+    expect(await call('parlor_look')).toContain('大厅');
+  });
+
   it('首次加入存的是 ownerKey（不是空的 ownerToken），面板家长链接能换会话', async () => {
     const { secrets } = await startWorld();
     const key = secrets.PARLOR_OWNER_TOKEN;
@@ -232,10 +252,13 @@ describe('World 多客厅', () => {
     expect(await call('parlor_room_leave')).toContain('已经在大厅');
   });
 
-  it('开客厅容量放宽到 2–30：30 能开，31 被工具层拒绝', async () => {
+  it('开客厅固定 30 席，兼容旧参数并拒绝越界输入', async () => {
     await startWorld();
     const created = await call('parlor_room_create', { name: '大礼堂', visibility: 'public', capacity: 30 });
     expect(created).toContain('30 席');
+    expect(await call('parlor_room_create', { name: '旧小容量厅', capacity: 8 })).toContain('30 席');
+    expect(await call('parlor_room_create', { name: '默认人数厅' })).toContain('30 席');
+    expect(world!.tools().find(t => t.name === 'parlor_room_create')!.parameters.properties).not.toHaveProperty('capacity');
     expect(await call('parlor_room_create', { name: '超编厅', capacity: 31 })).toContain('2–30');
     expect(await call('parlor_room_create', { name: '坏数厅', capacity: 12.5 })).toContain('2–30');
   });

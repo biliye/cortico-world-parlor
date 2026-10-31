@@ -147,6 +147,8 @@ describe('WorldServer 聊天网关', () => {
     // 再切回一个满员目标：源席位必须还在
     const full = await post(app.url, '/v1/rooms', { name: '满厅', visibility: 'public', capacity: 2 }, cooHeaders(A));
     const fullId = (full.body.room as { id: string }).id;
+    // 模拟库内满员目标，验证换房事务回滚。
+    app.dbHandle.prepare('UPDATE rooms SET capacity = 2 WHERE id = ?').run(fullId);
     await post(app.url, `/v1/rooms/${fullId}/join`, { name: '乙' }, cooHeaders(B));
     await post(app.url, `/v1/rooms/${fullId}/join`, { name: '丙' }, cooHeaders(C));
     const blocked = await post(app.url, `/v1/rooms/${otherId}/switch`, { to: fullId }, {

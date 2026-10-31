@@ -19,19 +19,8 @@ const RULES = {
 
 /** 这版大厅只露出斗地主；哪些游戏露出来由 games/registry.js 的 enabled 决定。 */
 
-/** 建厅时的人数上限（普通客厅最多 30；大厅的 400 不在这里选）。 */
-const ROOM_CAPACITY_CHOICES = [8, 16, 30];
-
-function capacitySelect() {
-  const select = el('select');
-  select.setAttribute('aria-label', '人数上限');
-  for (const value of ROOM_CAPACITY_CHOICES) {
-    const option = el('option', '', `${value} 人`);
-    option.value = String(value);
-    select.append(option);
-  }
-  return select;
-}
+/** 普通客厅固定 30 人；大厅容量由服务器单独管理。 */
+const ROOM_CAPACITY = 30;
 
 const state = {
   cfg: readStore(),
@@ -214,7 +203,7 @@ async function tryParentEntry(key = '', options = {}) {
     const played = await fetch('/v1/parent/play', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(key ? { key } : {}),
+      body: JSON.stringify({ ...(key ? { key } : {}), ...(options.room ? { room: options.room } : {}) }),
       ...timeoutSignal(),
     });
     const body = await played.json().catch(() => ({}));
@@ -615,6 +604,8 @@ function connect() {
     setConn('off');
     source.close();
     if (state.stream === source) state.stream = null;
+    // 服务端收回席位后及时检查状态，进入重新入场流程。
+    scheduleRefresh();
     state.reconnect = setTimeout(connect, 3000);
   };
 }
@@ -988,7 +979,7 @@ function buildShell() {
   const lobbyTitle = el('h1', '', '灯还亮着。');
   const lobbySub = el('p');
   lobbyCopy.append(lobbyEyebrow, lobbyTitle, lobbySub);
-  lobbyHead.append(lobbyCopy);
+  lobbyHead.append(lobbyCopy, roomManage);
   const gameGrid = el('div', 'game-grid');
   // 玩法说明由 registry 里的 guide 生成（见 renderGuides）；这里只留壳。
   const guide = el('section', 'panel ddz-guide');
@@ -1037,7 +1028,7 @@ function buildShell() {
     option.value = value;
     hallCreateVis.append(option);
   }
-  const hallCreateCap = capacitySelect();
+  const hallCreateCap = el('span', 'muted', '固定 30 人');
   const hallCreateBtn = btn('开一间', () => { void createHallRoom(); }, { primary: true, small: true });
   const hallCreateRow = el('div', 'hall-create-row');
   hallCreateRow.append(hallCreateName, hallCreateVis, hallCreateCap, hallCreateBtn);
@@ -1988,7 +1979,7 @@ async function createHallRoom() {
       body: JSON.stringify({
         name,
         visibility: ui.hallCreateVis.value,
-        capacity: Number(ui.hallCreateCap.value),
+        capacity: ROOM_CAPACITY,
       }),
     });
     ui.hallCreateName.value = '';
@@ -2535,7 +2526,7 @@ function ensureRoomsDialog() {
     option.value = value;
     visInput.append(option);
   }
-  const capInput = capacitySelect();
+  const capInput = el('span', 'muted', '固定 30 人');
   const createBtn = btn('开一间', async () => {
     const name = nameInput.value.trim();
     if (name.length < 2) {
@@ -2550,7 +2541,7 @@ function ensureRoomsDialog() {
         body: JSON.stringify({
           name,
           visibility: visInput.value,
-          capacity: Number(capInput.value),
+          capacity: ROOM_CAPACITY,
         }),
       });
       await goRoom(created.room.id);
@@ -2798,6 +2789,45 @@ function renderAccess(data) {
   visSection.append(visRow);
   visSection.append(el('p', 'note', '改成私密不会自动授权现在在厅里的人，要在这里逐个授权或邀请。'));
   accessBody.append(visSection);
+
+  const deleteSection = el('section', 'access-section');
+  deleteSection.append(el('h3', '', '删除客厅'));
+  deleteSection.append(el('p', 'note', '删除后从目录移除，在场席位和未接受的邀请会失效。历史、身份和筹码保留；有未结束牌桌时不能删除。'));
+  const deleteBtn = btn('删除客厅', () => { void deleteRoom(data.room, deleteBtn); }, {
+    danger: true, small: true,
+  });
+  deleteSection.append(deleteBtn);
+  accessBody.append(deleteSection);
+}
+
+async function deleteRoom(room, button) {
+  if (!room || !confirm('确定删除「' + room.name + '」？在场的所有人都会离开，未接受的邀请会失效。')) return;
+  button.disabled = true;
+  try {
+    await api('/v1/rooms/' + encodeURIComponent(room.id) + '/delete', { method: 'POST' });
+    accessDialog.close();
+    if (currentRoom() === room.id) {
+      if (state.stream) state.stream.close();
+      state.stream = null;
+      clearTimeout(state.reconnect);
+      clearTimeout(state.refreshTimer);
+      state.refreshTimer = null;
+      clearStore();
+      if (await tryParentEntry('', { room: 'hall' })) {
+        if (state.cfg) location.href = '/play?room=hall';
+      } else {
+        await loadEntryPolicy();
+        renderJoin('客厅已删除，请重新加入大厅。');
+      }
+    } else {
+      showToast('客厅已删除');
+      void loadHall(true);
+    }
+  } catch (error) {
+    showToast(error.message || '删除失败', 'bad');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /** verb：成员列表用「移出」，在场列表用「请出」；两处走同一个 revoke。 */

@@ -17,7 +17,9 @@ const seed = (): void => {
   for (const id of [A, B, C]) coo.run(id, 'pet', id);
   createRoom(db, { id: 'lobby', name: '客厅', ownerCooId: A, capacity: 8 });
   createRoom(db, { id: 'other', name: '别厅', ownerCooId: A, capacity: 8 });
-  createRoom(db, { id: 'full', name: '满厅', ownerCooId: A, capacity: 2 });
+  createRoom(db, { id: 'full', name: '满厅', ownerCooId: A });
+  // 模拟库内满员边界以验证换房失败回滚。
+  db.prepare("UPDATE rooms SET capacity = 2 WHERE id = 'full'").run();
 };
 
 const tokenFactory = (): (() => string) => {
@@ -55,7 +57,7 @@ describe('RoomHost 聊天切片', () => {
     const snap = lobby.snapshot(B);
     expect(snap.id).toBe('lobby');
     expect(snap.seat.name).toBe('小满');
-    expect(snap.maxSeats).toBe(8);
+    expect(snap.maxSeats).toBe(30);
     expect(snap.events.map((event) => event.text)).toContain('@小满 在吗');
   });
 

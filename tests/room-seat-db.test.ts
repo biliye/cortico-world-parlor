@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe('客厅 store', () => {
-  it('建房：id 生成、默认值、2–30 容量、主题与非法输入', () => {
+  it('建房：id 生成、默认值、固定 30 席与旧参数兼容、主题与非法输入', () => {
     const room = createRoom(db, {
       name: '  可可   厅 ',
       ownerCooId: COO,
@@ -70,7 +70,7 @@ describe('客厅 store', () => {
       name: '可可 厅',
       ownerCooId: COO,
       visibility: 'public',
-      capacity: 6,
+      capacity: 30,
       topic: '一起 打牌',
       seq: 0,
       createdAt: 1_000,
@@ -78,8 +78,8 @@ describe('客厅 store', () => {
       archivedAt: null,
     });
     expect(room.epoch.length).toBeGreaterThan(0);
-    expect(createRoom(db, { name: '两人厅', ownerCooId: COO, capacity: 2 }, 1_001).capacity).toBe(2);
-    expect(createRoom(db, { name: '十二人厅', ownerCooId: COO, capacity: 12 }, 1_002).capacity).toBe(12);
+    expect(createRoom(db, { name: '两人厅', ownerCooId: COO, capacity: 2 }, 1_001).capacity).toBe(30);
+    expect(createRoom(db, { name: '十二人厅', ownerCooId: COO, capacity: 12 }, 1_002).capacity).toBe(30);
     expect(createRoom(db, { name: '三十人厅', ownerCooId: COO, capacity: 30 }, 1_003).capacity).toBe(30);
 
     expectCode(() => createRoom(db, { name: '太小', ownerCooId: COO, capacity: 1 }), 'invalid');
@@ -128,6 +128,8 @@ describe('客厅 store', () => {
 
   it('容量：只算活跃非 observer；绕过 store 直插也被 trigger 拦住', () => {
     const room = createRoom(db, { name: '两人厅', ownerCooId: COO, capacity: 2 }, 100);
+    // 人为设置库内边界，保留底层满员保护的验证。
+    db.prepare('UPDATE rooms SET capacity = 2 WHERE id = ?').run(room.id);
     const first = joinSeat(db, { roomId: room.id, cooId: COO, name: '甲', token: 'token-cap-1', visibleFromSeq: 0 });
     joinSeat(db, { roomId: room.id, cooId: COO2, name: '乙', token: 'token-cap-2', visibleFromSeq: 0 });
     expectCode(() => joinSeat(db, { roomId: room.id, cooId: COO3, name: '丙', token: 'token-cap-3', visibleFromSeq: 0 }), 'room_full');
@@ -273,6 +275,7 @@ describe('客厅 store', () => {
   it('换房：目标满则源席位与成员写入一起回滚；成功时区间各自封口', () => {
     const a = createRoom(db, { name: '甲厅', ownerCooId: COO, capacity: 3 }, 100);
     const b = createRoom(db, { name: '乙厅', ownerCooId: COO, capacity: 2 }, 200);
+    db.prepare('UPDATE rooms SET capacity = 2 WHERE id = ?').run(b.id);
     const mine = joinSeat(db, { roomId: a.id, cooId: COO, name: '阿岚', token: 'token-switch-1', visibleFromSeq: 0 });
     joinSeat(db, { roomId: b.id, cooId: COO2, name: '甲', token: 'token-switch-2', visibleFromSeq: 0 });
     joinSeat(db, { roomId: b.id, cooId: COO3, name: '乙', token: 'token-switch-3', visibleFromSeq: 0 });

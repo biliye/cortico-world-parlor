@@ -312,7 +312,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_room_create',
-    description: 'Create a room: name (2–32 chars), visibility public/unlisted/private, optional capacity (2–30) and topic. You do not enter it automatically; use parlor_room_visit afterwards.',
+    description: 'Create a room: name (2–32 chars), visibility public/unlisted/private, a fixed capacity of 30 talking seats, and optional topic. You do not enter it automatically; use parlor_room_visit afterwards.',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -320,7 +320,6 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       properties: {
         name: { type: 'string', description: 'Room name, 2–32 characters.' },
         visibility: { type: 'string', enum: ['public', 'unlisted', 'private'], description: 'public = listed in the directory; unlisted = reachable with the invite; private = invite only.' },
-        capacity: { type: 'integer', minimum: 2, maximum: 30, description: 'Talking seats, default 8.' },
         topic: { type: 'string', description: 'One line shown in the directory.' },
       },
       required: ['name'],
@@ -648,11 +647,21 @@ export class ParlorWorld implements World {
 
   /** 用现有身份入座，拿一枚新令牌；启动和「席位被释放后自动重连」共用。 */
   private async joinRoom(client: ParlorClient): Promise<void> {
-    const joined = await client.join(this.inviteCode, {
-      name: this.baseSeatName(),
-      kind: 'pet',
-      tier: this.ctx.cfg.wakeTier,
-    }, this.roomArg());
+    const request = { name: this.baseSeatName(), kind: 'pet' as const, tier: this.ctx.cfg.wakeTier };
+    let joined;
+    try {
+      joined = await client.join(this.inviteCode, request, this.roomArg());
+    } catch (error) {
+      // 删除客厅后保留身份和账本，回大厅重新入座。
+      if (!this.multiRoom || !(error instanceof ParlorHttpError)
+        || error.status !== 403 || !error.message.includes('已经归档')) throw error;
+      joined = await client.join(this.inviteCode, request, 'hall');
+      this.currentRoom = 'hall';
+      this.pending = [];
+      this.focusBacklog = [];
+      this.focused = false;
+      await this.reportLink('原客厅已被房主删除，已回到大厅。');
+    }
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
     // 已有账户再次加入不会发新钥匙：这时要留住 .env 里那把，别拿空串覆盖。
@@ -1038,7 +1047,7 @@ export class ParlorWorld implements World {
       const created = await this.client.createRoom({
         name,
         ...(visibility ? { visibility } : {}),
-        ...(capacity !== undefined ? { capacity } : {}),
+        capacity: 30,
         ...(typeof args.topic === 'string' && args.topic.trim() ? { topic: args.topic.trim() } : {}),
       }, this.token || undefined);
       const room = created.room;

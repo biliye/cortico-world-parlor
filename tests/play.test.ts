@@ -336,7 +336,7 @@ describe('网页玩家', () => {
     expect(js).toContain('history.replaceState(null, \'\', location.pathname + location.search)');
     expect(js).toContain('function tryParentEntry');
     expect(js).toContain("fetch('/v1/parent/play'");
-    expect(js).toContain('JSON.stringify(key ? { key } : {})');
+    expect(js).toContain('...(options.room ? { room: options.room } : {})');
     // 换席位这一步也要有超时：服务器挂住时要走到「重试」，不能一直等。
     expect(js).toContain('timeoutSignal()');
     // 没有钥匙但浏览器已有家长会话：也直接下场（书签/刷新都能进）。
@@ -394,11 +394,13 @@ describe('网页玩家', () => {
     expect(expired).toContain('这个席位的令牌已经失效');
   });
 
-  it('建房可选 8/16/30 人', () => {
+  it('建房固定 30 人，移除人数选择并提供房主删除入口', () => {
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    expect(js).toContain('const ROOM_CAPACITY_CHOICES = [8, 16, 30]');
-    expect(js).toContain('capacity: Number(ui.hallCreateCap.value)');
-    expect(js).toContain('capacity: Number(capInput.value)');
+    expect(js).toContain('const ROOM_CAPACITY = 30');
+    expect(js).not.toContain('capacitySelect');
+    expect(js).toContain('async function deleteRoom(room, button)');
+    expect(js).toContain('固定 30 人');
+    expect(js).toContain('capacity: ROOM_CAPACITY');
   });
 
   it('访客入口关闭时不再显示加入表单', () => {

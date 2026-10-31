@@ -640,7 +640,7 @@
     },
     {
       "name": "parlor_room_create",
-      "description": "Create a room: name (2–32 chars), visibility public/unlisted/private, optional capacity (2–30) and topic. You do not enter it automatically; use parlor_room_visit afterwards.",
+      "description": "Create a room: name (2–32 chars), visibility public/unlisted/private, a fixed capacity of 30 talking seats, and optional topic. You do not enter it automatically; use parlor_room_visit afterwards.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -657,12 +657,6 @@
               "private"
             ],
             "description": "public = listed in the directory; unlisted = reachable with the invite; private = invite only."
-          },
-          "capacity": {
-            "type": "integer",
-            "minimum": 2,
-            "maximum": 30,
-            "description": "Talking seats, default 8."
           },
           "topic": {
             "type": "string",

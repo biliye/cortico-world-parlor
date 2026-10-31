@@ -17,7 +17,7 @@ import type { SeatKind, WakeTier } from './protocol.ts';
 export const MIN_ROOM_CAPACITY = 2;
 /** 建厅/改容量的上限：普通客厅 30 人；大厅另由 HALL_CAPACITY 管，库级兜底 500。 */
 export const MAX_ROOM_CAPACITY = MAX_USER_ROOM_CAPACITY;
-export const DEFAULT_ROOM_CAPACITY = 8;
+export const DEFAULT_ROOM_CAPACITY = MAX_USER_ROOM_CAPACITY;
 export const MAX_ROOM_NAME = 32;
 export const MAX_ROOM_TOPIC = 80;
 export const MAX_SEAT_NAME = 24;
@@ -246,7 +246,8 @@ const cleanCapacity = (value: unknown): number => {
   if (!Number.isInteger(capacity) || (capacity as number) < MIN_ROOM_CAPACITY || (capacity as number) > MAX_ROOM_CAPACITY) {
     throw new RoomSeatError('invalid', `席位上限要在 ${MIN_ROOM_CAPACITY}–${MAX_ROOM_CAPACITY} 之间`);
   }
-  return capacity as number;
+  // 兼容旧客户端的 2–30 参数，最终统一为 30 席。
+  return DEFAULT_ROOM_CAPACITY;
 };
 
 const cleanRoomId = (value: unknown): string => {
@@ -329,7 +330,7 @@ const createRoomTx = (db: Db, input: CreateRoomInput, now: number): RoomRow => {
   return requireRoom(db, id);
 };
 
-/** 建一个普通客厅（kind = 'room'）。capacity 只接受 2–30。 */
+/** 建一个普通客厅（kind = 'room'）。固定 30 席；兼容旧客户端的 2–30 参数。 */
 export const createRoom = (db: Db, input: CreateRoomInput, now = Date.now()): RoomRow => (
   withTransaction(db, () => createRoomTx(db, input, now))
 );

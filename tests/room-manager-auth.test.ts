@@ -69,3 +69,96 @@ describe('房主管理识别有效席位令牌', () => {
     expect((await request(`/v1/rooms/${room}/access`, undefined, bearer(moved.token))).status).toBe(200);
   });
 });
+
+describe('删除客厅', () => {
+  it.each([false, true])('global=%s：只有房主能删除；释放席位、隐藏目录，历史与账户保留，重复操作幂等', async (global) => {
+    const { room, player } = await setup(global);
+    const client = new ParlorClient(server!.url);
+    const childSeat = server!.dbHandle.prepare("SELECT token_hash FROM room_seats WHERE coo_id=? AND released_at IS NULL").get(childId);
+    const visitor = await request('/v1/rooms/' + room + '/join', { name: '来客' }, {
+      'x-parlor-invite': 'inv', 'x-parlor-coo': 'coo-delete-visitor',
+      'x-parlor-coo-secret': 'visitor-secret-01234567890123456789',
+    });
+    expect(visitor.status).toBe(200);
+    const token = visitor.body.token;
+    expect((await request('/v1/rooms/' + room + '/delete', {}, bearer(token))).status).toBe(403);
+    expect((await request('/v1/rooms/' + room + '/delete', {}, bearer('forged'))).status).toBe(401);
+    expect((await request('/v1/rooms/hall/delete', {}, bearer(player.token))).status).toBe(403);
+    await client.action(token, { type: 'say', text: '保留的历史' }, room);
+    const beforeCoos = server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM coos').get()?.n;
+    const beforeAccounts = server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM accounts').get()?.n;
+    const ledger = server!.dbHandle.prepare('SELECT * FROM ledger_entries ORDER BY id').all();
+    const deleted = await request('/v1/rooms/' + room + '/delete', {}, bearer(player.token));
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.room).toMatchObject({ archived: true, seats: 0, capacity: 30 });
+    const archived = server!.dbHandle.prepare('SELECT archived_at FROM rooms WHERE id=?').get(room)?.archived_at;
+    const again = await request('/v1/rooms/' + room + '/delete', {}, bearer(player.token));
+    expect(again.status).toBe(200);
+    expect(server!.dbHandle.prepare('SELECT archived_at FROM rooms WHERE id=?').get(room)?.archived_at).toBe(archived);
+    expect((await request('/v1/rooms?all=1', undefined, bearer(player.token))).body.rooms.some((x: any) => x.id === room)).toBe(false);
+    expect((await request('/v1/hall', undefined, bearer(player.token))).body.rooms.some((x: any) => x.id === room)).toBe(false);
+    expect((await request('/v1/rooms/' + room + '/room', undefined, bearer(token))).status).toBe(401);
+    expect((await request('/v1/rooms/' + room + '/access', undefined, bearer(player.token))).status).toBe(409);
+    expect((await request('/v1/rooms/' + room + '/join', { name: '再来' }, {
+      'x-parlor-invite': 'inv', 'x-parlor-coo': 'coo-delete-visitor',
+      'x-parlor-coo-secret': 'visitor-secret-01234567890123456789',
+    })).status).toBe(403);
+    expect(server!.dbHandle.prepare("SELECT COUNT(*) AS n FROM events WHERE room_id=? AND text='保留的历史'").get(room)?.n).toBe(1);
+    expect(server!.dbHandle.prepare("SELECT COUNT(*) AS n FROM events WHERE room_id=? AND json_extract(data_json,'$.reason')='room_deleted'").get(room)?.n).toBe(1);
+    expect(server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM coos').get()?.n).toBe(beforeCoos);
+    expect(server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM accounts').get()?.n).toBe(beforeAccounts);
+    expect(server!.dbHandle.prepare('SELECT * FROM ledger_entries ORDER BY id').all()).toEqual(ledger);
+    expect(server!.dbHandle.prepare("SELECT token_hash FROM room_seats WHERE coo_id=? AND released_at IS NULL").get(childId)).toEqual(childSeat);
+    expect(server!.dbHandle.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it('未结束的等待、叫地主、打牌桌均阻止删除，拒绝时不改变席位和历史', async () => {
+    const { room, player } = await setup(false);
+    const client = new ParlorClient(server!.url);
+    const moved = await client.switchTo(player.token, 'hall', room);
+    await client.action(moved.token, { type: 'table_open', game: 'ddz', requestId: 'delete-guard-open' }, room);
+    const before = server!.dbHandle.prepare('SELECT seq FROM rooms WHERE id=?').get(room)?.seq;
+    for (const status of ['open', 'bidding', 'playing']) {
+      server!.dbHandle.prepare('UPDATE tables SET status=? WHERE room_id=?').run(status, room);
+      const result = await request('/v1/rooms/' + room + '/delete', {}, bearer(moved.token));
+      expect(result.status).toBe(409);
+      expect(result.body.error).toContain('未结束');
+      expect(server!.dbHandle.prepare('SELECT archived_at, seq FROM rooms WHERE id=?').get(room)).toMatchObject({ archived_at: null, seq: before });
+      expect((await request('/v1/rooms/' + room + '/room', undefined, bearer(moved.token))).status).toBe(200);
+    }
+    server!.dbHandle.prepare("UPDATE tables SET status='open' WHERE room_id=?").run(room);
+    await client.action(moved.token, { type: 'table_leave', requestId: 'delete-guard-leave' }, room);
+    expect((await request('/v1/rooms/' + room + '/delete', {}, bearer(moved.token))).status).toBe(200);
+  });
+
+  it('删除私密厅撤销待接受邀请，旧邀请不能重新打开客厅', async () => {
+    const { player } = await setup(false);
+    const made = await request('/v1/rooms', { name: '要关闭的私密厅', visibility: 'private' }, bearer(player.token));
+    const room = made.body.room.id;
+    const invite = await request('/v1/rooms/' + room + '/invite', { to: childId }, bearer(player.token));
+    expect(invite.status).toBe(200);
+    expect((await request('/v1/rooms/' + room + '/delete', {}, bearer(player.token))).status).toBe(200);
+    const row = server!.dbHandle.prepare('SELECT status FROM room_invitations WHERE id=?').get(invite.body.invitationId);
+    expect(row?.status).toBe('revoked');
+    expect((await request('/v1/invitations/' + invite.body.invitationId + '/accept', {}, childHeaders)).status).toBe(409);
+  });
+
+  it('普通厅新建固定 30 席，旧小容量兼容；第 31 个会说话的席位被拒绝', async () => {
+    const { player } = await setup(false);
+    for (const capacity of [undefined, 2, 8, 16, 30]) {
+      const made = await request('/v1/rooms', { name: '固定人数厅', visibility: 'public', capacity }, bearer(player.token));
+      expect(made.status).toBe(200);
+      expect(made.body.room.capacity).toBe(30);
+    }
+    expect((await request('/v1/rooms', { name: '非法人数厅', capacity: 0 }, bearer(player.token))).status).toBe(400);
+    expect((await request('/v1/rooms', { name: '非法人数厅', capacity: 31 }, bearer(player.token))).status).toBe(400);
+    const made = await request('/v1/rooms', { name: '三十人边界厅', visibility: 'public' }, bearer(player.token));
+    for (let i=0; i<31; i++) {
+      const joined = await request('/v1/rooms/' + made.body.room.id + '/join', { name: '客人' + i }, {
+        'x-parlor-invite': 'inv', 'x-parlor-coo': 'coo-capacity-test-' + i,
+        'x-parlor-coo-secret': 'capacity-secret-01234567890123456789-' + i,
+      });
+      expect(joined.status, JSON.stringify({ i, body: joined.body })).toBe(i < 30 ? 200 : 409);
+    }
+  });
+});

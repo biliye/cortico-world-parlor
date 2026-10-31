@@ -29,6 +29,23 @@ const seat = (roomId: string, id: string, cooId: string, name: string, token: st
 };
 
 describe('SQLite 地基', () => {
+  it('现有普通厅含归档厅统一到 30，大厅与席位数据保留，迁移幂等', () => {
+    coo('coo-cap-owner');
+    for (const capacity of [2, 8, 16, 30, 64]) room('room-' + capacity, 'coo-cap-owner', capacity);
+    room('hall', 'coo-cap-owner', 400, 'hall');
+    db.prepare("UPDATE rooms SET archived_at = 123 WHERE id = 'room-8'").run();
+    seat('room-2', 'seat-kept', 'coo-cap-owner', '本人', 'token-kept');
+    migrate(db);
+    migrate(db);
+    const rooms = db.prepare("SELECT capacity FROM rooms WHERE kind = 'room'").all();
+    expect(rooms).toHaveLength(5);
+    expect(rooms.every(row => row.capacity === 30)).toBe(true);
+    expect(db.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get()?.capacity).toBe(400);
+    expect(db.prepare("SELECT archived_at FROM rooms WHERE id = 'room-8'").get()?.archived_at).toBe(123);
+    expect(db.prepare("SELECT token_hash FROM room_seats WHERE id = 'seat-kept'").get()?.token_hash).toBe('token-kept');
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
   it('migrate 可重复执行，schema 版本写进 meta', () => {
     migrate(db);
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string };

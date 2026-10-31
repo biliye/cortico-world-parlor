@@ -21,7 +21,7 @@ import { likePrefix, parseHandleQuery } from './handles.ts';
 import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
-  RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken,
+  RoomSeatError, activeSeatForCoo, activeSeats, archive, createRoom, getRoom, hashSeatToken,
   listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash, seatsForOfflineRelease,
   touchSeatSeen, type RoomRow,
 } from './room-seat-db.ts';
@@ -322,7 +322,6 @@ export class WorldServer {
         name: '默认客厅',
         ownerCooId: system,
         visibility: 'unlisted',
-        capacity: 8,
       }, this.now());
     }
     this.ensureHall();
@@ -943,7 +942,7 @@ export class WorldServer {
         name,
         ownerCooId: cooId,
         ...(visibility ? { visibility } : {}),
-        ...(capacity ? { capacity } : {}),
+        ...(capacity !== undefined ? { capacity } : {}),
         ...(topic ? { topic } : {}),
       }, this.now());
       json(res, 200, { room: roomSummary(this.db, room) });
@@ -964,8 +963,8 @@ export class WorldServer {
       return;
     }
 
-    // —— 私密厅：成员管理 / 可见性 / 房主邀请 ——
-    const managed = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(access|visibility|invite)$/);
+    // —— 房主：成员管理 / 可见性 / 房主邀请 / 删除客厅 ——
+    const managed = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(access|visibility|invite|delete)$/);
     if (managed) {
       const roomId = managed[1];
       const what = managed[2];
@@ -973,6 +972,24 @@ export class WorldServer {
       if (!room) throw new HttpError(404, '客厅不存在');
       const manager = this.roomManager(req, roomId);
       const now = this.now();
+      if (what === 'delete' && method === 'POST') {
+        if (room.kind !== 'room' || room.id === this.defaultRoomId || room.ownerCooId === 'system-owner') {
+          throw new HttpError(403, '大厅和系统默认客厅不能删除');
+        }
+        const host = this.host(roomId);
+        withTransaction(this.db, () => {
+          const live = this.db.prepare(
+            "SELECT 1 FROM tables WHERE room_id = ? AND status IN ('open','bidding','playing') LIMIT 1",
+          ).get(roomId);
+          if (live) throw new HttpError(409, '客厅里还有未结束的牌桌，请先结束牌局或收起等待中的桌子');
+          for (const seat of activeSeats(this.db, roomId)) host.remove(seat.cooId, now, 'room_deleted');
+          revokeInvitationsFor(this.db, roomId, null, now);
+          archive(this.db, roomId, now);
+        });
+        json(res, 200, { ok: true, room: roomSummary(this.db, getRoom(this.db, roomId)!) });
+        return;
+      }
+      if (room.archivedAt !== null) throw new HttpError(409, '这个客厅已经删除');
       if (what === 'access' && method === 'GET') {
         expireInvitations(this.db, now);
         const ownerRow = room.ownerCooId
