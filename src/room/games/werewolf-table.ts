@@ -1087,7 +1087,10 @@ export class WerewolfTable implements TableEngine {
       ...(pending ? { canAct: true, myMove: pending } : { canAct: false }),
       ...(fresh ? { freshResult: true } : {}),
       ...(deadline ? { deadline } : {}),
-      ...(pending ? { submitted: this.submittedOf(seat) } : {}),
+      // 已交的动作不再随 pending 消失：投票交了票之后本人仍要能看到「已提交」与投给了谁
+      //（设计稿 §5.3：提交后只固定显示本人选择）。submitted 只含本人的动作，不泄他人票。
+      ...(this.submittedOf(seat).length ? { submitted: this.submittedOf(seat) } : {}),
+      ...(phase.kind === 'vote' && this.ballots.has(seat.seatNo) ? { myVote: this.ballots.get(seat.seatNo) ?? null } : {}),
       ...(seat.role ? {
         role: seat.role,
         roleLabel: ROLE_CARD_LABELS[seat.role],

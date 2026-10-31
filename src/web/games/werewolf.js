@@ -454,6 +454,12 @@ export function mountWerewolf(root, ctx) {
     }
     if (table.phase === 'night') note.append(el('span', '', '夜里有人在行动；天亮见。'));
     else if (table.phase === 'speech' && table.turn) note.append(el('span', '', `等 ${seatLabel(seatNoOf(table.turn))} 发言。`));
+    else if (table.phase === 'vote' && priv) {
+      // 设计稿 §5.3：提交后只固定显示本人选择，到点再看全桌票型。
+      if (priv.myVote === undefined) note.append(el('span', '', '投票进行中；到点统一揭晓。'));
+      else if (priv.myVote === null) note.append(el('span', '', '你已弃票，到点统一揭晓。'));
+      else note.append(el('span', '', `你已投给 ${priv.myVote} 号，到点统一揭晓。`));
+    }
     else note.append(el('span', '', '等下一个窗口。'));
     return note;
   }

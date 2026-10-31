@@ -39,7 +39,16 @@ const post = async (base: string, path: string, body: unknown, headers: Record<s
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
-  return { status: response.status, body: await response.json() as Record<string, unknown> };
+  return { status: response.status, headers: response.headers, body: await response.json() as Record<string, unknown> };
+};
+
+const until = async (check: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('等待超时');
 };
 
 const get = async (base: string, path: string, token: string) => {
@@ -151,5 +160,161 @@ describe('狼人杀 · 网关与注册表', () => {
     expect(whisper.status).toBe(409);
     const outsider = await act(app, child.body.token as string, { type: 'whisper', to: PET_NAMES[0], text: '场外插一句' });
     expect(outsider.status).toBe(200);
+  });
+});
+
+describe('狼人杀 · 秘密出口矩阵', () => {
+  it('B1：狼聊暗号与身份只留在狼席位——非狼席位的补发/回放、家长页、观战出口都读不到', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-b1-'));
+    const clock = { now: 1_770_000_000_000 };
+    server = new WorldServer({
+      allowGuestJoin: true, dbFile: join(dir, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
+      now: () => clock.now,
+    });
+    await server.listen();
+    const app = server;
+    const CODE = '夜里三更见';
+
+    // 孩子（Coo）进厅；七只 Coo 陪玩（孩子占第九个 Coo 席位前的第八席）；第十个席位进厅观战、不坐桌。
+    const child = await post(app.url, '/v1/rooms/lobby/join', { name: '豆豆' }, { ...cooHeaders(CHILD), 'x-parlor-invite': 'inv' });
+    expect(child.status).toBe(200);
+    const childToken = child.body.token as string;
+    const petTokens: string[] = [];
+    for (let i = 0; i < PETS.length - 1; i++) {
+      const joined = await post(app.url, '/v1/rooms/lobby/join', { name: PET_NAMES[i] }, {
+        ...cooHeaders(PETS[i], PARLOR_CLIENT_VERSION), 'x-parlor-invite': 'inv',
+      });
+      expect(joined.status).toBe(200);
+      petTokens.push(joined.body.token as string);
+    }
+    const watcher = await post(app.url, '/v1/rooms/lobby/join', { name: '观战客' }, {
+      ...cooHeaders('coo-watch001', PARLOR_CLIENT_VERSION), 'x-parlor-invite': 'inv',
+    });
+    expect(watcher.status).toBe(200);
+    const watcherToken = watcher.body.token as string;
+
+    // 家长用钥匙下场（human 席位）开桌；孩子坐第九席，凑满九席开局。
+    const played = await post(app.url, '/v1/parent/play', { key: child.body.ownerKey as string });
+    expect(played.status).toBe(200);
+    const parentCookie = (played.headers.get('set-cookie') ?? '').split(';')[0];
+    expect(parentCookie).toContain('parlor_parent=');
+    const playerToken = played.body.token as string;
+    const opened = await act(app, playerToken, { type: 'table_open', requestId: 'b1-open', game: 'werewolf' });
+    expect(opened.status).toBe(200);
+    const tableId = opened.body.tableId as string;
+    for (let i = 0; i < petTokens.length; i++) {
+      const joined = await act(app, petTokens[i], { type: 'table_join', requestId: `b1-j${i}`, table: tableId }, PARLOR_CLIENT_VERSION);
+      expect(joined.status).toBe(200);
+    }
+    expect((await act(app, childToken, { type: 'table_join', requestId: 'b1-jchild', table: tableId }, PARLOR_CLIENT_VERSION)).status).toBe(200);
+    expect((await act(app, playerToken, { type: 'table_start', requestId: 'b1-start', table: tableId })).status).toBe(200);
+
+    const privOf = async (token: string) => {
+      const snap = await get(app.url, '/v1/rooms/lobby/room?limit=1', token);
+      expect(snap.status).toBe(200);
+      return (snap.body.tablePrivate ?? null) as {
+        role?: string;
+        seat?: string;
+        phase?: string;
+        windowId?: string;
+        myMove?: string;
+        wolfChat?: Array<{ seatNo: number; text: string }>;
+        seats?: Array<{ seatNo: number; id: string }>;
+      } | null;
+    };
+
+    // 快过看身份窗口（15 秒），等网关的秒钟 tick 把桌子推进到首夜。
+    clock.now += 20_000;
+    await until(async () => (await privOf(childToken))?.phase === 'night');
+
+    // 认身份：每个 token 是什么 role、坐哪个座号。
+    const tokens = [playerToken, childToken, ...petTokens];
+    const roleOfToken = new Map<string, string>();
+    const seatIdOfToken = new Map<string, string>();
+    for (const token of tokens) {
+      const priv = await privOf(token);
+      expect(priv?.role).toBeTruthy();
+      roleOfToken.set(token, priv!.role!);
+      seatIdOfToken.set(token, priv!.seat!);
+    }
+    const wolfTokens = tokens.filter((token) => roleOfToken.get(token) === 'wolf');
+    expect(wolfTokens).toHaveLength(3);
+    const seatNoById = new Map((await privOf(childToken))!.seats!.map((entry) => [entry.id, entry.seatNo]));
+    const wolfSeatNos = wolfTokens.map((token) => seatNoById.get(seatIdOfToken.get(token)!)!);
+    const killTarget = [1, 2, 3, 4, 5, 6, 7, 8, 9].find((no) => !wolfSeatNos.includes(no))!;
+
+    // 狼交暗号与刀票；正向对照：暗号真的进了狼自己的私视图。
+    const wolfPriv = await privOf(wolfTokens[0]);
+    expect(wolfPriv!.myMove).toBe('wolf_chat');
+    const chat = await act(app, wolfTokens[0], {
+      type: 'werewolf_action', windowId: wolfPriv!.windowId, move: 'wolf_chat', text: CODE, requestId: 'b1-chat',
+    });
+    expect(chat.status, JSON.stringify(chat.body)).toBe(200);
+    const kill = await act(app, wolfTokens[0], {
+      type: 'werewolf_action', windowId: wolfPriv!.windowId, move: 'wolf_kill', target: killTarget, requestId: 'b1-kill',
+    });
+    expect(kill.status, JSON.stringify(kill.body)).toBe(200);
+    expect(JSON.stringify((await privOf(wolfTokens[0]))!.wolfChat)).toContain(CODE);
+
+    // 非狼读者：优先村民。断言口径：暗号绝不出现；狼专属字段（狼聊/刀票/队友/锁定刀口）绝不出现；
+    // role 字段只允许读者自己的身份——服务端把每个席位自己的身份写进它自己的唤醒事件，这是设计内行为。
+    const reader = tokens.find((token) => roleOfToken.get(token) === 'villager')
+      ?? tokens.find((token) => roleOfToken.get(token) !== 'wolf')!;
+    const readerRole = roleOfToken.get(reader)!;
+    const assertNoSecret = (blob: string, label: string) => {
+      expect(blob, `${label}：读到了狼聊暗号`).not.toContain(CODE);
+      expect(blob, `${label}：读到了狼聊记录`).not.toContain('"wolfChat"');
+      expect(blob, `${label}：读到了刀票`).not.toContain('"killVotes"');
+      expect(blob, `${label}：读到了狼队名单`).not.toContain('"teammates"');
+      expect(blob, `${label}：读到了锁定刀口`).not.toContain('"lockedKill"');
+    };
+    const assertRolesMine = (blob: string, label: string) => {
+      for (const match of blob.matchAll(/"role":"([a-z]+)"/g)) {
+        expect(match[1], `${label}：出现了别人的 role`).toBe(readerRole);
+      }
+    };
+
+    // 出口一：历史补发。
+    const history = await get(app.url, '/v1/rooms/lobby/history?since=0&limit=200', reader);
+    expect(history.status).toBe(200);
+    const historyBlob = JSON.stringify(history.body.events);
+    assertNoSecret(historyBlob, '历史补发');
+    assertRolesMine(historyBlob, '历史补发');
+
+    // 出口二：回放（厅内 /v1/rooms/*/replay 与身份级 /v1/me/replay）。
+    const replay = await get(app.url, '/v1/rooms/lobby/replay?limit=200', reader);
+    expect(replay.status).toBe(200);
+    const replayBlob = JSON.stringify(replay.body.events);
+    assertNoSecret(replayBlob, '回放');
+    assertRolesMine(replayBlob, '回放');
+    const meReplay = await get(app.url, '/v1/me/replay?room=lobby&limit=200', reader);
+    expect(meReplay.status).toBe(200);
+    const meReplayBlob = JSON.stringify(meReplay.body.events);
+    assertNoSecret(meReplayBlob, '身份级回放');
+    assertRolesMine(meReplayBlob, '身份级回放');
+
+    // 出口三：家长页（owner 会话）。局中其他真人在桌上 → 整页隐藏：无私视图、无唤醒事件、无任何 role。
+    const parentView = await fetch(`${app.url}/v1/parent/view?since=0&limit=200`, { headers: { cookie: parentCookie } });
+    expect(parentView.status).toBe(200);
+    const parentBody = await parentView.json() as Record<string, unknown>;
+    expect(parentBody.ownerPrivateHidden).toBe(true);
+    expect(parentBody.tablePrivate).toBeNull();
+    expect((parentBody.events as { type: string }[]).some((event) => event.type === 'parlor.table.turn')).toBe(false);
+    const parentBlob = JSON.stringify(parentBody);
+    assertNoSecret(parentBlob, '家长页');
+    expect(parentBlob, '家长页：出现了 role 字段').not.toContain('"role"');
+
+    // 出口四：观战（在房间里、不在桌上）：快照与补发里无暗号、无任何 role。
+    const watchSnap = await get(app.url, '/v1/rooms/lobby/room?limit=200', watcherToken);
+    expect(watchSnap.status).toBe(200);
+    expect((watchSnap.body as { tablePrivate: unknown }).tablePrivate).toBeNull();
+    const watchBlob = JSON.stringify(watchSnap.body);
+    assertNoSecret(watchBlob, '观战快照');
+    expect(watchBlob, '观战快照：出现了 role 字段').not.toContain('"role"');
+    const watchHistory = await get(app.url, '/v1/rooms/lobby/history?since=0&limit=200', watcherToken);
+    expect(watchHistory.status).toBe(200);
+    const watchEventsBlob = JSON.stringify(watchHistory.body.events);
+    assertNoSecret(watchEventsBlob, '观战补发');
+    expect(watchEventsBlob, '观战补发：出现了 role 字段').not.toContain('"role"');
   });
 });

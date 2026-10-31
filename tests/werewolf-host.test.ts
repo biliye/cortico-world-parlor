@@ -106,7 +106,7 @@ const action = (
   cooId: string,
   body: Record<string, unknown>,
   requestId?: string,
-): { receipt: { revision?: number; seq?: number }; error?: string } => {
+): { receipt: { revision?: number; seq?: number; tableId?: string }; error?: string } => {
   try {
     const receipt = fixture.host.tableAction(cooId, {
       type: 'werewolf_action',
@@ -126,6 +126,30 @@ const aliveCoos = (fixture: Fixture): string[] => {
 };
 
 const cooBySeatNo = (seatNo: number): string => COOS[seatNo - 1];
+
+/** 狼人杀九席之外的额外 Coo：双桌与坏快照测试里开第二张桌用。 */
+const EXTRA_COOS = ['coo-extra0001', 'coo-extra0002'];
+const EXTRA_NAMES = ['多多', '点点'];
+
+const joinExtras = (fixture: Fixture): string[] => {
+  const insert = fixture.db.prepare(
+    'INSERT OR IGNORE INTO coos(id, kind, display_name, secret_hash, created_at) VALUES (?, ?, ?, ?, ?)',
+  );
+  return EXTRA_COOS.map((cooId, index) => {
+    insert.run(cooId, 'pet', EXTRA_NAMES[index], null, fixture.clock.now);
+    return fixture.host.join(cooId, { name: EXTRA_NAMES[index], kind: 'pet' }).seat.id;
+  });
+};
+
+/** 挑一个非狼、非自身的存活座号当刀票目标。 */
+const nonWolfSeatNo = (fixture: Fixture, wolves: string[]): number => {
+  const wolfNos = wolves.map((cooId) => {
+    const seat = fixture.host.seatOf(cooId)!;
+    const priv = fixture.host.tablePrivate(seat.id) as unknown as Priv;
+    return priv.seats!.find((entry) => entry.id === seat.id)!.seatNo;
+  });
+  return [1, 2, 3, 4, 5, 6, 7, 8, 9].find((no) => !wolfNos.includes(no))!;
+};
 
 /** 按阶段泵：能动的交默认动作，到点推进；verbed 记录阶段转换。 */
 const pump = (fixture: Fixture, onEvent?: (type: string, text: string) => void, maxSteps = 400): void => {
@@ -451,6 +475,198 @@ describe('狼人杀 · 宿主层', () => {
       expect(windowMs).toBeLessThanOrEqual(60_000);
     }
     void cooBySeatNo;
+    fixture.close();
+  });
+
+  it('B5 同房双桌：狼人杀与斗地主互不串——回执各归各桌、秘密不出桌、一桌打完另一桌照常', () => {
+    const fixture = setup();
+    enterAll(fixture);
+    const extraSeats = joinExtras(fixture);
+    const tableId = openWerewolf(fixture);
+    startTable(fixture, tableId);
+    fixture.clock.now += 20_000;
+    fixture.host.tickClock(fixture.clock.now); // 首夜
+    expect(privOf(fixture, COOS[0]).phase).toBe('night');
+
+    // 同一客厅再开一张斗地主桌：另两个人坐，第三席由脚本陪练补。
+    const ddz = fixture.host.openTable(EXTRA_COOS[0], { game: 'ddz' });
+    const ddzId = ddz.tableId;
+    fixture.host.joinTable(EXTRA_COOS[1], ddzId, 'join-ddz', CLIENT_OK);
+    fixture.host.startTable(EXTRA_COOS[0], ddzId);
+    expect((fixture.host.tablePublic(ddzId) as { status?: string }).status).toBe('bidding');
+
+    // 交错走动作：狼聊暗号 → 斗地主叫地主 → 刀票 → 斗地主领出。每张回执都归属自己的桌。
+    const wolves = COOS.filter((cooId) => privOf(fixture, cooId).role === 'wolf');
+    const killTarget = nonWolfSeatNo(fixture, wolves);
+    const chat = action(fixture, wolves[0], { move: 'wolf_chat', text: '夜里三更见' });
+    expect(chat.error).toBeUndefined();
+    expect(chat.receipt.tableId).toBe(tableId);
+    const ddzRevision = () => (fixture.host.tablePublic(ddzId) as { revision: number }).revision;
+    const bid = fixture.host.tableAction(EXTRA_COOS[0], { type: 'ddz_action', move: 'bid', call: true }, {
+      tableId: ddzId, revision: ddzRevision(), requestId: 'ddz-bid',
+    });
+    expect(bid.tableId).toBe(ddzId);
+    const kill = action(fixture, wolves[0], { move: 'wolf_kill', target: killTarget });
+    expect(kill.error).toBeUndefined();
+    expect(kill.receipt.tableId).toBe(tableId);
+    // 地主（开桌人）按服务端提示领出第一手。
+    const landlordPriv = fixture.host.tablePrivate(extraSeats[0]) as unknown as
+      { yourTurn?: boolean; hint?: { cards?: string[]; pass?: boolean } };
+    expect(landlordPriv?.yourTurn).toBe(true);
+    expect(landlordPriv.hint?.cards?.length ?? 0).toBeGreaterThan(0);
+    const play = fixture.host.tableAction(EXTRA_COOS[0], {
+      type: 'ddz_action', move: 'play', cards: landlordPriv.hint!.cards,
+    }, { tableId: ddzId, revision: ddzRevision(), requestId: 'ddz-play' });
+    expect(play.tableId).toBe(ddzId);
+
+    // 秘密不出桌：斗地主席位的私视图与补发里没有暗号、没有狼聊/刀票/狼队字段。
+    for (const seatId of extraSeats) {
+      const blob = JSON.stringify(fixture.host.tablePrivate(seatId));
+      expect(blob).not.toContain('夜里三更见');
+      expect(blob).not.toContain('"wolfChat"');
+      expect(blob).not.toContain('"killVotes"');
+      expect(blob).not.toContain('"teammates"');
+    }
+    const ddzEvents = fixture.host.history(EXTRA_COOS[0], { since: 0, limit: 200 });
+    const ddzBlob = JSON.stringify(ddzEvents);
+    expect(ddzBlob).not.toContain('夜里三更见');
+    expect(ddzBlob).not.toContain('"wolfChat"');
+    // 斗地主桌自己的事件里同样没有狼人杀的秘密。
+    const ddzTableEvents = ddzEvents.filter(
+      (event) => (event.data as { tableId?: string } | undefined)?.tableId === ddzId,
+    );
+    expect(ddzTableEvents.length).toBeGreaterThan(0);
+    expect(JSON.stringify(ddzTableEvents)).not.toContain('夜里三更见');
+
+    // 反向：狼人杀席位的补发里，斗地主的出牌事件只归属斗地主桌；
+    // 归属狼人杀桌的事件里没有斗地主的数据。
+    const villager = COOS.find((cooId) => privOf(fixture, cooId).role === 'villager')
+      ?? COOS.find((cooId) => !['wolf', 'seer'].includes(privOf(fixture, cooId).role!))!;
+    const wolfSideEvents = fixture.host.history(villager, { since: 0, limit: 200 });
+    const forWolfTable = wolfSideEvents.filter(
+      (event) => (event.data as { tableId?: string } | undefined)?.tableId === tableId,
+    );
+    expect(forWolfTable.length).toBeGreaterThan(0);
+    expect(forWolfTable.every((event) => (event.data as { game?: string }).game !== 'ddz')).toBe(true);
+    const ddzActions = wolfSideEvents.filter((event) => event.type === 'parlor.table.action');
+    expect(ddzActions.length).toBeGreaterThan(0);
+    expect(ddzActions.every((event) => (event.data as { tableId?: string }).tableId === ddzId)).toBe(true);
+
+    // 一桌自然打完（真人席位超时由服务器按最小合法牌代打），狼人杀桌不被牵着走完。
+    const ddzStatus = (): string => (fixture.host.tablePublic(ddzId) as { status?: string }).status ?? '';
+    for (let i = 0; i < 400 && ddzStatus() !== 'ended'; i++) {
+      fixture.clock.now += 61_000;
+      fixture.host.tickClock(fixture.clock.now);
+    }
+    expect(ddzStatus()).toBe('ended');
+    expect((fixture.host.tablePublic(tableId) as { status?: string }).status).toBe('playing');
+    expect(privOf(fixture, COOS[0])).not.toBeNull();
+    fixture.close();
+  });
+
+  it('D2 连续两次重启：截止只按本次停机时长平移一次，不叠加（5 秒 + 7 秒 = 12 秒）', () => {
+    dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-'));
+    const file = join(dir, 'parlor.db');
+    const fixture = setup(file);
+    enterAll(fixture);
+    const tableId = openWerewolf(fixture);
+    startTable(fixture, tableId);
+    fixture.clock.now += 20_000;
+    fixture.host.tickClock(fixture.clock.now); // 首夜
+    const wolves = COOS.filter((cooId) => privOf(fixture, cooId).role === 'wolf');
+    // 交一半动作就停机：夜里还剩 40 秒（远大于 10 秒的最短重连时间，平移量可精确算）。
+    expect(action(fixture, wolves[0], { move: 'wolf_kill', target: nonWolfSeatNo(fixture, wolves) }).error).toBeUndefined();
+    const deadline1 = privOf(fixture, wolves[0]).deadline ?? 0;
+    const stopAt = fixture.clock.now;
+    fixture.close();
+
+    // 第一次停机 5 秒：截止 = 旧截止 + 5 秒。
+    const clock2 = { now: stopAt + 5_000 };
+    const db2 = openDb(file);
+    migrate(db2);
+    const host2 = new RoomHost(db2, 'lobby', { now: () => clock2.now });
+    const priv2 = (): Priv => host2.tablePrivate(host2.seatOf(wolves[0])!.id) as unknown as Priv;
+    expect(priv2().phase).toBe('night');
+    const deadline2 = priv2().deadline ?? 0;
+    expect(deadline2 - deadline1).toBe(5_000);
+    db2.close();
+
+    // 第二次停机 7 秒：只按 7 秒再平移一次；叠加错法会算出 12 秒（拿旧基准）或 17 秒。
+    const clock3 = { now: clock2.now + 7_000 };
+    const db3 = openDb(file);
+    migrate(db3);
+    const host3 = new RoomHost(db3, 'lobby', { now: () => clock3.now });
+    const priv3 = (): Priv => host3.tablePrivate(host3.seatOf(wolves[0])!.id) as unknown as Priv;
+    expect(priv3().phase).toBe('night');
+    const deadline3 = priv3().deadline ?? 0;
+    expect(deadline3 - deadline2).toBe(7_000);
+    expect(deadline3 - deadline1).toBe(12_000);
+    db3.close();
+  });
+
+  it('D2 坏快照只隔离狼人杀那一桌：动作报「隔离」，同房骰子桌完全不受影响', () => {
+    dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-'));
+    const file = join(dir, 'parlor.db');
+    const fixture = setup(file);
+    enterAll(fixture);
+    const extraSeats = joinExtras(fixture);
+    const tableId = openWerewolf(fixture);
+    startTable(fixture, tableId);
+    fixture.clock.now += 20_000;
+    fixture.host.tickClock(fixture.clock.now);
+    // 同房再开一张骰子桌。
+    const dice = fixture.host.openTable(EXTRA_COOS[0], { game: 'dice' });
+    const diceId = dice.tableId;
+    fixture.host.joinTable(EXTRA_COOS[1], diceId, 'join-dice', CLIENT_OK);
+    fixture.host.startTable(EXTRA_COOS[0], diceId);
+    // 落盘后把狼人杀桌的存档改成对不上版本的数据。
+    fixture.db.prepare("UPDATE tables SET state_json = '{\"version\":999}' WHERE id = ?").run(tableId);
+    fixture.close();
+
+    const clock2 = { now: 1_760_000_000_000 + 80_000 };
+    const db2 = openDb(file);
+    migrate(db2);
+    const host2 = new RoomHost(db2, 'lobby', { now: () => clock2.now });
+    // 狼人杀桌被隔离：公开摘要带 frozen，动作被拒，私视图不再发。
+    const frozen = host2.tablePublic(tableId) as { frozen?: boolean };
+    expect(frozen.frozen).toBe(true);
+    expect(() => host2.tableAction(COOS[1], {
+      type: 'werewolf_action', windowId: 'w9', move: 'wolf_chat', text: '试试还能不能交',
+    }, { tableId, requestId: 'frozen-wolf' })).toThrow(/隔离/);
+    expect(host2.tablePrivate(host2.seatOf(COOS[1])!.id)).toBeNull();
+    // 骰子桌照常：还能正常停牌（宿主层直接给引擎形状的动作，type: 'stand'）。
+    const dicePub = host2.tablePublic(diceId) as { status?: string; revision: number };
+    expect(dicePub.status).toBe('playing');
+    const stood = host2.tableAction(EXTRA_COOS[0], { type: 'stand' }, {
+      tableId: diceId, revision: dicePub.revision, requestId: 'dice-stand',
+    });
+    expect(stood.tableId).toBe(diceId);
+    db2.close();
+  });
+
+  it('B4 终局解锁：打完后房间发言、同桌私聊、桌聊恢复可用', () => {
+    const fixture = setup();
+    enterAll(fixture);
+    const tableId = openWerewolf(fixture);
+    startTable(fixture, tableId);
+    fixture.clock.now += 20_000;
+    fixture.host.tickClock(fixture.clock.now); // 进行中
+    // 三个口在局中都被拒。
+    expect(() => fixture.host.tableSay(COOS[1], '局中桌聊', tableId)).toThrow(/游戏动作/);
+    expect(() => fixture.host.say(COOS[1], '局中房间发言')).toThrow(/狼人杀/);
+    expect(() => fixture.host.whisper(COOS[1], NAMES[2], '局中私聊')).toThrow(/不能私聊/);
+    // 打到终局。
+    pump(fixture);
+    expect((fixture.host.tablePublic(tableId) as { status?: string }).status).toBe('ended');
+    fixture.clock.now += 1_000; // 绕开两条发言之间的间隔
+    // 房间发言与同桌私聊恢复。
+    expect(() => fixture.host.say(COOS[1], '终局后客厅说话')).not.toThrow();
+    expect(() => fixture.host.whisper(COOS[1], NAMES[2], '终局后私聊')).not.toThrow();
+    // 桌聊恢复：打完的那张桌已经收档（table_say 回「已经结束」），另开一张桌就能照常说。
+    fixture.clock.now += 100;
+    const next = fixture.host.openTable(COOS[1], { game: 'dice' });
+    fixture.host.joinTable(COOS[2], next.tableId, 'join-after-end', CLIENT_OK);
+    expect(() => fixture.host.tableSay(COOS[1], '终局后桌聊', next.tableId)).not.toThrow();
     fixture.close();
   });
 });
