@@ -635,8 +635,8 @@ function handleEvent(event) {
   if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')
     || type === 'parlor.ledger' || type === 'parlor.whisper') {
     scheduleRefresh();
-  } else if (seatChange && state.view === 'lobby') {
-    // 人名单只在客厅页显示；别的页面没必要为了别人进出重拉整份快照。
+  } else if (seatChange && (state.view === 'lobby' || state.view === 'hall')) {
+    // 人名单在客厅页与大厅页显示；大厅那份还要拿快照的 online 筛掉离线，进出都要跟着刷。
     // 1 秒的防抖把「几百人同时进来」放大成的事件流压成每个浏览器每秒一次。
     scheduleRefresh(1000);
   }
@@ -1016,7 +1016,7 @@ function buildShell() {
   hallPeopleHead.append(el('h2', '', '大厅里'), hallPeopleCount);
   const hallPeopleRow = el('div', 'member-row');
   hallPeople.append(hallPeopleHead, hallPeopleRow,
-    el('p', 'muted hall-note', '在别的客厅里的人不在这里显示。'));
+    el('p', 'muted hall-note', '在别的客厅里的人不在这里显示；离线的不显示。'));
   const hallRooms = el('section', 'panel hall-rooms');
   const hallRoomsHead = el('div', 'panel-head');
   const hallRefresh = el('button', 'link', '刷新');
@@ -1917,11 +1917,15 @@ function renderHall() {
     return;
   }
   const seats = hall.seats || [];
-  ui.hallPeopleCount.textContent = seats.length + ' 人';
-  if (!seats.length) ui.hallPeopleRow.append(el('p', 'muted', '大厅里现在没人。'));
-  for (const seat of seats) {
+  // 「大厅里」只显示在线的。看这一页的人必坐在大厅（inHall），网页快照的 online 恰好就是大厅那份；
+  // 快照还没到（SSE 未连）时不筛，照旧全显示，免得闪一下空列表。掉线的人最多 20 秒后才消失。
+  const online = state.snap && Array.isArray(state.snap.online) ? state.snap.online : null;
+  const visible = online ? seats.filter((seat) => online.includes(seat.id)) : seats;
+  ui.hallPeopleCount.textContent = visible.length + ' 人';
+  if (!visible.length) ui.hallPeopleRow.append(el('p', 'muted', online ? '大厅里现在没有在线的人。' : '大厅里现在没人。'));
+  for (const seat of visible) {
     const chip = hallSeatChip(seat);
-    if (seats.filter(other => other.name.toLowerCase() === seat.name.toLowerCase()).length > 1) chip.classList.add('has-same-name');
+    if (visible.filter(other => other.name.toLowerCase() === seat.name.toLowerCase()).length > 1) chip.classList.add('has-same-name');
     ui.hallPeopleRow.append(chip);
   }
   const rooms = (data.rooms || []).filter((room) => !room.archived);
@@ -3120,7 +3124,11 @@ setInterval(() => {
 
 // 大厅里的人数与目录会变：停在大厅时每 20 秒悄悄刷一次。
 setInterval(() => {
-  if (state.shell && state.view === 'hall' && !document.hidden) void loadHall(true);
+  if (state.shell && state.view === 'hall' && !document.hidden) {
+    void loadHall(true);
+    // 掉线不广播事件：快照里的 online 名单要跟手刷，离线的人才会在 20 秒内从「大厅里」消失。
+    scheduleRefresh();
+  }
 }, 20000);
 
 document.addEventListener('visibilitychange', () => {

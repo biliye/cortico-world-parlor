@@ -356,6 +356,14 @@ describe('网页玩家', () => {
     ]) {
       expect(js).toContain(line);
     }
+    // 「大厅里」只显示在线的：筛选用网页快照的 online（看大厅的人必在大厅里），
+    // 快照没到就不筛，免得闪空列表。
+    expect(js).toContain('const visible = online ? seats.filter');
+    expect(js).toContain('大厅里现在没有在线的人');
+    expect(js).toContain('离线的不显示');
+    // 掉线不广播事件：大厅页遇到进出事件与 20 秒自刷都要连快照一起刷，online 才不会停在旧名单。
+    expect(js).toContain("state.view === 'lobby' || state.view === 'hall'");
+    expect(js).toContain('掉线不广播事件');
     expect(css).toContain('.view-hall');
     expect(css).toContain('.hall-create');
     // 旧标签页的 401 不能删掉别的标签页刚写进去的新令牌（否则像被登出）。
