@@ -228,6 +228,15 @@ const checkCommonInvariants = (sim: Sim, tag: string): void => {
       expect(nightAfterExile, `${tag}: 第${lastExileDay}天放逐后没入夜就又开了白天流程`).toBe(true);
     }
   }
+  // 遗言资格不变量：每人最多一次遗言（首夜出局者/白天放逐者），且只在活着时欠的债。
+  const lastWordsSeen = new Set<number>();
+  for (const event of events.slice(0, endIdx)) {
+    const data = (event.data ?? {}) as { kind?: string; seatNo?: number };
+    if (event.type === 'parlor.table.werewolf.speech_open' && data.kind === 'lastwords') {
+      expect(lastWordsSeen.has(data.seatNo ?? -1), `${tag}: ${data.seatNo} 号被排了第二次遗言`).toBe(false);
+      lastWordsSeen.add(data.seatNo ?? -1);
+    }
+  }
 };
 
 describe('狼人杀随机对局模拟', () => {

@@ -645,7 +645,10 @@ export class WerewolfTable implements TableEngine {
     const outcome = judgeOutcome(alive);
     if (outcome) return this.reveal(now, events, outcome);
     if (this.pendingLastWords.length > 0) {
-      return this.beginSpeech(now, events, 'lastwords', [...this.pendingLastWords]);
+      // 取走整个队列：放逐遗言走夜晚、天亮遗言走白天，都不许把残留带进下一天。
+      const queue = [...this.pendingLastWords];
+      this.pendingLastWords = [];
+      return this.beginSpeech(now, events, 'lastwords', queue);
     }
     return this.beginDaySpeech(now, events);
   }
