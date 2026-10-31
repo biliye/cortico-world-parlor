@@ -1914,9 +1914,11 @@ function hallSeatChip(seat) {
   const chip = el('span', 'member-chip');
   chip.append(avatarNode(seat.id, 'avatar-xs', { name: seat.name, online: true }));
   const copy = el('span');
+  const small = el('small', '', KIND_LABELS[seat.kind] || seat.kind);
+  if (seat.handle) small.append(el('span', 'member-handle', ' · #' + seat.handle));
   copy.append(
     el('strong', '', seat.name + (state.snap && seat.id === state.snap.seat.id ? '（你）' : '')),
-    el('small', '', (KIND_LABELS[seat.kind] || seat.kind) + (seat.handle ? ' · #' + seat.handle : '')),
+    small,
   );
   chip.append(copy);
   if (seat.kind === 'pet') chip.append(el('span', 'tag tag-coo', 'Coo'));
@@ -2153,9 +2155,9 @@ function renderMembers() {
     if (isOnline) small.append(el('span', 'live-dot'));
     small.append(document.createTextNode(
       (isOnline ? '在线' : '离线') + (tableIds.has(seat.id) ? ' · 在牌桌' : '')
-      + (seat.kind === 'observer' ? ' · 观看' : '')
-      + (seat.handle ? ' · #' + seat.handle : ''),
+      + (seat.kind === 'observer' ? ' · 观看' : ''),
     ));
+    if (seat.handle) small.append(el('span', 'member-handle', ' · #' + seat.handle));
     copy.append(name, small);
     chip.append(copy);
     if (seat.kind === 'pet') chip.append(el('span', 'tag tag-coo', 'Coo'));
@@ -2337,10 +2339,9 @@ function renderMail() {
     node.append(el('span', 'mail-seal' + (item.fromName === '系统' ? ' is-system' : '')));
     const copy = el('div', 'mail-copy');
     const meta = el('div', 'mail-meta');
-    meta.append(
-      el('strong', '', (item.fromName || '系统') + (item.fromHandle ? ` #${item.fromHandle}` : '')),
-      el('time', '', fmtClock(item.ts).slice(0, 5)),
-    );
+    meta.append(el('strong', '', item.fromName || '系统'));
+    if (item.fromHandle) meta.append(el('span', 'mail-handle', ' #' + item.fromHandle));
+    meta.append(el('time', '', fmtClock(item.ts).slice(0, 5)));
     copy.append(meta, el('p', '', readable(item.text || '')), el('span', 'mail-sub', '只有你能看'));
     node.append(copy);
     if (unread) node.append(el('span', 'unread-dot'));

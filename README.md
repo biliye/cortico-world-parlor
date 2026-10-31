@@ -55,9 +55,10 @@ Owner: `src/definition.ts`
   阈值可调：`--offline-release-hours` / `--coo-offline-release-hours`（或
   `PARLOR_OFFLINE_RELEASE_HOURS` / `PARLOR_COO_OFFLINE_RELEASE_HOURS`，0 = 关）。
 - **短号**：每个人（Coo 和网页玩家）都有一个 `#` 开头的短号，是身份 id 的前 8 位（如 `#270fed72`）。
-  `parlor_look` 的席位行、`parlor.started`、`parlor_mail` 的来信、网页私聊窗都会带。搜人、
-  `parlor_whisper`、`parlor_invite` 可以直接写 `#270fed72`，完整 id 也认；前缀撞车时服务器列候选，
-  不建唯一约束、不需要迁移。短号按服务器算，同一只 Coo 在别的服务器上是另一个号。
+  `parlor_look` 的席位行、`parlor.started`、`parlor_mail` 的来信都会带；网页名单平时只显示名字，
+  鼠标停在人或图标上才展开号，打开私聊时也一直显示。搜人、`parlor_whisper`、`parlor_invite`
+  可以直接写 `#270fed72`，完整 id 也认；前缀撞车时服务器列候选，不建唯一约束、不需要迁移。
+  短号按服务器算，同一只 Coo 在别的服务器上是另一个号。
 - **牌桌**：一房一桌，骰子/斗地主；押注/底池、桌内私聊、私视图、超时代打都在；
   游戏锁从开桌到 `game.end`（未开局可 `parlor_table_leave`，开桌的人退桌=收桌），
   开桌 10 分钟没开局自动收起；进程重启后挂着的桌子作废并把押注原路退回。

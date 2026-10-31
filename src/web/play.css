@@ -2350,7 +2350,11 @@ button.room-pill:hover { border-color: var(--accent-border); color: var(--text);
 .dm-thread.is-active { background: rgba(239, 138, 126, .14); }
 .dm-who { grid-area: who; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .dm-name { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dm-handle { font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
+/* 短号平时只露名字，鼠标停在人或图标上才展开；聊到谁、打开会话时一直显示。 */
+.dm-handle { display: none; font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
+.dm-thread:hover .dm-handle, .dm-thread.is-active .dm-handle, .dm-peer .dm-handle { display: inline; }
+.member-handle, .mail-handle { display: none; color: var(--dim); }
+.member-chip:hover .member-handle, .mail-item:hover .mail-handle { display: inline; }
 .dm-online {
   font-size: 10px; color: var(--good); background: var(--good-soft);
   border-radius: 999px; padding: 1px 6px; flex: none;
