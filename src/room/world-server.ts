@@ -1467,9 +1467,8 @@ export class WorldServer {
     if (action === 'join' && method === 'POST') {
       const body = await readJson(req);
       const name = typeof body.name === 'string' ? body.name : '';
-      // 这个接口原来不校验邀请码：知道房间 id 就能用一个新身份进来（lobby 这种 id 猜得到）。
-      // 已有身份（cookies 里的 cooId+secret 认得出来）换房不受影响；新身份必须带邀请码。
-      if (this.identify(req) === null) this.checkInvite(req, body);
+      // 全局登记只证明身份，入场仍需目标服务器的邀请码；换厅使用已入场的席位令牌。
+      if (this.identityAuthority || this.identify(req) === null) this.checkInvite(req, body);
       const cooId = this.cooAuth(req, name);
       this.assertRoomEntry(roomId, cooId);
       const host = this.host(roomId);

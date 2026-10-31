@@ -619,11 +619,9 @@ export class ParlorWorld implements World {
     this.identity = loadOrCreateIdentity(this.identityFile);
     const client = new ParlorClient(baseUrl, this.identity);
     this.client = client;
-    if (!this.server) {
-      await client.initializeIdentity(cfg.identityUrl || DEFAULT_SERVER_URL, DEFAULT_INVITE_CODE, this.baseSeatName());
-      saveIdentity(this.identityFile, this.identity);
-    }
-    this.multiRoom = await this.detectMultiRoom(client);
+    this.multiRoom = !this.server && await client.initializeIdentity(
+      cfg.identityUrl || DEFAULT_SERVER_URL, DEFAULT_INVITE_CODE, this.baseSeatName(),
+    );
     this.loadCursors();
 
     const stored = this.ctx.secret(SEAT_SECRET).trim();
@@ -667,6 +665,7 @@ export class ParlorWorld implements World {
       this.ctx.storeSecret(CURRENT_ROOM_SECRET, this.currentRoom);
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
+    if (this.identity?.authority) saveIdentity(this.identityFile, this.identity);
     this.lastSeq = this.resumeFrom(snapshot.latest);
     this.applySnapshot(snapshot);
   }
@@ -971,7 +970,7 @@ export class ParlorWorld implements World {
     const blocked = this.needMultiRoom();
     if (blocked) return blocked;
     try {
-      const me: MeView = await this.client.me();
+      const me: MeView = await this.client.me(this.token || undefined);
       const here = me.seat?.room ?? this.currentRoom;
       const lines = [
         `我现在在：${this.roomLabel(here, me.rooms)}${me.seat ? `（席位 ${me.seat.name}）` : '（不在任何客厅）'}。`,
@@ -1036,7 +1035,7 @@ export class ParlorWorld implements World {
         ...(visibility ? { visibility } : {}),
         ...(capacity !== undefined ? { capacity } : {}),
         ...(typeof args.topic === 'string' && args.topic.trim() ? { topic: args.topic.trim() } : {}),
-      });
+      }, this.token || undefined);
       const room = created.room;
       return `开好了：「${room.name}」（${room.id}）· ${room.capacity} 席 · `
         + `${room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开' : '私密'}。\n`
@@ -1055,7 +1054,7 @@ export class ParlorWorld implements World {
     const room = typeof args.room === 'string' && args.room.trim() ? args.room.trim() : undefined;
     const text = typeof args.text === 'string' ? args.text.trim() : undefined;
     try {
-      const result = await this.client.invite(to, room, text);
+      const result = await this.client.invite(to, room, text, this.token || undefined);
       if (result.already) return `${result.to} 本来就能进「${result.room}」，已经给他留了一条提醒。`;
       if (result.pending) {
         return `私密客厅的邀请已经挂起（邀请号 ${result.invitationId ?? '？'}）：${result.to} 的信箱里多了一封，`
@@ -1123,17 +1122,6 @@ export class ParlorWorld implements World {
   /** 旧单客厅服务器只认 /v1/... 别名；多客厅网关才走房间路径。 */
   private roomArg(): string | undefined {
     return this.multiRoom ? this.currentRoom : undefined;
-  }
-
-  /** 探一下对面有没有 /v1/me：有就是多客厅网关，404 就是旧单客厅服务器。 */
-  private async detectMultiRoom(client: ParlorClient): Promise<boolean> {
-    try {
-      const me = await client.me();
-      return typeof me.cooId === 'string' && me.cooId.length > 0;
-    } catch (error) {
-      if (error instanceof ParlorHttpError && (error.status === 404 || error.status === 405)) return false;
-      throw error;
-    }
   }
 
   private needMultiRoom(): ToolOutcome | null {

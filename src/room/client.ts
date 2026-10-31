@@ -36,16 +36,16 @@ export class ParlorClient {
   private ticket?: IdentityTicket;
   private refreshing?: Promise<IdentityTicket>;
 
-  /** 先探测能力；长期密钥只交给配置里信任的身份服务。 */
-  async initializeIdentity(authority: string, invite: string, name: string): Promise<void> {
+  /** 只向目标服务器探测能力；需要新通行证时才联系权威。返回是否为多客厅网关。 */
+  async initializeIdentity(authority: string, invite: string, name: string): Promise<boolean> {
     const response = await fetch(this.url('/healthz'), { redirect: 'error', signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new ParlorHttpError(response.status, '读取服务器能力失败');
-    const health = await response.json() as { globalIdentity?: { authority: string; audience: string } };
+    const health = await response.json() as { protocol?: number; globalIdentity?: { authority: string; audience: string } };
     if (!health.globalIdentity) {
       if (this.identity?.authority || identityOrigin(this.baseUrl) !== identityOrigin(authority)) {
         throw new Error('目标服务器尚未支持全局身份；请先升级服务器');
       }
-      return;
+      return health.protocol === 2;
     }
     authority = identityOrigin(authority);
     if (this.identity?.authority && this.identity.authority !== authority) throw new Error('已有身份属于另一统一身份服务，请保持原身份服务地址');
@@ -54,7 +54,7 @@ export class ParlorClient {
       throw new Error('目标服务器的身份服务或公开地址与配置不一致');
     }
     this.global = { authority, audience, invite, name };
-    await this.globalTicket();
+    return health.protocol === 2;
   }
 
   private async globalTicket(): Promise<IdentityTicket> {
@@ -204,26 +204,26 @@ export class ParlorClient {
   }
 
   /** 我在哪：当前席位与能看到的客厅目录。 */
-  async me(): Promise<MeView> {
+  async me(token?: string): Promise<MeView> {
     const response = await fetch(this.url('/v1/me'), {
-      headers: await this.headers({}),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MeView>(response);
   }
 
   /** 大厅：谁在大厅、公开目录、我在哪。 */
-  async hall(): Promise<HallView> {
+  async hall(token?: string): Promise<HallView> {
     const response = await fetch(this.url('/v1/hall'), {
-      headers: await this.headers({}),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<HallView>(response);
   }
 
-  async rooms(all = true): Promise<{ rooms: RoomSummary[] }> {
+  async rooms(all = true, token?: string): Promise<{ rooms: RoomSummary[] }> {
     const response = await fetch(this.url(`/v1/rooms${all ? '?all=1' : ''}`), {
-      headers: await this.headers({}),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ rooms: RoomSummary[] }>(response);
@@ -231,10 +231,10 @@ export class ParlorClient {
 
   async createRoom(input: {
     name: string; visibility?: string; capacity?: number; topic?: string;
-  }): Promise<{ room: RoomSummary }> {
+  }, token?: string): Promise<{ room: RoomSummary }> {
     const response = await fetch(this.url('/v1/rooms'), {
       method: 'POST',
-      headers: await this.headers({ 'content-type': 'application/json' }),
+      headers: await this.headers({ 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }),
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(15_000),
     });
@@ -264,10 +264,10 @@ export class ParlorClient {
   }
 
   /** 定向邀请：跨客厅送达（信箱 + 对方当前客厅的一条私密通知）。 */
-  async invite(to: string, room?: string, text?: string): Promise<InviteResponse> {
+  async invite(to: string, room?: string, text?: string, token?: string): Promise<InviteResponse> {
     const response = await fetch(this.url('/v1/invite'), {
       method: 'POST',
-      headers: await this.headers({ 'content-type': 'application/json' }),
+      headers: await this.headers({ 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }),
       body: JSON.stringify({ to, ...(room ? { room } : {}), ...(text ? { text } : {}) }),
       signal: AbortSignal.timeout(15_000),
     });
