@@ -1604,7 +1604,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .ddz-center-note { font-size: 10px; color: #b99b78; text-align: center; }
 
 /* 我的手牌：扇形铺在桌沿。放不下时横向滑动，不再把每张压得只剩一条缝。 */
-.ddz-handbar { display: flex; justify-content: center; padding-top: 2px; }
+.ddz-handbar { display: flex; flex-direction: column; min-width: 0; padding-top: 2px; }
 .ddz-handbar-inner { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .ddz-hand {
   display: flex; align-items: flex-end;
@@ -1623,11 +1623,10 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .ddz-hand-empty { color: #c6a683; font-size: 11px; padding: 18px 0; }
 
 .ddz-actionbar {
-  display: flex; align-items: center; gap: 10px;
-  margin-top: 10px; padding-top: 10px;
-  border-top: 1px dashed rgba(255, 214, 150, .2);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px;
+  padding-top: 6px;
 }
-.ddz-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ddz-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
 .ddz-board .btn {
   background: rgba(0, 0, 0, .3);
   color: #f4e2c6;
@@ -1649,8 +1648,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .ddz-wait { font-size: 10.5px; color: #e0c8a6; }
 .ddz-selected { font-size: 10px; color: #ffd18a; font-weight: 600; }
 .ddz-clock {
-  margin-left: auto;
-  font-size: 10px; color: #e0c8a6; white-space: nowrap;
+  font-size: 11px; color: #e0c8a6; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .ddz-clock .clock { color: #ffd18a; }
@@ -1702,6 +1700,8 @@ html.card-art-ready .pcard.has-art {
   box-shadow: 0 0 0 2px #ffd58a, 0 0 26px rgba(255, 196, 120, .45), 0 12px 22px rgba(0, 0, 0, .4);
 }
 .pcard.sel:hover { --lift: -20px; }
+/* 手牌选中或悬停只上移，右侧牌仍按原来的顺序盖在左侧牌上。 */
+.ddz-hand .pcard:hover, .ddz-hand .pcard.sel { z-index: auto; }
 .pcard.red { color: var(--paper-red); }
 .pcard.joker { color: var(--violet); font: 750 calc(var(--cw) * .26)/1.15 var(--font-ui); }
 .pcard.small-card { --cw: 34px; cursor: default; }
@@ -2196,7 +2196,7 @@ html.no-card-art .pcard.back { border: 0; }
   .ddz-hand { padding: 28px 4px 2px; }
   .ddz-hand .pcard { --cw: 56px; margin-left: var(--overlap, -24px); }
   .ddz-actionbar { flex-wrap: wrap; gap: 6px; }
-  .ddz-clock { margin-left: 0; width: 100%; }
+  .ddz-clock { width: 100%; text-align: center; }
   .guide-list { grid-template-columns: 1fr; gap: 4px; }
   .ddz-end-seats { grid-template-columns: 1fr; gap: 8px; }
   .ddz-end-banner { padding: 13px; }

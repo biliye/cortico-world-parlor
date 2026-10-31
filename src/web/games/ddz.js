@@ -5,6 +5,8 @@ import {
   el, clear, btn, cardButton, fmtClock, clockSpan, cardLabel, icon, initialOf, readable,
 } from '../common.js';
 
+const HAND_ORDER = ['BJ', 'SJ', '2', 'A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3'];
+
 export function mountDdz(root, ctx) {
   const box = el('section', 'panel game-ddz');
   root.append(box);
@@ -78,12 +80,12 @@ export function mountDdz(root, ctx) {
     if (rightSeat) grid.append(seatColumn(rightSeat, table, 'right'));
 
     const handbar = el('div', 'ddz-handbar');
+    handbar.append(actionBar(table, priv, myTurn, seated, view));
     const hand = handArea(priv, handCards, myTurn);
     if (hand) handbar.append(hand);
     grid.append(handbar);
     board.append(grid);
 
-    board.append(actionBar(table, priv, myTurn, seated, view));
     box.append(board);
     if (hand && hand.classList.contains('ddz-hand')) {
       fitHand(hand, (priv && priv.hand ? priv.hand.length : 0));
@@ -257,10 +259,14 @@ export function mountDdz(root, ctx) {
     const count = priv && Array.isArray(priv.hand) ? priv.hand.length : 0;
     if (!count) return el('div', 'ddz-hand-empty', '你在旁观；这一局结束后可以坐下一桌。');
     const hand = el('div', 'ddz-hand');
-    priv.hand.forEach((card, index) => {
+    // 只改变显示顺序；选择、花色和提示仍按服务器手牌的原始索引对应。
+    const ordered = priv.hand.map((card, index) => ({ card, index }))
+      .sort((left, right) => HAND_ORDER.indexOf(left.card) - HAND_ORDER.indexOf(right.card)
+        || left.index - right.index);
+    ordered.forEach(({ card, index }) => {
       const node = cardButton(card, selection.has(index),
         myTurn ? () => toggleCard(index) : null, false, handCards ? handCards[index] : null);
-      handNodes.push(node);
+      handNodes[index] = node;
       hand.append(node);
     });
     return hand;
