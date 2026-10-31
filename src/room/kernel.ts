@@ -281,14 +281,27 @@ export class RoomKernel {
     return this.seats.map(publicSeat);
   }
 
+  /** Coo 撞名时自动加序号；真人仍报冲突，让网页用户自己换。 */
+  private joinName(base: string, kind: SeatKind): string {
+    const taken = (candidate: string): boolean => (
+      this.seats.some((seat) => seat.name.toLowerCase() === candidate.toLowerCase())
+    );
+    if (!taken(base)) return base;
+    if (kind !== 'pet') throw new RoomError('conflict', `已经有叫「${base}」的席位`);
+    for (let index = 2; index <= 50; index += 1) {
+      const suffix = ` ${index}`;
+      const candidate = Array.from(base).slice(0, Math.max(1, MAX_NAME - suffix.length)).join('') + suffix;
+      if (!taken(candidate)) return candidate;
+    }
+    throw new RoomError('conflict', `已经有叫「${base}」的席位，自动编号也排满了`);
+  }
+
   join(request: JoinRequest, cooId?: string): JoinResponse {
-    const name = cleanName(request.name);
-    if (!name) throw new RoomError('invalid', '名字不能为空');
+    const requested = cleanName(request.name);
+    if (!requested) throw new RoomError('invalid', '名字不能为空');
     const kind: SeatKind = isKind(request.kind) ? request.kind : 'pet';
     const tier: WakeTier = isTier(request.tier) ? request.tier : DEFAULT_WAKE_TIER;
-    if (this.seats.some((seat) => seat.name.toLowerCase() === name.toLowerCase())) {
-      throw new RoomError('conflict', `已经有叫「${name}」的席位`);
-    }
+    const name = this.joinName(requested, kind);
     if (kind !== 'observer' && this.seats.filter((seat) => seat.kind !== 'observer').length >= this.maxSeats) {
       throw new RoomError('full', `客厅最多 ${this.maxSeats} 个会说话的席位`);
     }

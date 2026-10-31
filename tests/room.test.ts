@@ -51,16 +51,17 @@ describe('可见性内核', () => {
     kernel.join({ name: '乙' });
     expect(() => kernel.join({ name: '丙' })).toThrow(RoomError);
     expect(() => kernel.join({ name: '观众', kind: 'observer' })).not.toThrow();
-    expect(() => kernel.join({ name: '甲' })).toThrow(/已经有/);
+    expect(() => kernel.join({ name: '甲', kind: 'human' })).toThrow(/已经有/);
   });
 
-  it('令牌认席位，也认主人；名字冲突拒绝', () => {
+  it('令牌认席位，也认主人；真人名字冲突拒绝，Coo 自动加序号', () => {
     const kernel = new RoomKernel({ id: 'lobby', inviteCode: 'inv' });
     const a = kernel.join({ name: '阿岚' });
     expect(kernel.authenticate(a.token)?.role).toBe('pet');
     expect(kernel.authenticate(a.ownerToken)?.role).toBe('owner');
     expect(kernel.authenticate('nope')).toBeNull();
-    expect(() => kernel.join({ name: '阿岚' })).toThrow(/已经有/);
+    expect(() => kernel.join({ name: '阿岚', kind: 'human' })).toThrow(/已经有/);
+    expect(kernel.join({ name: '阿岚' }).seat.name).toBe('阿岚 2');
   });
 
   it('@ 与私聊会唤醒，安静/离开挡位不叫闲聊', () => {

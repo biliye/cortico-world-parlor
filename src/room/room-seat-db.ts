@@ -453,6 +453,30 @@ const activeNameTaken = (db: Db, roomId: string, name: string): boolean => (
   ).get(roomId, name)
 );
 
+/** 自动加序号的上限：正常客厅远到不了，纯粹防死循环。 */
+const MAX_NAME_SUFFIX = 50;
+
+/** 截到 24 字以内再接「 2」「 3」；按码位截，别把 emoji 劈成半个。 */
+const suffixedSeatName = (base: string, index: number): string => {
+  const suffix = ` ${index}`;
+  const keep = Math.max(1, MAX_SEAT_NAME - suffix.length);
+  return Array.from(base).slice(0, keep).join('') + suffix;
+};
+
+/**
+ * Coo 的席位名来自 bot 显示名/配置，撞名时自动加序号，别让它整个启动失败；
+ * 真人/观看者仍然报 name_taken，让网页用户自己换一个。
+ */
+const resolveJoinName = (db: Db, roomId: string, kind: SeatKind, base: string): string => {
+  if (!activeNameTaken(db, roomId, base)) return base;
+  if (kind !== 'pet') throw new RoomSeatError('name_taken', `已经有叫「${base}」的活跃席位`);
+  for (let index = 2; index <= MAX_NAME_SUFFIX + 1; index += 1) {
+    const candidate = suffixedSeatName(base, index);
+    if (!activeNameTaken(db, roomId, candidate)) return candidate;
+  }
+  throw new RoomSeatError('name_taken', `已经有叫「${base}」的活跃席位，自动编号也排满了`);
+};
+
 const setPresenceTx = (db: Db, cooId: string, roomId: string, seatId: string, now: number): void => {
   db.prepare(
     `INSERT INTO coo_sessions(coo_id, session_version, current_room_id, current_seat_id, created_at, last_seen_at)
@@ -487,9 +511,7 @@ const joinSeatTx = (db: Db, input: JoinSeatInput, now: number): SeatRow => {
   if (current) {
     throw new RoomSeatError('already_seated', `这个 Coo 已经在 ${current.roomId}/${current.id} 坐着，先释放席位`);
   }
-  if (activeNameTaken(db, room.id, name)) {
-    throw new RoomSeatError('name_taken', `已经有叫「${name}」的活跃席位`);
-  }
+  const seatName = resolveJoinName(db, room.id, kind, name);
   if (kind !== 'observer' && countSeatedTx(db, room.id) >= room.capacity) {
     throw new RoomSeatError('room_full', `客厅最多 ${room.capacity} 个会说话的席位`);
   }
@@ -504,12 +526,12 @@ const joinSeatTx = (db: Db, input: JoinSeatInput, now: number): SeatRow => {
     db.prepare(
       `INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, last_seen_at, visible_from_seq)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(room.id, seatId, input.cooId, kind, name, tier, tokenHash, now, now, visibleFromSeq);
+    ).run(room.id, seatId, input.cooId, kind, seatName, tier, tokenHash, now, now, visibleFromSeq);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('room_full')) throw new RoomSeatError('room_full', `客厅最多 ${room.capacity} 个会说话的席位`);
     if (message.includes('room_seats.coo_id')) throw new RoomSeatError('already_seated', '这个 Coo 已经有一个活跃席位');
-    if (message.includes('room_seats.room_id, room_seats.name')) throw new RoomSeatError('name_taken', `已经有叫「${name}」的活跃席位`);
+    if (message.includes('room_seats.room_id, room_seats.name')) throw new RoomSeatError('name_taken', `已经有叫「${seatName}」的活跃席位`);
     if (message.includes('room_seats.token_hash')) throw new RoomSeatError('invalid', '这个席位令牌已经用过，换一个');
     throw error;
   }
@@ -586,7 +608,7 @@ export const activeSeats = (db: Db, roomId: string): SeatRow[] => {
   return rows.map(toSeat);
 };
 
-/** 离线清理的候选：只看活跃的真人席位（Coo 的 pet 席位不动）。 */
+/** 离线清理的候选：按席位类型取；pet 是 Coo，human 是网页真人，observer 不清理。 */
 export interface OfflineSeatCandidate {
   roomId: string;
   id: string;
@@ -595,12 +617,12 @@ export interface OfflineSeatCandidate {
   lastSeenAt: number;
 }
 
-export const humanSeatsForOfflineRelease = (db: Db): OfflineSeatCandidate[] => {
+export const seatsForOfflineRelease = (db: Db, kind: 'human' | 'pet'): OfflineSeatCandidate[] => {
   const rows = db.prepare(
     `SELECT room_id, id, coo_id, name, COALESCE(last_seen_at, joined_at) AS last_seen_at
        FROM room_seats
-      WHERE released_at IS NULL AND kind = 'human'`,
-  ).all() as unknown as {
+      WHERE released_at IS NULL AND kind = ?`,
+  ).all(kind) as unknown as {
     room_id: string; id: string; coo_id: string; name: string; last_seen_at: number;
   }[];
   return rows.map((row) => ({

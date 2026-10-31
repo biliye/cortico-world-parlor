@@ -571,6 +571,12 @@ export class ParlorWorld implements World {
     this.server = undefined;
   }
 
+  /** 入座用的名字：配置的席位名，留空用 bot 显示名。撞名加序号由服务器做。 */
+  private baseSeatName(): string {
+    const cfg = this.ctx.cfg;
+    return cfg.seatName.trim() || this.ctx.botName;
+  }
+
   private async connect(): Promise<void> {
     const cfg = this.ctx.cfg;
     const defaultRoom = cfg.room || DEFAULT_ROOM_ID;
@@ -635,10 +641,15 @@ export class ParlorWorld implements World {
     if (!invite) {
       throw new Error('客厅：扩展设置里的「邀请码」是空的，部署 .env 里也没有 PARLOR_INVITE_CODE。连房主的客厅要填对方的邀请码；自己开客厅就留空让 World 生成。');
     }
-    const joined = await client.join(invite, {
-      name: cfg.seatName.trim() || this.ctx.botName,
+    await this.joinRoom(client);
+  }
+
+  /** 用现有身份入座，拿一枚新令牌；启动和「席位被释放后自动重连」共用。 */
+  private async joinRoom(client: ParlorClient): Promise<void> {
+    const joined = await client.join(this.inviteCode, {
+      name: this.baseSeatName(),
       kind: 'pet',
-      tier: cfg.wakeTier,
+      tier: this.ctx.cfg.wakeTier,
     }, this.roomArg());
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
@@ -654,6 +665,22 @@ export class ParlorWorld implements World {
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
     this.lastSeq = this.resumeFrom(snapshot.latest);
     this.applySnapshot(snapshot);
+  }
+
+  /**
+   * 席位被服务器释放了（离线太久、被房主请出去），手里的令牌已经失效：
+   * 用同一身份重新入座，换新令牌接着收流。失败就交给下一轮退避。
+   */
+  private async rejoinSeat(): Promise<boolean> {
+    const client = this.client;
+    if (!client || !this.inviteCode) return false;
+    try {
+      await this.joinRoom(client);
+      await this.reportLink(`席位被释放了，已重新入座：${this.seat?.name ?? '未知'}。`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** 断线重连从上次游标继续；游标比服务器新（房间重建过）时退回服务器最新。 */
@@ -747,6 +774,12 @@ export class ParlorWorld implements World {
         clean = true;
       } catch (error) {
         if (signal.aborted || this.stopped) return;
+        // 令牌失效 = 席位已经不在（离线清理/被请出去）：重新入座，别拿死令牌一直重试。
+        if (error instanceof ParlorHttpError && error.status === 401 && await this.rejoinSeat()) {
+          if (signal.aborted || this.stopped) return;
+          backoff = 1000;
+          continue;
+        }
         await this.reportLink(`客厅连接断了：${messageOf(error)}`);
       }
       if (signal.aborted || this.stopped) return;
@@ -1056,7 +1089,9 @@ export class ParlorWorld implements World {
     const blocked = this.needMultiRoom();
     if (blocked) return blocked;
     try {
-      const moved = await this.client.switchTo(this.token, this.currentRoom, target, this.seat?.name);
+      // 传基础名而不是当前席位名：撞名时服务器会加「 2」这样的序号，
+      // 拿序号名去串门会越加越长。
+      const moved = await this.client.switchTo(this.token, this.currentRoom, target, this.baseSeatName());
       this.currentRoom = moved.room;
       this.token = moved.token;
       this.seat = moved.seat;

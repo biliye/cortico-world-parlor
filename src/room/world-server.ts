@@ -20,7 +20,7 @@ import { gameByActionType } from './games/registry.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, createRoom, getRoom, hashSeatToken,
-  humanSeatsForOfflineRelease, listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash,
+  listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash, seatsForOfflineRelease,
   touchSeatSeen, type RoomRow,
 } from './room-seat-db.ts';
 import {
@@ -42,6 +42,8 @@ export interface WorldServerOptions {
   allowGuestJoin?: boolean;
   /** 真人席位离线多少小时后释放；默认 6，0 = 关。 */
   offlineReleaseHours?: number;
+  /** Coo 的 pet 席位离线多少小时后释放；默认 6，0 = 关。 */
+  cooOfflineReleaseHours?: number;
   now?: () => number;
 }
 
@@ -175,6 +177,7 @@ export class WorldServer {
   private readonly inviteCode: string;
   private readonly allowGuestJoin: boolean;
   private readonly offlineReleaseMs: number;
+  private readonly cooOfflineReleaseMs: number;
   private readonly hostName: string;
   private readonly port: number;
   private server?: Server;
@@ -206,6 +209,7 @@ export class WorldServer {
     this.inviteCode = options.inviteCode ?? '';
     this.allowGuestJoin = options.allowGuestJoin ?? false;
     this.offlineReleaseMs = Math.max(0, options.offlineReleaseHours ?? 6) * 3_600_000;
+    this.cooOfflineReleaseMs = Math.max(0, options.cooOfflineReleaseHours ?? 6) * 3_600_000;
     this.hostName = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
     this.ensureDefaultRoom();
@@ -251,7 +255,7 @@ export class WorldServer {
     this.heartbeatTimer = setInterval(() => this.heartbeat(), 5_000);
     this.heartbeatTimer.unref?.();
     this.heartbeat(true);
-    // 真人席位离线清理：每 5 分钟一次；刚启动 10 秒先扫一遍（这时还没有 SSE）。
+    // 离线席位清理（真人 + Coo）：每 5 分钟一次；刚启动 10 秒先扫一遍（这时还没有 SSE）。
     this.janitorTimer = setInterval(() => this.releaseOfflineSeats(), 5 * 60_000);
     this.janitorTimer.unref?.();
     this.janitorFirstTimer = setTimeout(() => this.releaseOfflineSeats(), 10_000);
@@ -412,24 +416,30 @@ export class WorldServer {
   }
 
   /**
-   * 真人席位离线超过阈值就释放；Coo 的 pet 席位不动。
-   * 「在线」以 SSE 连接为准：还有一条连着就不动；牌桌锁着也不动。
+   * 席位离线超过阈值就释放：真人按 offlineReleaseHours，Coo 的 pet 席位按 cooOfflineReleaseHours。
+   * 「在线」以 SSE 连接为准：还有一条连着就不动；牌桌锁着也不动（等这局结束）。
    * 返回这次释放了几个，方便测试和运维日志。
    */
   releaseOfflineSeats(now = this.now()): number {
-    if (this.offlineReleaseMs <= 0) return 0;
-    const cutoff = now - this.offlineReleaseMs;
+    const sweeps = [
+      { kind: 'human' as const, ms: this.offlineReleaseMs },
+      { kind: 'pet' as const, ms: this.cooOfflineReleaseMs },
+    ].filter((sweep) => sweep.ms > 0);
+    if (sweeps.length === 0) return 0;
     const online = new Set<string>();
     for (const clients of this.sse.values()) {
       for (const client of clients) online.add(client.cooId);
     }
     let released = 0;
-    for (const seat of humanSeatsForOfflineRelease(this.db)) {
-      if (online.has(seat.cooId)) continue;
-      if (seat.lastSeenAt > cutoff) continue;
-      try {
-        if (this.host(seat.roomId).releaseOffline(seat.cooId, now)) released += 1;
-      } catch { /* 这间房暂时有问题就跳过，下一轮再试 */ }
+    for (const sweep of sweeps) {
+      const cutoff = now - sweep.ms;
+      for (const seat of seatsForOfflineRelease(this.db, sweep.kind)) {
+        if (online.has(seat.cooId)) continue;
+        if (seat.lastSeenAt > cutoff) continue;
+        try {
+          if (this.host(seat.roomId).releaseOffline(seat.cooId, now)) released += 1;
+        } catch { /* 这间房暂时有问题就跳过，下一轮再试 */ }
+      }
     }
     return released;
   }
@@ -499,6 +509,7 @@ export class WorldServer {
         protocol: 2,
         guestJoin: this.allowGuestJoin,
         offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
+        cooOfflineReleaseHours: this.cooOfflineReleaseMs / 3_600_000,
         hall: this.hallId,
         rooms: listRooms(this.db, { kind: 'room' }).length,
         seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,

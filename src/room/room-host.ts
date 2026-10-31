@@ -245,8 +245,8 @@ export class RoomHost {
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${name} 进了${this.placeOf(this.roomId)}。`,
-        data: { seatId: seat.id, name },
+        text: `${seat.name} 进了${this.placeOf(this.roomId)}。`,
+        data: { seatId: seat.id, name: seat.name },
       });
       return { seat, token, event };
     });
@@ -389,8 +389,8 @@ export class RoomHost {
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${name} 进了${this.placeOf(targetRoomId)}。`,
-        data: { seatId: joined.id, name, from: source.id },
+        text: `${joined.name} 进了${this.placeOf(targetRoomId)}。`,
+        data: { seatId: joined.id, name: joined.name, from: source.id },
       });
       return { released, seat: joined, token, leaveEvent, joinEvent };
     });

@@ -8,8 +8,9 @@
  * 网页「用户名 + 邀请码」的访客入口默认关闭。压测/本地需要它时加
  *   --allow-guest-join true   或   PARLOR_ALLOW_GUEST_JOIN=1
  *
- * 真人席位离线超过 6 小时自动释放（Coo 的 pet 席位不动）；要改：
- *   --offline-release-hours 12   或   PARLOR_OFFLINE_RELEASE_HOURS=12   （0 = 关）
+ * 席位离线超过阈值自动释放：真人默认 6 小时，Coo 的 pet 席位默认 6 小时。要改：
+ *   --offline-release-hours 12      或 PARLOR_OFFLINE_RELEASE_HOURS=12       （0 = 关）
+ *   --coo-offline-release-hours 24  或 PARLOR_COO_OFFLINE_RELEASE_HOURS=24   （0 = 关）
  *
  * Node >= 22.13（node:sqlite 免 flag）。Node 24 默认支持类型剥离，可以去掉 --experimental-strip-types。
  */
@@ -41,6 +42,13 @@ if (!Number.isFinite(offlineHours) || offlineHours < 0) {
   console.error('离线释放小时数不对');
   process.exit(2);
 }
+const cooOfflineHours = Number(
+  args.get('--coo-offline-release-hours') ?? process.env.PARLOR_COO_OFFLINE_RELEASE_HOURS ?? '6',
+);
+if (!Number.isFinite(cooOfflineHours) || cooOfflineHours < 0) {
+  console.error('Coo 席位离线释放小时数不对');
+  process.exit(2);
+}
 
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
   console.error('端口不对');
@@ -50,6 +58,7 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 const server = new WorldServer({
   dbFile, host, port, inviteCode: invite, defaultRoomId, allowGuestJoin,
   offlineReleaseHours: offlineHours,
+  cooOfflineReleaseHours: cooOfflineHours,
 });
 
 try {
@@ -60,6 +69,7 @@ try {
   console.log(`邀请码：${invite}`);
   console.log(`网页访客加入：${allowGuestJoin ? '开' : '关（只用带钥匙的下场玩链接）'}`);
   console.log(`真人席位离线释放：${offlineHours > 0 ? `${offlineHours} 小时` : '关'}`);
+  console.log(`Coo 席位离线释放：${cooOfflineHours > 0 ? `${cooOfflineHours} 小时` : '关'}`);
   console.log(`数据库：${dbFile}`);
   console.log(`网页：${address.url}/play`);
 } catch (error) {

@@ -167,16 +167,24 @@ describe('客厅 store', () => {
     expect(active.n).toBe(1);
   });
 
-  it('同名活跃席位拒绝（大小写不敏感），释放后可用；令牌只存哈希', () => {
+  it('真人同名活跃席位拒绝（大小写不敏感），释放后可用；令牌只存哈希', () => {
     const a = createRoom(db, { name: '甲厅', ownerCooId: COO }, 100);
     const b = createRoom(db, { name: '乙厅', ownerCooId: COO }, 200);
-    const seat1 = joinSeat(db, { roomId: a.id, cooId: COO, name: 'Cocoa', token: 'token-name-1', visibleFromSeq: 0 });
+    const seat1 = joinSeat(db, {
+      roomId: a.id, cooId: COO, kind: 'human', name: 'Cocoa', token: 'token-name-1', visibleFromSeq: 0,
+    });
 
-    expectCode(() => joinSeat(db, { roomId: a.id, cooId: COO2, name: 'cocoa', token: 'token-name-2', visibleFromSeq: 0 }), 'name_taken');
-    expect(joinSeat(db, { roomId: b.id, cooId: COO2, name: 'cocoa', token: 'token-name-3', visibleFromSeq: 0 }).name).toBe('cocoa');
+    expectCode(() => joinSeat(db, {
+      roomId: a.id, cooId: COO2, kind: 'human', name: 'cocoa', token: 'token-name-2', visibleFromSeq: 0,
+    }), 'name_taken');
+    expect(joinSeat(db, {
+      roomId: b.id, cooId: COO2, kind: 'human', name: 'cocoa', token: 'token-name-3', visibleFromSeq: 0,
+    }).name).toBe('cocoa');
 
     releaseSeat(db, a.id, seat1.id, 3, 300);
-    const seat3 = joinSeat(db, { roomId: a.id, cooId: COO3, name: 'COCOA', token: 'token-name-4', visibleFromSeq: 0 });
+    const seat3 = joinSeat(db, {
+      roomId: a.id, cooId: COO3, kind: 'human', name: 'COCOA', token: 'token-name-4', visibleFromSeq: 0,
+    });
     expect(seat3.name).toBe('COCOA');
 
     const stored = db.prepare('SELECT token_hash FROM room_seats WHERE room_id = ? AND id = ?')
@@ -186,6 +194,39 @@ describe('客厅 store', () => {
     expect(seatByTokenHash(db, hashSeatToken('token-name-4'))?.id).toBe(seat3.id);
     expect(seatByTokenHash(db, 'token-name-4')).toBeNull();
     expect(seatByTokenHash(db, hashSeatToken('token-name-1'))).toBeNull();
+  });
+
+  it('Coo 同名自动加序号，大小写不敏感；序号名也占坑，释放后回到原名', () => {
+    const room = createRoom(db, { name: '同名厅', ownerCooId: COO }, 100);
+    const first = joinSeat(db, { roomId: room.id, cooId: COO, name: 'Cocoa', token: 'token-suffix-1', visibleFromSeq: 0 });
+    expect(first.name).toBe('Cocoa');
+
+    const second = joinSeat(db, { roomId: room.id, cooId: COO2, name: 'cocoa', token: 'token-suffix-2', visibleFromSeq: 0 });
+    expect(second.name).toBe('cocoa 2');
+    const third = joinSeat(db, { roomId: room.id, cooId: COO3, name: 'COCOA', token: 'token-suffix-3', visibleFromSeq: 0 });
+    expect(third.name).toBe('COCOA 3');
+
+    // 「cocoa 2」已经被占了，再撞名要跳到 4。
+    const fourth = joinSeat(db, { roomId: room.id, cooId: COO4, name: 'cocoa', token: 'token-suffix-4', visibleFromSeq: 0 });
+    expect(fourth.name).toBe('cocoa 4');
+    expectCode(() => joinSeat(db, {
+      roomId: room.id, cooId: COO5, kind: 'human', name: 'cocoa', token: 'token-suffix-5', visibleFromSeq: 0,
+    }), 'name_taken');
+
+    releaseSeat(db, room.id, first.id, 9, 900);
+    const reused = joinSeat(db, { roomId: room.id, cooId: COO5, name: 'Cocoa', token: 'token-suffix-6', visibleFromSeq: 0 });
+    expect(reused.name).toBe('Cocoa');
+  });
+
+  it('同名自动加序号不会超过 24 字', () => {
+    const room = createRoom(db, { name: '长名厅', ownerCooId: COO }, 100);
+    const base = '一二三四五六七八九十一二三四五六七八九十一二三四';
+    expect(Array.from(base)).toHaveLength(24);
+    joinSeat(db, { roomId: room.id, cooId: COO, name: base, token: 'token-long-1', visibleFromSeq: 0 });
+    const second = joinSeat(db, { roomId: room.id, cooId: COO2, name: base, token: 'token-long-2', visibleFromSeq: 0 });
+    expect(Array.from(second.name)).toHaveLength(24);
+    expect(second.name.endsWith(' 2')).toBe(true);
+    expect(second.name.slice(0, -2)).toBe(Array.from(base).slice(0, 22).join(''));
   });
 
   it('离开只释放席位，成员保留；可见区间封口且 release 幂等', () => {
