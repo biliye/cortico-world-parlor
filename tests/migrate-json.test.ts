@@ -61,7 +61,7 @@ describe('旧 JSON 迁移到 SQLite', () => {
     old = undefined;
 
     const dbFile = join(dir, 'parlor.db');
-    const report = migrateLegacyJson({ dataDir: dir, dbFile });
+    const report = await migrateLegacyJson({ dataDir: dir, dbFile });
     expect(report.counts.seats).toBe(2);
     expect(report.counts.releasedSeats).toBe(0);
     expect(report.counts.events).toBeGreaterThan(5);
@@ -72,7 +72,7 @@ describe('旧 JSON 迁移到 SQLite', () => {
     expect(report.unread.every((check) => check.match)).toBe(true);
 
     // 旧席位令牌在新网关里仍然有效；历史与私聊按原受众可见。
-    server = new WorldServer({ allowGuestJoin: true, dbFile, port: 0, inviteCode: 'inv' });
+    server = await WorldServer.create({ allowGuestJoin: true, dbFile, port: 0, inviteCode: 'inv' });
     await server.listen();
     const snapA = await snapshot(server.url, a.token);
     expect(snapA.status).toBe(200);
@@ -93,10 +93,10 @@ describe('旧 JSON 迁移到 SQLite', () => {
     );
 
     // 迁移不合并：同一个库再迁一次要拒绝。
-    expect(() => migrateLegacyJson({ dataDir: dir, dbFile })).toThrow(/已经有数据/);
+    await expect(migrateLegacyJson({ dataDir: dir, dbFile })).rejects.toThrow(/已经有数据/);
   });
 
-  it('旧版的 legacy:<room>:<seat> 身份会被换成合法占位 cooId', () => {
+  it('旧版的 legacy:<room>:<seat> 身份会被换成合法占位 cooId', async () => {
     writeFileSync(join(dir, 'room.json'), JSON.stringify({
       version: 1,
       id: 'lobby',
@@ -131,7 +131,7 @@ describe('旧 JSON 迁移到 SQLite', () => {
       }],
     }));
 
-    const report = migrateLegacyJson({ dataDir: dir, dbFile: ':memory:' });
+    const report = await migrateLegacyJson({ dataDir: dir, dbFile: ':memory:' });
     expect(report.counts.seats).toBe(1);
     expect(report.counts.events).toBe(2);
     expect(report.counts.ledgerEntries).toBe(1);
@@ -140,7 +140,7 @@ describe('旧 JSON 迁移到 SQLite', () => {
     expect(report.balances.every((check) => check.match)).toBe(true);
   });
 
-  it('大富翁还没结束时默认拒绝迁移，--abandon-monopoly 才作废留档', () => {
+  it('大富翁还没结束时默认拒绝迁移，--abandon-monopoly 才作废留档', async () => {
     writeFileSync(join(dir, 'room.json'), JSON.stringify({
       version: 1,
       id: 'lobby',
@@ -163,8 +163,8 @@ describe('旧 JSON 迁移到 SQLite', () => {
       table: { status: 'playing', host: 's1', seats: [] },
     }));
 
-    expect(() => migrateLegacyJson({ dataDir: dir, dbFile: ':memory:' })).toThrow(/大富翁/);
-    const report = migrateLegacyJson({ dataDir: dir, dbFile: ':memory:', abandonMonopoly: true });
+    await expect(migrateLegacyJson({ dataDir: dir, dbFile: ':memory:' })).rejects.toThrow(/大富翁/);
+    const report = await migrateLegacyJson({ dataDir: dir, dbFile: ':memory:', abandonMonopoly: true });
     expect(report.warnings.some((warning) => warning.includes('大富翁'))).toBe(true);
     expect(report.counts.events).toBe(2);
   });
@@ -186,8 +186,8 @@ describe('迁移后的旧家长链接', () => {
       events: [{ seq: 1, ts: 1, type: 'parlor.say', from: 's1', scope: { kind: 'room' }, text: 'hi' }],
     }));
     const dbFile = join(dir, 'legacy.db');
-    migrateLegacyJson({ dataDir: dir, dbFile });
-    server = new WorldServer({ allowGuestJoin: true, dbFile, port: 0, inviteCode: 'inv' });
+    await migrateLegacyJson({ dataDir: dir, dbFile });
+    server = await WorldServer.create({ allowGuestJoin: true, dbFile, port: 0, inviteCode: 'inv' });
     await server.listen();
 
     const opened = await fetch(`${server.url}/v1/owner?token=old-owner-token`, { redirect: 'manual' });

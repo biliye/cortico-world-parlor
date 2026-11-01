@@ -3,6 +3,7 @@
  * 这是「新服务器可以替代旧服务器」的第一道证据，和牌桌/社交的 HTTP 测试互补。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,7 +62,7 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
 
 describe('旧 World 工具 × 新服务器', () => {
   it('连接、说话、私聊、查看、回放、骰子一局都能走通', async () => {
-    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
     await server.listen();
 
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };

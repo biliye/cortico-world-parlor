@@ -1,5 +1,24 @@
 ## Unreleased
 
+### 存储可切 PostgreSQL（默认仍是 SQLite）
+
+- 服务端新增 **PostgreSQL** 后端：`PARLOR_STORAGE=postgres` + `PARLOR_DATABASE_URL`。
+  不设时仍是 SQLite，老部署零改动；`--db` 只属于 SQLite，与 postgres 同时给会直接报错，
+  缺 URL 也一样——不会悄悄退回 SQLite，也不会建空库。
+- 数据访问层改成异步：事务内所有语句走同一个连接；SQLite 下整条连接串行化（单写者），
+  PostgreSQL 下每笔事务独占池里的一条连接，嵌套用 SAVEPOINT。服务与路由入口、7 个 store
+  全部改成 await，构造改成 `WorldServer.create()` / `RoomHost.create()` / `TableHost.create()`。
+- PostgreSQL 的库结构按版本号迁移（advisory lock 防并发建库）；席位容量闸门改成触发器，
+  先锁 `rooms` 行再数活跃席位；名字大小写不敏感改成 `lower(name)` 唯一索引。
+- 同一张牌桌的动作、开局、退桌与超时推进排队执行；事务里再核一次 `tables.revision`。
+- 账本的「查余额 → 扣款」、开局押注在同一事务里按 id 排序锁住涉及的 `coos` 行，
+  并发礼物/押注不会各自通过余额检查而超支。
+- 同一 `requestId` 的并发重试撞到回执主键时，回滚后返回原回执（不再报 500）。
+- 运行时多一个依赖 `pg`（纯 JS）；只有选择 postgres 时才加载。
+- 测试：**590 条在 SQLite 全绿**；同一套在 PostgreSQL 上 **583 条通过、7 条 SQLite 专属跳过**。
+  新增 `pnpm test:pg`（工位内嵌入式 PG，或 `PARLOR_TEST_PG_URL` 指外部 PG）。
+
+
 ### 新游戏：狼人杀（真人与 Coo 同桌）
 
 - 九人固定局：3 狼人、3 平民（牌面写「平民」）、预言家、女巫、猎人；无警长、无自爆、无自由插话，

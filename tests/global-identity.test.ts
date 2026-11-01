@@ -8,10 +8,10 @@ import { WorldServer } from '../src/room/world-server.ts';
 import { ParlorClient } from '../src/room/client.ts';
 import { IdentityRegistry, GLOBAL_HEADER, IDENTITY_TTL } from '../src/room/global-identity.ts';
 import { mentionsInText } from '../src/room/mentions.ts';
-import { migrate, openDb } from '../src/room/db.ts';
 import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
 import { FakeHost } from './helpers/fake-host.ts';
+import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
 const servers: WorldServer[] = [];
 const dirs: string[] = [];
@@ -20,7 +20,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 const start = async (authority = 'self', dbFile?: string, now?: () => number) => {
-  const s = new WorldServer({ identityAuthority: authority, dbFile, now, allowGuestJoin: true });
+  const s = await WorldServer.create({ identityAuthority: authority, dbFile, now, allowGuestJoin: true });
   servers.push(s); await s.listen(); return s;
 };
 const id = (suffix: string) => ({ cooId: `12345678-${suffix}-4000-8000-000000000000`, cooSecret: `secret-${suffix}-01234567890123456789` });
@@ -45,7 +45,7 @@ describe('全局身份', () => {
     const joined = await remote.join('', { name: '小明' });
     expect(joined.seat.handle).toBe(jb.seat.handle);
     expect((await remote.me()).cooId).toBe(id('bbbb').cooId);
-    expect(other.dbHandle.prepare('SELECT secret_hash FROM coos WHERE id=?').get(id('bbbb').cooId)).toEqual({ secret_hash: null });
+    expect(await other.dbHandle.prepare('SELECT secret_hash FROM coos WHERE id=?').get(id('bbbb').cooId)).toEqual({ secret_hash: null });
     // 这台只有第二位：不能让第一位的全局短号被当成第二位的 ID 前缀。
     await expect(remote.invite('#12345678')).rejects.toThrow('尚不认识');
     const snap = await a.snapshot(ja.token);
@@ -85,7 +85,7 @@ describe('全局身份', () => {
     await authority.close(); servers.splice(servers.indexOf(authority), 1);
     const again = await start('self', file);
     expect((await session(again, id('bbbb'))).body.person.handle).toBe('12345678-');
-    expect(again.dbHandle.prepare("SELECT COUNT(*) AS n FROM room_seats WHERE name='旧名字' AND released_at IS NULL").get()).toEqual({ n: 2 });
+    expect(await again.dbHandle.prepare("SELECT COUNT(*) AS n FROM room_seats WHERE name='旧名字' AND released_at IS NULL").get()).toEqual({ n: 2 });
   });
 
   it('同名裸 @ 不误叫；@#号 和 @名字 #号 只叫对应的人', () => {
@@ -95,14 +95,14 @@ describe('全局身份', () => {
     expect(mentionsInText('@小明 #12345678 你好', seats)).toEqual(['a']);
   });
 
-  it('分配使用唯一约束；同一个 ID 不能改凭证认领', () => {
-    const db = openDb(); migrate(db);
+  it('分配使用唯一约束；同一个 ID 不能改凭证认领', async () => {
+    const db = await openTestDb();
     try {
       const registry = new IdentityRegistry(db);
-      const person = registry.enroll(id('aaaa').cooId, id('aaaa').cooSecret, '小明');
-      expect(registry.enroll(id('aaaa').cooId, id('aaaa').cooSecret, '改名').handle).toBe(person.handle);
-      expect(() => registry.enroll(id('aaaa').cooId, 'other-secret-012345678901234', '冒名')).toThrow('凭证');
-    } finally { db.close(); }
+      const person = await registry.enroll(id('aaaa').cooId, id('aaaa').cooSecret, '小明');
+      expect((await registry.enroll(id('aaaa').cooId, id('aaaa').cooSecret, '改名')).handle).toBe(person.handle);
+      await expect(registry.enroll(id('aaaa').cooId, 'other-secret-012345678901234', '冒名')).rejects.toThrow('凭证');
+    } finally { await closeTestDb(db); }
   });
 
   it('网页同一浏览器进入两台服务器，沿用玩家身份；跳转链接不携带长期密钥', async () => {
@@ -160,14 +160,14 @@ describe('全局身份', () => {
     await expect(client.initializeIdentity(authority.url, '', '小明')).rejects.toThrow('不一致');
     expect((await session(authority, { cooId: 'system-owner', cooSecret: id('aaaa').cooSecret })).status).toBe(403);
     const valid = await session(authority, id('aaaa'));
-    authority.dbHandle.prepare("UPDATE coos SET status='disabled' WHERE id=?").run(id('aaaa').cooId);
+    await authority.dbHandle.prepare("UPDATE coos SET status='disabled' WHERE id=?").run(id('aaaa').cooId);
     expect((await fetch(authority.url + '/v1/me', { headers: { [GLOBAL_HEADER]: valid.body.token } })).status).toBe(401);
     expect((await session(authority, id('aaaa'))).status).toBe(403);
   });
 
   it('其他服务器的家长入口沿用统一玩家身份，关闭访客入口时仍可下场', async () => {
     const authority = await start();
-    const remote = new WorldServer({ identityAuthority: authority.url, allowGuestJoin: false });
+    const remote = await WorldServer.create({ identityAuthority: authority.url, allowGuestJoin: false });
     servers.push(remote); await remote.listen();
     const child = new ParlorClient(remote.url, id('cccc'));
     await child.initializeIdentity(authority.url, '', '小满');
@@ -201,7 +201,7 @@ describe('全局身份', () => {
       expect(host.events[0]?.text).toMatch(/#[a-f0-9]{8}/);
       const saved = JSON.parse(readFileSync(join(ctx.dataDir, 'parlor-identity.json'), 'utf8'));
       expect(saved.authority).toBe(authority.url);
-      expect(remote.dbHandle.prepare('SELECT secret_hash FROM coos WHERE id=?').get(saved.cooId)).toEqual({ secret_hash: null });
+      expect(await remote.dbHandle.prepare('SELECT secret_hash FROM coos WHERE id=?').get(saved.cooId)).toEqual({ secret_hash: null });
     } finally { await world.stop(); }
   });
 });

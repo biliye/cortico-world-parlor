@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,8 +23,8 @@ afterEach(async () => {
 
 const start = async (): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-world-'));
-  server = new WorldServer({ allowGuestJoin: true,
-    dbFile: join(dir, 'parlor.db'),
+  server = await WorldServer.create({ allowGuestJoin: true,
+    ...(await pgServerStorage(join(dir, 'parlor.db'))),
     port: 0,
     inviteCode: 'inv',
     defaultRoomId: 'lobby',
@@ -148,7 +149,7 @@ describe('WorldServer 聊天网关', () => {
     const full = await post(app.url, '/v1/rooms', { name: '满厅', visibility: 'public', capacity: 2 }, cooHeaders(A));
     const fullId = (full.body.room as { id: string }).id;
     // 模拟库内满员目标，验证换房事务回滚。
-    app.dbHandle.prepare('UPDATE rooms SET capacity = 2 WHERE id = ?').run(fullId);
+    await app.dbHandle.prepare('UPDATE rooms SET capacity = 2 WHERE id = ?').run(fullId);
     await post(app.url, `/v1/rooms/${fullId}/join`, { name: '乙' }, cooHeaders(B));
     await post(app.url, `/v1/rooms/${fullId}/join`, { name: '丙' }, cooHeaders(C));
     const blocked = await post(app.url, `/v1/rooms/${otherId}/switch`, { to: fullId }, {
@@ -206,8 +207,14 @@ describe('WorldServer 聊天网关', () => {
     });
     expect(response.status).toBe(200);
     const reader = response.body!.getReader();
-    const first = await reader.read();
-    const text = new TextDecoder().decode(first.value);
+    // 流是异步写的：retry 先到，历史在同一个请求里随后写；读到历史为止。
+    const decoder = new TextDecoder();
+    let text = '';
+    for (let attempt = 0; attempt < 20 && !text.includes('流里的话'); attempt += 1) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
     expect(text).toContain('retry: 3000');
     expect(text).toContain('流里的话');
     controller.abort();

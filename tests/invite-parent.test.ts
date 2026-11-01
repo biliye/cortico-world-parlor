@@ -3,6 +3,7 @@
  * 还能看到）。没有家长账户的群友席不接受邀请；还没下过场的家长没有可收信的身份。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,9 +24,9 @@ afterEach(async () => {
 
 const start = async (): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-invite-'));
-  server = new WorldServer({
+  server = await WorldServer.create({
     allowGuestJoin: true,
-    dbFile: join(dir, 'parlor.db'),
+    ...(await pgServerStorage(join(dir, 'parlor.db'))),
     port: 0,
     inviteCode: 'inv',
     defaultRoomId: 'lobby',

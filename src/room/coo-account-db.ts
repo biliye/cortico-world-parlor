@@ -148,20 +148,20 @@ let savepointSeq = 0;
  * 一段写入要原子生效。外层没有事务时用 withTransaction（BEGIN IMMEDIATE）；
  * 已经被调用方包在事务里时改用 SAVEPOINT，只回滚这一段，不拆外层事务。
  */
-const atomically = <T>(db: Db, fn: () => T): T => {
+const atomically = async <T>(db: Db, fn: () => Promise<T>): Promise<T> => {
   const flag = (db as Db & { isTransaction?: boolean }).isTransaction;
   if (flag === false) return withTransaction(db, fn);
   savepointSeq += 1;
   const name = `coo_account_sp_${savepointSeq}`;
-  db.exec(`SAVEPOINT ${name}`);
+  await db.exec(`SAVEPOINT ${name}`);
   try {
-    const value = fn();
-    db.exec(`RELEASE SAVEPOINT ${name}`);
+    const value = await fn();
+    await db.exec(`RELEASE SAVEPOINT ${name}`);
     return value;
   } catch (error) {
     try {
-      db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
-      db.exec(`RELEASE SAVEPOINT ${name}`);
+      await db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+      await db.exec(`RELEASE SAVEPOINT ${name}`);
     } catch { /* 连接已经坏了；保留原始错误 */ }
     throw error;
   }
@@ -179,12 +179,12 @@ export class CooAccountDb {
     this.limit = Number.isSafeInteger(limit) && limit > 0 ? limit : DEFAULT_ACCOUNT_LIMIT;
   }
 
-  get size(): number {
+  get size(): Promise<number> {
     return this.count();
   }
 
-  count(): number {
-    const row = this.db.prepare('SELECT COUNT(*) AS n FROM accounts').get() as { n: number };
+  async count(): Promise<number> {
+    const row = await this.db.prepare('SELECT COUNT(*) AS n FROM accounts').get() as { n: number };
     return Number(row.n);
   }
 
@@ -193,16 +193,16 @@ export class CooAccountDb {
    * 已存在且 secret 对得上返回 ok（只更新 last_seen_at），对不上返回 mismatch。
    * 同一个 secret 不能绑到第二个 coo（secret_hash 的唯一索引兜底）。
    */
-  registerCoo(cooId: string, secret: string, kind: CooKind = 'pet', displayName = ''): ClaimResult {    if (!isCooId(cooId) || !isCooSecret(secret) || !isCooKind(kind)) return 'invalid';
+  async registerCoo(cooId: string, secret: string, kind: CooKind = 'pet', displayName = ''): Promise<ClaimResult> {    if (!isCooId(cooId) || !isCooSecret(secret) || !isCooKind(kind)) return 'invalid';
     const hash = hashKey(secret);
-    return atomically(this.db, () => {
-      const row = this.cooRow(cooId);
+    return await atomically(this.db, async () => {
+      const row = await this.cooRow(cooId);
       const now = this.now();
-      const holder = this.db.prepare('SELECT id FROM coos WHERE secret_hash = ?').get(hash) as { id: string } | undefined;
+      const holder = await this.db.prepare('SELECT id FROM coos WHERE secret_hash = ?').get(hash) as { id: string } | undefined;
       if (holder && holder.id !== cooId) return 'invalid';
 
       if (!row) {
-        this.db.prepare(
+        await this.db.prepare(
           `INSERT INTO coos(id, kind, display_name, secret_hash, created_at, last_seen_at, status)
            VALUES (?, ?, ?, ?, ?, ?, 'active')`,
         ).run(cooId, kind, cleanName(displayName), hash, now, now);
@@ -212,7 +212,7 @@ export class CooAccountDb {
       if (!row.secret_hash) {
         // 先由 ensureAccount 建的占位身份：第一次带 secret 注册时认领它。
         const name = cleanName(displayName);
-        this.db.prepare(
+        await this.db.prepare(
           `UPDATE coos SET secret_hash = ?, kind = ?,
              display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END,
              last_seen_at = ?
@@ -221,7 +221,7 @@ export class CooAccountDb {
         return 'ok';
       }
       if (!sameHash(row.secret_hash, hash)) return 'mismatch';
-      this.db.prepare('UPDATE coos SET last_seen_at = ? WHERE id = ?').run(now, cooId);
+      await this.db.prepare('UPDATE coos SET last_seen_at = ? WHERE id = ?').run(now, cooId);
       return 'ok';
     });
   }
@@ -230,27 +230,27 @@ export class CooAccountDb {
    * 只校验，不自动注册。未知 coo、没注册过 secret、被禁用都算 invalid；
    * 已注册但 secret 不同是 mismatch。
    */
-  claimIdentity(cooId: string, secret: string): ClaimResult {
+  async claimIdentity(cooId: string, secret: string): Promise<ClaimResult> {
     if (!isCooId(cooId) || !isCooSecret(secret)) return 'invalid';
-    return atomically(this.db, () => {
-      const row = this.cooRow(cooId);
+    return await atomically(this.db, async () => {
+      const row = await this.cooRow(cooId);
       if (!row || row.status !== 'active' || !row.secret_hash) return 'invalid';
       if (!sameHash(row.secret_hash, hashKey(secret))) return 'mismatch';
-      this.db.prepare('UPDATE coos SET last_seen_at = ? WHERE id = ?').run(this.now(), cooId);
+      await this.db.prepare('UPDATE coos SET last_seen_at = ? WHERE id = ?').run(this.now(), cooId);
       return 'ok';
     });
   }
 
   /** 家长自己下场用的固定玩家身份（human coo）；第一次下场时才建。 */
-  playerCooOf(accountId: string): string | null {
-    const row = this.db.prepare('SELECT player_coo_id FROM accounts WHERE id = ?')
+  async playerCooOf(accountId: string): Promise<string | null> {
+    const row = await this.db.prepare('SELECT player_coo_id FROM accounts WHERE id = ?')
       .get(accountId) as { player_coo_id: string | null } | undefined;
     return row?.player_coo_id ?? null;
   }
 
   /** 这个 coo 是不是某个家长账户的下场身份（网页邀请只对这类人开放）。 */
-  isPlayerCoo(cooId: string): boolean {
-    const row = this.db.prepare(
+  async isPlayerCoo(cooId: string): Promise<boolean> {
+    const row = await this.db.prepare(
       `SELECT 1 AS hit FROM accounts
         WHERE player_coo_id = ? AND status = 'active' LIMIT 1`,
     ).get(cooId) as { hit: number } | undefined;
@@ -262,16 +262,16 @@ export class CooAccountDb {
    * 玩家身份的显示名（也就是席位名）与账户显示名都认。
    * `cooId` 为 null = 这个账户还没下过场，没有可收信的下场身份。
    */
-  findParentsByName(name: string): { accountId: string; cooId: string | null; name: string }[] {
+  async findParentsByName(name: string): Promise<{ accountId: string; cooId: string | null; name: string }[]> {
     const clean = cleanName(name);
     if (!clean) return [];
-    const rows = this.db.prepare(
+    const rows = await this.db.prepare(
       `SELECT a.id AS account_id, a.player_coo_id AS coo_id, a.display_name AS account_name,
               COALESCE(c.display_name, '') AS player_name
          FROM accounts a
          LEFT JOIN coos c ON c.id = a.player_coo_id
         WHERE a.status = 'active'
-          AND (a.display_name = ? COLLATE NOCASE OR c.display_name = ? COLLATE NOCASE)`,
+          AND (lower(a.display_name) = lower(?) OR lower(c.display_name) = lower(?))`,
     ).all(clean, clean) as {
       account_id: string; coo_id: string | null; account_name: string; player_name: string;
     }[];
@@ -291,31 +291,31 @@ export class CooAccountDb {
   }
 
   /** 这个 coo 的显示名（家长玩家席位沿用它，换房不丢名字）。 */
-  cooDisplayName(cooId: string): string {
-    const row = this.cooRow(cooId);
+  async cooDisplayName(cooId: string): Promise<string> {
+    const row = await this.cooRow(cooId);
     return row ? row.display_name : '';
   }
 
   /** 改 coo 的显示名（不动 secret、不动身份）。 */
-  renameCooDisplay(cooId: string, displayName: string): boolean {
+  async renameCooDisplay(cooId: string, displayName: string): Promise<boolean> {
     const name = cleanName(displayName);
     if (!name) return false;
-    const result = this.db.prepare('UPDATE coos SET display_name = ? WHERE id = ?').run(name, cooId);
+    const result = await this.db.prepare('UPDATE coos SET display_name = ? WHERE id = ?').run(name, cooId);
     return Number(result.changes) > 0;
   }
 
-  bindPlayerCoo(accountId: string, cooId: string): void {
-    this.db.prepare('UPDATE accounts SET player_coo_id = ? WHERE id = ?').run(cooId, accountId);
+  async bindPlayerCoo(accountId: string, cooId: string): Promise<void> {
+    await this.db.prepare('UPDATE accounts SET player_coo_id = ? WHERE id = ?').run(cooId, accountId);
   }
 
   /**
    * 给已存在的 coo 换一个新 secret（旧 secret 立即失效）。
    * 家长每次下场玩都会拿一枚新的；数据库仍然只存哈希。
    */
-  rotateSecret(cooId: string, secret: string): void {
-    const row = this.cooRow(cooId);
+  async rotateSecret(cooId: string, secret: string): Promise<void> {
+    const row = await this.cooRow(cooId);
     if (!row) throw new Error('这个 Coo 身份不存在');
-    this.db.prepare('UPDATE coos SET secret_hash = ?, last_seen_at = ? WHERE id = ?')
+    await this.db.prepare('UPDATE coos SET secret_hash = ?, last_seen_at = ? WHERE id = ?')
       .run(hashKey(secret), this.now(), cooId);
   }
 
@@ -324,17 +324,17 @@ export class CooAccountDb {
    * 新建时返回一次 ownerKey；之后只能从部署的 .env 拿，或轮换。
    * 若 coo 还没注册身份，会在 coos 里先建一个占位（没 secret），之后可由 registerCoo 认领。
    */
-  ensureAccount(cooId: string, displayName?: string): EnsureAccountResult {
+  async ensureAccount(cooId: string, displayName?: string): Promise<EnsureAccountResult> {
     if (!isCooId(cooId)) throw new Error('cooId 格式不对');
-    return atomically(this.db, () => {
-      const existing = this.byCooId(cooId);
+    return await atomically(this.db, async () => {
+      const existing = await this.byCooId(cooId);
       if (existing) return { account: existing, created: false };
-      if (this.count() >= this.limit) throw new Error('家长账户表满了');
+      if (await this.count() >= this.limit) throw new Error('家长账户表满了');
 
-      const name = cleanName(displayName) || this.defaultAccountName(cooId);
+      const name = cleanName(displayName) || (await this.defaultAccountName(cooId));
       const now = this.now();
-      if (!this.cooRow(cooId)) {
-        this.db.prepare(
+      if (!(await this.cooRow(cooId))) {
+        await this.db.prepare(
           `INSERT INTO coos(id, kind, display_name, secret_hash, created_at, last_seen_at, status)
            VALUES (?, 'pet', ?, NULL, ?, ?, 'active')`,
         ).run(cooId, name, now, now);
@@ -351,24 +351,25 @@ export class CooAccountDb {
         lastLoginAt: null,
         status: 'active',
       };
-      this.insertAccount(account);
+      await this.insertAccount(account);
       return { account, ownerKey, created: true };
     });
   }
 
   /** 家长账户的默认显示名：「<孩子名>的家长」；孩子不在座就退回 coo 显示名，最后「家长」。 */
-  private defaultAccountName(cooId: string): string {
-    const seat = this.db.prepare(
+  private async defaultAccountName(cooId: string): Promise<string> {
+    const seat = await this.db.prepare(
       'SELECT name FROM room_seats WHERE coo_id = ? AND released_at IS NULL ORDER BY joined_at DESC LIMIT 1',
     ).get(cooId) as { name: string } | undefined;
-    const child = (seat?.name || this.cooRow(cooId)?.display_name || '').trim();
+    const coo = await this.cooRow(cooId);
+    const child = (seat?.name || coo?.display_name || '').trim();
     return child ? cleanName(`${child}的家长`) : '家长';
   }
 
   /** 用 ownerKey 找账户；找不到/格式不对/账户或 coo 被禁用返回 null。 */
-  verifyOwnerKey(key: string): ParentAccount | null {
+  async verifyOwnerKey(key: string): Promise<ParentAccount | null> {
     if (typeof key !== 'string' || key.length < 16 || key.length > 128) return null;
-    const row = this.db.prepare(
+    const row = await this.db.prepare(
       `SELECT ${ACCOUNT_COLUMNS_A}
          FROM accounts a JOIN coos c ON c.id = a.coo_id
         WHERE a.owner_key_hash = ? AND a.status = 'active' AND c.status = 'active'`,
@@ -377,14 +378,14 @@ export class CooAccountDb {
   }
 
   /** 换一把 ownerKey；旧 key 立即失效，session_version +1，所有旧会话也失效。 */
-  rotateOwnerKey(cooId: string): string | null {
+  async rotateOwnerKey(cooId: string): Promise<string | null> {
     if (!isCooId(cooId)) return null;
-    return atomically(this.db, () => {
-      const account = this.byCooId(cooId);
-      const coo = this.cooRow(cooId);
+    return await atomically(this.db, async () => {
+      const account = await this.byCooId(cooId);
+      const coo = await this.cooRow(cooId);
       if (!account || account.status !== 'active' || !coo || coo.status !== 'active') return null;
       const ownerKey = makeOwnerKey();
-      this.db.prepare(
+      await this.db.prepare(
         'UPDATE accounts SET owner_key_hash = ?, session_version = session_version + 1 WHERE id = ?',
       ).run(hashKey(ownerKey), account.id);
       return ownerKey;
@@ -392,41 +393,41 @@ export class CooAccountDb {
   }
 
   /** 登录后改显示名；空名字拒绝。 */
-  rename(accountId: string, displayName: string): ParentAccount | null {
+  async rename(accountId: string, displayName: string): Promise<ParentAccount | null> {
     if (typeof accountId !== 'string' || accountId.length === 0) return null;
     const name = cleanName(displayName);
     if (!name) return null;
-    return atomically(this.db, () => {
-      const result = this.db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run(name, accountId);
+    return await atomically(this.db, async () => {
+      const result = await this.db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run(name, accountId);
       if (Number(result.changes) === 0) return null;
-      return this.byId(accountId) ?? null;
+      return (await this.byId(accountId)) ?? null;
     });
   }
 
   /** 退出所有设备；不动 ownerKey，session_version +1。 */
-  bumpSession(accountId: string): boolean {
+  async bumpSession(accountId: string): Promise<boolean> {
     if (typeof accountId !== 'string' || accountId.length === 0) return false;
-    const result = this.db.prepare(
+    const result = await this.db.prepare(
       'UPDATE accounts SET session_version = session_version + 1 WHERE id = ?',
     ).run(accountId);
     return Number(result.changes) > 0;
   }
 
-  byCooId(cooId: string): ParentAccount | undefined {
-    const row = this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE coo_id = ?`)
+  async byCooId(cooId: string): Promise<ParentAccount | undefined> {
+    const row = await this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE coo_id = ?`)
       .get(cooId) as AccountRow | undefined;
     return row ? toParentAccount(row) : undefined;
   }
 
-  byId(accountId: string): ParentAccount | undefined {
-    const row = this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE id = ?`)
+  async byId(accountId: string): Promise<ParentAccount | undefined> {
+    const row = await this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE id = ?`)
       .get(accountId) as AccountRow | undefined;
     return row ? toParentAccount(row) : undefined;
   }
 
   /** 全局 Coo 身份；不含 secret 哈希。 */
-  findCoo(cooId: string): CooRecord | undefined {
-    const row = this.cooRow(cooId);
+  async findCoo(cooId: string): Promise<CooRecord | undefined> {
+    const row = await this.cooRow(cooId);
     if (!row) return undefined;
     return {
       id: row.id,
@@ -444,26 +445,26 @@ export class CooAccountDb {
   }
 
   /** 所有账户的对外视图；不带 ownerKeyHash。 */
-  views(): AccountView[] {
-    return this.all().map(publicAccount);
+  async views(): Promise<AccountView[]> {
+    return (await this.all()).map(publicAccount);
   }
 
   /** 所有账户（含哈希，仅供服务端内部用）。 */
-  all(): ParentAccount[] {
-    const rows = this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts ORDER BY created_at, id`)
+  async all(): Promise<ParentAccount[]> {
+    const rows = await this.db.prepare(`SELECT ${ACCOUNT_COLUMNS} FROM accounts ORDER BY created_at, id`)
       .all() as unknown as AccountRow[];
     return rows.map(toParentAccount);
   }
 
   /** 给家长门户开一个会话；调用方先用 verifyOwnerKey 认过人。 */
-  createSession(accountId: string, ttlMs = SESSION_TTL_MS): ParentSession | null {
-    const account = this.byId(accountId);
+  async createSession(accountId: string, ttlMs = SESSION_TTL_MS): Promise<ParentSession | null> {
+    const account = await this.byId(accountId);
     if (!account || account.status !== 'active') return null;
     const token = randomBytes(32).toString('base64url');
     const id = randomUUID();
     const now = this.now();
     const expiresAt = now + Math.max(60_000, ttlMs);
-    this.db.prepare(
+    await this.db.prepare(
       `INSERT INTO account_sessions(id, account_id, token_hash, session_version, created_at, last_seen_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(id, accountId, hashKey(token), account.sessionVersion, now, now, expiresAt);
@@ -471,9 +472,9 @@ export class CooAccountDb {
   }
 
   /** 认会话：过期、被撤销、版本变了（轮换 key/退出所有设备）都不认。 */
-  verifySession(token: string): { account: ParentAccount; sessionId: string; expiresAt: number } | null {
+  async verifySession(token: string): Promise<{ account: ParentAccount; sessionId: string; expiresAt: number } | null> {
     if (typeof token !== 'string' || token.length < 16 || token.length > 128) return null;
-    const row = this.db.prepare(
+    const row = await this.db.prepare(
       `SELECT s.id AS session_id, s.session_version AS session_version, s.expires_at AS expires_at,
               ${ACCOUNT_COLUMNS_A}
          FROM account_sessions s
@@ -488,30 +489,30 @@ export class CooAccountDb {
     if (!row) return null;
     const account = toParentAccount(row);
     if (Number(row.session_version) !== account.sessionVersion) return null;
-    this.db.prepare('UPDATE account_sessions SET last_seen_at = ? WHERE id = ?')
+    await this.db.prepare('UPDATE account_sessions SET last_seen_at = ? WHERE id = ?')
       .run(this.now(), row.session_id);
     return { account, sessionId: row.session_id, expiresAt: Number(row.expires_at) };
   }
 
-  revokeSession(token: string): boolean {
-    const result = this.db.prepare(
+  async revokeSession(token: string): Promise<boolean> {
+    const result = await this.db.prepare(
       'UPDATE account_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL',
     ).run(this.now(), hashKey(token));
     return Number(result.changes) > 0;
   }
 
   /** 轮换 key / 退出所有设备时顺手撤掉所有会话。 */
-  revokeAllSessions(accountId: string): void {
-    this.db.prepare('UPDATE account_sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL')
+  async revokeAllSessions(accountId: string): Promise<void> {
+    await this.db.prepare('UPDATE account_sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL')
       .run(this.now(), accountId);
   }
 
-  private cooRow(cooId: string): CooRow | undefined {
-    return this.db.prepare(`SELECT ${COO_COLUMNS} FROM coos WHERE id = ?`).get(cooId) as CooRow | undefined;
+  private async cooRow(cooId: string): Promise<CooRow | undefined> {
+    return await this.db.prepare(`SELECT ${COO_COLUMNS} FROM coos WHERE id = ?`).get(cooId) as CooRow | undefined;
   }
 
-  private insertAccount(account: ParentAccount): void {
-    this.db.prepare(
+  private async insertAccount(account: ParentAccount): Promise<void> {
+    await this.db.prepare(
       `INSERT INTO accounts(id, coo_id, display_name, owner_key_hash, session_version, created_at, last_login_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
@@ -528,12 +529,12 @@ export class CooAccountDb {
 }
 
 /** 打开（或新建）一个库并建表，返回 store；用完由调用方关闭 `store.db`。 */
-export const openCooAccountDb = (
+export const openCooAccountDb = async (
   file = ':memory:',
   options: CooAccountDbOptions = {},
-): CooAccountDb => {
+): Promise<CooAccountDb> => {
   const db = openDb(file);
-  migrate(db);
+  await migrate(db);
   return new CooAccountDb(db, options);
 };
 

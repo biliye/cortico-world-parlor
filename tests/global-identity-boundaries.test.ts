@@ -17,7 +17,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 async function start(authority = 'self', inviteCode = '') {
-  const s = new WorldServer({ identityAuthority: authority, inviteCode });
+  const s = await WorldServer.create({ identityAuthority: authority, inviteCode });
   servers.push(s); await s.listen(); return s;
 }
 
@@ -83,7 +83,7 @@ describe('全局身份的入场与续席边界', () => {
     const next = PARLOR.create(ctx); worlds.push(next);
     await expect(next.start(new FakeHost())).rejects.toThrow('身份服务暂时无法连接');
     expect(JSON.parse(readFileSync(identityFile, 'utf8'))).toEqual(identity);
-    expect((target.dbHandle.prepare('SELECT COUNT(*) AS n FROM room_seats').get() as { n: number }).n).toBe(1);
+    expect(((await target.dbHandle.prepare('SELECT COUNT(*) AS n FROM room_seats').get()) as { n: number }).n).toBe(1);
   });
 
   it('F3：即使有有效席位，身份域配置不一致仍然拒绝启动', async () => {

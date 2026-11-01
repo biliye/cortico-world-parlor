@@ -39,7 +39,7 @@ if (!dataDir || !dbFile) {
 const dryRun = args.has('--dry-run');
 
 try {
-  const report = migrateLegacyJson({
+  const report = await migrateLegacyJson({
     dataDir,
     dbFile: dryRun ? ':memory:' : dbFile,
     ...(args.get('--room') ? { roomId: args.get('--room')! } : {}),

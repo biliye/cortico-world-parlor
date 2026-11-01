@@ -1,12 +1,16 @@
 import { globalIdentityEnabled } from './global-identity.ts';
 /**
- * 客厅、成员、席位与可见区间的 SQLite store。
+ * 客厅、成员、席位与可见区间的 store。
  *
  * 这一层只回答“哪个客厅归谁、谁有成员资格、谁现在坐着、从哪条事件看到哪条事件”：
  * - 不分配事件 seq；visibleFromSeq/visibleToSeq 由调用方（世界/房间内核）传入。
  * - 不判断事件 scope；只存区间、查区间，scope 过滤仍归 RoomKernel/protocol。
  * - 一个 Coo 全局同时最多一个活跃席位：唯一索引兜底，joinSeat 先做预检给出可读错误。
  * - 成员资格长期保留；离开客厅只释放席位，不动 room_members。
+ *
+ * 并发：入座前先锁 rooms 行（SQLite 由 BEGIN IMMEDIATE 保证单写者，PostgreSQL
+ * 由触发器里 `SELECT … FOR UPDATE` 保证），再数活跃席位。容量检查在 JS 里做一次
+ * 给出可读错误，触发器再兜一次底。
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
@@ -280,32 +284,32 @@ export const hashSeatToken = (token: string): string => {
   return createHash('sha256').update(token).digest('hex');
 };
 
-const requireCoo = (db: Db, cooId: string, label: string): void => {
+const requireCoo = async (db: Db, cooId: string, label: string): Promise<void> => {
   if (!isCooId(cooId)) throw new RoomSeatError('invalid', `${label} cooId 格式不对`);
-  const found = db.prepare('SELECT 1 AS ok FROM coos WHERE id = ?').get(cooId);
+  const found = await db.prepare('SELECT 1 AS ok FROM coos WHERE id = ?').get(cooId);
   if (!found) throw new RoomSeatError('unknown_coo', `没有这个 Coo：${cooId}`);
 };
 
-const roomRow = (db: Db, id: string): RoomRow | null => {
-  const row = db.prepare(`${ROOM_COLUMNS} WHERE id = ?`).get(id) as unknown as RoomDbRow | undefined;
+const roomRow = async (db: Db, id: string): Promise<RoomRow | null> => {
+  const row = await db.prepare(`${ROOM_COLUMNS} WHERE id = ?`).get(id) as unknown as RoomDbRow | undefined;
   return row ? toRoom(row) : null;
 };
 
-const requireRoom = (db: Db, id: string): RoomRow => {
-  const room = roomRow(db, id);
+const requireRoom = async (db: Db, id: string): Promise<RoomRow> => {
+  const room = await roomRow(db, id);
   if (!room) throw new RoomSeatError('room_not_found', `没有这个客厅：${id}`);
   return room;
 };
 
-const seatRow = (db: Db, roomId: string, seatId: string): SeatRow | null => {
-  const row = db.prepare(`${SEAT_COLUMNS} WHERE room_id = ? AND id = ?`).get(roomId, seatId) as unknown as SeatDbRow | undefined;
+const seatRow = async (db: Db, roomId: string, seatId: string): Promise<SeatRow | null> => {
+  const row = await db.prepare(`${SEAT_COLUMNS} WHERE room_id = ? AND id = ?`).get(roomId, seatId) as unknown as SeatDbRow | undefined;
   return row ? toSeat(row) : null;
 };
 
 // —— 客厅 ——
 
-const createRoomTx = (db: Db, input: CreateRoomInput, now: number): RoomRow => {
-  requireCoo(db, input.ownerCooId, '主人');
+const createRoomTx = async (db: Db, input: CreateRoomInput, now: number): Promise<RoomRow> => {
+  await requireCoo(db, input.ownerCooId, '主人');
   const name = cleanRoomName(input.name);
   const visibility = input.visibility ?? 'unlisted';
   if (!isVisibility(visibility)) throw new RoomSeatError('invalid', '可见性不对');
@@ -315,14 +319,14 @@ const createRoomTx = (db: Db, input: CreateRoomInput, now: number): RoomRow => {
   let id: string;
   if (input.id !== undefined) {
     id = cleanRoomId(input.id);
-    if (roomRow(db, id)) throw new RoomSeatError('room_exists', `客厅 id 已经存在：${id}`);
+    if (await roomRow(db, id)) throw new RoomSeatError('room_exists', `客厅 id 已经存在：${id}`);
   } else {
     id = makeRoomId();
-    for (let attempt = 0; attempt < 20 && roomRow(db, id); attempt += 1) id = makeRoomId();
-    if (roomRow(db, id)) throw new RoomSeatError('invalid', '客厅 id 生成失败，换一个');
+    for (let attempt = 0; attempt < 20 && await roomRow(db, id); attempt += 1) id = makeRoomId();
+    if (await roomRow(db, id)) throw new RoomSeatError('invalid', '客厅 id 生成失败，换一个');
   }
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, topic, epoch, seq, created_at, last_active_at)
      VALUES (?, 'room', ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
   ).run(id, name, input.ownerCooId, visibility, capacity, topic || null, randomUUID(), now, now);
@@ -331,26 +335,26 @@ const createRoomTx = (db: Db, input: CreateRoomInput, now: number): RoomRow => {
 };
 
 /** 建一个普通客厅（kind = 'room'）。固定 30 席；兼容旧客户端的 2–30 参数。 */
-export const createRoom = (db: Db, input: CreateRoomInput, now = Date.now()): RoomRow => (
+export const createRoom = async (db: Db, input: CreateRoomInput, now = Date.now()): Promise<RoomRow> => (
   withTransaction(db, () => createRoomTx(db, input, now))
 );
 
-export const getRoom = (db: Db, id: string): RoomRow | null => roomRow(db, id);
+export const getRoom = (db: Db, id: string): Promise<RoomRow | null> => roomRow(db, id);
 
 /** id 优先，其次大小写不敏感的名字；同名时优先未归档、最近活跃的。 */
-export const resolveRoom = (db: Db, value: string): RoomRow | null => {
+export const resolveRoom = async (db: Db, value: string): Promise<RoomRow | null> => {
   const needle = typeof value === 'string' ? value.trim() : '';
   if (!needle) return null;
-  const byId = roomRow(db, needle);
+  const byId = await roomRow(db, needle);
   if (byId) return byId;
-  const row = db.prepare(
-    `${ROOM_COLUMNS} WHERE name = ? COLLATE NOCASE
+  const row = await db.prepare(
+    `${ROOM_COLUMNS} WHERE lower(name) = lower(?)
      ORDER BY archived_at IS NOT NULL, last_active_at DESC, created_at DESC, id ASC LIMIT 1`,
   ).get(needle) as unknown as RoomDbRow | undefined;
   return row ? toRoom(row) : null;
 };
 
-export const listRooms = (db: Db, options: ListRoomsOptions = {}): RoomRow[] => {
+export const listRooms = async (db: Db, options: ListRoomsOptions = {}): Promise<RoomRow[]> => {
   const where: string[] = ['kind = ?'];
   const params: Array<string | number> = [options.kind ?? 'room'];
   if (!options.includeArchived) where.push('archived_at IS NULL');
@@ -359,77 +363,77 @@ export const listRooms = (db: Db, options: ListRoomsOptions = {}): RoomRow[] => 
     where.push('visibility = ?');
     params.push(options.visibility);
   }
-  const rows = db.prepare(
+  const rows = await db.prepare(
     `${ROOM_COLUMNS} WHERE ${where.join(' AND ')}
      ORDER BY last_active_at DESC, created_at DESC, id ASC`,
   ).all(...params) as unknown as RoomDbRow[];
   return rows.map(toRoom);
 };
 
-const touchRoomTx = (db: Db, id: string, now: number): boolean => {
-  const result = db.prepare('UPDATE rooms SET last_active_at = ? WHERE id = ?').run(now, id);
+const touchRoomTx = async (db: Db, id: string, now: number): Promise<boolean> => {
+  const result = await db.prepare('UPDATE rooms SET last_active_at = ? WHERE id = ?').run(now, id);
   return Number(result.changes) > 0;
 };
 
-export const touch = (db: Db, id: string, now = Date.now()): boolean => withTransaction(db, () => touchRoomTx(db, id, now));
+export const touch = (db: Db, id: string, now = Date.now()): Promise<boolean> => withTransaction(db, () => touchRoomTx(db, id, now));
 
-const archiveRoomTx = (db: Db, id: string, now: number): RoomRow | null => {
-  db.prepare('UPDATE rooms SET archived_at = COALESCE(archived_at, ?) WHERE id = ?').run(now, id);
+const archiveRoomTx = async (db: Db, id: string, now: number): Promise<RoomRow | null> => {
+  await db.prepare('UPDATE rooms SET archived_at = COALESCE(archived_at, ?) WHERE id = ?').run(now, id);
   return roomRow(db, id);
 };
 
 /** 归档幂等：已经归档时保留第一次的 archived_at。 */
-export const archive = (db: Db, id: string, now = Date.now()): RoomRow | null => (
+export const archive = (db: Db, id: string, now = Date.now()): Promise<RoomRow | null> => (
   withTransaction(db, () => archiveRoomTx(db, id, now))
 );
 
-const unarchiveRoomTx = (db: Db, id: string, now: number): RoomRow | null => {
-  db.prepare('UPDATE rooms SET archived_at = NULL, last_active_at = ? WHERE id = ? AND archived_at IS NOT NULL').run(now, id);
+const unarchiveRoomTx = async (db: Db, id: string, now: number): Promise<RoomRow | null> => {
+  await db.prepare('UPDATE rooms SET archived_at = NULL, last_active_at = ? WHERE id = ? AND archived_at IS NOT NULL').run(now, id);
   return roomRow(db, id);
 };
 
-export const unarchive = (db: Db, id: string, now = Date.now()): RoomRow | null => (
+export const unarchive = (db: Db, id: string, now = Date.now()): Promise<RoomRow | null> => (
   withTransaction(db, () => unarchiveRoomTx(db, id, now))
 );
 
 // —— 成员 ——
 
-const memberRow = (db: Db, roomId: string, cooId: string): MemberRow | null => {
-  const row = db.prepare(
+const memberRow = async (db: Db, roomId: string, cooId: string): Promise<MemberRow | null> => {
+  const row = await db.prepare(
     'SELECT room_id, coo_id, joined_at, removed_at FROM room_members WHERE room_id = ? AND coo_id = ?',
   ).get(roomId, cooId) as unknown as MemberDbRow | undefined;
   return row ? toMember(row) : null;
 };
 
-const upsertMemberTx = (db: Db, roomId: string, cooId: string, now: number): MemberRow => {
-  requireRoom(db, roomId);
-  requireCoo(db, cooId, '成员');
-  const existing = memberRow(db, roomId, cooId);
+const upsertMemberTx = async (db: Db, roomId: string, cooId: string, now: number): Promise<MemberRow> => {
+  await requireRoom(db, roomId);
+  await requireCoo(db, cooId, '成员');
+  const existing = await memberRow(db, roomId, cooId);
   if (existing) {
     if (existing.removedAt !== null) {
-      db.prepare('UPDATE room_members SET joined_at = ?, removed_at = NULL WHERE room_id = ? AND coo_id = ?')
+      await db.prepare('UPDATE room_members SET joined_at = ?, removed_at = NULL WHERE room_id = ? AND coo_id = ?')
         .run(now, roomId, cooId);
     }
-    return memberRow(db, roomId, cooId)!;
+    return (await memberRow(db, roomId, cooId))!;
   }
-  db.prepare('INSERT INTO room_members(room_id, coo_id, joined_at) VALUES (?, ?, ?)').run(roomId, cooId, now);
-  return memberRow(db, roomId, cooId)!;
+  await db.prepare('INSERT INTO room_members(room_id, coo_id, joined_at) VALUES (?, ?, ?)').run(roomId, cooId, now);
+  return (await memberRow(db, roomId, cooId))!;
 };
 
 /** 加入/恢复成员资格；已在的成员不动 joined_at。 */
-export const upsertMember = (db: Db, roomId: string, cooId: string, now = Date.now()): MemberRow => (
+export const upsertMember = (db: Db, roomId: string, cooId: string, now = Date.now()): Promise<MemberRow> => (
   withTransaction(db, () => upsertMemberTx(db, roomId, cooId, now))
 );
 
 /** 当前有效的成员资格；被移除过就是 null（记录仍在库里，upsertMember 可恢复）。 */
-export const memberOf = (db: Db, roomId: string, cooId: string): MemberRow | null => {
-  const row = memberRow(db, roomId, cooId);
+export const memberOf = async (db: Db, roomId: string, cooId: string): Promise<MemberRow | null> => {
+  const row = await memberRow(db, roomId, cooId);
   return row && row.removedAt === null ? row : null;
 };
 
 /** 当前成员，按加入时间排序。 */
-export const membersOf = (db: Db, roomId: string): MemberRow[] => {
-  const rows = db.prepare(
+export const membersOf = async (db: Db, roomId: string): Promise<MemberRow[]> => {
+  const rows = await db.prepare(
     'SELECT room_id, coo_id, joined_at, removed_at FROM room_members WHERE room_id = ? AND removed_at IS NULL ORDER BY joined_at ASC, coo_id ASC',
   ).all(roomId) as unknown as MemberDbRow[];
   return rows.map(toMember);
@@ -437,22 +441,22 @@ export const membersOf = (db: Db, roomId: string): MemberRow[] => {
 
 // —— 席位 ——
 
-const activeSeatRow = (db: Db, cooId: string): SeatRow | null => {
-  const row = db.prepare(`${SEAT_COLUMNS} WHERE coo_id = ? AND released_at IS NULL`).get(cooId) as unknown as SeatDbRow | undefined;
+const activeSeatRow = async (db: Db, cooId: string): Promise<SeatRow | null> => {
+  const row = await db.prepare(`${SEAT_COLUMNS} WHERE coo_id = ? AND released_at IS NULL`).get(cooId) as unknown as SeatDbRow | undefined;
   return row ? toSeat(row) : null;
 };
 
-const countSeatedTx = (db: Db, roomId: string): number => {
-  const row = db.prepare(
+const countSeatedTx = async (db: Db, roomId: string): Promise<number> => {
+  const row = await db.prepare(
     "SELECT COUNT(*) AS n FROM room_seats WHERE room_id = ? AND released_at IS NULL AND kind <> 'observer'",
   ).get(roomId) as unknown as { n: number };
   return row.n;
 };
 
-const activeNameTaken = (db: Db, roomId: string, name: string): boolean => (
-  !!db.prepare(
-    'SELECT 1 AS ok FROM room_seats WHERE room_id = ? AND released_at IS NULL AND name = ? COLLATE NOCASE',
-  ).get(roomId, name)
+const activeNameTaken = async (db: Db, roomId: string, name: string): Promise<boolean> => (
+  !!(await db.prepare(
+    'SELECT 1 AS ok FROM room_seats WHERE room_id = ? AND released_at IS NULL AND lower(name) = lower(?)',
+  ).get(roomId, name))
 );
 
 /** 自动加序号的上限：正常客厅远到不了，纯粹防死循环。 */
@@ -469,18 +473,18 @@ const suffixedSeatName = (base: string, index: number): string => {
  * Coo 的席位名来自 bot 显示名/配置，撞名时自动加序号，别让它整个启动失败；
  * 真人/观看者仍然报 name_taken，让网页用户自己换一个。
  */
-const resolveJoinName = (db: Db, roomId: string, kind: SeatKind, base: string): string => {
-  if (globalIdentityEnabled(db) || !activeNameTaken(db, roomId, base)) return base;
+const resolveJoinName = async (db: Db, roomId: string, kind: SeatKind, base: string): Promise<string> => {
+  if (await globalIdentityEnabled(db) || !(await activeNameTaken(db, roomId, base))) return base;
   if (kind !== 'pet') throw new RoomSeatError('name_taken', `已经有叫「${base}」的活跃席位`);
   for (let index = 2; index <= MAX_NAME_SUFFIX + 1; index += 1) {
     const candidate = suffixedSeatName(base, index);
-    if (!activeNameTaken(db, roomId, candidate)) return candidate;
+    if (!(await activeNameTaken(db, roomId, candidate))) return candidate;
   }
   throw new RoomSeatError('name_taken', `已经有叫「${base}」的活跃席位，自动编号也排满了`);
 };
 
-const setPresenceTx = (db: Db, cooId: string, roomId: string, seatId: string, now: number): void => {
-  db.prepare(
+const setPresenceTx = async (db: Db, cooId: string, roomId: string, seatId: string, now: number): Promise<void> => {
+  await db.prepare(
     `INSERT INTO coo_sessions(coo_id, session_version, current_room_id, current_seat_id, created_at, last_seen_at)
      VALUES (?, 1, ?, ?, ?, ?)
      ON CONFLICT(coo_id) DO UPDATE SET
@@ -490,17 +494,17 @@ const setPresenceTx = (db: Db, cooId: string, roomId: string, seatId: string, no
   ).run(cooId, roomId, seatId, now, now);
 };
 
-const clearPresenceTx = (db: Db, cooId: string, roomId: string, seatId: string): void => {
-  db.prepare(
+const clearPresenceTx = async (db: Db, cooId: string, roomId: string, seatId: string): Promise<void> => {
+  await db.prepare(
     `UPDATE coo_sessions SET current_room_id = NULL, current_seat_id = NULL
      WHERE coo_id = ? AND current_room_id = ? AND current_seat_id = ?`,
   ).run(cooId, roomId, seatId);
 };
 
-const joinSeatTx = (db: Db, input: JoinSeatInput, now: number): SeatRow => {
-  const room = requireRoom(db, input.roomId);
+const joinSeatTx = async (db: Db, input: JoinSeatInput, now: number): Promise<SeatRow> => {
+  const room = await requireRoom(db, input.roomId);
   if (room.archivedAt !== null) throw new RoomSeatError('room_archived', '客厅已经归档，不能再进');
-  requireCoo(db, input.cooId, '席位');
+  await requireCoo(db, input.cooId, '席位');
   const name = cleanSeatName(input.name);
   const kind = input.kind ?? 'pet';
   if (!isSeatKind(kind)) throw new RoomSeatError('invalid', '席位类型不对');
@@ -509,60 +513,70 @@ const joinSeatTx = (db: Db, input: JoinSeatInput, now: number): SeatRow => {
   const visibleFromSeq = cleanSeq(input.visibleFromSeq, 'visibleFromSeq');
   const tokenHash = hashSeatToken(input.token);
 
-  const current = activeSeatRow(db, input.cooId);
+  // 容量检查这一层只是给可读错误；真正的闸门是库里的触发器：
+  // PostgreSQL 的 trg_room_capacity 先 SELECT rooms … FOR UPDATE 再数，
+  // SQLite 本来就是单写者。这里不写 FOR UPDATE，因为 SQLite 不认。
+  const current = await activeSeatRow(db, input.cooId);
   if (current) {
     throw new RoomSeatError('already_seated', `这个 Coo 已经在 ${current.roomId}/${current.id} 坐着，先释放席位`);
   }
-  const seatName = resolveJoinName(db, room.id, kind, name);
-  if (kind !== 'observer' && countSeatedTx(db, room.id) >= room.capacity) {
+  const seatName = await resolveJoinName(db, room.id, kind, name);
+  if (kind !== 'observer' && await countSeatedTx(db, room.id) >= room.capacity) {
     throw new RoomSeatError('room_full', `客厅最多 ${room.capacity} 个会说话的席位`);
   }
-  if (db.prepare('SELECT 1 AS ok FROM room_seats WHERE token_hash = ?').get(tokenHash)) {
+  if (await db.prepare('SELECT 1 AS ok FROM room_seats WHERE token_hash = ?').get(tokenHash)) {
     throw new RoomSeatError('invalid', '这个席位令牌已经用过，换一个');
   }
 
   let seatId = makeSeatId();
-  for (let attempt = 0; attempt < 20 && seatRow(db, room.id, seatId); attempt += 1) seatId = makeSeatId();
+  for (let attempt = 0; attempt < 20 && await seatRow(db, room.id, seatId); attempt += 1) seatId = makeSeatId();
 
   try {
-    db.prepare(
+    await db.prepare(
       `INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, last_seen_at, visible_from_seq)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(room.id, seatId, input.cooId, kind, seatName, tier, tokenHash, now, now, visibleFromSeq);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // SQLite 报列名，PostgreSQL 报约束名；两套都要认。
     if (message.includes('room_full')) throw new RoomSeatError('room_full', `客厅最多 ${room.capacity} 个会说话的席位`);
-    if (message.includes('room_seats.coo_id')) throw new RoomSeatError('already_seated', '这个 Coo 已经有一个活跃席位');
-    if (message.includes('room_seats.room_id, room_seats.name')) throw new RoomSeatError('name_taken', `已经有叫「${seatName}」的活跃席位`);
-    if (message.includes('room_seats.token_hash')) throw new RoomSeatError('invalid', '这个席位令牌已经用过，换一个');
+    if (message.includes('room_seats.coo_id') || message.includes('ux_one_active_seat_per_coo')) {
+      throw new RoomSeatError('already_seated', '这个 Coo 已经有一个活跃席位');
+    }
+    if (message.includes('room_seats.room_id, room_seats.name') || message.includes('ux_active_seat_name')) {
+      throw new RoomSeatError('name_taken', `已经有叫「${seatName}」的活跃席位`);
+    }
+    if (message.includes('room_seats.token_hash') || message.includes('room_seats_token_hash_key')) {
+      throw new RoomSeatError('invalid', '这个席位令牌已经用过，换一个');
+    }
     throw error;
   }
 
-  upsertMemberTx(db, room.id, input.cooId, now);
-  setPresenceTx(db, input.cooId, room.id, seatId, now);
-  return seatRow(db, room.id, seatId)!;
+  await upsertMemberTx(db, room.id, input.cooId, now);
+  await setPresenceTx(db, input.cooId, room.id, seatId, now);
+  return (await seatRow(db, room.id, seatId))!;
 };
 
 /**
  * 进客厅：容量只看活跃非 observer 席位；同名活跃席位拒绝；
  * 一个 Coo 已有活跃席位时拒绝（换房用 switchSeat，或调用方自己 release + join 包一层 withTransaction）。
  */
-export const joinSeat = (db: Db, input: JoinSeatInput): SeatRow => {
+export const joinSeat = (db: Db, input: JoinSeatInput): Promise<SeatRow> => {
   const now = input.now ?? Date.now();
   return withTransaction(db, () => joinSeatTx(db, input, now));
 };
 
-const releaseSeatTx = (db: Db, roomId: string, seatId: string, visibleToSeq: number, now: number): SeatRow | null => {
-  const seat = seatRow(db, roomId, seatId);
+const releaseSeatTx = async (db: Db, roomId: string, seatId: string, visibleToSeq: number, now: number): Promise<SeatRow | null> => {
+  const seat = await seatRow(db, roomId, seatId);
   if (!seat) return null;
   if (seat.releasedAt !== null) return seat;
   const until = cleanSeq(visibleToSeq, 'visibleToSeq');
   if (until < seat.visibleFromSeq) {
     throw new RoomSeatError('invalid', `visibleToSeq（${until}）不能小于 visibleFromSeq（${seat.visibleFromSeq}）`);
   }
-  db.prepare('UPDATE room_seats SET released_at = ?, visible_to_seq = ? WHERE room_id = ? AND id = ? AND released_at IS NULL')
+  await db.prepare('UPDATE room_seats SET released_at = ?, visible_to_seq = ? WHERE room_id = ? AND id = ? AND released_at IS NULL')
     .run(now, until, roomId, seatId);
-  clearPresenceTx(db, seat.cooId, roomId, seatId);
+  await clearPresenceTx(db, seat.cooId, roomId, seatId);
   return seatRow(db, roomId, seatId);
 };
 
@@ -576,16 +590,16 @@ export const releaseSeat = (
   seatId: string,
   visibleToSeq: number,
   now = Date.now(),
-): SeatRow | null => withTransaction(db, () => releaseSeatTx(db, roomId, seatId, visibleToSeq, now));
+): Promise<SeatRow | null> => withTransaction(db, () => releaseSeatTx(db, roomId, seatId, visibleToSeq, now));
 
-const switchSeatTx = (db: Db, input: SwitchSeatInput, now: number): SwitchSeatResult => {
-  const source = seatRow(db, input.fromRoomId, input.fromSeatId);
+const switchSeatTx = async (db: Db, input: SwitchSeatInput, now: number): Promise<SwitchSeatResult> => {
+  const source = await seatRow(db, input.fromRoomId, input.fromSeatId);
   if (!source) throw new RoomSeatError('seat_not_found', `没有这个源席位：${input.fromRoomId}/${input.fromSeatId}`);
   if (source.releasedAt !== null) throw new RoomSeatError('invalid', '源席位已经释放，不是换房');
   if (source.cooId !== input.to.cooId) throw new RoomSeatError('invalid', '只能换自己的席位');
-  const released = releaseSeatTx(db, input.fromRoomId, input.fromSeatId, input.visibleToSeq, now);
+  const released = await releaseSeatTx(db, input.fromRoomId, input.fromSeatId, input.visibleToSeq, now);
   if (!released) throw new RoomSeatError('seat_not_found', `没有这个源席位：${input.fromRoomId}/${input.fromSeatId}`);
-  const seat = joinSeatTx(db, { ...input.to, now }, now);
+  const seat = await joinSeatTx(db, { ...input.to, now }, now);
   return { released, seat };
 };
 
@@ -594,17 +608,17 @@ const switchSeatTx = (db: Db, input: SwitchSeatInput, now: number): SwitchSeatRe
  * 目标满、重名、额度不够都会让源席位一起回滚，不会出现“两头都不在”的中间态。
  * 如果调用方需要同时写事件/账本，把 releaseSeat + joinSeat 自己包进 withTransaction 也可以。
  */
-export const switchSeat = (db: Db, input: SwitchSeatInput): SwitchSeatResult => {
+export const switchSeat = (db: Db, input: SwitchSeatInput): Promise<SwitchSeatResult> => {
   const now = input.now ?? input.to.now ?? Date.now();
   return withTransaction(db, () => switchSeatTx(db, input, now));
 };
 
 /** 这个 Coo 现在坐着的唯一活跃席位。 */
-export const activeSeatForCoo = (db: Db, cooId: string): SeatRow | null => activeSeatRow(db, cooId);
+export const activeSeatForCoo = (db: Db, cooId: string): Promise<SeatRow | null> => activeSeatRow(db, cooId);
 
 /** 客厅里所有活跃席位（含 observer），按进厅时间排序。容量请用非 observer 计数。 */
-export const activeSeats = (db: Db, roomId: string): SeatRow[] => {
-  const rows = db.prepare(
+export const activeSeats = async (db: Db, roomId: string): Promise<SeatRow[]> => {
+  const rows = await db.prepare(
     `${SEAT_COLUMNS} WHERE room_id = ? AND released_at IS NULL ORDER BY joined_at ASC, id ASC`,
   ).all(roomId) as unknown as SeatDbRow[];
   return rows.map(toSeat);
@@ -619,8 +633,8 @@ export interface OfflineSeatCandidate {
   lastSeenAt: number;
 }
 
-export const seatsForOfflineRelease = (db: Db, kind: 'human' | 'pet'): OfflineSeatCandidate[] => {
-  const rows = db.prepare(
+export const seatsForOfflineRelease = async (db: Db, kind: 'human' | 'pet'): Promise<OfflineSeatCandidate[]> => {
+  const rows = await db.prepare(
     `SELECT room_id, id, coo_id, name, COALESCE(last_seen_at, joined_at) AS last_seen_at
        FROM room_seats
       WHERE released_at IS NULL AND kind = ?`,
@@ -637,51 +651,52 @@ export const seatsForOfflineRelease = (db: Db, kind: 'human' | 'pet'): OfflineSe
 };
 
 /** SSE 连上/断开时刷新；离线清理用它判断多久没见。 */
-export const touchSeatSeen = (db: Db, roomId: string, seatId: string, now = Date.now()): void => {
-  db.prepare(
+export const touchSeatSeen = async (db: Db, roomId: string, seatId: string, now = Date.now()): Promise<void> => {
+  await db.prepare(
     'UPDATE room_seats SET last_seen_at = ? WHERE room_id = ? AND id = ? AND released_at IS NULL',
   ).run(now, roomId, seatId);
 };
 
 /** 只认活跃席位；释放后的令牌不能再用来行动。 */
-export const seatByTokenHash = (db: Db, tokenHash: string): SeatRow | null => {
+export const seatByTokenHash = async (db: Db, tokenHash: string): Promise<SeatRow | null> => {
   if (typeof tokenHash !== 'string' || !tokenHash) return null;
-  const row = db.prepare(`${SEAT_COLUMNS} WHERE token_hash = ? AND released_at IS NULL`)
+  const row = await db.prepare(`${SEAT_COLUMNS} WHERE token_hash = ? AND released_at IS NULL`)
     .get(tokenHash) as unknown as SeatDbRow | undefined;
   return row ? toSeat(row) : null;
 };
 
 /** 给同一个席位换一枚新令牌（家长在同一间客厅再次下场时用）；旧令牌立即失效。 */
-export const updateSeatToken = (db: Db, roomId: string, seatId: string, tokenHash: string): void => {
-  db.prepare('UPDATE room_seats SET token_hash = ? WHERE room_id = ? AND id = ?')
+export const updateSeatToken = async (db: Db, roomId: string, seatId: string, tokenHash: string): Promise<void> => {
+  await db.prepare('UPDATE room_seats SET token_hash = ? WHERE room_id = ? AND id = ?')
     .run(tokenHash, roomId, seatId);
 };
 
 /** 改席位名；同厅已有同名活跃席位时 name_taken（改成自己原来的名字不算冲突）。 */
-export const renameSeat = (db: Db, roomId: string, seatId: string, name: string): SeatRow => {
+export const renameSeat = async (db: Db, roomId: string, seatId: string, name: string): Promise<SeatRow> => {
   const clean = cleanSeatName(name);
-  return withTransaction(db, () => {
-    const seat = seatRow(db, roomId, seatId);
+  return withTransaction(db, async () => {
+    const seat = await seatRow(db, roomId, seatId);
     if (!seat || seat.releasedAt !== null) throw new RoomSeatError('seat_not_found', '席位不存在或已经离开');
-    if (!globalIdentityEnabled(db) && seat.name.toLowerCase() !== clean.toLowerCase() && activeNameTaken(db, roomId, clean)) {
+    const globalIdentity = await globalIdentityEnabled(db);
+    if (!globalIdentity && seat.name.toLowerCase() !== clean.toLowerCase() && await activeNameTaken(db, roomId, clean)) {
       throw new RoomSeatError('name_taken', `已经有叫「${clean}」的活跃席位`);
     }
     try {
-      db.prepare('UPDATE room_seats SET name = ? WHERE room_id = ? AND id = ?').run(clean, roomId, seatId);
+      await db.prepare('UPDATE room_seats SET name = ? WHERE room_id = ? AND id = ?').run(clean, roomId, seatId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('room_seats.room_id, room_seats.name')) {
+      if (message.includes('room_seats.room_id, room_seats.name') || message.includes('ux_active_seat_name')) {
         throw new RoomSeatError('name_taken', `已经有叫「${clean}」的活跃席位`);
       }
       throw error;
     }
-    return seatRow(db, roomId, seatId)!;
+    return (await seatRow(db, roomId, seatId))!;
   });
 };
 
 /** 可见区间查询；scope 过滤不在这里做。席位不存在返回 null。 */
-export const seatInterval = (db: Db, roomId: string, seatId: string): SeatInterval | null => {
-  const row = db.prepare(
+export const seatInterval = async (db: Db, roomId: string, seatId: string): Promise<SeatInterval | null> => {
+  const row = await db.prepare(
     'SELECT visible_from_seq, visible_to_seq FROM room_seats WHERE room_id = ? AND id = ?',
   ).get(roomId, seatId) as unknown as { visible_from_seq: number; visible_to_seq: number | null } | undefined;
   return row ? { visibleFromSeq: row.visible_from_seq, visibleToSeq: row.visible_to_seq } : null;

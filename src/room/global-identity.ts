@@ -21,14 +21,14 @@ export function identityOrigin(value: string): string {
   return url.origin;
 }
 
-export function enableGlobalIdentity(db: Db): void {
-  db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES ('global_identity','1')").run();
-  db.exec('DROP INDEX IF EXISTS ux_active_seat_name');
+export async function enableGlobalIdentity(db: Db): Promise<void> {
+  await db.prepare("INSERT INTO meta(key,value) VALUES ('global_identity','1') ON CONFLICT (key) DO UPDATE SET value = excluded.value").run();
+  await db.exec('DROP INDEX IF EXISTS ux_active_seat_name');
 }
-export const globalIdentityEnabled = (db: Db): boolean => !!db.prepare("SELECT 1 FROM meta WHERE key='global_identity' AND value='1'").get();
+export const globalIdentityEnabled = async (db: Db): Promise<boolean> => !!(await db.prepare("SELECT 1 FROM meta WHERE key='global_identity' AND value='1'").get());
 
-export const registeredHandle = (db: Db, cooId: string): string => {
-  const row = db.prepare('SELECT handle FROM global_handles WHERE coo_id=?').get(cooId) as { handle: string } | undefined;
+export const registeredHandle = async (db: Db, cooId: string): Promise<string> => {
+  const row = await db.prepare('SELECT handle FROM global_handles WHERE coo_id=?').get(cooId) as { handle: string } | undefined;
   return row?.handle ?? cooId.slice(0, 8).toLowerCase();
 };
 
@@ -43,43 +43,43 @@ export class IdentityRegistry {
   }
 
   /** 同一事务内分配并固定短号；旧身份用原 secret 接入，绝不重发 cooId。 */
-  enroll(cooId: string, secret: string, name: string, kind: 'pet' | 'human' = 'pet'): GlobalPerson {
+  async enroll(cooId: string, secret: string, name: string, kind: 'pet' | 'human' = 'pet'): Promise<GlobalPerson> {
     if (!isCooId(cooId) || !isCooSecret(secret)) throw new Error('身份格式不对');
-    return withTransaction(this.db, () => {
+    return await withTransaction(this.db, async () => {
       const store = new CooAccountDb(this.db, { now: this.now });
-      const existing = store.findCoo(cooId);
+      const existing = await store.findCoo(cooId);
       if (existing && !['pet', 'human'].includes(existing.kind)) throw new Error('系统或历史占位身份不能注册');
-      if (store.registerCoo(cooId, secret, kind, name) !== 'ok') throw new Error('身份凭证不匹配或身份已停用');
-      const old = this.db.prepare('SELECT handle FROM global_handles WHERE coo_id=?').get(cooId) as { handle: string } | undefined;
+      if ((await store.registerCoo(cooId, secret, kind, name)) !== 'ok') throw new Error('身份凭证不匹配或身份已停用');
+      const old = await this.db.prepare('SELECT handle FROM global_handles WHERE coo_id=?').get(cooId) as { handle: string } | undefined;
       if (!old) {
         const id = cooId.toLowerCase();
         let handle = '';
         for (let length = 8; length <= id.length; length += 1) {
           const candidate = id.slice(0, length);
-          if (!this.db.prepare('SELECT 1 FROM global_handles WHERE handle=?').get(candidate)) { handle = candidate; break; }
+          if (!(await this.db.prepare('SELECT 1 FROM global_handles WHERE handle=?').get(candidate))) { handle = candidate; break; }
         }
         if (!handle) throw new Error('无法分配唯一短号');
-        this.db.prepare('INSERT INTO global_handles(coo_id,handle) VALUES (?,?)').run(cooId, handle);
+        await this.db.prepare('INSERT INTO global_handles(coo_id,handle) VALUES (?,?)').run(cooId, handle);
       }
-      if (name.trim()) store.renameCooDisplay(cooId, name);
-      const record = store.findCoo(cooId)!;
-      return { cooId, handle: registeredHandle(this.db, cooId), name: record.displayName, kind: record.kind === 'human' ? 'human' : 'pet' };
+      if (name.trim()) await store.renameCooDisplay(cooId, name);
+      const record = (await store.findCoo(cooId))!;
+      return { cooId, handle: await registeredHandle(this.db, cooId), name: record.displayName, kind: record.kind === 'human' ? 'human' : 'pet' };
     });
   }
 
-  issue(person: GlobalPerson, audience: string): IdentityTicket {
+  async issue(person: GlobalPerson, audience: string): Promise<IdentityTicket> {
     audience = identityOrigin(audience);
     const token = randomBytes(32).toString('base64url');
     const expiresAt = this.now() + IDENTITY_TTL;
-    this.db.prepare('DELETE FROM identity_tickets WHERE expires_at<=?').run(this.now());
-    this.db.prepare('INSERT INTO identity_tickets(token_hash,coo_id,audience,expires_at) VALUES (?,?,?,?)')
+    await this.db.prepare('DELETE FROM identity_tickets WHERE expires_at<=?').run(this.now());
+    await this.db.prepare('INSERT INTO identity_tickets(token_hash,coo_id,audience,expires_at) VALUES (?,?,?,?)')
       .run(hash(token), person.cooId, audience, expiresAt);
     return { token, expiresAt, person };
   }
 
-  verify(token: string, audience: string): GlobalPerson | null {
+  async verify(token: string, audience: string): Promise<GlobalPerson | null> {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
-    const row = this.db.prepare(`SELECT c.id,c.display_name,c.kind,h.handle FROM identity_tickets t
+    const row = await this.db.prepare(`SELECT c.id,c.display_name,c.kind,h.handle FROM identity_tickets t
       JOIN coos c ON c.id=t.coo_id JOIN global_handles h ON h.coo_id=c.id
       WHERE t.token_hash=? AND t.audience=? AND t.expires_at>? AND c.status='active'`)
       .get(hash(token), identityOrigin(audience), this.now()) as { id: string; display_name: string; kind: string; handle: string } | undefined;

@@ -121,6 +121,26 @@ World 启动先读取目标服务器能力并尝试续用已有席位；有效�
   （`--abandon-monopoly` 才作废留档）；`--dry-run` 在内存库演练。
 - **事件**：`events` 每小时清一次「早于 7 天且不在最后 500 条」，回放仍 7 天。
 
+## 存储：SQLite 与 PostgreSQL
+
+默认还是 SQLite（`--db ./parlor.db`），老部署不用改。要换 PostgreSQL：
+
+```bash
+PARLOR_STORAGE=postgres \\
+PARLOR_DATABASE_URL='postgres://用户:密码@主机:5432/parlor' \\
+node --experimental-strip-types scripts/serve-world.ts --host 0.0.0.0 --port 8790 --invite <邀请码>
+```
+
+- `--db` 只属于 SQLite；和 `--storage postgres` 同时给会直接报错。缺 `PARLOR_DATABASE_URL`
+  也一样——不会悄悄退回 SQLite，也不会建空库。
+- 连接池：`--pool-max` / `PARLOR_PG_POOL_MAX`（默认 8）；单条语句超时：
+  `--statement-timeout-ms` / `PARLOR_PG_STATEMENT_TIMEOUT_MS`。
+- 运行时会多一个依赖 `pg`（纯 JS）。服务端部署如果之前没有 `node_modules`，需要
+  `pnpm install --prod` 或把 `pg` 一起带上。
+- PostgreSQL 的库结构按版本号迁移（启动时自动建表/升级，advisory lock 防并发建库）。
+- 测试：`pnpm test`（SQLite）；`PARLOR_TEST_PG=1 pnpm test:pg` 会起工位内嵌入式 PostgreSQL
+  跑同一套测试，或用 `PARLOR_TEST_PG_URL` 指向外部库。
+
 起新网关：
 
 ```bash

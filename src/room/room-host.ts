@@ -6,6 +6,9 @@
  *
  * 所有写操作都包在 withTransaction 里：事件、席位、信箱要么一起成，要么一起回。
  * 每房事件 seq 由 EventDb 分配，别的客厅不会串号。牌桌规则在 table-host.ts。
+ *
+ * 构造是异步的：TableHost 起来时要恢复本房未结束的牌局（可能作废/退款），
+ * 必须等恢复完再开始接请求。用 `RoomHost.create()`，不要 new。
  */
 import { randomBytes } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
@@ -15,6 +18,7 @@ import { registeredHandle } from './global-identity.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { mentionsInText } from './mentions.ts';
+import { lockCooRows } from './storage/locks.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, getRoom, hashSeatToken, joinSeat, releaseSeat,
   seatByTokenHash, updateSeatToken, type RoomRow, type SeatRow,
@@ -119,13 +123,13 @@ const SAY_GAP_MS = 50;
 
 const makeToken = (): string => randomBytes(24).toString('base64url');
 
-const seatOfRow = (db: Db, row: SeatRow): Seat => ({
+const seatOfRow = async (db: Db, row: SeatRow): Promise<Seat> => ({
   id: row.id,
   name: row.name,
   kind: row.kind,
   tier: row.tier,
   joinedAt: row.joinedAt,
-  handle: registeredHandle(db, row.cooId),
+  handle: await registeredHandle(db, row.cooId),
 });
 
 const wrapSeatError = (error: unknown): never => {
@@ -154,71 +158,93 @@ export class RoomHost {
 
   private readonly db: Db;
 
-  constructor(db: Db, roomId: string, options: RoomHostOptions = {}) {
+  private constructor(
+    db: Db,
+    roomId: string,
+    options: RoomHostOptions,
+    parts: { mail: MailDb; ledger: LedgerDb; tableHost: TableHost },
+  ) {
     this.db = db;
     this.roomId = roomId;
     this.events = new EventDb(db);
     this.now = options.now ?? Date.now;
-    this.mail = new MailDb(db, { now: this.now });
-    this.ledger = new LedgerDb(db, { now: this.now });
+    this.mail = parts.mail;
+    this.ledger = parts.ledger;
     this.makeToken = options.token ?? makeToken;
-    this.tableHost = new TableHost({
+    this.tableHost = parts.tableHost;
+  }
+
+  /**
+   * 建一个客厅运行时。等待 TableHost 恢复完本房未结束的牌局再返回——
+   * 恢复可能写库（作废、退款、隔离坏存档），必须在接请求之前完成。
+   */
+  static async create(db: Db, roomId: string, options: RoomHostOptions = {}): Promise<RoomHost> {
+    const now = options.now ?? Date.now;
+    const mail = new MailDb(db, { now });
+    const ledger = new LedgerDb(db, { now });
+    // 席位查询直接走 store，不经过 RoomHost 实例：TableHost 恢复时就要用，
+    // 那时 RoomHost 还没构造完。
+    const tableHost = await TableHost.create({
       db,
       roomId,
-      now: this.now,
-      ledger: this.ledger,
-      mail: this.mail,
+      now,
+      ledger,
+      mail,
       ...(options.turnMs !== undefined ? { turnMs: options.turnMs } : {}),
       seats: {
-        activeSeat: (cooId) => this.seatOf(cooId),
-        seats: () => this.seats(),
+        activeSeat: async (cooId: string) => {
+          const seat = await activeSeatForCoo(db, cooId);
+          return seat?.roomId === roomId ? seat : null;
+        },
+        seats: () => activeSeats(db, roomId),
       },
       ...(options.recovery ? { recovery: options.recovery } : {}),
     });
+    return new RoomHost(db, roomId, options, { mail, ledger, tableHost });
   }
 
-  room(): RoomRow {
+  room(): Promise<RoomRow> {
     return this.requireRoom();
   }
 
   /** 这块地方叫什么：大厅是特殊客厅，事件文案别把大厅写成客厅。 */
-  private placeOf(roomId: string): string {
-    return getRoom(this.db, roomId)?.kind === 'hall' ? '大厅' : '客厅';
+  private async placeOf(roomId: string): Promise<string> {
+    return (await getRoom(this.db, roomId))?.kind === 'hall' ? '大厅' : '客厅';
   }
 
-  latest(): number {
+  latest(): Promise<number> {
     return this.events.latest(this.roomId);
   }
 
-  seats(): SeatRow[] {
+  seats(): Promise<SeatRow[]> {
     return activeSeats(this.db, this.roomId);
   }
 
-  seatOf(cooId: string): SeatRow | null {
-    const seat = activeSeatForCoo(this.db, cooId);
+  async seatOf(cooId: string): Promise<SeatRow | null> {
+    const seat = await activeSeatForCoo(this.db, cooId);
     return seat?.roomId === this.roomId ? seat : null;
   }
 
   /** 用明文令牌认当前活跃席位；令牌只在这个客厅有效。 */
-  seatByToken(token: string): SeatRow {
-    const seat = seatByTokenHash(this.db, hashSeatToken(token));
+  async seatByToken(token: string): Promise<SeatRow> {
+    const seat = await seatByTokenHash(this.db, hashSeatToken(token));
     if (!seat || seat.roomId !== this.roomId) throw new HostError('forbidden', '席位令牌无效或已经离开');
     return seat;
   }
 
   /** 同一个席位换一枚新令牌（家长再次下场）：席位、可见区间、账本都不动。 */
-  reissueSeatToken(cooId: string): { seat: SeatRow; token: string } {
-    const seat = this.seatOf(cooId);
+  async reissueSeatToken(cooId: string): Promise<{ seat: SeatRow; token: string }> {
+    const seat = await this.seatOf(cooId);
     if (!seat) throw new HostError('not_found', '你不在这个客厅里');
     const token = this.makeToken();
-    updateSeatToken(this.db, this.roomId, seat.id, hashSeatToken(token));
+    await updateSeatToken(this.db, this.roomId, seat.id, hashSeatToken(token));
     return { seat, token };
   }
 
-  join(cooId: string, input: { name?: string; kind?: SeatKind; tier?: WakeTier } = {}): JoinResult {
-    const room = this.requireRoom();
+  async join(cooId: string, input: { name?: string; kind?: SeatKind; tier?: WakeTier } = {}): Promise<JoinResult> {
+    const room = await this.requireRoom();
     if (room.archivedAt !== null) throw new HostError('conflict', '这个客厅已经归档');
-    const active = activeSeatForCoo(this.db, cooId);
+    const active = await activeSeatForCoo(this.db, cooId);
     if (active) {
       throw new HostError('already_seated', active.roomId === this.roomId
         ? '你已经在这个客厅里了；用原来的席位令牌'
@@ -226,13 +252,13 @@ export class RoomHost {
     }
     const name = cleanName(input.name ?? '');
     const token = this.makeToken();
-    const visibleFromSeq = this.events.latest(this.roomId);
+    const visibleFromSeq = await this.events.latest(this.roomId);
     const now = this.now();
 
-    return withTransaction(this.db, () => {
+    return withTransaction(this.db, async () => {
       let seat: SeatRow;
       try {
-        seat = joinSeat(this.db, {
+        seat = await joinSeat(this.db, {
           roomId: this.roomId,
           cooId,
           name,
@@ -246,13 +272,13 @@ export class RoomHost {
         return wrapSeatError(error);
       }
       // 新身份第一次进客厅发筹码；已有身份不会重复发（唯一索引兜底）。
-      this.ledger.ensureGrant(cooId, this.roomId);
-      const event = this.events.append(this.roomId, {
+      await this.ledger.ensureGrant(cooId, this.roomId);
+      const event = await this.events.append(this.roomId, {
         type: 'parlor.joined',
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${seat.name} 进了${this.placeOf(this.roomId)}。`,
+        text: `${seat.name} 进了${await this.placeOf(this.roomId)}。`,
         data: { seatId: seat.id, name: seat.name },
       });
       return { seat, token, event };
@@ -263,9 +289,9 @@ export class RoomHost {
    * 私聊信已经落进信箱了，这里只往对方所在的客厅推一条事件，让在线的人立刻看到；
    * 不再写第二封信（否则信箱里会出现两条）。
    */
-  whisperNotice(fromCooId: string, fromName: string, target: { cooId: string; id: string; name: string }, text: string): RoomEvent {
+  async whisperNotice(fromCooId: string, fromName: string, target: { cooId: string; id: string; name: string }, text: string): Promise<RoomEvent> {
     const now = this.now();
-    const senderSeat = activeSeatForCoo(this.db, fromCooId);
+    const senderSeat = await activeSeatForCoo(this.db, fromCooId);
     return this.events.append(this.roomId, {
       type: 'parlor.whisper',
       ts: now,
@@ -277,25 +303,25 @@ export class RoomHost {
     });
   }
 
-  leave(cooId: string): LeaveResult {
-    this.requireRoom();
-    const seat = this.seatOf(cooId);
+  async leave(cooId: string): Promise<LeaveResult> {
+    await this.requireRoom();
+    const seat = await this.seatOf(cooId);
     if (!seat) throw new HostError('not_found', '你不在这个客厅里');
-    this.assertNotLocked(cooId, '离开客厅');
+    await this.assertNotLocked(cooId, '离开客厅');
     const now = this.now();
 
-    return withTransaction(this.db, () => {
-      const event = this.events.append(this.roomId, {
+    return withTransaction(this.db, async () => {
+      const event = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: `${seat.name} 离开了${this.placeOf(this.roomId)}。`,
+        text: `${seat.name} 离开了${await this.placeOf(this.roomId)}。`,
         data: { seatId: seat.id, name: seat.name },
       });
       let released: SeatRow | null;
       try {
-        released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
+        released = await releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
       } catch (error) {
         return wrapSeatError(error);
       }
@@ -307,12 +333,12 @@ export class RoomHost {
    * 长时间没有 SSE 的真人席位：写一条带原因的离开事件再释放。
    * 牌桌锁着就不动（等这局结束，下一轮清理再看）。
    */
-  releaseOffline(cooId: string, now = this.now()): LeaveResult | null {
-    const seat = this.seatOf(cooId);
+  async releaseOffline(cooId: string, now = this.now()): Promise<LeaveResult | null> {
+    const seat = await this.seatOf(cooId);
     if (!seat) return null;
-    if (this.tableHost.lockOf(cooId)) return null;
-    return withTransaction(this.db, () => {
-      const event = this.events.append(this.roomId, {
+    if (await this.tableHost.lockOf(cooId)) return null;
+    return withTransaction(this.db, async () => {
+      const event = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
         from: seat.id,
@@ -320,7 +346,7 @@ export class RoomHost {
         text: `${seat.name} 的席位因长时间未上线被释放。`,
         data: { seatId: seat.id, name: seat.name, reason: 'offline' },
       });
-      const released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
+      const released = await releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
       return { seat: released, event };
     });
   }
@@ -329,56 +355,56 @@ export class RoomHost {
    * 房主移除成员：立刻停止这一房的访问并释放席位；牌桌锁不拦（牌局由服务器托管到结算）。
    * 调用方先 `markTableAuto`，这里只管席位与事件。
    */
-  remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' = 'removed'): LeaveResult | null {
-    const seat = this.seatOf(cooId);
+  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' = 'removed'): Promise<LeaveResult | null> {
+    const seat = await this.seatOf(cooId);
     if (!seat) return null;
-    return withTransaction(this.db, () => {
-      const event = this.events.append(this.roomId, {
+    return withTransaction(this.db, async () => {
+      const event = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: reason === 'room_deleted' ? '房主删除了客厅，席位已释放，请回大厅。' : `${seat.name} 被房主移出了${this.placeOf(this.roomId)}。`,
+        text: reason === 'room_deleted' ? '房主删除了客厅，席位已释放，请回大厅。' : `${seat.name} 被房主移出了${await this.placeOf(this.roomId)}。`,
         data: { seatId: seat.id, name: seat.name, reason },
       });
-      const released = releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
+      const released = await releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
       return { seat: released, event };
     });
   }
 
-  /** 原子换房：源客厅写离开事件并释放席位，目标客厅拿新席位并写加入事件。 */
-  switchTo(cooId: string, targetRoomId: string, input: { name?: string } = {}): SwitchResult {
+  /** 原子换房：源客厅写离开事件并释放席位，目标客厅拿新席位并写入加入事件。 */
+  async switchTo(cooId: string, targetRoomId: string, input: { name?: string } = {}): Promise<SwitchResult> {
     if (targetRoomId === this.roomId) throw new HostError('invalid', '已经在这个客厅里');
-    const source = this.requireRoom();
-    const target = getRoom(this.db, targetRoomId);
+    const source = await this.requireRoom();
+    const target = await getRoom(this.db, targetRoomId);
     if (!target) throw new HostError('not_found', '目标客厅不存在');
     if (target.archivedAt !== null) throw new HostError('conflict', '目标客厅已经归档');
-    const seat = this.seatOf(cooId);
+    const seat = await this.seatOf(cooId);
     if (!seat) throw new HostError('not_found', '你不在当前客厅里');
-    this.assertNotLocked(cooId, '换客厅');
+    await this.assertNotLocked(cooId, '换客厅');
     const name = cleanName(input.name ?? seat.name);
     const token = this.makeToken();
     const now = this.now();
-    const targetFrom = this.events.latest(targetRoomId);
+    const targetFrom = await this.events.latest(targetRoomId);
 
-    return withTransaction(this.db, () => {
-      const leaveEvent = this.events.append(this.roomId, {
+    return withTransaction(this.db, async () => {
+      const leaveEvent = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: `${seat.name} 离开了${this.placeOf(this.roomId)}，去「${target.name}」。`,
+        text: `${seat.name} 离开了${await this.placeOf(this.roomId)}，去「${target.name}」。`,
         data: { seatId: seat.id, name: seat.name, to: targetRoomId },
       });
       let released: SeatRow | null;
       try {
-        released = releaseSeat(this.db, this.roomId, seat.id, leaveEvent.seq, now);
+        released = await releaseSeat(this.db, this.roomId, seat.id, leaveEvent.seq, now);
       } catch (error) {
         return wrapSeatError(error);
       }
       let joined: SeatRow;
       try {
-        joined = joinSeat(this.db, {
+        joined = await joinSeat(this.db, {
           roomId: targetRoomId,
           cooId,
           name,
@@ -391,28 +417,28 @@ export class RoomHost {
       } catch (error) {
         return wrapSeatError(error);
       }
-      const joinEvent = this.events.append(targetRoomId, {
+      const joinEvent = await this.events.append(targetRoomId, {
         type: 'parlor.joined',
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${joined.name} 进了${this.placeOf(targetRoomId)}。`,
+        text: `${joined.name} 进了${await this.placeOf(targetRoomId)}。`,
         data: { seatId: joined.id, name: joined.name, from: source.id },
       });
       return { released, seat: joined, token, leaveEvent, joinEvent };
     });
   }
 
-  say(cooId: string, text: string): SayResult {
-    const seat = this.requireSeat(cooId);
+  async say(cooId: string, text: string): Promise<SayResult> {
+    const seat = await this.requireSeat(cooId);
     // 狼人杀进行中，参与者的普通客厅公开发言暂不允许：发言走游戏动作，次数才有意义。
-    if (this.tableHost.chatLockedFor(cooId)) {
+    if (await this.tableHost.chatLockedFor(cooId)) {
       throw new HostError('conflict', '你正在狼人杀桌上，局中发言走游戏动作；普通聊天等这局结束');
     }
     const body = cleanText(text);
     this.checkSayGap(cooId);
-    const mentions = this.mentionsIn(body, seat);
-    const event = this.events.append(this.roomId, {
+    const mentions = await this.mentionsIn(body, seat);
+    const event = await this.events.append(this.roomId, {
       type: 'parlor.say',
       ts: this.now(),
       from: seat.id,
@@ -424,20 +450,20 @@ export class RoomHost {
     return { event };
   }
 
-  whisper(cooId: string, to: string, text: string): WhisperResult {
-    const seat = this.requireSeat(cooId);
-    const target = this.resolveSeat(to);
+  async whisper(cooId: string, to: string, text: string): Promise<WhisperResult> {
+    const seat = await this.requireSeat(cooId);
+    const target = await this.resolveSeat(to);
     if (target.id === seat.id) throw new HostError('invalid', '不能对自己说私聊');
     // 狼人杀进行中，同桌参与者之间的普通私聊暂不允许：防止绕开单次发言与狼聊限制。
     // 只拦「两端都在同一张进行中狼人杀桌」的组合；桌外人与参与者私聊不受影响。
-    if (this.tableHost.chatLockedFor(cooId) && this.tableHost.lockedTablePeerCooIds(cooId).has(target.cooId)) {
+    if (await this.tableHost.chatLockedFor(cooId) && (await this.tableHost.lockedTablePeerCooIds(cooId)).has(target.cooId)) {
       throw new HostError('conflict', '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
     }
     const body = cleanText(text);
     const now = this.now();
 
-    return withTransaction(this.db, () => {
-      const event = this.events.append(this.roomId, {
+    return withTransaction(this.db, async () => {
+      const event = await this.events.append(this.roomId, {
         type: 'parlor.whisper',
         ts: now,
         from: seat.id,
@@ -446,7 +472,7 @@ export class RoomHost {
         data: { name: seat.name, to: target.name },
         audience: [{ cooId: target.cooId, seatId: target.id }],
       });
-      const letter = this.mail.append({
+      const letter = await this.mail.append({
         to: target.cooId,
         fromCooId: seat.cooId,
         room: this.roomId,
@@ -465,8 +491,8 @@ export class RoomHost {
   }
 
   /** 从最早到最新；用这个 coo 在该客厅最近一次席位的可见区间。 */
-  history(cooId: string, options: { since?: number; limit?: number } = {}): RoomEvent[] {
-    const interval = this.latestInterval(cooId);
+  async history(cooId: string, options: { since?: number; limit?: number } = {}): Promise<RoomEvent[]> {
+    const interval = await this.latestInterval(cooId);
     if (!interval) return [];
     return this.events.history(this.roomId, {
       cooId,
@@ -480,8 +506,8 @@ export class RoomHost {
    * 跨房通知：给此刻在这个客厅的某个 Coo 写一条 seat-scope 事件（不写信箱）。
    * 目标不在这个客厅时返回 null；调用方自己决定要不要另留一封信。
    */
-  pingSeat(cooId: string, text: string, data: Record<string, unknown>, type = 'parlor.invite'): RoomEvent | null {
-    const seat = this.seatOf(cooId);
+  async pingSeat(cooId: string, text: string, data: Record<string, unknown>, type = 'parlor.invite'): Promise<RoomEvent | null> {
+    const seat = await this.seatOf(cooId);
     if (!seat) return null;
     return this.events.append(this.roomId, {
       type,
@@ -495,8 +521,8 @@ export class RoomHost {
   }
 
   /** 赛后回看：历来有权看的全部事件，不受当前席位区间限制。 */
-  replay(cooId: string, options: { before?: number; limit?: number } = {}): { events: RoomEvent[]; older: boolean } {
-    this.requireRoom();
+  async replay(cooId: string, options: { before?: number; limit?: number } = {}): Promise<{ events: RoomEvent[]; older: boolean }> {
+    await this.requireRoom();
     return this.events.replay(this.roomId, {
       cooId,
       ...(options.before !== undefined ? { before: options.before } : {}),
@@ -504,58 +530,62 @@ export class RoomHost {
     });
   }
 
-  snapshot(cooId: string, options: { since?: number; limit?: number } = {}): RoomSnapshot {
-    const seat = this.requireSeat(cooId);
+  async snapshot(cooId: string, options: { since?: number; limit?: number } = {}): Promise<RoomSnapshot> {
+    const seat = await this.requireSeat(cooId);
     const interval = { visibleFromSeq: seat.visibleFromSeq, visibleUntilSeq: seat.visibleToSeq };
     const now = this.now();
-    const latest = this.events.latest(this.roomId);
-    const room = this.requireRoom();
+    const latest = await this.events.latest(this.roomId);
+    const room = await this.requireRoom();
+    const seatRows = await this.seats();
+    const seats: Seat[] = [];
+    for (const row of seatRows) seats.push(await seatOfRow(this.db, row));
+    const tablePublic = await this.tableHost.public(cooId);
     return {
       id: this.roomId,
       name: room.name,
-      seat: seatOfRow(this.db, seat),
-      seats: this.seats().map((row) => seatOfRow(this.db, row)),
+      seat: await seatOfRow(this.db, seat),
+      seats,
       maxSeats: room.capacity,
       latest,
       now,
       at: serverClock(now),
-      events: this.events.recent(this.roomId, {
+      events: await this.events.recent(this.roomId, {
         cooId,
         interval,
         ...(options.since !== undefined ? { since: options.since } : {}),
         limit: options.limit ?? 30,
       }),
-      mailUnread: this.mail.unreadCount(cooId),
+      mailUnread: await this.mail.unreadCount(cooId),
       tables: this.tableHost.list(),
-      ...(this.tableHost.public(cooId) ? { table: this.tableHost.public(cooId) } : {}),
-      tablePrivate: this.tableHost.private(seat.id),
-      ledger: this.ledger.summaryFor(cooId),
-      ledgerRoom: this.ledger.publicInRoom(this.roomId, 5),
+      ...(tablePublic ? { table: tablePublic } : {}),
+      tablePrivate: await this.tableHost.private(seat.id),
+      ledger: await this.ledger.summaryFor(cooId),
+      ledgerRoom: await this.ledger.publicInRoom(this.roomId, 5),
     };
   }
 
   /** 这个客厅里的未读；跨厅邀请在全局未读里。 */
-  mailUnread(cooId: string): number {
+  mailUnread(cooId: string): Promise<number> {
     return this.mail.unreadCount(cooId, this.roomId);
   }
 
   /** 全部客厅的未读（信箱是全局的，邀请也落在这里）。 */
-  mailUnreadAll(cooId: string): number {
+  mailUnreadAll(cooId: string): Promise<number> {
     return this.mail.unreadCount(cooId);
   }
 
   /** SSE 补看/轮询：从 since 之后、该 coo 可见的事件。 */
-  eventsSince(cooId: string, since: number, limit = 200): RoomEvent[] {
-    const interval = this.latestInterval(cooId);
+  async eventsSince(cooId: string, since: number, limit = 200): Promise<RoomEvent[]> {
+    const interval = await this.latestInterval(cooId);
     if (!interval) return [];
     return this.events.history(this.roomId, { cooId, interval, since, limit });
   }
 
   /** 改当前活跃席位的唤醒挡位。 */
-  setTier(cooId: string, tier: WakeTier): void {
-    const seat = this.seatOf(cooId);
+  async setTier(cooId: string, tier: WakeTier): Promise<void> {
+    const seat = await this.seatOf(cooId);
     if (!seat) throw new HostError('not_found', '你不在这个客厅里');
-    this.db.prepare(
+    await this.db.prepare(
       'UPDATE room_seats SET tier = ? WHERE room_id = ? AND id = ? AND released_at IS NULL',
     ).run(tier, this.roomId, seat.id);
   }
@@ -567,12 +597,12 @@ export class RoomHost {
   // —— 牌桌 ——
 
   /** 坐在未结束的牌桌上时不能离厅/换房；返回锁信息给调用方拼错误。 */
-  tableLock(cooId: string): TableLockInfo | null {
+  tableLock(cooId: string): Promise<TableLockInfo | null> {
     return this.tableHost.lockOf(cooId);
   }
 
-  openTable(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string } = {}, requestId?: string): TableOpenResult {
-    if (this.requireRoom().kind === 'hall') {
+  async openTable(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string } = {}, requestId?: string): Promise<TableOpenResult> {
+    if ((await this.requireRoom()).kind === 'hall') {
       throw new HostError('conflict', '大厅是进场和选房的地方，不能开桌；先走进一个客厅');
     }
     return this.tableHost.open(cooId, input, requestId);
@@ -582,20 +612,20 @@ export class RoomHost {
     return this.tableHost.join(cooId, tableId, requestId, clientVersion);
   }
 
-  leaveTable(cooId: string, tableId?: string, requestId?: string): TableLeaveResult {
+  leaveTable(cooId: string, tableId?: string, requestId?: string): Promise<TableLeaveResult> {
     return this.tableHost.leave(cooId, tableId, requestId);
   }
 
-  startTable(cooId: string, tableId?: string, requestId?: string): StartReceipt {
+  startTable(cooId: string, tableId?: string, requestId?: string): Promise<StartReceipt> {
     return this.tableHost.start(cooId, tableId, requestId);
   }
 
-  tableAction(cooId: string, action: unknown, options: { tableId?: string; revision?: number; requestId?: string } = {}): TableReceipt {
+  tableAction(cooId: string, action: unknown, options: { tableId?: string; revision?: number; requestId?: string } = {}): Promise<TableReceipt> {
     return this.tableHost.act(cooId, action, options);
   }
 
-  tableSay(cooId: string, text: string, tableId?: string): RoomEvent {
-    this.requireSeat(cooId);
+  async tableSay(cooId: string, text: string, tableId?: string): Promise<RoomEvent> {
+    await this.requireSeat(cooId);
     this.checkSayGap(cooId);
     return this.tableHost.say(cooId, text, tableId);
   }
@@ -610,12 +640,12 @@ export class RoomHost {
   }
 
   /** 这个 coo 被进行中的游戏锁了普通聊天（狼人杀发言走游戏动作）。 */
-  chatLockedFor(cooId: string): boolean {
+  chatLockedFor(cooId: string): Promise<boolean> {
     return this.tableHost.chatLockedFor(cooId);
   }
 
   /** 同一张锁聊桌上的全部真实身份（含本人）；两端都在桌上才拦私聊。 */
-  lockedTablePeerCooIds(cooId: string): Set<string> {
+  lockedTablePeerCooIds(cooId: string): Promise<Set<string>> {
     return this.tableHost.lockedTablePeerCooIds(cooId);
   }
 
@@ -624,7 +654,7 @@ export class RoomHost {
   }
 
   /** 被移出客厅的人：牌局里改成托管（结算仍归他）。 */
-  markTableAuto(cooId: string): string[] {
+  markTableAuto(cooId: string): Promise<string[]> {
     return this.tableHost.markAuto(cooId);
   }
 
@@ -634,7 +664,7 @@ export class RoomHost {
   }
 
   /** 运营命令：作废一张桌并按开局明细退款。 */
-  voidTable(tableId: string, note?: string): boolean {
+  voidTable(tableId: string, note?: string): Promise<boolean> {
     return this.tableHost.voidTable(tableId, note);
   }
 
@@ -643,173 +673,188 @@ export class RoomHost {
   }
 
   /** 清理超过保留期的事件（回放 7 天；最后 500 条永远留着）。 */
-  pruneEvents(beforeTs: number, keep = 500): number {
+  pruneEvents(beforeTs: number, keep = 500): Promise<number> {
     return this.events.prune(this.roomId, beforeTs, keep);
   }
 
   /** 网关每秒调一次：开桌超时、牌局超时代打、承诺到期、余额补给。 */
-  tickClock(now = this.now()): void {
-    this.tableHost.tick();
-    this.expireLedger(now);
-    this.refillLedger(now);
+  async tickClock(now = this.now()): Promise<void> {
+    await this.tableHost.tick();
+    await this.expireLedger(now);
+    await this.refillLedger(now);
   }
 
   // —— 账本：礼物 / 承诺 / 回应 ——
 
-  gift(cooId: string, to: string, text: string, chips?: unknown): { entry: LedgerEntry; delivered?: DeliveryReceipt[] } {
-    const seat = this.requireSeat(cooId);
+  async gift(cooId: string, to: string, text: string, chips?: unknown): Promise<{ entry: LedgerEntry; delivered?: DeliveryReceipt[] }> {
+    const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能写账本');
-    const target = this.requireTarget(seat, to);
+    const target = await this.requireTarget(seat, to);
     const body = cleanSocial(text);
     const amount = chipsOf(chips);
-    this.checkSocialBudget(cooId);
-    if (amount !== undefined && this.ledger.balanceOf(cooId) < amount) {
-      throw new HostError('invalid', `你只有 ${this.ledger.balanceOf(cooId)} 枚筹码`);
-    }
-    const entry = this.ledger.record({
-      kind: 'gift',
-      room: this.roomId,
-      from: cooId,
-      to: target.cooId,
-      text: body,
-      visibility: 'private',
-      data: { fromName: seat.name, toName: target.name, ...(amount ? { chips: amount } : {}) },
-      ...(amount ? { transfers: [{ from: cooId, to: target.cooId, amount }] } : {}),
+    await this.checkSocialBudget(cooId);
+    // 「查余额 → 扣款」必须在同一个事务里、并锁住双方身份行：
+    // PostgreSQL 下两个并发礼物否则会各自通过余额检查而超支。
+    return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId, target.cooId]);
+      if (amount !== undefined) {
+        const balance = await this.ledger.balanceOf(cooId);
+        if (balance < amount) throw new HostError('invalid', `你只有 ${balance} 枚筹码`);
+      }
+      const entry = await this.ledger.record({
+        kind: 'gift',
+        room: this.roomId,
+        from: cooId,
+        to: target.cooId,
+        text: body,
+        visibility: 'private',
+        data: { fromName: seat.name, toName: target.name, ...(amount ? { chips: amount } : {}) },
+        ...(amount ? { transfers: [{ from: cooId, to: target.cooId, amount }] } : {}),
+      });
+      const delivered = await this.notify(target.cooId, `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
+        kind: 'gift', action: 'gift', from: seat.name, entryId: entry.id, toName: target.name,
+      });
+      return { entry, delivered: [delivered] };
     });
-    const delivered = this.notify(target.cooId, `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
-      kind: 'gift', action: 'gift', from: seat.name, entryId: entry.id, toName: target.name,
-    });
-    return { entry, delivered: [delivered] };
   }
 
-  promise(
+  async promise(
     cooId: string,
     to: string,
     text: string,
     due?: unknown,
     chips?: unknown,
-  ): { entry: LedgerEntry; delivered?: DeliveryReceipt[] } {
-    const seat = this.requireSeat(cooId);
+  ): Promise<{ entry: LedgerEntry; delivered?: DeliveryReceipt[] }> {
+    const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能写账本');
-    const target = this.requireTarget(seat, to);
+    const target = await this.requireTarget(seat, to);
     const body = cleanSocial(text);
     const amount = chipsOf(chips);
     const dueAt = dueOf(due, this.now());
-    this.checkSocialBudget(cooId);
-    const open = this.ledger.countOpenPromises(cooId);
-    if (open >= MAX_OPEN_PROMISES) {
-      throw new HostError('invalid', `你已经有 ${MAX_OPEN_PROMISES} 条没了结的承诺，先了结几条`);
-    }
-    const entry = this.ledger.record({
-      kind: 'promise',
-      room: this.roomId,
-      from: cooId,
-      to: target.cooId,
-      text: body,
-      visibility: 'private',
-      ...(dueAt !== undefined ? { due: dueAt } : {}),
-      data: {
-        fromName: seat.name,
-        toName: target.name,
-        ...(amount ? { chips: amount } : {}),
-      },
+    await this.checkSocialBudget(cooId);
+    // 「数未了结 → 写入」也要在同一个事务里，否则并发承诺可以绕过上限。
+    return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId, target.cooId]);
+      const open = await this.ledger.countOpenPromises(cooId);
+      if (open >= MAX_OPEN_PROMISES) {
+        throw new HostError('invalid', `你已经有 ${MAX_OPEN_PROMISES} 条没了结的承诺，先了结几条`);
+      }
+      const entry = await this.ledger.record({
+        kind: 'promise',
+        room: this.roomId,
+        from: cooId,
+        to: target.cooId,
+        text: body,
+        visibility: 'private',
+        ...(dueAt !== undefined ? { due: dueAt } : {}),
+        data: {
+          fromName: seat.name,
+          toName: target.name,
+          ...(amount ? { chips: amount } : {}),
+        },
+      });
+      const delivered = await this.notify(
+        target.cooId,
+        `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}${amount ? `，${amount} 枚筹码` : ''}。用 parlor_respond 回。`,
+        { kind: 'promise', action: 'promise', from: seat.name, entryId: entry.id, toName: target.name },
+      );
+      return { entry, delivered: [delivered] };
     });
-    const delivered = this.notify(
-      target.cooId,
-      `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}${amount ? `，${amount} 枚筹码` : ''}。用 parlor_respond 回。`,
-      { kind: 'promise', action: 'promise', from: seat.name, entryId: entry.id, toName: target.name },
-    );
-    return { entry, delivered: [delivered] };
   }
 
   /** 回应承诺：只有被承诺的人能答应/拒绝/了结；只有提出的人能在回应前撤回。 */
-  respond(
+  async respond(
     cooId: string,
     id: string,
     action: 'accept' | 'decline' | 'done' | 'cancel',
-  ): { entry: LedgerEntry; delivered?: DeliveryReceipt[] } {
-    const seat = this.requireSeat(cooId);
+  ): Promise<{ entry: LedgerEntry; delivered?: DeliveryReceipt[] }> {
+    const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能写账本');
-    const promise = this.ledger.find(id);
+    const promise = await this.ledger.find(id);
     if (!promise || (promise.kind !== 'promise' && promise.kind !== 'debt')) {
       throw new HostError('not_found', '找不到这条承诺；用 parlor_ledger 看未了结里的 id');
     }
     if (promise.room !== this.roomId) {
       throw new HostError('not_found', '这条承诺不在这个客厅；回原来的客厅再回应');
     }
-    const status = this.ledger.promiseStatus(promise);
     const counterpartCoo = promise.from === cooId ? promise.to : promise.from;
-    const counterpartSeat = counterpartCoo ? this.seatOf(counterpartCoo) : null;
-    const storedName = promise.from === cooId ? promise.data?.toName : promise.data?.fromName;
-    const otherName = counterpartSeat?.name
-      ?? (typeof storedName === 'string' && storedName ? storedName : '对方');
+    // 读状态 → 判权限 → 写回应 是一个整体：PG 下两个人的并发回应（答应/撤回）
+    // 必须串行，否则会各写一条互相矛盾的终态。锁涉及的双方身份行。
+    return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId, promise.from, promise.to, counterpartCoo]);
+      const status = await this.ledger.promiseStatus(promise);
+      const counterpartSeat = counterpartCoo ? await this.seatOf(counterpartCoo) : null;
+      const storedName = promise.from === cooId ? promise.data?.toName : promise.data?.fromName;
+      const otherName = counterpartSeat?.name
+        ?? (typeof storedName === 'string' && storedName ? storedName : '对方');
 
-    if (action === 'accept' || action === 'decline') {
-      if (promise.to !== cooId) throw new HostError('forbidden', '只有被承诺的人能回应');
-      if (status !== 'pending') throw new HostError('conflict', `这条承诺已经「${this.statusLabel(status)}」了`);
-    } else if (action === 'cancel') {
-      if (promise.from !== cooId) throw new HostError('forbidden', '只有提出承诺的人能撤回');
-      if (status !== 'pending') throw new HostError('conflict', '对方已经回应了，不能单方面撤回');
-    } else {
-      if (promise.to !== cooId) throw new HostError('forbidden', '只有被承诺的人（债权人）能说了结');
-      if (status !== 'accepted') throw new HostError('conflict', `这条承诺现在是「${this.statusLabel(status)}」，不能了结`);
-      const amount = typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
-      if (amount > 0) {
-        const balance = promise.from ? this.ledger.balanceOf(promise.from) : 0;
-        if (balance < amount) {
-          throw new HostError('invalid', `${otherName} 现在只有 ${balance} 枚筹码，还不够 ${amount} 枚`);
+      if (action === 'accept' || action === 'decline') {
+        if (promise.to !== cooId) throw new HostError('forbidden', '只有被承诺的人能回应');
+        if (status !== 'pending') throw new HostError('conflict', `这条承诺已经「${this.statusLabel(status)}」了`);
+      } else if (action === 'cancel') {
+        if (promise.from !== cooId) throw new HostError('forbidden', '只有提出承诺的人能撤回');
+        if (status !== 'pending') throw new HostError('conflict', '对方已经回应了，不能单方面撤回');
+      } else {
+        if (promise.to !== cooId) throw new HostError('forbidden', '只有被承诺的人（债权人）能说了结');
+        if (status !== 'accepted') throw new HostError('conflict', `这条承诺现在是「${this.statusLabel(status)}」，不能了结`);
+        const chips = typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
+        if (chips > 0) {
+          const balance = promise.from ? await this.ledger.balanceOf(promise.from) : 0;
+          if (balance < chips) {
+            throw new HostError('invalid', `${otherName} 现在只有 ${balance} 枚筹码，还不够 ${chips} 枚`);
+          }
         }
       }
-    }
 
-    const kind = action === 'done' ? 'settle' : action;
-    const amount = action === 'done' && typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
-    const prefix = { accept: '已答应', decline: '已拒绝', cancel: '已撤回', done: '已了结' }[action];
-    const entry = this.ledger.record({
-      kind,
-      ref: promise.id,
-      room: promise.room,
-      from: cooId,
-      ...(counterpartCoo ? { to: counterpartCoo } : {}),
-      text: `${prefix}：${promise.text}`,
-      visibility: 'private',
-      data: {
-        fromName: seat.name,
-        toName: otherName,
-        promiseText: promise.text,
-        ...(amount ? { chips: amount } : {}),
-      },
-      ...(amount && promise.from
-        ? { transfers: [{ from: promise.from, to: promise.to ?? cooId, amount }] }
-        : {}),
+      const kind = action === 'done' ? 'settle' : action;
+      const amount = action === 'done' && typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
+      const prefix = { accept: '已答应', decline: '已拒绝', cancel: '已撤回', done: '已了结' }[action];
+      const entry = await this.ledger.record({
+        kind,
+        ref: promise.id,
+        room: promise.room,
+        from: cooId,
+        ...(counterpartCoo ? { to: counterpartCoo } : {}),
+        text: `${prefix}：${promise.text}`,
+        visibility: 'private',
+        data: {
+          fromName: seat.name,
+          toName: otherName,
+          promiseText: promise.text,
+          ...(amount ? { chips: amount } : {}),
+        },
+        ...(amount && promise.from
+          ? { transfers: [{ from: promise.from, to: promise.to ?? cooId, amount }] }
+          : {}),
+      });
+      const text = {
+        accept: `答应了你的承诺：${promise.text}`,
+        decline: `没答应这条承诺：${promise.text}`,
+        cancel: `撤回了承诺：${promise.text}`,
+        done: `说了结这条承诺：${promise.text}${amount ? `（${amount} 枚筹码已划给你）` : ''}`,
+      }[action];
+      const delivered = counterpartCoo
+        ? await this.notify(counterpartCoo, `${seat.name} ${text}`, {
+          kind: 'promise', action, from: seat.name, entryId: promise.id, toName: otherName,
+        })
+        : undefined;
+      return { entry, ...(delivered ? { delivered: [delivered] } : {}) };
     });
-    const text = {
-      accept: `答应了你的承诺：${promise.text}`,
-      decline: `没答应这条承诺：${promise.text}`,
-      cancel: `撤回了承诺：${promise.text}`,
-      done: `说了结这条承诺：${promise.text}${amount ? `（${amount} 枚筹码已划给你）` : ''}`,
-    }[action];
-    const delivered = counterpartCoo
-      ? this.notify(counterpartCoo, `${seat.name} ${text}`, {
-        kind: 'promise', action, from: seat.name, entryId: promise.id, toName: otherName,
-      })
-      : undefined;
-    return { entry, ...(delivered ? { delivered: [delivered] } : {}) };
   }
 
   /** 到期没结的承诺由服务器追加 default；只扫本客厅的承诺。 */
-  expireLedger(now = this.now()): LedgerEntry[] {
-    const created = this.ledger.expire(now, this.roomId);
+  async expireLedger(now = this.now()): Promise<LedgerEntry[]> {
+    const created = await this.ledger.expire(now, this.roomId);
     for (const entry of created) {
       const [debtorCoo, creditorCoo] = entry.participants ?? [];
       const text = typeof entry.data?.promiseText === 'string' ? entry.data.promiseText : entry.text;
       if (debtorCoo) {
-        this.notify(debtorCoo, `你对 ${entry.data?.toName ?? '对方'} 的承诺到期没结：${text}`, {
+        await this.notify(debtorCoo, `你对 ${entry.data?.toName ?? '对方'} 的承诺到期没结：${text}`, {
           kind: 'promise', action: 'default', entryId: entry.ref ?? entry.id,
         });
       }
       if (creditorCoo) {
-        this.notify(creditorCoo, `${entry.data?.fromName ?? '对方'} 对你的承诺到期没结：${text}`, {
+        await this.notify(creditorCoo, `${entry.data?.fromName ?? '对方'} 对你的承诺到期没结：${text}`, {
           kind: 'promise', action: 'default', entryId: entry.ref ?? entry.id,
         });
       }
@@ -818,26 +863,26 @@ export class RoomHost {
   }
 
   /** 余额见底的人由客厅补一点（每段间隔最多一次），并私下告诉他。 */
-  refillLedger(now = this.now()): LedgerEntry[] {
+  async refillLedger(now = this.now()): Promise<LedgerEntry[]> {
     const created: LedgerEntry[] = [];
-    for (const seat of this.seats()) {
+    for (const seat of await this.seats()) {
       if (seat.kind === 'observer') continue;
-      const entry = this.ledger.maybeRefill(seat.cooId, this.roomId, now);
+      const entry = await this.ledger.maybeRefill(seat.cooId, this.roomId, now);
       if (!entry) continue;
       created.push(entry);
       const amount = typeof entry.data?.chips === 'number' ? entry.data.chips : 0;
-      this.notify(seat.cooId, `客厅给你补了 ${amount} 枚筹码，现在有 ${this.ledger.balanceOf(seat.cooId)} 枚。`, {
+      await this.notify(seat.cooId, `客厅给你补了 ${amount} 枚筹码，现在有 ${await this.ledger.balanceOf(seat.cooId)} 枚。`, {
         kind: 'grant', action: 'refill', entryId: entry.id,
       });
     }
     return created;
   }
 
-  private assertNotLocked(cooId: string, verb: string): void {
-    const lock = this.tableHost.lockOf(cooId);
+  private async assertNotLocked(cooId: string, verb: string): Promise<void> {
+    const lock = await this.tableHost.lockOf(cooId);
     if (!lock) return;
     if (lock.status === 'open') {
-      const hint = lock.hostSeatId === this.seatOf(cooId)?.id
+      const hint = lock.hostSeatId === (await this.seatOf(cooId))?.id
         ? '你是开桌的人，先把桌子收起来'
         : '先退桌';
       throw new HostError('conflict', `你还在${lock.label}桌上（还没开局）：${hint}，再${verb}`);
@@ -845,16 +890,16 @@ export class RoomHost {
     throw new HostError('conflict', `${lock.label}牌局还没结束；打完才能${verb}`);
   }
 
-  private requireTarget(seat: SeatRow, to: string): SeatRow {
+  private async requireTarget(seat: SeatRow, to: string): Promise<SeatRow> {
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能写账本');
-    const target = this.resolveSeat(to);
+    const target = await this.resolveSeat(to);
     if (target.id === seat.id) throw new HostError('invalid', '不能对自己做这件事');
     if (target.kind === 'observer') throw new HostError('invalid', '观看者不参与账本');
     return target;
   }
 
-  private checkSocialBudget(cooId: string): void {
-    if (this.ledger.socialCountSince(cooId, this.now() - 3_600_000) >= MAX_SOCIAL_PER_HOUR) {
+  private async checkSocialBudget(cooId: string): Promise<void> {
+    if (await this.ledger.socialCountSince(cooId, this.now() - 3_600_000) >= MAX_SOCIAL_PER_HOUR) {
       throw new HostError('invalid', `一小时内最多 ${MAX_SOCIAL_PER_HOUR} 条礼物或承诺，过一会儿再来`);
     }
   }
@@ -877,14 +922,14 @@ export class RoomHost {
    * 账本通知：对方在这个客厅就写一条 seat-scope 事件（即时唤醒用），
    * 不在也照样留一封进全局信箱。返回给寄信人的投递回执。
    */
-  private notify(
+  private async notify(
     cooId: string,
     text: string,
     data: Record<string, unknown> & { kind: string; entryId?: string },
-  ): DeliveryReceipt {
-    const seat = this.seatOf(cooId);
+  ): Promise<DeliveryReceipt> {
+    const seat = await this.seatOf(cooId);
     if (seat) {
-      this.events.append(this.roomId, {
+      await this.events.append(this.roomId, {
         type: 'parlor.ledger',
         from: 'system',
         scope: { kind: 'seat', seatId: seat.id },
@@ -895,7 +940,7 @@ export class RoomHost {
       });
     }
     const kind = data.kind === 'gift' ? 'gift' : data.kind === 'promise' ? 'promise' : 'ledger';
-    const letter = this.mail.append({
+    const letter = await this.mail.append({
       to: cooId,
       room: this.roomId,
       kind,
@@ -912,39 +957,53 @@ export class RoomHost {
     };
   }
 
-  private requireRoom(): RoomRow {
-    const room = getRoom(this.db, this.roomId);
+  private async requireRoom(): Promise<RoomRow> {
+    const room = await getRoom(this.db, this.roomId);
     if (!room) throw new HostError('not_found', `客厅不存在：${this.roomId}`);
     return room;
   }
 
-  private requireSeat(cooId: string): SeatRow {
-    this.requireRoom();
-    const seat = this.seatOf(cooId);
+  private async requireSeat(cooId: string): Promise<SeatRow> {
+    await this.requireRoom();
+    const seat = await this.seatOf(cooId);
     if (!seat) throw new HostError('forbidden', '你不在这个客厅里');
     return seat;
   }
 
-  private resolveSeat(value: string): SeatRow {
+  private async resolveSeat(value: string): Promise<SeatRow> {
     const needle = value.trim().toLowerCase();
-    const seats = this.seats();
+    const seats = await this.seats();
     const handle = parseHandleQuery(value) ?? (value.includes(' #') ? parseHandleQuery('#' + value.split(' #').pop()) : null);
     const exact = seats.find((item) => item.id === value.trim() || item.cooId === value.trim());
     if (exact) return exact;
-    const hits = handle ? seats.filter((item) => registeredHandle(this.db, item.cooId) === handle || item.cooId.toLowerCase() === handle)
-      : seats.filter((item) => item.name.toLowerCase() === needle);
-    if (hits.length > 1) throw new HostError('conflict', '有多个同名席位，请用 #短号');
-    const seat = hits[0];
+    const matches: SeatRow[] = [];
+    if (handle) {
+      for (const item of seats) {
+        const registered = await registeredHandle(this.db, item.cooId);
+        if (registered === handle || item.cooId.toLowerCase() === handle) matches.push(item);
+      }
+    } else {
+      for (const item of seats) {
+        if (item.name.toLowerCase() === needle) matches.push(item);
+      }
+    }
+    if (matches.length > 1) throw new HostError('conflict', '有多个同名席位，请用 #短号');
+    const seat = matches[0];
     if (!seat) throw new HostError('not_found', '客厅里没有这个席位：' + value);
     return seat;
   }
 
-  private mentionsIn(text: string, from: SeatRow): string[] {
-    return mentionsInText(text, this.seats().map((seat) => ({ ...seat, handle: registeredHandle(this.db, seat.cooId) }))).filter((id) => id !== from.id);
+  private async mentionsIn(text: string, from: SeatRow): Promise<string[]> {
+    const seats = await this.seats();
+    const withHandles = [];
+    for (const seat of seats) {
+      withHandles.push({ ...seat, handle: await registeredHandle(this.db, seat.cooId) });
+    }
+    return mentionsInText(text, withHandles).filter((id) => id !== from.id);
   }
 
-  private latestInterval(cooId: string): { visibleFromSeq: number; visibleUntilSeq: number | null } | null {
-    const row = this.db.prepare(
+  private async latestInterval(cooId: string): Promise<{ visibleFromSeq: number; visibleUntilSeq: number | null } | null> {
+    const row = await this.db.prepare(
       `SELECT visible_from_seq, visible_to_seq FROM room_seats
        WHERE room_id = ? AND coo_id = ?
        ORDER BY visible_from_seq DESC, joined_at DESC, id DESC LIMIT 1`,
@@ -952,4 +1011,3 @@ export class RoomHost {
     return row ? { visibleFromSeq: row.visible_from_seq, visibleUntilSeq: row.visible_to_seq } : null;
   }
 }
-

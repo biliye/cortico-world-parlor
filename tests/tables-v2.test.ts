@@ -3,6 +3,7 @@
  * 重试拿原回执、旧版本打不进新回合。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
 const A = 'coo-t2aaaaaa';
@@ -19,7 +20,7 @@ afterEach(async () => {
 });
 
 const start = async (): Promise<WorldServer> => {
-  server = new WorldServer({ allowGuestJoin: false, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+  server = await WorldServer.create({ allowGuestJoin: false, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
   await server.listen();
   return server;
 };

@@ -1,5 +1,6 @@
 /** 多客厅 World：开客厅、串门、回大厅、邀请，以及专注 B。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,7 +61,7 @@ const startWorld = async (options: { room?: string; tier?: WakeTier } = {}): Pro
   host: FakeHost; friend: ParlorClient; friendToken: string; secrets: Record<string, string>;
   ctx: WorldContext<ParlorConfigSection>;
 }> => {
-  server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+  server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
   await server.listen();
   const secrets: Record<string, string> = {
     PARLOR_INVITE_CODE: 'inv',
@@ -197,7 +198,7 @@ describe('World 多客厅', () => {
   });
 
   it('已有账户再次加入不会把 .env 里的 ownerKey 冲掉', async () => {
-    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
     await server.listen();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx1 = makeContext(secrets);
@@ -323,7 +324,7 @@ describe('World 多客厅', () => {
 
 describe('默认落在大厅', () => {
   it('装完就在大厅；想开桌要先走进一个客厅', async () => {
-    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
     await server.listen();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx = makeContext(secrets);

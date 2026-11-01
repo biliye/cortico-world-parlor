@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { jsonValue } from '../src/room/storage/json.ts';
+import { pgServerStorage, pgTestEnabled } from './helpers/pg.ts';
 import { ParlorClient } from '../src/room/client.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
@@ -21,7 +23,7 @@ const request = async (path: string, body?: unknown, headers: Record<string, str
 };
 
 const setup = async (global: boolean) => {
-  server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv',
+  server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv',
     ...(global ? { identityAuthority: 'self' } : {}) });
   await server.listen();
   const child = await request('/v1/rooms/hall/join', { name: '房主Coo', kind: 'pet' },
@@ -32,7 +34,7 @@ const setup = async (global: boolean) => {
   if (global) expect(player.body.identity.cooSecret).toBe('seat-only');
   const created = await request('/v1/rooms', { name: '家长建的测试厅', visibility: 'public' }, bearer(player.body.token));
   expect(created.status).toBe(200);
-  const owner = server.dbHandle.prepare('SELECT owner_coo_id FROM rooms WHERE id=?')
+  const owner = await server.dbHandle.prepare('SELECT owner_coo_id FROM rooms WHERE id=?')
     .get(created.body.room.id) as { owner_coo_id: string };
   expect(owner.owner_coo_id).toBe(player.body.identity.cooId);
   return { room: created.body.room.id as string, player: player.body, child: child.body };
@@ -74,7 +76,7 @@ describe('删除客厅', () => {
   it.each([false, true])('global=%s：只有房主能删除；释放席位、隐藏目录，历史与账户保留，重复操作幂等', async (global) => {
     const { room, player } = await setup(global);
     const client = new ParlorClient(server!.url);
-    const childSeat = server!.dbHandle.prepare("SELECT token_hash FROM room_seats WHERE coo_id=? AND released_at IS NULL").get(childId);
+    const childSeat = await server!.dbHandle.prepare("SELECT token_hash FROM room_seats WHERE coo_id=? AND released_at IS NULL").get(childId);
     const visitor = await request('/v1/rooms/' + room + '/join', { name: '来客' }, {
       'x-parlor-invite': 'inv', 'x-parlor-coo': 'coo-delete-visitor',
       'x-parlor-coo-secret': 'visitor-secret-01234567890123456789',
@@ -85,16 +87,16 @@ describe('删除客厅', () => {
     expect((await request('/v1/rooms/' + room + '/delete', {}, bearer('forged'))).status).toBe(401);
     expect((await request('/v1/rooms/hall/delete', {}, bearer(player.token))).status).toBe(403);
     await client.action(token, { type: 'say', text: '保留的历史' }, room);
-    const beforeCoos = server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM coos').get()?.n;
-    const beforeAccounts = server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM accounts').get()?.n;
-    const ledger = server!.dbHandle.prepare('SELECT * FROM ledger_entries ORDER BY id').all();
+    const beforeCoos = (await server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM coos').get())?.n;
+    const beforeAccounts = (await server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM accounts').get())?.n;
+    const ledger = await server!.dbHandle.prepare('SELECT * FROM ledger_entries ORDER BY id').all();
     const deleted = await request('/v1/rooms/' + room + '/delete', {}, bearer(player.token));
     expect(deleted.status).toBe(200);
     expect(deleted.body.room).toMatchObject({ archived: true, seats: 0, capacity: 30 });
-    const archived = server!.dbHandle.prepare('SELECT archived_at FROM rooms WHERE id=?').get(room)?.archived_at;
+    const archived = (await server!.dbHandle.prepare('SELECT archived_at FROM rooms WHERE id=?').get(room))?.archived_at;
     const again = await request('/v1/rooms/' + room + '/delete', {}, bearer(player.token));
     expect(again.status).toBe(200);
-    expect(server!.dbHandle.prepare('SELECT archived_at FROM rooms WHERE id=?').get(room)?.archived_at).toBe(archived);
+    expect((await server!.dbHandle.prepare('SELECT archived_at FROM rooms WHERE id=?').get(room))?.archived_at).toBe(archived);
     expect((await request('/v1/rooms?all=1', undefined, bearer(player.token))).body.rooms.some((x: any) => x.id === room)).toBe(false);
     expect((await request('/v1/hall', undefined, bearer(player.token))).body.rooms.some((x: any) => x.id === room)).toBe(false);
     expect((await request('/v1/rooms/' + room + '/room', undefined, bearer(token))).status).toBe(401);
@@ -103,13 +105,18 @@ describe('删除客厅', () => {
       'x-parlor-invite': 'inv', 'x-parlor-coo': 'coo-delete-visitor',
       'x-parlor-coo-secret': 'visitor-secret-01234567890123456789',
     })).status).toBe(403);
-    expect(server!.dbHandle.prepare("SELECT COUNT(*) AS n FROM events WHERE room_id=? AND text='保留的历史'").get(room)?.n).toBe(1);
-    expect(server!.dbHandle.prepare("SELECT COUNT(*) AS n FROM events WHERE room_id=? AND json_extract(data_json,'$.reason')='room_deleted'").get(room)?.n).toBe(1);
-    expect(server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM coos').get()?.n).toBe(beforeCoos);
-    expect(server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM accounts').get()?.n).toBe(beforeAccounts);
-    expect(server!.dbHandle.prepare('SELECT * FROM ledger_entries ORDER BY id').all()).toEqual(ledger);
-    expect(server!.dbHandle.prepare("SELECT token_hash FROM room_seats WHERE coo_id=? AND released_at IS NULL").get(childId)).toEqual(childSeat);
-    expect(server!.dbHandle.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect((await server!.dbHandle.prepare("SELECT COUNT(*) AS n FROM events WHERE room_id=? AND text='保留的历史'").get(room))?.n).toBe(1);
+    const eventRows = await server!.dbHandle.prepare('SELECT data_json FROM events WHERE room_id = ?').all(room) as { data_json: unknown }[];
+    const deletedNotices = eventRows.filter((row) => jsonValue<Record<string, unknown>>(row.data_json, {}).reason === 'room_deleted');
+    expect(deletedNotices).toHaveLength(1);
+    expect((await server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM coos').get())?.n).toBe(beforeCoos);
+    expect((await server!.dbHandle.prepare('SELECT COUNT(*) AS n FROM accounts').get())?.n).toBe(beforeAccounts);
+    expect(await server!.dbHandle.prepare('SELECT * FROM ledger_entries ORDER BY id').all()).toEqual(ledger);
+    expect(await server!.dbHandle.prepare("SELECT token_hash FROM room_seats WHERE coo_id=? AND released_at IS NULL").get(childId)).toEqual(childSeat);
+    // PRAGMA 只有 SQLite 有；PG 的外键由约束本身保证。
+    if (!pgTestEnabled()) {
+      expect(await server!.dbHandle.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    }
   });
 
   it('未结束的等待、叫地主、打牌桌均阻止删除，拒绝时不改变席位和历史', async () => {
@@ -117,16 +124,16 @@ describe('删除客厅', () => {
     const client = new ParlorClient(server!.url);
     const moved = await client.switchTo(player.token, 'hall', room);
     await client.action(moved.token, { type: 'table_open', game: 'ddz', requestId: 'delete-guard-open' }, room);
-    const before = server!.dbHandle.prepare('SELECT seq FROM rooms WHERE id=?').get(room)?.seq;
+    const before = (await server!.dbHandle.prepare('SELECT seq FROM rooms WHERE id=?').get(room))?.seq;
     for (const status of ['open', 'bidding', 'playing']) {
-      server!.dbHandle.prepare('UPDATE tables SET status=? WHERE room_id=?').run(status, room);
+      await server!.dbHandle.prepare('UPDATE tables SET status=? WHERE room_id=?').run(status, room);
       const result = await request('/v1/rooms/' + room + '/delete', {}, bearer(moved.token));
       expect(result.status).toBe(409);
       expect(result.body.error).toContain('未结束');
-      expect(server!.dbHandle.prepare('SELECT archived_at, seq FROM rooms WHERE id=?').get(room)).toMatchObject({ archived_at: null, seq: before });
+      expect(await server!.dbHandle.prepare('SELECT archived_at, seq FROM rooms WHERE id=?').get(room)).toMatchObject({ archived_at: null, seq: before });
       expect((await request('/v1/rooms/' + room + '/room', undefined, bearer(moved.token))).status).toBe(200);
     }
-    server!.dbHandle.prepare("UPDATE tables SET status='open' WHERE room_id=?").run(room);
+    await server!.dbHandle.prepare("UPDATE tables SET status='open' WHERE room_id=?").run(room);
     await client.action(moved.token, { type: 'table_leave', requestId: 'delete-guard-leave' }, room);
     expect((await request('/v1/rooms/' + room + '/delete', {}, bearer(moved.token))).status).toBe(200);
   });
@@ -138,7 +145,7 @@ describe('删除客厅', () => {
     const invite = await request('/v1/rooms/' + room + '/invite', { to: childId }, bearer(player.token));
     expect(invite.status).toBe(200);
     expect((await request('/v1/rooms/' + room + '/delete', {}, bearer(player.token))).status).toBe(200);
-    const row = server!.dbHandle.prepare('SELECT status FROM room_invitations WHERE id=?').get(invite.body.invitationId);
+    const row = await server!.dbHandle.prepare('SELECT status FROM room_invitations WHERE id=?').get(invite.body.invitationId);
     expect(row?.status).toBe('revoked');
     expect((await request('/v1/invitations/' + invite.body.invitationId + '/accept', {}, childHeaders)).status).toBe(409);
   });

@@ -12,7 +12,8 @@ import type { AddressInfo } from 'node:net';
 import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
 import { CooAccountDb, type ParentAccount } from './coo-account-db.ts';
-import { migrate, openDb, withTransaction, type Db } from './db.ts';
+import { migrate, withTransaction, type Db } from './db.ts';
+import { openStorage, type StorageKind } from './storage/open.ts';
 import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
@@ -35,7 +36,16 @@ import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protoc
 import { sendWebAsset } from './web-assets.ts';
 
 export interface WorldServerOptions {
+  /** 存储后端；不设就是 sqlite（老部署零改动）。 */
+  storage?: StorageKind;
+  /** SQLite 的库文件；只用于 sqlite 路径。 */
   dbFile?: string;
+  /** PostgreSQL 连接串；storage=postgres 时必填，缺了直接报错。 */
+  databaseUrl?: string;
+  /** 连接池上限（只对 PostgreSQL 生效）。 */
+  poolMax?: number;
+  /** 单条语句超时毫秒（只对 PostgreSQL 生效）。 */
+  statementTimeoutMs?: number;
   /** self = 本机提供统一身份；URL = 信任该身份服务；省略保留旧协议。 */
   identityAuthority?: string;
   /** 反向代理后的公开源地址；临时通行证只能用于这个目标。 */
@@ -157,25 +167,34 @@ const statusOf = (error: unknown): number => {
   return 500;
 };
 
+/**
+ * fetch 规范里禁用的端口：undici 连之前就拒绝（bad port）。
+ * 只影响「让系统分配端口（port 0）」的测试/staging；生产用固定端口。
+ */
+const BLOCKED_PORTS = new Set([2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6679, 6697, 10080]);
+const isBlockedPort = (port: number): boolean => (
+  port < 1024 || BLOCKED_PORTS.has(port) || (port >= 6665 && port <= 6669)
+);
+
 const messageOf = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
 );
 
-const seatOfRow = (db: Db, roomId: string, seat: {
+const seatOfRow = async (db: Db, roomId: string, seat: {
   id: string; name: string; kind: SeatKind; tier: WakeTier; joinedAt: number; cooId: string;
-}): Seat => ({
+}): Promise<Seat> => ({
   id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier, joinedAt: seat.joinedAt,
-  handle: registeredHandle(db, seat.cooId),
+  handle: await registeredHandle(db, seat.cooId),
 });
 
-const roomSummary = (db: Db, room: RoomRow) => ({
+const roomSummary = async (db: Db, room: RoomRow) => ({
   id: room.id,
   kind: room.kind,
   name: room.name,
   topic: room.topic,
   visibility: room.visibility,
   capacity: room.capacity,
-  seats: activeSeats(db, room.id).filter((seat) => seat.kind !== 'observer').length,
+  seats: (await activeSeats(db, room.id)).filter((seat) => seat.kind !== 'observer').length,
   archived: room.archivedAt !== null,
   lastActiveAt: room.lastActiveAt,
 });
@@ -210,23 +229,29 @@ export class WorldServer {
   private lastHeartbeatAt = 0;
   /** 每厅一个 RoomHost：牌桌引擎在内存里，必须跨请求共用同一个实例。 */
   private readonly hosts = new Map<string, RoomHost>();
+  /** 正在建、还没建完的 host：同一客厅并发首访共用同一个 Promise，不会建出两份。 */
+  private readonly hostPending = new Map<string, Promise<RoomHost>>();
   /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
   private readonly inviteTimes = new Map<string, number[]>();
   /** 家长链接试错限频：每个 IP 一小时最多 10 次。 */
   private readonly parentKeyTimes = new Map<string, number[]>();
   /** 事件清理：每小时一次，超过 7 天且不在最后 500 条的删掉。 */
   private lastPrune = 0;
+  /** 推送循环与客厅时钟改成异步后，上一轮没跑完就跳过这一轮（原来同步循环天然串行）。 */
+  private pumping = false;
+  private clocking = false;
+  private closing = false;
+  /** 大厅 id 的同步快照：init() 建完大厅后填上，供 hallId 这个同步属性读。 */
+  private hallIdValue = '';
 
-  constructor(options: WorldServerOptions = {}) {
-    this.db = openDb(options.dbFile ?? ':memory:');
-    migrate(this.db);
+  private constructor(db: Db, options: WorldServerOptions = {}) {
+    this.db = db;
     this.now = options.now ?? Date.now;
     this.coo = new CooAccountDb(this.db, { now: this.now });
     this.identityAuthority = options.identityAuthority === 'self' ? 'self'
       : options.identityAuthority ? identityOrigin(options.identityAuthority) : undefined;
     this.publicUrl = options.publicUrl ? identityOrigin(options.publicUrl) : undefined;
     this.registry = new IdentityRegistry(this.db, this.now);
-    if (this.identityAuthority) enableGlobalIdentity(this.db);
     this.defaultRoomId = options.defaultRoomId ?? 'lobby';
     this.inviteCode = options.inviteCode ?? '';
     this.allowGuestJoin = options.allowGuestJoin ?? false;
@@ -235,11 +260,38 @@ export class WorldServer {
     this.tableTurnMs = options.tableTurnMs !== undefined && options.tableTurnMs > 0 ? options.tableTurnMs : undefined;
     this.hostName = options.host ?? '127.0.0.1';
     this.port = options.port ?? 0;
-    this.ensureDefaultRoom();
-    const healthy = this.db.prepare("SELECT value FROM meta WHERE key = 'last_healthy_at'").get() as
+    // 启动恢复基准在 init() 里读；构造函数只落字段，不碰库。
+    this.recovery = {};
+  }
+
+  /**
+   * 开库 + 迁移 + 初始化，全部完成后才返回。
+   * 迁移是异步的，服务必须先 await 完迁移再开始接请求，所以构造不能是同步的。
+   */
+  static async create(options: WorldServerOptions = {}): Promise<WorldServer> {
+    // file 只在 sqlite 路径下给：openStorage 见到 postgres + file 会直接报错，
+    // 而省略 file 时它自己会退回 sqlite 的 :memory:。
+    const db = await openStorage({
+      storage: options.storage ?? 'sqlite',
+      ...(options.dbFile !== undefined ? { file: options.dbFile } : {}),
+      ...(options.databaseUrl !== undefined ? { url: options.databaseUrl } : {}),
+      ...(options.poolMax !== undefined ? { poolMax: options.poolMax } : {}),
+      ...(options.statementTimeoutMs !== undefined ? { statementTimeoutMs: options.statementTimeoutMs } : {}),
+    });
+    await migrate(db);
+    const server = new WorldServer(db, options);
+    await server.init();
+    return server;
+  }
+
+  /** 迁移之后的一次性初始化：建系统身份、默认客厅与大厅，读上次健康心跳。 */
+  private async init(): Promise<void> {
+    if (this.identityAuthority) await enableGlobalIdentity(this.db);
+    await this.ensureDefaultRoom();
+    const healthy = await this.db.prepare("SELECT value FROM meta WHERE key = 'last_healthy_at'").get() as
       { value?: string } | undefined;
     const lastHealthyAt = Number(healthy?.value ?? '');
-    this.recovery = Number.isFinite(lastHealthyAt) && lastHealthyAt > 0 ? { lastHealthyAt } : {};
+    if (Number.isFinite(lastHealthyAt) && lastHealthyAt > 0) this.recovery.lastHealthyAt = lastHealthyAt;
   }
 
   get url(): string {
@@ -252,8 +304,8 @@ export class WorldServer {
 
   async listen(): Promise<{ url: string; host: string; port: number }> {
     // 先把所有有未结束牌局的客厅建出来：恢复要在开始接请求之前完成。
-    this.recoverOpenTables();
-    this.server = createServer((req, res) => {
+    await this.recoverOpenTables();
+    const makeServer = (): Server => createServer((req, res) => {
       void this.handle(req, res).catch((error: unknown) => {
         if (res.headersSent) {
           try { res.end(); } catch { /* 已断开 */ }
@@ -262,44 +314,77 @@ export class WorldServer {
         json(res, statusOf(error), { error: messageOf(error) });
       });
     });
-    await new Promise<void>((resolve, reject) => {
+    const bind = (): Promise<number> => new Promise<number>((resolve, reject) => {
       const server = this.server!;
-      server.once('error', reject);
-      server.listen(this.port, this.hostName, () => resolve());
+      const onError = (error: unknown): void => reject(error);
+      server.once('error', onError);
+      server.listen(this.port, this.hostName, () => {
+        server.removeListener('error', onError);
+        resolve((server.address() as AddressInfo).port);
+      });
     });
-    const address = this.server.address() as AddressInfo;
+    let assigned = 0;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      this.server = makeServer();
+      assigned = await bind();
+      // 端口 0 由系统分配，偶尔会落到 fetch 规范禁用的端口（undici 直接报 bad port）。
+      // 这时换一个：只在「让系统分配」时有这个问题，生产固定端口不会走这条。
+      if (this.port !== 0 || !isBlockedPort(assigned)) break;
+      const server = this.server;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    const address = this.server!.address() as AddressInfo;
     const host = this.hostName === '0.0.0.0' || this.hostName === '::' ? '127.0.0.1' : this.hostName;
     this.baseUrl = `http://${host}:${address.port}`;
-    this.pumpTimer = setInterval(() => this.pump(), 400);
+    // 定时器回调是异步的：统一吞掉拒绝并打日志，别让一次库错误变成 unhandled rejection。
+    this.pumpTimer = setInterval(() => {
+      void this.pump().catch((error) => { console.error('parlor: 推送循环出错', error); });
+    }, 400);
     this.pumpTimer.unref?.();
-    this.clockTimer = setInterval(() => this.tickClock(), 1000);
+    this.clockTimer = setInterval(() => {
+      void this.tickClock().catch((error) => { console.error('parlor: 客厅时钟出错', error); });
+    }, 1000);
     this.clockTimer.unref?.();
     // 健康心跳：只反映「进程和数据库都能写」。有未结束牌局时每 5 秒一次。
-    this.heartbeatTimer = setInterval(() => this.heartbeat(), 5_000);
+    this.heartbeatTimer = setInterval(() => {
+      void this.heartbeat().catch((error) => { console.error('parlor: 健康心跳写入失败', error); });
+    }, 5_000);
     this.heartbeatTimer.unref?.();
-    this.heartbeat(true);
+    await this.heartbeat(true);
     // 离线席位清理（真人 + Coo）：每 5 分钟一次；刚启动 10 秒先扫一遍（这时还没有 SSE）。
-    this.janitorTimer = setInterval(() => this.releaseOfflineSeats(), 5 * 60_000);
+    this.janitorTimer = setInterval(() => {
+      void this.releaseOfflineSeats().catch((error) => { console.error('parlor: 离线席位清理失败', error); });
+    }, 5 * 60_000);
     this.janitorTimer.unref?.();
-    this.janitorFirstTimer = setTimeout(() => this.releaseOfflineSeats(), 10_000);
+    this.janitorFirstTimer = setTimeout(() => {
+      void this.releaseOfflineSeats().catch((error) => { console.error('parlor: 离线席位清理失败', error); });
+    }, 10_000);
     this.janitorFirstTimer.unref?.();
     return { url: this.baseUrl, host: this.hostName, port: address.port };
   }
 
   async close(): Promise<void> {
+    if (this.closing) return;
+    this.closing = true;
     if (this.pumpTimer) clearInterval(this.pumpTimer);
     this.pumpTimer = undefined;
     if (this.clockTimer) clearInterval(this.clockTimer);
     this.clockTimer = undefined;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
+    // 等正在跑的推送/时钟收尾：它们的 await 还挂在库上，直接关池会报
+    // 「Cannot use a pool after calling end on the pool」。
+    for (let wait = 0; wait < 100 && (this.pumping || this.clocking); wait += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     // 正常退出：把准确停止时刻记下来，下次启动算停机时长才有意义。
-    try { this.heartbeat(true); } catch { /* 库可能已经坏了 */ }
+    try { await this.heartbeat(true); } catch { /* 库可能已经坏了 */ }
     if (this.janitorTimer) clearInterval(this.janitorTimer);
     this.janitorTimer = undefined;
     if (this.janitorFirstTimer) clearTimeout(this.janitorFirstTimer);
     this.janitorFirstTimer = undefined;
     this.hosts.clear();
+    this.hostPending.clear();
     for (const clients of this.sse.values()) {
       for (const client of clients) {
         try { client.res.end(); } catch { /* 已断开 */ }
@@ -312,82 +397,102 @@ export class WorldServer {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       this.server = undefined;
     }
-    this.db.close();
+    await this.db.close();
   }
 
-  private ensureDefaultRoom(): void {
+  private async ensureDefaultRoom(): Promise<void> {
     const system = 'system-owner';
-    this.db.prepare(
-      'INSERT OR IGNORE INTO coos(id, kind, display_name, created_at) VALUES (?, ?, ?, ?)',
+    // INSERT OR IGNORE → 两种后端都认的 ON CONFLICT DO NOTHING。
+    await this.db.prepare(
+      'INSERT INTO coos(id, kind, display_name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
     ).run(system, 'system', '系统', this.now());
-    if (!getRoom(this.db, this.defaultRoomId)) {
-      createRoom(this.db, {
+    if (!(await getRoom(this.db, this.defaultRoomId))) {
+      await createRoom(this.db, {
         id: this.defaultRoomId,
         name: '默认客厅',
         ownerCooId: system,
         visibility: 'unlisted',
       }, this.now());
     }
-    this.ensureHall();
+    await this.ensureHall();
   }
 
   /** 大厅是特殊客厅（kind = 'hall'）：有席位、能说话，但不进目录、没有牌桌。 */
-  private ensureHall(): RoomRow {
-    const existing = this.db.prepare("SELECT id FROM rooms WHERE kind = 'hall' LIMIT 1").get() as { id: string } | undefined;
-    if (existing) return getRoom(this.db, existing.id)!;
+  private async ensureHall(): Promise<RoomRow> {
+    const existing = await this.db.prepare("SELECT id FROM rooms WHERE kind = 'hall' LIMIT 1").get() as { id: string } | undefined;
+    if (existing) {
+      const row = (await getRoom(this.db, existing.id))!;
+      this.hallIdValue = row.id;
+      return row;
+    }
     const now = this.now();
-    this.db.prepare(
+    // 大厅靠 ux_rooms_hall 唯一：并发首访时后到的那条静默跳过，再把已有行读出来。
+    await this.db.prepare(
       `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, topic, epoch, seq, created_at, last_active_at)
-       VALUES (?, 'hall', ?, NULL, 'public', ?, ?, ?, 0, ?, ?)`,
+       VALUES (?, 'hall', ?, NULL, 'public', ?, ?, ?, 0, ?, ?)
+       ON CONFLICT DO NOTHING`,
     ).run('hall', '大厅', HALL_CAPACITY, '所有客厅的入口：看谁在线、有哪些客厅、去哪串门。', randomUUID(), now, now);
-    return getRoom(this.db, 'hall')!;
+    const row = (await getRoom(this.db, 'hall'))!;
+    this.hallIdValue = row.id;
+    return row;
   }
 
+  /** 大厅 id：init() 里一定建过，之后同步读（老调用方把它当属性用）。 */
   get hallId(): string {
-    return this.ensureHall().id;
+    return this.hallIdValue;
   }
 
-  private host(roomId: string): RoomHost {
+  private host(roomId: string): Promise<RoomHost> {
     const existing = this.hosts.get(roomId);
-    if (existing) return existing;
-    const host = new RoomHost(this.db, roomId, {
+    if (existing) return Promise.resolve(existing);
+    const pending = this.hostPending.get(roomId);
+    if (pending) return pending;
+    const created = RoomHost.create(this.db, roomId, {
       now: this.now,
       ...(this.tableTurnMs !== undefined ? { turnMs: this.tableTurnMs } : {}),
       recovery: this.recovery,
+    }).then((host) => {
+      this.hosts.set(roomId, host);
+      this.hostPending.delete(roomId);
+      return host;
+    }, (error: unknown) => {
+      // 恢复失败不留下坏缓存：下一个请求重试一次。
+      this.hostPending.delete(roomId);
+      throw error;
     });
-    this.hosts.set(roomId, host);
-    return host;
+    this.hostPending.set(roomId, created);
+    return created;
   }
 
   /** 统一准入：初次加入、换房、家长下场、邀请跳转、重发令牌都先过这里。 */
-  private assertRoomEntry(roomId: string, cooId: string): void {
-    const refusal = roomEntryRefusal(this.db, roomId, cooId);
+  private async assertRoomEntry(roomId: string, cooId: string): Promise<void> {
+    const refusal = await roomEntryRefusal(this.db, roomId, cooId);
     if (refusal) throw new HttpError(403, refusal);
   }
 
   /** 房主管理权限：房主本人（身份凭证或有效席位令牌）或该房主的家长管理会话。 */
-  private roomManager(req: IncomingMessage, roomId: string): string {
+  private async roomManager(req: IncomingMessage, roomId: string): Promise<string> {
     const cookie = cookieOf(req, 'parlor_parent');
     if (cookie) {
-      const session = this.coo.verifySession(cookie);
-      if (session && isRoomOwner(this.db, roomId, session.account.cooId)) return session.account.cooId;
+      const session = await this.coo.verifySession(cookie);
+      if (session && await isRoomOwner(this.db, roomId, session.account.cooId)) return session.account.cooId;
     }
-    const cooId = this.cooOrSeat(req);
-    if (cooId && isRoomOwner(this.db, roomId, cooId)) return cooId;
+    const cooId = await this.cooOrSeat(req);
+    if (cooId && await isRoomOwner(this.db, roomId, cooId)) return cooId;
     throw new HttpError(403, '只有房主（或房主的家长会话）能管理这个客厅');
   }
 
   /**
-   * 启动恢复：所有还有未结束牌局的客厅都要先建出 host（恢复在构造函数里做），
+   * 启动恢复：所有还有未结束牌局的客厅都要先建出 host（恢复在 RoomHost.create 里做），
    * 不能等某个房间第一次被访问才恢复。
    */
-  private recoverOpenTables(): void {
-    const rows = this.db.prepare(
+  private async recoverOpenTables(): Promise<void> {
+    const rows = await this.db.prepare(
       `SELECT DISTINCT room_id FROM tables WHERE status IN ('open','bidding','playing')`,
     ).all() as { room_id: string }[];
     for (const row of rows) {
       try {
-        this.host(row.room_id);
+        await this.host(row.room_id);
       } catch (error) {
         console.error(`parlor: 客厅 ${row.room_id} 的牌桌恢复失败`, error);
       }
@@ -398,14 +503,14 @@ export class WorldServer {
    * 健康心跳：写进去本身就是一次数据库可用性检查。
    * 只有存在未结束牌局时才需要（它只用来算停机时长）。
    */
-  private heartbeat(force = false): void {
+  private async heartbeat(force = false): Promise<void> {
     const now = this.now();
     if (!force && now - this.lastHeartbeatAt < 5_000) return;
-    const live = this.db.prepare(
+    const live = await this.db.prepare(
       `SELECT 1 AS hit FROM tables WHERE status IN ('open','bidding','playing') LIMIT 1`,
     ).get() as { hit: number } | undefined;
     if (!force && !live) return;
-    this.db.prepare(
+    await this.db.prepare(
       `INSERT INTO meta(key, value) VALUES('last_healthy_at', ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     ).run(String(now));
@@ -416,28 +521,34 @@ export class WorldServer {
    * 每秒：牌桌超时、承诺到期、余额补给。
    * 没人访问的客厅也要走到：先按「有活跃席位 / 有到期承诺」把 host 建出来。
    */
-  private tickClock(): void {
+  private async tickClock(): Promise<void> {
+    if (this.closing) return;
+    // 上一轮还没跑完（库慢）就跳过这一轮：同一个超时不能连做两次。
+    if (this.clocking) return;
+    this.clocking = true;
     const now = this.now();
     try {
-      const occupied = this.db.prepare(
+      const occupied = await this.db.prepare(
         'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
       ).all() as { room_id: string }[];
-      const due = this.db.prepare(
+      const due = await this.db.prepare(
         `SELECT DISTINCT room_id FROM ledger_entries
           WHERE kind = 'promise' AND due_at IS NOT NULL AND due_at <= ? AND room_id IS NOT NULL`,
       ).all(now) as { room_id: string }[];
-      for (const row of [...occupied, ...due]) this.host(row.room_id);
+      for (const row of [...occupied, ...due]) await this.host(row.room_id);
       for (const host of this.hosts.values()) {
-        try { host.tickClock(now); } catch (error) {
+        try { await host.tickClock(now); } catch (error) {
           console.error('parlor: 客厅时钟出错', error);
         }
       }
       if (now - this.lastPrune >= 3_600_000) {
         this.lastPrune = now;
-        this.pruneEvents(now);
+        await this.pruneEvents(now);
       }
     } catch (error) {
       console.error('parlor: 时钟扫描失败', error);
+    } finally {
+      this.clocking = false;
     }
   }
 
@@ -446,7 +557,7 @@ export class WorldServer {
    * 「在线」以 SSE 连接为准：还有一条连着就不动；牌桌锁着也不动（等这局结束）。
    * 返回这次释放了几个，方便测试和运维日志。
    */
-  releaseOfflineSeats(now = this.now()): number {
+  async releaseOfflineSeats(now = this.now()): Promise<number> {
     const sweeps = [
       { kind: 'human' as const, ms: this.offlineReleaseMs },
       { kind: 'pet' as const, ms: this.cooOfflineReleaseMs },
@@ -459,11 +570,11 @@ export class WorldServer {
     let released = 0;
     for (const sweep of sweeps) {
       const cutoff = now - sweep.ms;
-      for (const seat of seatsForOfflineRelease(this.db, sweep.kind)) {
+      for (const seat of await seatsForOfflineRelease(this.db, sweep.kind)) {
         if (online.has(seat.cooId)) continue;
         if (seat.lastSeenAt > cutoff) continue;
         try {
-          if (this.host(seat.roomId).releaseOffline(seat.cooId, now)) released += 1;
+          if (await (await this.host(seat.roomId)).releaseOffline(seat.cooId, now)) released += 1;
         } catch { /* 这间房暂时有问题就跳过，下一轮再试 */ }
       }
     }
@@ -491,16 +602,16 @@ export class WorldServer {
         let kind: 'pet' | 'human' = body.kind === 'human' ? 'human' : 'pet';
         if (body.useParent === true && cookieOf(req, 'parlor_parent')) {
           if (headerValue(req, 'origin') !== this.audienceUrl()) throw new HttpError(403, '来源不对');
-          const player = this.ensurePlayerCoo(this.parentSession(req).account);
+          const player = await this.ensurePlayerCoo((await this.parentSession(req)).account);
           cooId = player.cooId; secret = player.secret; name = player.name; kind = 'human';
         }
-        const person = this.registry.enroll(cooId, secret, name, kind);
-        json(res, 200, this.registry.issue(person, audience));
+        const person = await this.registry.enroll(cooId, secret, name, kind);
+        json(res, 200, await this.registry.issue(person, audience));
       } catch (error) { throw new HttpError(403, messageOf(error)); }
       return;
     }
     if (path === '/v1/identity/verify') {
-      const person = this.registry.verify(headerValue(req, GLOBAL_HEADER), String(body.audience ?? ''));
+      const person = await this.registry.verify(headerValue(req, GLOBAL_HEADER), String(body.audience ?? ''));
       if (!person) throw new HttpError(401, '身份通行证无效、已过期或目标不匹配');
       json(res, 200, { person }); return;
     }
@@ -512,27 +623,27 @@ export class WorldServer {
     const token = headerValue(req, GLOBAL_HEADER);
     let person: GlobalPerson | null;
     try {
-      person = this.identityAuthority === 'self' ? this.registry.verify(token, this.audienceUrl())
+      person = this.identityAuthority === 'self' ? await this.registry.verify(token, this.audienceUrl())
         : (await identityRequest<{ person: GlobalPerson }>(this.authorityUrl(), '/v1/identity/verify', { audience: this.audienceUrl() }, token)).person;
     } catch { throw new HttpError(401, '无法验证统一身份，请重试'); }
     if (!person || !isCooId(person.cooId) || !/^[a-z0-9_-]{8,64}$/.test(person.handle)
       || !['pet','human'].includes(person.kind)) throw new HttpError(401, '统一身份无效');
-    const existing = this.coo.findCoo(person.cooId);
+    const existing = await this.coo.findCoo(person.cooId);
     if (existing?.status === 'disabled') throw new HttpError(403, '身份已在本服务器停用');
-    withTransaction(this.db, () => {
-      this.db.prepare(`INSERT INTO coos(id,kind,display_name,created_at,last_seen_at) VALUES (?,?,?,?,?)
+    await withTransaction(this.db, async () => {
+      await this.db.prepare(`INSERT INTO coos(id,kind,display_name,created_at,last_seen_at) VALUES (?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,last_seen_at=excluded.last_seen_at`)
         .run(person!.cooId, person!.kind, person!.name, this.now(), this.now());
-      this.db.prepare('INSERT INTO global_handles(coo_id,handle) VALUES (?,?) ON CONFLICT(coo_id) DO UPDATE SET handle=excluded.handle')
+      await this.db.prepare('INSERT INTO global_handles(coo_id,handle) VALUES (?,?) ON CONFLICT(coo_id) DO UPDATE SET handle=excluded.handle')
         .run(person!.cooId, person!.handle);
     });
     this.verifiedPeople.set(req, person);
   }
 
-  private cooAuth(req: IncomingMessage, name = '', allowSeat = true): string {
+  private async cooAuth(req: IncomingMessage, name = '', allowSeat = true): Promise<string> {
     const seatToken = bearer(req);
     if (seatToken && allowSeat) {
-      const seat = seatByTokenHash(this.db, hashSeatToken(seatToken));
+      const seat = await seatByTokenHash(this.db, hashSeatToken(seatToken));
       if (seat && seat.releasedAt === null) return seat.cooId;
     }
     const global = this.verifiedPeople.get(req);
@@ -541,43 +652,43 @@ export class WorldServer {
     const secret = headerValue(req, 'x-parlor-coo-secret').trim();
     if (!isCooId(cooId) || !isCooSecret(secret)) throw new HttpError(400, '账本身份格式不对');
     if (this.identityAuthority && this.identityAuthority !== 'self') throw new HttpError(401, '请使用统一身份通行证');
-    const claim = this.coo.claimIdentity(cooId, secret);
+    const claim = await this.coo.claimIdentity(cooId, secret);
     if (claim === 'mismatch') throw new HttpError(403, '这个账本身份已经被占用了');
     if (claim === 'invalid') {
-      const created = this.coo.registerCoo(cooId, secret, 'pet', name);
+      const created = await this.coo.registerCoo(cooId, secret, 'pet', name);
       if (created === 'mismatch') throw new HttpError(403, '这个账本身份已经被占用了');
       if (created !== 'ok') throw new HttpError(400, '账本身份格式不对');
     }
-    if (this.identityAuthority === 'self') this.registry.enroll(cooId, secret, name);
+    if (this.identityAuthority === 'self') await this.registry.enroll(cooId, secret, name);
     return cooId;
   }
 
-  private identify(req: IncomingMessage): string | null {
+  private async identify(req: IncomingMessage): Promise<string | null> {
     const global = this.verifiedPeople.get(req);
     if (global) return global.cooId;
     const cooId = headerValue(req, 'x-parlor-coo').trim();
     const secret = headerValue(req, 'x-parlor-coo-secret').trim();
     if (this.identityAuthority && this.identityAuthority !== 'self') return null;
     if (!isCooId(cooId) || !isCooSecret(secret)) return null;
-    return this.coo.claimIdentity(cooId, secret) === 'ok' ? cooId : null;
+    return await this.coo.claimIdentity(cooId, secret) === 'ok' ? cooId : null;
   }
 
   /** 网页用席位令牌也能看目录/大厅；Coo 客户端仍用身份头。 */
-  private cooOrSeat(req: IncomingMessage): string {
-    const direct = this.identify(req);
+  private async cooOrSeat(req: IncomingMessage): Promise<string> {
+    const direct = await this.identify(req);
     if (direct) return direct;
     const token = bearer(req);
     if (!token) throw new HttpError(401, '缺少身份');
-    const seat = seatByTokenHash(this.db, hashSeatToken(token));
+    const seat = await seatByTokenHash(this.db, hashSeatToken(token));
     if (!seat || seat.releasedAt !== null) throw new HttpError(401, '席位令牌无效或已经离开');
     return seat.cooId;
   }
 
-  private seatAuth(req: IncomingMessage, roomId: string, tokenOverride?: string) {
+  private async seatAuth(req: IncomingMessage, roomId: string, tokenOverride?: string) {
     const token = tokenOverride ?? bearer(req);
     if (!token) throw new HttpError(401, '缺少席位令牌');
     try {
-      return this.host(roomId).seatByToken(token);
+      return await (await this.host(roomId)).seatByToken(token);
     } catch (error) {
       if (error instanceof HostError) throw new HttpError(401, error.message);
       throw error;
@@ -601,7 +712,7 @@ export class WorldServer {
     if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
 
     if (method === 'GET' && url.pathname === '/healthz') {
-      const room = getRoom(this.db, this.defaultRoomId);
+      const room = await getRoom(this.db, this.defaultRoomId);
       json(res, 200, {
         ok: true,
         room: this.defaultRoomId,
@@ -611,9 +722,9 @@ export class WorldServer {
         guestJoin: this.allowGuestJoin,
         offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
         cooOfflineReleaseHours: this.cooOfflineReleaseMs / 3_600_000,
-        hall: this.hallId,
-        rooms: listRooms(this.db, { kind: 'room' }).length,
-        seats: room ? activeSeats(this.db, room.id).filter((seat) => seat.kind !== 'observer').length : 0,
+        hall: (await this.ensureHall()).id,
+        rooms: (await listRooms(this.db, { kind: 'room' })).length,
+        seats: room ? (await activeSeats(this.db, room.id)).filter((seat) => seat.kind !== 'observer').length : 0,
         // 能力发现：客户端按这些字段决定用哪套接口。
         tablesV2: true,
         durableActions: true,
@@ -627,9 +738,9 @@ export class WorldServer {
       const body = await readJson(req);
       const key = typeof body.key === 'string' ? body.key.trim() : '';
       this.checkParentKeyRate(req);
-      const account = key ? this.coo.verifyOwnerKey(key) : null;
+      const account = key ? await this.coo.verifyOwnerKey(key) : null;
       if (!account) throw new HttpError(401, '这个家长链接不对，或已经失效了');
-      const session = this.coo.createSession(account.id);
+      const session = await this.coo.createSession(account.id);
       if (!session) throw new HttpError(403, '这个家长账户被停用了');
       res.setHeader('set-cookie', this.parentCookie(session.token, req));
       json(res, 200, {
@@ -640,20 +751,20 @@ export class WorldServer {
     }
 
     if (method === 'GET' && url.pathname === '/v1/parent/me') {
-      const session = this.parentSession(req);
+      const session = await this.parentSession(req);
       json(res, 200, {
         account: { id: session.account.id, cooId: session.account.cooId, displayName: session.account.displayName },
         expiresAt: session.expiresAt,
-        seat: this.parentSeatView(session.account.cooId),
+        seat: await this.parentSeatView(session.account.cooId),
       });
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/parent/view') {
-      const session = this.parentSession(req);
+      const session = await this.parentSession(req);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      json(res, 200, this.parentView(session.account.cooId, since, limit));
+      json(res, 200, await this.parentView(session.account.cooId, since, limit));
       return;
     }
 
@@ -663,95 +774,99 @@ export class WorldServer {
       const key = typeof body.key === 'string' ? body.key.trim() : '';
       if (key) {
         this.checkParentKeyRate(req);
-        const account = this.coo.verifyOwnerKey(key);
+        const account = await this.coo.verifyOwnerKey(key);
         if (!account) throw new HttpError(401, '这个家长链接不对，或已经失效了');
-        const fresh = this.coo.createSession(account.id);
+        const fresh = await this.coo.createSession(account.id);
         if (!fresh) throw new HttpError(403, '这个家长账户被停用了');
         res.setHeader('set-cookie', this.parentCookie(fresh.token, req));
         json(res, 200, await this.parentPlay(account, body));
         return;
       }
-      const session = this.parentSession(req);
+      const session = await this.parentSession(req);
       json(res, 200, await this.parentPlay(session.account, body));
       return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/parent/rename') {
-      const session = this.parentSession(req);
+      const session = await this.parentSession(req);
       const body = await readJson(req);
-      json(res, 200, this.parentRename(session.account, body));
+      json(res, 200, await this.parentRename(session.account, body));
       return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/parent/logout') {
       const token = cookieOf(req, 'parlor_parent');
-      if (token) this.coo.revokeSession(token);
+      if (token) await this.coo.revokeSession(token);
       res.setHeader('set-cookie', this.clearParentCookie(req));
       json(res, 200, { ok: true });
       return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/me/owner-key/rotate') {
-      const cooId = this.cooAuth(req, '', false);
-      let account = this.coo.byCooId(cooId);
+      const cooId = await this.cooAuth(req, '', false);
+      let account = await this.coo.byCooId(cooId);
       if (!account) {
         // 迁移过来的老 Coo 可能还没有 accounts 行：第一次要 key 时建一个。
-        const ensured = this.coo.ensureAccount(cooId);
+        const ensured = await this.coo.ensureAccount(cooId);
         account = ensured.account;
         if (ensured.ownerKey) {
           json(res, 200, { ownerKey: ensured.ownerKey });
           return;
         }
       }
-      const key = this.coo.rotateOwnerKey(cooId);
+      const key = await this.coo.rotateOwnerKey(cooId);
       if (!key) throw new HttpError(409, '轮换失败；稍后再试');
-      this.coo.revokeAllSessions(account.id);
+      await this.coo.revokeAllSessions(account.id);
       json(res, 200, { ownerKey: key });
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/me') {
-      const cooId = this.cooAuth(req);
-      const seat = activeSeatForCoo(this.db, cooId);
+      const cooId = await this.cooAuth(req);
+      const seat = await activeSeatForCoo(this.db, cooId);
+      const visible: RoomRow[] = [];
+      for (const room of await listRooms(this.db, { kind: 'room' })) {
+        if (room.visibility === 'public' || room.ownerCooId === cooId
+          || (await memberOf(this.db, room.id, cooId)) !== null) visible.push(room);
+      }
       json(res, 200, {
         cooId,
         seat: seat ? {
           room: seat.roomId, id: seat.id, name: seat.name, kind: seat.kind, tier: seat.tier,
-          handle: registeredHandle(this.db, seat.cooId),
+          handle: await registeredHandle(this.db, seat.cooId),
         } : null,
-        rooms: listRooms(this.db, { kind: 'room' })
-          .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
-          .map((room) => roomSummary(this.db, room)),
+        rooms: await Promise.all(visible.map((room) => roomSummary(this.db, room))),
       });
       return;
     }
 
     // 身份级读取：被移出客厅、大厅满员时，自己的信箱/账本/历史还看得到。
     if (method === 'GET' && url.pathname === '/v1/me/mail') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
       const peek = url.searchParams.get('peek') === '1';
       const room = url.searchParams.get('room') || undefined;
-      json(res, 200, new MailDb(this.db, { now: this.now }).list(cooId, room, limit, !peek));
+      json(res, 200, await new MailDb(this.db, { now: this.now }).list(cooId, room, limit, !peek));
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/me/ledger') {
-      const cooId = this.cooOrSeat(req);
-      json(res, 200, { ledger: new LedgerDb(this.db, { now: this.now }).summaryFor(cooId) });
+      const cooId = await this.cooOrSeat(req);
+      json(res, 200, { ledger: await new LedgerDb(this.db, { now: this.now }).summaryFor(cooId) });
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/me/replay') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const room = url.searchParams.get('room') ?? '';
-      if (!room || !getRoom(this.db, room)) throw new HttpError(404, '客厅不存在');
+      if (!room || !(await getRoom(this.db, room))) throw new HttpError(404, '客厅不存在');
       const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
       const before = Number(url.searchParams.get('before') ?? 0) || undefined;
-      const page = this.host(room).replay(cooId, { limit, ...(before ? { before } : {}) });
+      const host = await this.host(room);
+      const page = await host.replay(cooId, { limit, ...(before ? { before } : {}) });
       json(res, 200, {
         room,
-        latest: this.host(room).latest(),
+        latest: await host.latest(),
         now: this.now(),
         at: serverClock(this.now()),
         retentionDays: 7,
@@ -770,46 +885,48 @@ export class WorldServer {
     }
 
     if (method === 'GET' && url.pathname === '/v1/hall') {
-      const cooId = this.cooOrSeat(req);
-      const hall = this.ensureHall();
+      const cooId = await this.cooOrSeat(req);
+      const hall = await this.ensureHall();
+      const hallSeats = await activeSeats(this.db, hall.id);
+      const meSeat = await activeSeatForCoo(this.db, cooId);
+      const visible: RoomRow[] = [];
+      for (const room of await listRooms(this.db, { kind: 'room' })) {
+        if (room.visibility === 'public' || room.ownerCooId === cooId
+          || (await memberOf(this.db, room.id, cooId)) !== null) visible.push(room);
+      }
       json(res, 200, {
         hall: {
           id: hall.id,
           name: hall.name,
           topic: hall.topic,
           capacity: hall.capacity,
-          seats: activeSeats(this.db, hall.id).map((seat) => ({
-            id: seat.id, name: seat.name, kind: seat.kind, handle: registeredHandle(this.db, seat.cooId),
-          })),
+          seats: await Promise.all(hallSeats.map(async (seat) => ({
+            id: seat.id, name: seat.name, kind: seat.kind, handle: await registeredHandle(this.db, seat.cooId),
+          }))),
         },
-        me: (() => {
-          const seat = activeSeatForCoo(this.db, cooId);
-          return seat
-            ? { room: seat.roomId, id: seat.id, name: seat.name, handle: registeredHandle(this.db, seat.cooId) }
-            : null;
-        })(),
-        rooms: listRooms(this.db, { kind: 'room' })
-          .filter((room) => room.visibility === 'public' || room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null)
-          .map((room) => roomSummary(this.db, room)),
+        me: meSeat
+          ? { room: meSeat.roomId, id: meSeat.id, name: meSeat.name, handle: await registeredHandle(this.db, meSeat.cooId) }
+          : null,
+        rooms: await Promise.all(visible.map((room) => roomSummary(this.db, room))),
       });
       return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/invite') {
-      const cooId = this.cooAuth(req);
+      const cooId = await this.cooAuth(req);
       const body = await readJson(req);
-      const seat = activeSeatForCoo(this.db, cooId);
+      const seat = await activeSeatForCoo(this.db, cooId);
       if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再邀请');
       const to = typeof body.to === 'string' ? body.to.trim() : '';
       if (!to) throw new HttpError(400, '要写邀请谁（席位名、Coo 身份或家长名）');
-      const target = this.resolveInviteTarget(to);
+      const target = await this.resolveInviteTarget(to);
       if (target.cooId === cooId) throw new HttpError(400, '不能邀请自己');
       // 人类只邀请已有家长账户的人；无账户的旧访客席不接受邀请。
-      if (target.kind === 'human' && !this.coo.isPlayerCoo(target.cooId)) {
+      if (target.kind === 'human' && !await this.coo.isPlayerCoo(target.cooId)) {
         throw new HttpError(403, `「${target.name}」没有家长账户；这个邀请只对家长开放`);
       }
       const roomValue = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : seat.roomId;
-      const room = getRoom(this.db, roomValue) ?? resolveRoom(this.db, roomValue);
+      const room = (await getRoom(this.db, roomValue)) ?? (await resolveRoom(this.db, roomValue));
       if (!room) throw new HttpError(404, '要去的客厅不存在');
       if (room.archivedAt !== null) throw new HttpError(409, '那个客厅已经归档了');
       this.checkInviteRate(cooId);
@@ -818,16 +935,16 @@ export class WorldServer {
 
       // 私密厅：只有房主能邀请；邀请先挂起，接受之后才写长期准入。
       if (room.visibility === 'private') {
-        if (!isRoomOwner(this.db, room.id, cooId)) {
+        if (!await isRoomOwner(this.db, room.id, cooId)) {
           throw new HttpError(403, '这是私密客厅：只有房主能邀请人；成员不能把自己的邀请转给别人');
         }
-        if (hasRoomAccess(this.db, room.id, target.cooId)) {
+        if (await hasRoomAccess(this.db, room.id, target.cooId)) {
           const line = `${seat.name} 说你可以进私密客厅「${room.name}」了。`;
-          const letter = new MailDb(this.db, { now: this.now }).append({
+          const letter = await new MailDb(this.db, { now: this.now }).append({
             to: target.cooId, room: room.id, kind: 'invite', action: 'notice', fromName: seat.name, text: line,
           });
           if (target.roomId) {
-            this.host(target.roomId).pingSeat(target.cooId, line, {
+            await (await this.host(target.roomId)).pingSeat(target.cooId, line, {
               room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
             });
           }
@@ -836,15 +953,15 @@ export class WorldServer {
         }
         let invitationId = '';
         let mailSeq = 0;
-        withTransaction(this.db, () => {
-          const invitation = createRoomInvitationTx(this.db, {
+        await withTransaction(this.db, async () => {
+          const invitation = await createRoomInvitationTx(this.db, {
             roomId: room.id, invitedBy: cooId, targetCooId: target.cooId, now,
           });
           invitationId = invitation.id;
           const line = target.kind === 'human'
             ? `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。打开网页的「信箱」，点「接受并进去」。`
             : `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。用 parlor_invite_accept {id:"${invitation.id}"} 接受。`;
-          const letter = new MailDb(this.db, { now: this.now }).append({
+          const letter = await new MailDb(this.db, { now: this.now }).append({
             to: target.cooId,
             room: room.id,
             kind: 'invite',
@@ -855,7 +972,7 @@ export class WorldServer {
           });
           mailSeq = letter.seq;
           if (target.roomId) {
-            this.host(target.roomId).pingSeat(target.cooId, line, {
+            await (await this.host(target.roomId)).pingSeat(target.cooId, line, {
               room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
               invitationId: invitation.id, private: true,
             });
@@ -871,7 +988,7 @@ export class WorldServer {
         ? '。打开网页的「信箱」点「进去」就到。'
         : '。用 parlor_room_visit 进去。';
       const line = `${seat.name} 邀请你去「${room.name}」${extra ? `：${extra}` : ''}${how}`;
-      const letter = new MailDb(this.db, { now: this.now }).append({
+      const letter = await new MailDb(this.db, { now: this.now }).append({
         to: target.cooId,
         room: room.id,
         kind: 'invite',
@@ -880,7 +997,7 @@ export class WorldServer {
         text: line,
       });
       if (target.roomId) {
-        this.host(target.roomId).pingSeat(target.cooId, line, {
+        await (await this.host(target.roomId)).pingSeat(target.cooId, line, {
           room: room.id, roomName: room.name, from: seat.name, mailSeq: letter.seq,
         });
       }
@@ -889,85 +1006,90 @@ export class WorldServer {
     }
 
     if (method === 'POST' && url.pathname === '/v1/dm') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const body = await readJson(req);
-      json(res, 200, this.sendDm(cooId, body));
+      json(res, 200, await this.sendDm(cooId, body));
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/dm/threads') {
-      const cooId = this.cooOrSeat(req);
-      json(res, 200, this.dmThreads(cooId));
+      const cooId = await this.cooOrSeat(req);
+      json(res, 200, await this.dmThreads(cooId));
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/dm') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const peer = (url.searchParams.get('peer') ?? '').trim();
       if (!peer) throw new HttpError(400, '要看和谁的会话？');
       const before = Number(url.searchParams.get('before') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
-      json(res, 200, this.dmThreadPage(cooId, peer, before, limit));
+      json(res, 200, await this.dmThreadPage(cooId, peer, before, limit));
       return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/dm/read') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const body = await readJson(req);
       const peer = typeof body.peer === 'string' ? body.peer.trim() : '';
       if (!peer) throw new HttpError(400, '要看和谁的会话？');
-      const changed = new MailDb(this.db, { now: this.now }).markThreadRead(cooId, peer);
+      const changed = await new MailDb(this.db, { now: this.now }).markThreadRead(cooId, peer);
       json(res, 200, { ok: true, changed });
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/people') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const q = (url.searchParams.get('q') ?? '').trim();
-      json(res, 200, this.searchPeople(cooId, q));
+      json(res, 200, await this.searchPeople(cooId, q));
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/rooms') {
       const all = url.searchParams.get('all') === '1';
-      const cooId = all ? this.cooOrSeat(req) : null;
-      const rooms = listRooms(this.db, { kind: 'room' }).filter((room) => (
-        room.visibility === 'public'
-        || (all && cooId !== null && (room.ownerCooId === cooId || memberOf(this.db, room.id, cooId) !== null))
-      ));
-      json(res, 200, { rooms: rooms.map((room) => roomSummary(this.db, room)) });
+      const cooId = all ? await this.cooOrSeat(req) : null;
+      const rooms: RoomRow[] = [];
+      for (const room of await listRooms(this.db, { kind: 'room' })) {
+        if (room.visibility === 'public') {
+          rooms.push(room);
+          continue;
+        }
+        if (!all || cooId === null) continue;
+        if (room.ownerCooId === cooId || (await memberOf(this.db, room.id, cooId)) !== null) rooms.push(room);
+      }
+      json(res, 200, { rooms: await Promise.all(rooms.map((room) => roomSummary(this.db, room))) });
       return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/rooms') {
-      const cooId = this.cooAuth(req);
+      const cooId = await this.cooAuth(req);
       const body = await readJson(req);
       const name = typeof body.name === 'string' ? body.name : '';
       const visibility = typeof body.visibility === 'string' ? body.visibility as 'public' | 'unlisted' | 'private' : undefined;
       const capacity = typeof body.capacity === 'number' ? body.capacity : undefined;
       const topic = typeof body.topic === 'string' ? body.topic : undefined;
-      const room = createRoom(this.db, {
+      const room = await createRoom(this.db, {
         name,
         ownerCooId: cooId,
         ...(visibility ? { visibility } : {}),
         ...(capacity !== undefined ? { capacity } : {}),
         ...(topic ? { topic } : {}),
       }, this.now());
-      json(res, 200, { room: roomSummary(this.db, room) });
+      json(res, 200, { room: await roomSummary(this.db, room) });
       return;
     }
 
     const detail = url.pathname.match(/^\/v1\/rooms\/([^/]+)$/);
     if (method === 'GET' && detail) {
-      const room = getRoom(this.db, detail[1]);
+      const room = await getRoom(this.db, detail[1]);
       if (!room) throw new HttpError(404, '客厅不存在');
       if (room.visibility !== 'public') {
-        const cooId = this.identify(req);
-        if (!cooId || (!isRoomOwner(this.db, room.id, cooId) && memberOf(this.db, room.id, cooId) === null)) {
+        const cooId = await this.identify(req);
+        if (!cooId || (!await isRoomOwner(this.db, room.id, cooId) && await memberOf(this.db, room.id, cooId) === null)) {
           throw new HttpError(404, '客厅不存在');
         }
       }
-      json(res, 200, { room: roomSummary(this.db, room) });
+      json(res, 200, { room: await roomSummary(this.db, room) });
       return;
     }
 
@@ -976,46 +1098,46 @@ export class WorldServer {
     if (managed) {
       const roomId = managed[1];
       const what = managed[2];
-      const room = getRoom(this.db, roomId);
+      const room = await getRoom(this.db, roomId);
       if (!room) throw new HttpError(404, '客厅不存在');
-      const manager = this.roomManager(req, roomId);
+      const manager = await this.roomManager(req, roomId);
       const now = this.now();
       if (what === 'delete' && method === 'POST') {
         if (room.kind !== 'room' || room.id === this.defaultRoomId || room.ownerCooId === 'system-owner') {
           throw new HttpError(403, '大厅和系统默认客厅不能删除');
         }
-        const host = this.host(roomId);
-        withTransaction(this.db, () => {
-          const live = this.db.prepare(
+        const host = await this.host(roomId);
+        await withTransaction(this.db, async () => {
+          const live = await this.db.prepare(
             "SELECT 1 FROM tables WHERE room_id = ? AND status IN ('open','bidding','playing') LIMIT 1",
           ).get(roomId);
           if (live) throw new HttpError(409, '客厅里还有未结束的牌桌，请先结束牌局或收起等待中的桌子');
-          for (const seat of activeSeats(this.db, roomId)) host.remove(seat.cooId, now, 'room_deleted');
-          revokeInvitationsFor(this.db, roomId, null, now);
-          archive(this.db, roomId, now);
+          for (const seat of await activeSeats(this.db, roomId)) await host.remove(seat.cooId, now, 'room_deleted');
+          await revokeInvitationsFor(this.db, roomId, null, now);
+          await archive(this.db, roomId, now);
         });
-        json(res, 200, { ok: true, room: roomSummary(this.db, getRoom(this.db, roomId)!) });
+        json(res, 200, { ok: true, room: await roomSummary(this.db, (await getRoom(this.db, roomId))!) });
         return;
       }
       if (room.archivedAt !== null) throw new HttpError(409, '这个客厅已经删除');
       if (what === 'access' && method === 'GET') {
-        expireInvitations(this.db, now);
+        await expireInvitations(this.db, now);
         const ownerRow = room.ownerCooId
-          ? this.db.prepare('SELECT id, display_name FROM coos WHERE id = ?').get(room.ownerCooId) as
+          ? await this.db.prepare('SELECT id, display_name FROM coos WHERE id = ?').get(room.ownerCooId) as
             { id: string; display_name: string } | undefined
           : undefined;
         // 房主的家长会话：manager 是孩子的 cooId，本人在场时坐的是 player_coo_id 那个 human 身份。
         // 两个身份都不给「请出去」按钮，免得房主把自己踢下线。
-        const managerAccount = this.coo.byCooId(manager);
-        const managerPlayer = managerAccount ? this.coo.playerCooOf(managerAccount.id) : null;
+        const managerAccount = await this.coo.byCooId(manager);
+        const managerPlayer = managerAccount ? await this.coo.playerCooOf(managerAccount.id) : null;
         json(res, 200, {
-          room: roomSummary(this.db, room),
+          room: await roomSummary(this.db, room),
           owner: ownerRow ? { cooId: ownerRow.id, name: ownerRow.display_name } : null,
-          members: listRoomAccess(this.db, roomId),
-          invitations: pendingInvitationsForRoom(this.db, roomId, now),
+          members: await listRoomAccess(this.db, roomId),
+          invitations: await pendingInvitationsForRoom(this.db, roomId, now),
           // 现在在厅里的人：公开厅没有 room_access 记录，成员列表是空的；
           // 这一份按活跃席位来，房主能看见来客并直接请出去。
-          seats: activeSeats(this.db, roomId).map((seat) => ({
+          seats: (await activeSeats(this.db, roomId)).map((seat) => ({
             cooId: seat.cooId,
             seatId: seat.id,
             name: seat.name,
@@ -1032,36 +1154,36 @@ export class WorldServer {
         const body = await readJson(req);
         const action = typeof body.action === 'string' ? body.action : '';
         const target = typeof body.cooId === 'string' && body.cooId.trim()
-          ? { cooId: body.cooId.trim(), name: this.coo.cooDisplayName(body.cooId.trim()) || body.cooId.trim() }
-          : this.resolveInviteTarget(typeof body.to === 'string' ? body.to.trim() : '');
+          ? { cooId: body.cooId.trim(), name: await this.coo.cooDisplayName(body.cooId.trim()) || body.cooId.trim() }
+          : await this.resolveInviteTarget(typeof body.to === 'string' ? body.to.trim() : '');
         if (action === 'grant') {
-          if (isRoomOwner(this.db, roomId, target.cooId)) throw new HttpError(400, '房主本来就能进');
+          if (await isRoomOwner(this.db, roomId, target.cooId)) throw new HttpError(400, '房主本来就能进');
           if (room.visibility !== 'private') {
             throw new HttpError(409, '只有私密客厅需要单独授权；公开/不列目录的厅有身份就能进');
           }
-          withTransaction(this.db, () => {
-            grantRoomAccessTx(this.db, { roomId, cooId: target.cooId, source: 'owner', grantedBy: manager, now });
-            revokeInvitationsFor(this.db, roomId, target.cooId, now);
+          await withTransaction(this.db, async () => {
+            await grantRoomAccessTx(this.db, { roomId, cooId: target.cooId, source: 'owner', grantedBy: manager, now });
+            await revokeInvitationsFor(this.db, roomId, target.cooId, now);
           });
           json(res, 200, { ok: true, cooId: target.cooId, name: target.name });
           return;
         }
         if (action === 'revoke') {
-          if (isRoomOwner(this.db, roomId, target.cooId)) throw new HttpError(400, '不能移除房主');
-          const host = this.host(roomId);
+          if (await isRoomOwner(this.db, roomId, target.cooId)) throw new HttpError(400, '不能移除房主');
+          const host = await this.host(roomId);
           let removedSeat = false;
           let tables: string[] = [];
-          withTransaction(this.db, () => {
-            revokeRoomAccessTx(this.db, roomId, target.cooId, now, manager);
-            revokeInvitationsFor(this.db, roomId, target.cooId, now);
+          await withTransaction(this.db, async () => {
+            await revokeRoomAccessTx(this.db, roomId, target.cooId, now, manager);
+            await revokeInvitationsFor(this.db, roomId, target.cooId, now);
             // 开局前移除 = 退桌（开桌者收桌）；开局后交给脚本托管（结算仍归他）。
             try {
-              if (host.tablePublic(undefined, target.cooId)?.status === 'open') {
-                host.leaveTable(target.cooId);
+              if ((await host.tablePublic(undefined, target.cooId))?.status === 'open') {
+                await host.leaveTable(target.cooId);
               }
             } catch { /* 牌局已开始/已结束：走托管 */ }
-            tables = host.markTableAuto(target.cooId);
-            removedSeat = host.remove(target.cooId, now) !== null;
+            tables = await host.markTableAuto(target.cooId);
+            removedSeat = await host.remove(target.cooId, now) !== null;
           });
           json(res, 200, { ok: true, cooId: target.cooId, name: target.name, removedSeat, tables });
           return;
@@ -1077,58 +1199,58 @@ export class WorldServer {
         const keep = Array.isArray(body.keep)
           ? body.keep.filter((id): id is string => typeof id === 'string')
           : [];
-        const host = this.host(roomId);
+        const host = await this.host(roomId);
         let kicked: string[] = [];
-        withTransaction(this.db, () => {
-          this.db.prepare('UPDATE rooms SET visibility = ? WHERE id = ?').run(visibility, roomId);
+        await withTransaction(this.db, async () => {
+          await this.db.prepare('UPDATE rooms SET visibility = ? WHERE id = ?').run(visibility, roomId);
           if (visibility === 'private') {
             // 改成私密时不自动授权「来过的人」；只认房主确认保留的名单。
             const keepSet = new Set(keep);
             for (const cooId of keep) {
-              const exists = this.db.prepare('SELECT 1 FROM coos WHERE id = ?').get(cooId);
+              const exists = await this.db.prepare('SELECT 1 FROM coos WHERE id = ?').get(cooId);
               if (!exists) continue;
-              grantRoomAccessTx(this.db, { roomId, cooId, source: 'owner', grantedBy: manager, now });
+              await grantRoomAccessTx(this.db, { roomId, cooId, source: 'owner', grantedBy: manager, now });
             }
-            revokeInvitationsFor(this.db, roomId, null, now);
+            await revokeInvitationsFor(this.db, roomId, null, now);
             // 不在保留名单里的在场者当场请出去（牌局交给托管，结算仍归本人）。
-            for (const seat of activeSeats(this.db, roomId)) {
+            for (const seat of await activeSeats(this.db, roomId)) {
               if (seat.cooId === room.ownerCooId || keepSet.has(seat.cooId)) continue;
               try {
-                if (host.tablePublic(undefined, seat.cooId)?.status === 'open') {
-                  host.leaveTable(seat.cooId);
+                if ((await host.tablePublic(undefined, seat.cooId))?.status === 'open') {
+                  await host.leaveTable(seat.cooId);
                 }
               } catch { /* 牌局已开始：走托管 */ }
-              host.markTableAuto(seat.cooId);
-              if (host.remove(seat.cooId, now)) kicked.push(seat.cooId);
+              await host.markTableAuto(seat.cooId);
+              if (await host.remove(seat.cooId, now)) kicked.push(seat.cooId);
             }
           }
         });
         json(res, 200, {
           ok: true,
-          room: roomSummary(this.db, getRoom(this.db, roomId)!),
+          room: await roomSummary(this.db, (await getRoom(this.db, roomId))!),
           ...(kicked.length > 0 ? { removed: kicked } : {}),
         });
         return;
       }
       if (what === 'invite' && method === 'POST') {
         const body = await readJson(req);
-        const target = this.resolveInviteTarget(typeof body.to === 'string' ? body.to.trim() : '');
+        const target = await this.resolveInviteTarget(typeof body.to === 'string' ? body.to.trim() : '');
         if (target.cooId === manager) throw new HttpError(400, '不能邀请自己');
         if (room.visibility !== 'private') {
           throw new HttpError(409, '公开/不列目录的厅有平台身份就能进；不需要房主邀请');
         }
-        if (hasRoomAccess(this.db, roomId, target.cooId)) throw new HttpError(409, `「${target.name}」本来就能进`);
-        const inviterName = this.coo.cooDisplayName(manager) || '房主';
+        if (await hasRoomAccess(this.db, roomId, target.cooId)) throw new HttpError(409, `「${target.name}」本来就能进`);
+        const inviterName = await this.coo.cooDisplayName(manager) || '房主';
         let invitationId = '';
-        withTransaction(this.db, () => {
-          const invitation = createRoomInvitationTx(this.db, {
+        await withTransaction(this.db, async () => {
+          const invitation = await createRoomInvitationTx(this.db, {
             roomId, invitedBy: manager, targetCooId: target.cooId, now,
           });
           invitationId = invitation.id;
           const line = target.kind === 'human'
             ? `${inviterName} 邀请你加入私密客厅「${room.name}」。打开网页的「信箱」，点「接受并进去」。`
             : `${inviterName} 邀请你加入私密客厅「${room.name}」。用 parlor_invite_accept {id:"${invitation.id}"} 接受。`;
-          new MailDb(this.db, { now: this.now }).append({
+          await new MailDb(this.db, { now: this.now }).append({
             to: target.cooId,
             room: roomId,
             kind: 'invite',
@@ -1137,9 +1259,9 @@ export class WorldServer {
             text: line,
             invitationId: invitation.id,
           });
-          const seat = activeSeatForCoo(this.db, target.cooId);
+          const seat = await activeSeatForCoo(this.db, target.cooId);
           if (seat) {
-            this.host(seat.roomId).pingSeat(target.cooId, line, {
+            await (await this.host(seat.roomId)).pingSeat(target.cooId, line, {
               room: roomId, roomName: room.name, invitationId: invitation.id, private: true,
             });
           }
@@ -1153,14 +1275,14 @@ export class WorldServer {
     // —— 邀请接受/拒绝（Coo 和网页玩家都能用） ——
     const invitation = url.pathname.match(/^\/v1\/invitations\/([^/]+)\/(accept|decline)$/);
     if (invitation && method === 'POST') {
-      const cooId = this.cooOrSeat(req);
+      const cooId = await this.cooOrSeat(req);
       const id = invitation[1];
       const now = this.now();
       if (invitation[2] === 'accept') {
         let decision: 'ok' | 'not_found' | 'not_yours' | 'not_pending' | 'expired' = 'not_found';
         let roomId = '';
-        withTransaction(this.db, () => {
-          const accepted = acceptInvitationTx(this.db, id, cooId, now);
+        await withTransaction(this.db, async () => {
+          const accepted = await acceptInvitationTx(this.db, id, cooId, now);
           decision = accepted.decision;
           roomId = accepted.room?.id ?? '';
         });
@@ -1171,7 +1293,7 @@ export class WorldServer {
         json(res, 200, { ok: true, room: roomId });
         return;
       }
-      const decision = withTransaction(this.db, () => declineInvitationTx(this.db, id, cooId, now));
+      const decision = await withTransaction(this.db, () => declineInvitationTx(this.db, id, cooId, now));
       if (decision === 'not_found') throw new HttpError(404, '邀请不存在或已失效');
       if (decision === 'not_yours') throw new HttpError(403, '这个邀请不是给你的');
       if (decision === 'not_pending') throw new HttpError(409, '这个邀请已经处理过了');
@@ -1180,8 +1302,8 @@ export class WorldServer {
     }
 
     if (url.pathname === '/v1/me/invitations' && method === 'GET') {
-      const cooId = this.cooOrSeat(req);
-      json(res, 200, { invitations: pendingInvitationsForCoo(this.db, cooId, this.now()) });
+      const cooId = await this.cooOrSeat(req);
+      json(res, 200, { invitations: await pendingInvitationsForCoo(this.db, cooId, this.now()) });
       return;
     }
 
@@ -1189,23 +1311,23 @@ export class WorldServer {
       const person = this.verifiedPeople.get(req);
       if (!person || person.kind !== 'human') throw new HttpError(401, '需要玩家的统一身份');
       const body = await readJson(req);
-      const parent = body.parent === true ? this.parentSession(req).account : null;
+      const parent = body.parent === true ? (await this.parentSession(req)).account : null;
       if (!this.allowGuestJoin && !parent) throw new HttpError(403, '请用家长的下场玩链接');
       if (!parent) this.checkInvite(req, body);
       if (parent) {
-        const previous = this.coo.playerCooOf(parent.id);
+        const previous = await this.coo.playerCooOf(parent.id);
         if (previous && previous !== person.cooId) throw new HttpError(409, '此家长已有另一份玩家身份；请保留旧记录，暂不能自动合并');
-        this.coo.bindPlayerCoo(parent.id, person.cooId);
+        await this.coo.bindPlayerCoo(parent.id, person.cooId);
       }
-      const wanted = typeof body.room === 'string' ? body.room : this.hallId;
-      const target = getRoom(this.db, wanted);
+      const wanted = typeof body.room === 'string' ? body.room : (await this.ensureHall()).id;
+      const target = await getRoom(this.db, wanted);
       if (!target) throw new HttpError(404, '客厅不存在');
-      this.assertRoomEntry(target.id, person.cooId);
-      const current = activeSeatForCoo(this.db, person.cooId);
-      const joined = current ? current.roomId === target.id ? this.host(target.id).reissueSeatToken(person.cooId)
-        : this.host(current.roomId).switchTo(person.cooId, target.id, { name: person.name })
-        : this.host(target.id).join(person.cooId, { name: person.name, kind: 'human', tier: 'off' });
-      json(res, 200, { room: target.id, token: joined.token, seat: seatOfRow(this.db, target.id, joined.seat),
+      await this.assertRoomEntry(target.id, person.cooId);
+      const current = await activeSeatForCoo(this.db, person.cooId);
+      const joined = current ? current.roomId === target.id ? await (await this.host(target.id)).reissueSeatToken(person.cooId)
+        : await (await this.host(current.roomId)).switchTo(person.cooId, target.id, { name: person.name })
+        : await (await this.host(target.id)).join(person.cooId, { name: person.name, kind: 'human', tier: 'off' });
+      json(res, 200, { room: target.id, token: joined.token, seat: await seatOfRow(this.db, target.id, joined.seat),
         identity: { cooId: person.cooId, cooSecret: 'seat-only' } }); return;
     }
     const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream|replay|table-log)$/);
@@ -1220,22 +1342,22 @@ export class WorldServer {
       const body = await readJson(req);
       this.checkInvite(req, body);
       const name = typeof body.name === 'string' ? body.name : '';
-      const cooId = this.cooAuth(req, name);
-      this.assertRoomEntry(this.defaultRoomId, cooId);
-      const host = this.host(this.defaultRoomId);
-      if (host.seatOf(cooId)) host.leave(cooId);
-      const joined = host.join(cooId, {
+      const cooId = await this.cooAuth(req, name);
+      await this.assertRoomEntry(this.defaultRoomId, cooId);
+      const host = await this.host(this.defaultRoomId);
+      if (await host.seatOf(cooId)) await host.leave(cooId);
+      const joined = await host.join(cooId, {
         name,
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
-      const account = this.coo.ensureAccount(cooId);
+      const account = await this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: this.defaultRoomId,
-        seat: seatOfRow(this.db, this.defaultRoomId, joined.seat),
+        seat: await seatOfRow(this.db, this.defaultRoomId, joined.seat),
         token: joined.token,
         ownerToken: '',
-        maxSeats: host.room().capacity,
+        maxSeats: (await host.room()).capacity,
         ...(account.created && account.ownerKey ? { ownerKey: account.ownerKey } : {}),
       });
       return;
@@ -1250,20 +1372,20 @@ export class WorldServer {
       this.checkInvite(req, body);
       const name = typeof body.name === 'string' ? body.name : '';
       const value = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : this.defaultRoomId;
-      const room = getRoom(this.db, value) ?? resolveRoom(this.db, value);
+      const room = (await getRoom(this.db, value)) ?? (await resolveRoom(this.db, value));
       if (!room) throw new HttpError(404, `客厅不存在：${value}`);
       if (room.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
       const cooId = randomUUID();
       const secret = randomBytes(32).toString('base64url');
-      this.coo.registerCoo(cooId, secret, 'human', name);
-      if (this.identityAuthority === 'self') this.registry.enroll(cooId, secret, name, 'human');
-      this.assertRoomEntry(room.id, cooId);
-      const host = this.host(room.id);
-      const joined = host.join(cooId, { name, kind: 'human', tier: 'off' });
+      await this.coo.registerCoo(cooId, secret, 'human', name);
+      if (this.identityAuthority === 'self') await this.registry.enroll(cooId, secret, name, 'human');
+      await this.assertRoomEntry(room.id, cooId);
+      const host = await this.host(room.id);
+      const joined = await host.join(cooId, { name, kind: 'human', tier: 'off' });
       json(res, 200, {
         room: room.id,
         roomName: room.name,
-        seat: seatOfRow(this.db, room.id, joined.seat),
+        seat: await seatOfRow(this.db, room.id, joined.seat),
         token: joined.token,
         maxSeats: room.capacity,
         identity: { cooId, cooSecret: secret },
@@ -1283,12 +1405,12 @@ export class WorldServer {
       const token = url.searchParams.get('token') ?? '';
       if (!token) throw new HttpError(410, '旧家长链接缺 token；请从扩展面板重新拿');
       const hash = createHash('sha256').update(token).digest('hex');
-      const seat = this.db.prepare(
+      const seat = await this.db.prepare(
         'SELECT room_id, coo_id FROM room_seats WHERE legacy_owner_token_hash = ? LIMIT 1',
       ).get(hash) as { room_id: string; coo_id: string } | undefined;
       if (!seat) throw new HttpError(410, '这个旧家长链接已经失效；请从扩展面板重新拿');
-      const account = this.coo.ensureAccount(seat.coo_id);
-      const session = this.coo.createSession(account.account.id);
+      const account = await this.coo.ensureAccount(seat.coo_id);
+      const session = await this.coo.createSession(account.account.id);
       if (!session) throw new HttpError(403, '这个家长账户被停用了');
       res.writeHead(302, {
         'set-cookie': this.parentCookie(session.token, req),
@@ -1308,21 +1430,21 @@ export class WorldServer {
    * online 只认**正在连着的客户端**（SSE），不认库里有没有旧席位——席位只在主动离开/换厅时释放，
    * 几天没来的人也会留着一个活跃席位，拿它当在线会把人全标成在线。
    */
-  private personInfo(
+  private async personInfo(
     cooId: string,
     fallbackName = '',
     viewer = '',
-  ): { cooId: string; name: string; online: boolean; room: string | null; handle: string } {
-    const seat = activeSeatForCoo(this.db, cooId);
-    const row = this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
+  ): Promise<{ cooId: string; name: string; online: boolean; room: string | null; handle: string }> {
+    const seat = await activeSeatForCoo(this.db, cooId);
+    const row = await this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
     const name = seat?.name || (row?.display_name ?? '').trim() || fallbackName || '某人';
     // 私密厅的实时位置不给没有权限的人看。
     let room = seat?.roomId ?? null;
     if (room) {
-      const info = getRoom(this.db, room);
-      if (info && info.visibility === 'private' && (!viewer || !hasRoomAccess(this.db, room, viewer))) room = null;
+      const info = await getRoom(this.db, room);
+      if (info && info.visibility === 'private' && (!viewer || !await hasRoomAccess(this.db, room, viewer))) room = null;
     }
-    return { cooId, name, online: this.isOnline(cooId), room, handle: registeredHandle(this.db, cooId) };
+    return { cooId, name, online: this.isOnline(cooId), room, handle: await registeredHandle(this.db, cooId) };
   }
 
   /** 有没有正在连着的客户端（网页或 Coo）；不看席位在不在。 */
@@ -1337,15 +1459,15 @@ export class WorldServer {
    * 按短号找 cooId：# 后面可以是前 8 位，也可以是完整 id。
    * 前缀撞了不猜，列出完整 id 让调用方选（不建唯一约束）。
    */
-  private cooByHandle(handle: string): string {
-    const assigned = this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
+  private async cooByHandle(handle: string): Promise<string> {
+    const assigned = await this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
     if (assigned) return assigned.coo_id;
-    const exact = this.db.prepare("SELECT id FROM coos WHERE status = 'active' AND id = ?").get(handle) as
+    const exact = await this.db.prepare("SELECT id FROM coos WHERE status = 'active' AND id = ?").get(handle) as
       { id: string } | undefined;
     if (exact) return exact.id;
     // 全局短号是登记值；不能把别人的已分配短号当作本地某个 ID 的前缀。
     if (this.identityAuthority) throw new HttpError(404, `这台服务器尚不认识短号「#${handle}」`);
-    const rows = this.db.prepare(
+    const rows = await this.db.prepare(
       "SELECT id FROM coos WHERE status = 'active' AND id LIKE ? ESCAPE '\\' ORDER BY created_at, id LIMIT 6",
     ).all(`${likePrefix(handle)}%`) as { id: string }[];
     if (rows.length === 0) throw new HttpError(404, `没有找到号「#${handle}」`);
@@ -1356,32 +1478,33 @@ export class WorldServer {
   }
 
   /** 找人：优先 cooId（搜索结果带的就是它），退一步按当前唯一同名席位。 */
-  private dmPeer(value: string, fromCooId: string): { cooId: string; name: string; online: boolean; room: string | null } {
+  private async dmPeer(value: string, fromCooId: string): Promise<{ cooId: string; name: string; online: boolean; room: string | null }> {
     const needle = value.trim();
     if (!needle) throw new HttpError(400, '要写给谁？');
     const handle = parseHandleQuery(needle);
     if (handle !== null) {
-      return this.personInfo(this.cooByHandle(handle), '', fromCooId);
+      return this.personInfo(await this.cooByHandle(handle), '', fromCooId);
     }
     if (isCooId(needle)) {
-      const row = this.db.prepare("SELECT id FROM coos WHERE id = ? AND status = 'active'").get(needle);
+      const row = await this.db.prepare("SELECT id FROM coos WHERE id = ? AND status = 'active'").get(needle);
       if (!row) throw new HttpError(404, '没有这个人');
       return this.personInfo(needle, '', fromCooId);
     }
-    const bySeatId = this.db.prepare(
+    const bySeatId = await this.db.prepare(
       'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND id = ?',
     ).get(needle) as { coo_id: string } | undefined;
     if (bySeatId) return this.personInfo(bySeatId.coo_id, '', fromCooId);
-    const seats = this.db.prepare(
-      'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND name = ? COLLATE NOCASE',
+    // COLLATE NOCASE 只有 SQLite 有：改成 lower() 两边都对得上。
+    const seats = await this.db.prepare(
+      'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND lower(name) = lower(?)',
     ).all(needle) as { coo_id: string }[];
     const ids = [...new Set(seats.map((row) => row.coo_id))].filter((id) => id !== fromCooId);
     if (this.identityAuthority && seats.length > 1) throw new HttpError(409, '有多个同名的人，请用 #短号');
     if (ids.length === 1) return this.personInfo(ids[0], '', fromCooId);
     if (ids.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
     // 不在座的人：按 coo 显示名再找一次，这样 Coo 能回已经走开的私聊。
-    const coos = this.db.prepare(
-      "SELECT id FROM coos WHERE status = 'active' AND display_name = ? COLLATE NOCASE",
+    const coos = await this.db.prepare(
+      "SELECT id FROM coos WHERE status = 'active' AND lower(display_name) = lower(?)",
     ).all(needle) as { id: string }[];
     const names = [...new Set(coos.map((row) => row.id))].filter((id) => id !== fromCooId);
     if (this.identityAuthority && coos.length > 1) throw new HttpError(409, '有多个同名的人，请用 #短号');
@@ -1391,22 +1514,23 @@ export class WorldServer {
   }
 
   /** 私聊：对方离线也照常投信箱；在线时顺手往他所在的客厅推一条事件。 */
-  private sendDm(cooId: string, body: Record<string, unknown>): Record<string, unknown> {
-    const seat = activeSeatForCoo(this.db, cooId);
+  private async sendDm(cooId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const seat = await activeSeatForCoo(this.db, cooId);
     if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再发私聊');
-    const peer = this.dmPeer(typeof body.to === 'string' ? body.to : '', cooId);
+    const peer = await this.dmPeer(typeof body.to === 'string' ? body.to : '', cooId);
     if (peer.cooId === cooId) throw new HttpError(400, '不能给自己发私聊');
     // 狼人杀进行中：同桌参与者之间不能私聊（防绕开单次发言与狼聊限制）。
     // 只拦「两端都在同一张进行中的狼人杀桌」；桌外人不受影响。
-    const roomHost = this.hosts.get(seat.roomId);
-    if (roomHost && roomHost.chatLockedFor(cooId) && roomHost.lockedTablePeerCooIds(cooId).has(peer.cooId)) {
+    // 只查已建好的 host（不在这里新建）；正在建的等它建完，别漏掉桌锁。
+    const roomHost = this.hosts.get(seat.roomId) ?? await this.hostPending.get(seat.roomId);
+    if (roomHost && await roomHost.chatLockedFor(cooId) && (await roomHost.lockedTablePeerCooIds(cooId)).has(peer.cooId)) {
       throw new HttpError(409, '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
     }
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) throw new HttpError(400, '消息不能是空的');
     if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
     this.checkDmRate(cooId);
-    const letter = new MailDb(this.db, { now: this.now }).append({
+    const letter = await new MailDb(this.db, { now: this.now }).append({
       to: peer.cooId,
       fromCooId: cooId,
       room: seat.roomId,
@@ -1414,10 +1538,10 @@ export class WorldServer {
       fromName: seat.name,
       text,
     });
-    const target = activeSeatForCoo(this.db, peer.cooId);
+    const target = await activeSeatForCoo(this.db, peer.cooId);
     if (target) {
       try {
-        this.host(target.roomId).whisperNotice(cooId, seat.name, {
+        await (await this.host(target.roomId)).whisperNotice(cooId, seat.name, {
           cooId: target.cooId, id: target.id, name: target.name,
         }, text);
       } catch { /* 推事件失败不影响信 */ }
@@ -1428,47 +1552,46 @@ export class WorldServer {
     };
   }
 
-  private dmThreads(cooId: string): Record<string, unknown> {
+  private async dmThreads(cooId: string): Promise<Record<string, unknown>> {
     const mail = new MailDb(this.db, { now: this.now });
-    const threads = mail.threads(cooId).map((thread) => {
-      const info = this.personInfo(thread.peer, '', cooId);
+    const threads = await Promise.all((await mail.threads(cooId)).map(async (thread) => {
+      const info = await this.personInfo(thread.peer, '', cooId);
       return { ...thread, name: info.name, online: info.online, room: info.room, handle: info.handle };
-    });
-    return { threads, unread: mail.dmUnread(cooId) };
+    }));
+    return { threads, unread: await mail.dmUnread(cooId) };
   }
 
-  private dmThreadPage(cooId: string, peer: string, before: number, limit: number): Record<string, unknown> {
+  private async dmThreadPage(cooId: string, peer: string, before: number, limit: number): Promise<Record<string, unknown>> {
     if (!isCooId(peer)) throw new HttpError(400, '对方身份不对');
-    const page = new MailDb(this.db, { now: this.now }).thread(cooId, peer, before, limit);
-    return { peer: this.personInfo(peer, '', cooId), ...page };
+    const page = await new MailDb(this.db, { now: this.now }).thread(cooId, peer, before, limit);
+    return { peer: await this.personInfo(peer, '', cooId), ...page };
   }
 
   /** 搜人：在线的人 + 我聊过的人；空查询就是全部候选；带 # 就是按号找。 */
-  private searchPeople(cooId: string, query: string): Record<string, unknown> {
+  private async searchPeople(cooId: string, query: string): Promise<Record<string, unknown>> {
     const handle = parseHandleQuery(query);
     if (handle !== null) {
       // 按号找人：不看在线或聊过。拿到号就能找到，这正是号的意义。
-      const assigned = this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
-      if (assigned) return { people: assigned.coo_id === cooId ? [] : [this.personInfo(assigned.coo_id)] };
+      const assigned = await this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
+      if (assigned) return { people: assigned.coo_id === cooId ? [] : [await this.personInfo(assigned.coo_id)] };
       if (this.identityAuthority) {
-        const exact = this.db.prepare("SELECT id FROM coos WHERE id=? AND status='active'").get(handle) as { id: string } | undefined;
-        return { people: exact && exact.id !== cooId ? [this.personInfo(exact.id)] : [] };
+        const exact = await this.db.prepare("SELECT id FROM coos WHERE id=? AND status='active'").get(handle) as { id: string } | undefined;
+        return { people: exact && exact.id !== cooId ? [await this.personInfo(exact.id)] : [] };
       }
-      const rows = this.db.prepare(
+      const rows = await this.db.prepare(
         `SELECT id, display_name FROM coos
           WHERE status = 'active' AND id <> ? AND id LIKE ? ESCAPE '\\'
           ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at, id
           LIMIT 20`,
       ).all(cooId, `${likePrefix(handle)}%`, handle) as { id: string; display_name: string }[];
-      return { people: rows.map((row) => this.personInfo(row.id, row.display_name, cooId)) };
+      return { people: await Promise.all(rows.map((row) => this.personInfo(row.id, row.display_name, cooId))) };
     }
     const needle = query.trim().toLowerCase();
-    const rows = this.db.prepare(
+    const rows = await this.db.prepare(
       "SELECT id, display_name FROM coos WHERE status = 'active' AND id <> ?",
     ).all(cooId) as { id: string; display_name: string }[];
-    const past = new Set(new MailDb(this.db, { now: this.now }).threads(cooId).map((thread) => thread.peer));
-    const people = rows
-      .map((row) => this.personInfo(row.id, row.display_name, cooId))
+    const past = new Set((await new MailDb(this.db, { now: this.now }).threads(cooId)).map((thread) => thread.peer));
+    const people = (await Promise.all(rows.map((row) => this.personInfo(row.id, row.display_name, cooId))))
       .filter((person) => (person.online || past.has(person.cooId))
         && (!needle || person.name.toLowerCase().includes(needle)))
       .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, 'zh'))
@@ -1499,40 +1622,40 @@ export class WorldServer {
       const body = await readJson(req);
       const name = typeof body.name === 'string' ? body.name : '';
       // 全局登记只证明身份，入场仍需目标服务器的邀请码；换厅使用已入场的席位令牌。
-      if (this.identityAuthority || this.identify(req) === null) this.checkInvite(req, body);
-      const cooId = this.cooAuth(req, name);
-      this.assertRoomEntry(roomId, cooId);
-      const host = this.host(roomId);
-      const joined = host.join(cooId, {
+      if (this.identityAuthority || await this.identify(req) === null) this.checkInvite(req, body);
+      const cooId = await this.cooAuth(req, name);
+      await this.assertRoomEntry(roomId, cooId);
+      const host = await this.host(roomId);
+      const joined = await host.join(cooId, {
         name,
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
-      const account = this.coo.ensureAccount(cooId);
+      const account = await this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: roomId,
-        seat: seatOfRow(this.db, roomId, joined.seat),
+        seat: await seatOfRow(this.db, roomId, joined.seat),
         token: joined.token,
-        maxSeats: host.room().capacity,
+        maxSeats: (await host.room()).capacity,
         ...(account.created && account.ownerKey ? { ownerKey: account.ownerKey } : {}),
       });
       return;
     }
 
     if (action === 'switch' && method === 'POST') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const body = await readJson(req);
       const value = typeof body.to === 'string' ? body.to : '';
-      const target = getRoom(this.db, value) ?? resolveRoom(this.db, value);
+      const target = (await getRoom(this.db, value)) ?? (await resolveRoom(this.db, value));
       if (!target) throw new HttpError(404, `目标客厅不存在：${value}`);
-      this.assertRoomEntry(target.id, seat.cooId);
-      const moved = this.host(roomId).switchTo(seat.cooId, target.id, {
+      await this.assertRoomEntry(target.id, seat.cooId);
+      const moved = await (await this.host(roomId)).switchTo(seat.cooId, target.id, {
         ...(typeof body.name === 'string' ? { name: body.name } : {}),
       });
       json(res, 200, {
         ok: true,
         room: target.id,
-        seat: seatOfRow(this.db, target.id, moved.seat),
+        seat: await seatOfRow(this.db, target.id, moved.seat),
         token: moved.token,
         leaveSeq: moved.leaveEvent.seq,
         joinSeq: moved.joinEvent.seq,
@@ -1541,8 +1664,8 @@ export class WorldServer {
     }
 
     if (action === 'leave' && method === 'POST') {
-      const seat = this.seatAuth(req, roomId);
-      const left = this.host(roomId).leave(seat.cooId);
+      const seat = await this.seatAuth(req, roomId);
+      const left = await (await this.host(roomId)).leave(seat.cooId);
       json(res, 200, {
         ok: true,
         seq: left.event.seq,
@@ -1552,25 +1675,25 @@ export class WorldServer {
     }
 
     if (action === 'room' && method === 'GET') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      const snapshot: RoomSnapshot = this.host(roomId).snapshot(seat.cooId, { since, limit });
+      const snapshot: RoomSnapshot = await (await this.host(roomId)).snapshot(seat.cooId, { since, limit });
       json(res, 200, { ...snapshot, online: this.onlineSeatIds(roomId) });
       return;
     }
 
     if (action === 'history' && method === 'GET') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      const host = this.host(roomId);
-      json(res, 200, { latest: host.latest(), events: host.history(seat.cooId, { since, limit }) });
+      const host = await this.host(roomId);
+      json(res, 200, { latest: await host.latest(), events: await host.history(seat.cooId, { since, limit }) });
       return;
     }
 
     if (action === 'action' && method === 'POST') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const body = await readJson(req);
       const type = typeof body.type === 'string' ? body.type : '';
       const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
@@ -1581,7 +1704,7 @@ export class WorldServer {
       if (tableMutation && !requestId) {
         throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
       }
-      const host = this.host(roomId);
+      const host = await this.host(roomId);
       const tableArg = typeof body.table === 'string' && body.table.trim() ? body.table.trim() : undefined;
       const revisionArg = typeof body.revision === 'number' ? body.revision : undefined;
       let delivered: unknown;
@@ -1595,12 +1718,12 @@ export class WorldServer {
       let closed: boolean | undefined;
 
       if (type === 'say') {
-        host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
+        await host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
       } else if (type === 'table_say') {
-        host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '', tableArg);
+        await host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '', tableArg);
       } else if (type === 'whisper') {
         // 私聊走全局那条：对方在别的客厅或不在线也照样投信箱（Coo 也能跨厅回）。
-        const result = this.sendDm(seat.cooId, body);
+        const result = await this.sendDm(seat.cooId, body);
         const message = result.message as { seq: number; ts: number };
         delivered = [{
           to: (result.peer as { name: string }).name,
@@ -1610,9 +1733,9 @@ export class WorldServer {
         }];
       } else if (type === 'set_tier') {
         if (typeof body.tier !== 'string') throw new HttpError(400, '挡位不对');
-        host.setTier(seat.cooId, body.tier as WakeTier);
+        await host.setTier(seat.cooId, body.tier as WakeTier);
       } else if (type === 'gift') {
-        const result = host.gift(
+        const result = await host.gift(
           seat.cooId,
           typeof body.to === 'string' ? body.to : '',
           typeof body.text === 'string' ? body.text : '',
@@ -1620,7 +1743,7 @@ export class WorldServer {
         );
         delivered = result.delivered;
       } else if (type === 'promise') {
-        const result = host.promise(
+        const result = await host.promise(
           seat.cooId,
           typeof body.to === 'string' ? body.to : '',
           typeof body.text === 'string' ? body.text : '',
@@ -1633,10 +1756,10 @@ export class WorldServer {
         if (actionName !== 'accept' && actionName !== 'decline' && actionName !== 'done' && actionName !== 'cancel') {
           throw new HttpError(400, '回应只能是 accept / decline / done / cancel');
         }
-        const result = host.respond(seat.cooId, typeof body.id === 'string' ? body.id : '', actionName);
+        const result = await host.respond(seat.cooId, typeof body.id === 'string' ? body.id : '', actionName);
         delivered = result.delivered;
       } else if (type === 'table_open') {
-        const opened = host.openTable(seat.cooId, {
+        const opened = await host.openTable(seat.cooId, {
           game: typeof body.game === 'string' ? body.game : undefined,
           stake: body.stake,
           clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
@@ -1649,19 +1772,19 @@ export class WorldServer {
       } else if (type === 'table_join') {
         // 客户端自报协议能力版本（狼人杀开局前用它校验每只 Coo）；旧版不带 = 旧版。
         const clientVersion = headerValue(req, 'x-parlor-client').trim() || undefined;
-        const joined = host.joinTable(seat.cooId, tableArg, requestId, clientVersion);
+        const joined = await host.joinTable(seat.cooId, tableArg, requestId, clientVersion);
         tableId = joined.tableId;
         revision = joined.receipt.revision;
         receiptSeq = joined.receipt.seq;
         deadline = joined.receipt.deadline;
         turn = joined.receipt.turn;
       } else if (type === 'table_leave') {
-        const left = host.leaveTable(seat.cooId, tableArg, requestId);
+        const left = await host.leaveTable(seat.cooId, tableArg, requestId);
         revision = left.receipt.revision;
         receiptSeq = left.receipt.seq;
         closed = left.closed;
       } else if (type === 'table_start') {
-        const receipt = host.startTable(seat.cooId, tableArg, requestId);
+        const receipt = await host.startTable(seat.cooId, tableArg, requestId);
         tableId = receipt.tableId;
         revision = receipt.revision;
         receiptSeq = receipt.seq;
@@ -1672,7 +1795,7 @@ export class WorldServer {
         // 牌桌动作按注册表分发：加一个游戏不用再改这里，只要它在 games/registry.ts 里登记过。
         const game = gameByActionType(type);
         if (game) {
-          const target = host.tablePublic(tableArg, seat.cooId);
+          const target = await host.tablePublic(tableArg, seat.cooId);
           // 不带桌号时，快照里那张「刚打完」的结果桌不能当成正在打的桌。
           if (!target || (!tableArg && target.status === 'ended')) {
             throw new HttpError(404, '你不在任何牌桌上');
@@ -1680,7 +1803,7 @@ export class WorldServer {
           if (target.game !== game.id) {
             throw new HttpError(400, `这张桌子不是${game.label}桌`);
           }
-          const receipt = host.tableAction(seat.cooId, game.toAction(body), {
+          const receipt = await host.tableAction(seat.cooId, game.toAction(body), {
             ...(tableArg ? { tableId: tableArg } : { tableId: target.id ?? target.tableId }),
             ...(revisionArg !== undefined ? { revision: revisionArg } : {}),
             ...(requestId ? { requestId } : {}),
@@ -1700,7 +1823,7 @@ export class WorldServer {
       const ts = this.now();
       json(res, 200, {
         ok: true,
-        seq: receiptSeq ?? host.latest(),
+        seq: receiptSeq ?? await host.latest(),
         ts,
         at: serverClock(ts),
         ...(requestId ? { requestId } : {}),
@@ -1717,7 +1840,7 @@ export class WorldServer {
     }
 
     if (action === 'table-log' && method === 'GET') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const tableArg = url.searchParams.get('table')?.trim() || undefined;
       const query = {
         ...(url.searchParams.get('day') !== null ? { day: Number(url.searchParams.get('day')) } : {}),
@@ -1725,20 +1848,20 @@ export class WorldServer {
         ...(url.searchParams.get('limit') !== null ? { limit: Number(url.searchParams.get('limit')) } : {}),
         review: url.searchParams.get('review') === '1',
       };
-      const log = this.host(roomId).tableLog(seat.cooId, tableArg, query);
+      const log = await (await this.host(roomId)).tableLog(seat.cooId, tableArg, query);
       json(res, 200, { ok: true, at: serverClock(this.now()), log });
       return;
     }
 
     if (action === 'replay' && method === 'GET') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
       const before = Number(url.searchParams.get('before') ?? 0) || undefined;
-      const host = this.host(roomId);
-      const page = host.replay(seat.cooId, { limit, ...(before ? { before } : {}) });
+      const host = await this.host(roomId);
+      const page = await host.replay(seat.cooId, { limit, ...(before ? { before } : {}) });
       json(res, 200, {
         room: roomId,
-        latest: host.latest(),
+        latest: await host.latest(),
         now: this.now(),
         at: serverClock(this.now()),
         retentionDays: 7,
@@ -1757,27 +1880,27 @@ export class WorldServer {
     }
 
     if (action === 'mail' && method === 'GET') {
-      const seat = this.seatAuth(req, roomId);
+      const seat = await this.seatAuth(req, roomId);
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
       const peek = url.searchParams.get('peek') === '1';
       const all = url.searchParams.get('all') === '1';
-      json(res, 200, this.host(roomId).readMail(seat.cooId, limit, !peek, all));
+      json(res, 200, await (await this.host(roomId)).readMail(seat.cooId, limit, !peek, all));
       return;
     }
 
     if (action === 'stream' && method === 'GET') {
       const token = url.searchParams.get('token') ?? bearer(req);
-      this.seatAuth(req, roomId, token);
-      this.stream(req, res, roomId, token, Number(url.searchParams.get('since') ?? 0) || 0);
+      await this.seatAuth(req, roomId, token);
+      await this.stream(req, res, roomId, token, Number(url.searchParams.get('since') ?? 0) || 0);
       return;
     }
 
     throw new HttpError(405, '这个动作不支持这个 HTTP 方法');
   }
 
-  private stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): void {
-    const host = this.host(roomId);
-    const seat = host.seatByToken(token);
+  private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {
+    const host = await this.host(roomId);
+    const seat = await host.seatByToken(token);
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
@@ -1786,7 +1909,7 @@ export class WorldServer {
     });
     res.flushHeaders?.();
     res.write('retry: 3000\n\n');
-    const initial = host.eventsSince(seat.cooId, since, 200);
+    const initial = await host.eventsSince(seat.cooId, since, 200);
     let cursor = since;
     for (const event of initial) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -1809,13 +1932,14 @@ export class WorldServer {
       this.sse.set(roomId, clients);
     }
     clients.add(client);
-    touchSeatSeen(this.db, roomId, seat.id, now);
+    await touchSeatSeen(this.db, roomId, seat.id, now);
     // 掉线排查用：一行开、一行关（谁断的、持续多久）。不带令牌。
     console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条）`);
     req.on('close', () => {
       clients?.delete(client);
       if (clients?.size === 0) this.sse.delete(roomId);
-      try { touchSeatSeen(this.db, roomId, seat.id, this.now()); } catch { /* 席位已释放/库关了 */ }
+      // 断连回调是同步的：写不进去（席位已释放/库关了）就算了，别抛未处理的拒绝。
+      void touchSeatSeen(this.db, roomId, seat.id, this.now()).catch(() => { /* 席位已释放/库关了 */ });
       if (client.closed) return;
       client.closed = true;
       const ms = Math.max(0, this.now() - client.openedAt);
@@ -1843,17 +1967,17 @@ export class WorldServer {
     return `parlor_parent=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}`;
   }
 
-  private parentSession(req: IncomingMessage) {
+  private async parentSession(req: IncomingMessage) {
     const token = cookieOf(req, 'parlor_parent');
-    const session = token ? this.coo.verifySession(token) : null;
+    const session = token ? await this.coo.verifySession(token) : null;
     if (!session) throw new HttpError(401, '家长会话已失效，请重新打开家长链接');
     return session;
   }
 
-  private parentSeatView(cooId: string) {
-    const seat = activeSeatForCoo(this.db, cooId);
+  private async parentSeatView(cooId: string) {
+    const seat = await activeSeatForCoo(this.db, cooId);
     if (!seat) return null;
-    const room = getRoom(this.db, seat.roomId);
+    const room = await getRoom(this.db, seat.roomId);
     return {
       room: seat.roomId,
       roomName: room?.name ?? seat.roomId,
@@ -1869,12 +1993,13 @@ export class WorldServer {
    * 下场身份找（人不在座也能邀请）。人类只认有家长账户的；没下过场的家长没有
    * 能收信的身份。
    */
-  private resolveInviteTarget(to: string): { cooId: string; name: string; roomId: string | null; kind: string } {
+  private async resolveInviteTarget(to: string): Promise<{ cooId: string; name: string; roomId: string | null; kind: string }> {
     const handle = parseHandleQuery(to);
-    const key = handle !== null ? this.cooByHandle(handle) : to;
-    const rows = this.db.prepare(
+    const key = handle !== null ? await this.cooByHandle(handle) : to;
+    // COLLATE NOCASE 只有 SQLite 有：改成 lower() 两边都对得上。
+    const rows = await this.db.prepare(
       `SELECT room_id, id, coo_id, name, kind FROM room_seats
-        WHERE released_at IS NULL AND (coo_id = ? OR name = ? COLLATE NOCASE)`,
+        WHERE released_at IS NULL AND (coo_id = ? OR lower(name) = lower(?))`,
     ).all(key, key) as { room_id: string; id: string; coo_id: string; name: string; kind: string }[];
     const row = rows.find((entry) => entry.coo_id === key)
       ?? rows.find((entry) => entry.name.toLowerCase() === key.toLowerCase());
@@ -1886,7 +2011,7 @@ export class WorldServer {
       target = { cooId: row.coo_id, name: row.name, roomId: row.room_id, kind: row.kind };
     } else {
       // 没在座的 Coo：按身份 id 找（房主管理页里列出的就是 cooId）。
-      const coo = this.db.prepare('SELECT id, kind, display_name FROM coos WHERE id = ?').get(key) as
+      const coo = await this.db.prepare('SELECT id, kind, display_name FROM coos WHERE id = ?').get(key) as
         { id: string; kind: string; display_name: string } | undefined;
       if (coo) {
         return {
@@ -1896,7 +2021,7 @@ export class WorldServer {
           kind: coo.kind === 'human' ? 'human' : 'pet',
         };
       }
-      const parents = this.coo.findParentsByName(key);
+      const parents = await this.coo.findParentsByName(key);
       const ready = parents.filter(
         (entry): entry is { accountId: string; cooId: string; name: string } => entry.cooId !== null,
       );
@@ -1912,7 +2037,7 @@ export class WorldServer {
       }
       target = { cooId: parent.cooId, name: parent.name, roomId: null, kind: 'human' };
     }
-    if (target.kind === 'human' && !this.coo.isPlayerCoo(target.cooId)) {
+    if (target.kind === 'human' && !await this.coo.isPlayerCoo(target.cooId)) {
       throw new HttpError(403, `「${target.name}」没有家长账户；这个邀请只对家长开放`);
     }
     return target;
@@ -1925,40 +2050,40 @@ export class WorldServer {
    */
   private async parentPlay(account: ParentAccount, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const requested = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : '';
-    const childSeat = activeSeatForCoo(this.db, account.cooId);
+    const childSeat = await activeSeatForCoo(this.db, account.cooId);
     const wanted = requested || childSeat?.roomId || this.defaultRoomId;
-    const target = getRoom(this.db, wanted) ?? resolveRoom(this.db, wanted);
+    const target = (await getRoom(this.db, wanted)) ?? (await resolveRoom(this.db, wanted));
     if (!target) throw new HttpError(404, `客厅不存在：${wanted}`);
     if (target.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
 
     if (this.identityAuthority && this.identityAuthority !== 'self') {
       return { globalEntry: this.authorityUrl(), room: target.id };
     }
-    const player = this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
-    if (this.identityAuthority === 'self') this.registry.enroll(player.cooId, player.secret, player.name, 'human');
+    const player = await this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
+    if (this.identityAuthority === 'self') await this.registry.enroll(player.cooId, player.secret, player.name, 'human');
     // 家长作为玩家也要按自己的身份准入（孩子被邀请不等于家长玩家也是成员）。
-    this.assertRoomEntry(target.id, player.cooId);
-    let seat = activeSeatForCoo(this.db, player.cooId);
+    await this.assertRoomEntry(target.id, player.cooId);
+    let seat = await activeSeatForCoo(this.db, player.cooId);
     let token: string;
     if (!seat) {
-      const joined = this.host(target.id).join(player.cooId, {
+      const joined = await (await this.host(target.id)).join(player.cooId, {
         name: player.name, kind: 'human', tier: 'off',
       });
       seat = joined.seat;
       token = joined.token;
     } else if (seat.roomId === target.id) {
-      const reissued = this.host(target.id).reissueSeatToken(player.cooId);
+      const reissued = await (await this.host(target.id)).reissueSeatToken(player.cooId);
       seat = reissued.seat;
       token = reissued.token;
     } else {
-      const moved = this.host(seat.roomId).switchTo(player.cooId, target.id, { name: player.name });
+      const moved = await (await this.host(seat.roomId)).switchTo(player.cooId, target.id, { name: player.name });
       seat = moved.seat;
       token = moved.token;
     }
     return {
       room: target.id,
       roomName: target.name,
-      seat: seatOfRow(this.db, target.id, seat),
+      seat: await seatOfRow(this.db, target.id, seat),
       token,
       identity: { cooId: player.cooId, cooSecret: this.identityAuthority ? 'seat-only' : player.secret },
       player: true,
@@ -1969,25 +2094,25 @@ export class WorldServer {
    * 家长改名字：账户显示名 + 玩家身份名 + 当前席位名一次改完。
    * 还没下过场就顺手把玩家身份建出来，免得第一次下场又回到默认名。
    */
-  private parentRename(account: ParentAccount, body: Record<string, unknown>): Record<string, unknown> {
+  private async parentRename(account: ParentAccount, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const raw = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
     if (!raw) throw new HttpError(400, '名字不能为空');
     if (raw.length > 24) throw new HttpError(400, '名字最多 24 个字');
 
-    const playerId = this.coo.playerCooOf(account.id);
+    const playerId = await this.coo.playerCooOf(account.id);
     let seat: { room: string; id: string; name: string } | null = null;
     if (playerId) {
-      const active = activeSeatForCoo(this.db, playerId);
+      const active = await activeSeatForCoo(this.db, playerId);
       if (active) {
         // 同厅重名会抛 RoomSeatError('name_taken')，由 statusOf 转成 409。
-        renameSeat(this.db, active.roomId, active.id, raw);
+        await renameSeat(this.db, active.roomId, active.id, raw);
         seat = { room: active.roomId, id: active.id, name: raw };
       }
-      this.coo.renameCooDisplay(playerId, raw);
+      await this.coo.renameCooDisplay(playerId, raw);
     }
-    const renamed = this.coo.rename(account.id, raw);
+    const renamed = await this.coo.rename(account.id, raw);
     if (!renamed) throw new HttpError(409, '改不了名字');
-    if (!playerId && (!this.identityAuthority || this.identityAuthority === 'self')) this.ensurePlayerCoo(renamed, raw);
+    if (!playerId && (!this.identityAuthority || this.identityAuthority === 'self')) await this.ensurePlayerCoo(renamed, raw);
     return {
       account: { id: renamed.id, cooId: renamed.cooId, displayName: renamed.displayName },
       seat,
@@ -1995,33 +2120,33 @@ export class WorldServer {
   }
 
   /** 家长玩家的固定 human 身份；每次下场换一枚新 secret（库里只存哈希）。 */
-  private ensurePlayerCoo(account: ParentAccount, requested = ''): { cooId: string; secret: string; name: string } {
+  private async ensurePlayerCoo(account: ParentAccount, requested = ''): Promise<{ cooId: string; secret: string; name: string }> {
     const secret = randomBytes(32).toString('base64url');
-    const existing = this.coo.playerCooOf(account.id);
+    const existing = await this.coo.playerCooOf(account.id);
     if (existing) {
-      const name = this.coo.cooDisplayName(existing) || this.defaultPlayerName(account);
-      this.coo.rotateSecret(existing, secret);
+      const name = await this.coo.cooDisplayName(existing) || await this.defaultPlayerName(account);
+      await this.coo.rotateSecret(existing, secret);
       return { cooId: existing, secret, name: name.slice(0, 24) };
     }
-    const name = (requested.trim() || this.defaultPlayerName(account)).slice(0, 24);
+    const name = (requested.trim() || await this.defaultPlayerName(account)).slice(0, 24);
     const cooId = randomUUID();
-    const created = this.coo.registerCoo(cooId, secret, 'human', name);
+    const created = await this.coo.registerCoo(cooId, secret, 'human', name);
     if (created !== 'ok') throw new HttpError(500, '建不了家长的游戏身份');
-    this.coo.bindPlayerCoo(account.id, cooId);
+    await this.coo.bindPlayerCoo(account.id, cooId);
     return { cooId, secret, name };
   }
 
   /** 家长玩家的默认名「<孩子名>家的家长」；孩子不在座就退回孩子的显示名，最后退回「家长」。 */
-  private defaultPlayerName(account: ParentAccount): string {
-    const seat = activeSeatForCoo(this.db, account.cooId);
-    const child = (seat?.name || this.coo.cooDisplayName(account.cooId) || '').trim();
+  private async defaultPlayerName(account: ParentAccount): Promise<string> {
+    const seat = await activeSeatForCoo(this.db, account.cooId);
+    const child = (seat?.name || await this.coo.cooDisplayName(account.cooId) || '').trim();
     return child ? `${child}家的家长` : '家长';
   }
 
   /** 家长只读视图：跟孩子当前席位走，可见范围与孩子自己完全一致。 */
-  private parentView(cooId: string, since: number, limit: number): Record<string, unknown> {
+  private async parentView(cooId: string, since: number, limit: number): Promise<Record<string, unknown>> {
     const now = this.now();
-    const seat = activeSeatForCoo(this.db, cooId);
+    const seat = await activeSeatForCoo(this.db, cooId);
     const mail = new MailDb(this.db, { now: this.now });
     if (!seat) {
       return {
@@ -2033,18 +2158,18 @@ export class WorldServer {
         events: [],
         tablePrivate: null,
         mail: [],
-        mailUnread: mail.unreadCount(cooId),
+        mailUnread: await mail.unreadCount(cooId),
       };
     }
-    const room = getRoom(this.db, seat.roomId);
-    const host = this.host(seat.roomId);
-    const snapshot = host.snapshot(cooId, { since, limit });
+    const room = await getRoom(this.db, seat.roomId);
+    const host = await this.host(seat.roomId);
+    const snapshot = await host.snapshot(cooId, { since, limit });
     // 家长防偷看：桌上还有别的真人时，藏起孩子的暗牌与私牌事件。
     const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
       ? snapshot.table.id ?? snapshot.table.tableId
       : undefined;
     const otherReal = liveTableId
-      ? (this.db.prepare(
+      ? (await this.db.prepare(
         `SELECT coo_id FROM table_seats
           WHERE table_id = ? AND left_at IS NULL AND coo_id IS NOT NULL`,
       ).all(liveTableId) as { coo_id: string }[]).some((row) => row.coo_id !== cooId)
@@ -2065,30 +2190,30 @@ export class WorldServer {
       ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
       ledgerRoom: snapshot.ledgerRoom ?? [],
       mailUnread: snapshot.mailUnread ?? 0,
-      mail: mail.recent(cooId, undefined, 5),
+      mail: await mail.recent(cooId, undefined, 5),
       ownerPrivateHidden,
     };
   }
 
   /** 回放是 7 天；事件表只增不减会一直长，所以每小时清一次。 */
-  private pruneEvents(now: number): void {
+  private async pruneEvents(now: number): Promise<void> {
     const before = now - 7 * 24 * 60 * 60_000;
-    const rooms = this.db.prepare('SELECT id FROM rooms').all() as { id: string }[];
+    const rooms = await this.db.prepare('SELECT id FROM rooms').all() as { id: string }[];
     for (const room of rooms) {
       try {
-        this.host(room.id).pruneEvents(before, 500);
+        await (await this.host(room.id)).pruneEvents(before, 500);
       } catch (error) {
         console.error(`parlor: 清理事件失败（${room.id}）`, error);
       }
     }
     // 牌桌的隐藏内容与动作回执也按同一保留期清；活动牌局不受影响。
-    this.db.prepare('DELETE FROM action_receipts WHERE created_at < ?').run(before);
-    this.db.prepare(
+    await this.db.prepare('DELETE FROM action_receipts WHERE created_at < ?').run(before);
+    await this.db.prepare(
       `UPDATE tables SET state_json = NULL
         WHERE state_json IS NOT NULL AND status IN ('ended','abandoned')
           AND ended_at IS NOT NULL AND ended_at < ?`,
     ).run(before);
-    expireInvitations(this.db, now);
+    await expireInvitations(this.db, now);
   }
 
   /** 有推送连接的席位（快照里的在线标记）。 */
@@ -2135,34 +2260,42 @@ export class WorldServer {
     if (!sendWebAsset(rel, req, res, page)) throw new HttpError(404, '没有这个文件');
   }
 
-  private pump(): void {
+  private async pump(): Promise<void> {
+    if (this.closing) return;
+    // 上一轮还没跑完就跳过这一轮：两条循环同时读 client.since 会把同一批事件推两遍。
+    if (this.pumping) return;
+    this.pumping = true;
     const now = this.now();
-    for (const [roomId, clients] of this.sse) {
-      const host = this.host(roomId);
-      for (const client of [...clients]) {
-        try {
-          if (!host.seatOf(client.cooId)) {
+    try {
+      for (const [roomId, clients] of this.sse) {
+        const host = await this.host(roomId);
+        for (const client of [...clients]) {
+          try {
+            if (!await host.seatOf(client.cooId)) {
+              clients.delete(client);
+              client.closeReason = '席位已经不在这个客厅';
+              client.res.end();
+              continue;
+            }
+            const events: RoomEvent[] = await host.eventsSince(client.cooId, client.since, 200);
+            for (const event of events) {
+              client.res.write(`data: ${JSON.stringify(event)}\n\n`);
+              client.since = event.seq;
+            }
+            if (events.length === 0 && now - client.lastPing >= 15_000) {
+              client.res.write(': ping\n\n');
+              client.lastPing = now;
+            }
+          } catch (error) {
             clients.delete(client);
-            client.closeReason = '席位已经不在这个客厅';
-            client.res.end();
-            continue;
+            client.closeReason = `写推送失败：${(error as Error)?.message ?? String(error)}`;
+            try { client.res.end(); } catch { /* 已断开 */ }
           }
-          const events: RoomEvent[] = host.eventsSince(client.cooId, client.since, 200);
-          for (const event of events) {
-            client.res.write(`data: ${JSON.stringify(event)}\n\n`);
-            client.since = event.seq;
-          }
-          if (events.length === 0 && now - client.lastPing >= 15_000) {
-            client.res.write(': ping\n\n');
-            client.lastPing = now;
-          }
-        } catch (error) {
-          clients.delete(client);
-          client.closeReason = `写推送失败：${(error as Error)?.message ?? String(error)}`;
-          try { client.res.end(); } catch { /* 已断开 */ }
         }
+        if (clients.size === 0) this.sse.delete(roomId);
       }
-      if (clients.size === 0) this.sse.delete(roomId);
+    } finally {
+      this.pumping = false;
     }
   }
 }

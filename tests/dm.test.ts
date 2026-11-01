@@ -3,6 +3,7 @@
  * 这些测试只走 HTTP，不碰浏览器；浮窗本身由本机 ego 冒烟另行目击。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,7 +26,7 @@ afterEach(async () => {
 });
 
 const start = async (): Promise<WorldServer> => {
-  server = new WorldServer({ allowGuestJoin: true, dbFile: join(dir!, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby' });
+  server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(join(dir!, 'parlor.db'))), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby' });
   await server.listen();
   return server;
 };

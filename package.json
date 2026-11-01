@@ -82,13 +82,19 @@
     "typecheck": "tsc --noEmit",
     "serve": "node --experimental-strip-types scripts/serve.ts",
     "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
-    "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts"
+    "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts",
+    "test:pg": "vitest run --config vitest.pg.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "cortico": "^0.2.6",
+    "embedded-postgres": "18.6.0-beta.19",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
   }
 }

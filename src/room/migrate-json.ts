@@ -226,8 +226,8 @@ const oldUnread = (mail: LegacyMail | null, cooId: string): number => {
   return (mail.items ?? []).filter((item) => item.to === cooId && item.read !== true && item.seq > cursor).length;
 };
 
-const ensureCoo = (db: Db, cooId: string, kind: string, name: string, secretHash: string | null, now: number): void => {
-  db.prepare(
+const ensureCoo = async (db: Db, cooId: string, kind: string, name: string, secretHash: string | null, now: number): Promise<void> => {
+  await db.prepare(
     `INSERT OR IGNORE INTO coos(id, kind, display_name, secret_hash, created_at, last_seen_at, status)
      VALUES (?, ?, ?, ?, ?, ?, 'active')`,
   ).run(cooId, kind === 'system' ? 'system' : kind === 'human' ? 'human' : kind === 'legacy' ? 'legacy' : 'pet',
@@ -254,7 +254,7 @@ const scopeColumns = (scope: Record<string, unknown>): {
  * 跑一次迁移。成功返回核对报告；任何核对不过都会抛错并回滚。
  * 目标库已经有数据时拒绝执行（迁移不是合并）。
  */
-export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
+export async function migrateLegacyJson(options: MigrationOptions): Promise<MigrationReport> {
   const now = options.now ?? Date.now;
   const dryRun = options.dbFile === ':memory:';
   const warnings: string[] = [];
@@ -283,7 +283,7 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
   }
 
   const db = openDb(options.dbFile);
-  migrate(db);
+  await migrate(db);
   const startedAt = now();
   const counts = { coos: 0, seats: 0, releasedSeats: 0, events: 0, ledgerEntries: 0, mail: 0, audience: 0 };
   const report: MigrationReport = {
@@ -297,25 +297,25 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
   };
 
   try {
-    const occupied = (db.prepare('SELECT COUNT(*) AS n FROM rooms').get() as { n: number }).n
-      + (db.prepare('SELECT COUNT(*) AS n FROM events').get() as { n: number }).n
-      + (db.prepare('SELECT COUNT(*) AS n FROM ledger_entries').get() as { n: number }).n
-      + (db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n;
+    const occupied = ((await db.prepare('SELECT COUNT(*) AS n FROM rooms').get()) as { n: number }).n
+      + ((await db.prepare('SELECT COUNT(*) AS n FROM events').get()) as { n: number }).n
+      + ((await db.prepare('SELECT COUNT(*) AS n FROM ledger_entries').get()) as { n: number }).n
+      + ((await db.prepare('SELECT COUNT(*) AS n FROM mail').get()) as { n: number }).n;
     if (occupied > 0) throw new Error('目标库已经有数据；迁移只写空库，不合并、不覆盖。');
 
-    withTransaction(db, () => {
+    await withTransaction(db, async () => {
       // 1. 身份
-      ensureCoo(db, 'system-owner', 'system', '系统', null, now());
+      await ensureCoo(db, 'system-owner', 'system', '系统', null, now());
       for (const [cooId, identity] of Object.entries(ledger?.identities ?? {})) {
         if (!isCoo(cooId) || typeof identity?.secretHash !== 'string') continue;
-        ensureCoo(db, cooId, 'pet', '', identity.secretHash, Number(identity.createdAt) || now());
+        await ensureCoo(db, cooId, 'pet', '', identity.secretHash, Number(identity.createdAt) || now());
         counts.coos += 1;
       }
 
       // 2. 客厅
       const firstTs = room.events.length > 0 ? room.events[0].ts : now();
       const lastTs = room.events.length > 0 ? room.events[room.events.length - 1].ts : now();
-      db.prepare(
+      await db.prepare(
         `INSERT INTO rooms(id, kind, name, owner_coo_id, visibility, capacity, topic, epoch, seq,
            created_at, last_active_at)
          VALUES (?, 'room', ?, 'system-owner', 'unlisted', ?, ?, ?, ?, ?, ?)`,
@@ -343,11 +343,11 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
       for (const [cooId, seats] of byCoo) {
         const sorted = [...seats].sort((left, right) => (right.joinedAt || 0) - (left.joinedAt || 0));
         const keep = sorted[0];
-        ensureCoo(db, cooId, keep.kind, keep.name, ledger?.identities[cooId]?.secretHash ?? null, keep.joinedAt || now());
+        await ensureCoo(db, cooId, keep.kind, keep.name, ledger?.identities[cooId]?.secretHash ?? null, keep.joinedAt || now());
         let position = 0;
         for (const seat of sorted) {
           const active = seat === keep;
-          db.prepare(
+          await db.prepare(
             `INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash,
                legacy_owner_token_hash, joined_at, last_seen_at, released_at, visible_from_seq, visible_to_seq)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)`,
@@ -364,8 +364,8 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
             active ? null : now(),
             active ? null : lastSeq,
           );
-          db.prepare(
-            `INSERT OR IGNORE INTO room_members(room_id, coo_id, joined_at) VALUES (?, ?, ?)`,
+          await db.prepare(
+            `INSERT INTO room_members(room_id, coo_id, joined_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
           ).run(roomId, cooId, Number(seat.joinedAt) || now());
           counts.seats += 1;
           if (!active) counts.releasedSeats += 1;
@@ -377,7 +377,7 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
            ON CONFLICT(coo_id) DO UPDATE SET current_room_id = excluded.current_room_id,
              current_seat_id = excluded.current_seat_id, last_seen_at = excluded.last_seen_at`,
         );
-        current.run(cooId, roomId, keep.id, Number(keep.joinedAt) || now(), now());
+        await current.run(cooId, roomId, keep.id, Number(keep.joinedAt) || now(), now());
         if (sorted.length > 1) {
           warnings.push(`席位 ${keep.name}（${cooId}）有 ${sorted.length} 条旧席位；保留 ${keep.id}，其余封口。`);
         }
@@ -394,11 +394,11 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const insertAudience = db.prepare(
-        'INSERT OR IGNORE INTO event_audience(room_id, seq, coo_id, seat_id) VALUES (?, ?, ?, ?)',
+        'INSERT INTO event_audience(room_id, seq, coo_id, seat_id) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
       );
       for (const event of [...merged.values()].sort((left, right) => left.seq - right.seq)) {
         const scope = scopeColumns(event.scope ?? {});
-        insertEvent.run(
+        await insertEvent.run(
           roomId,
           event.seq,
           Number(event.ts) || now(),
@@ -417,14 +417,14 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
         if (scope.kind === 'seat' && scope.seatId) {
           const cooId = seatCoo.get(scope.seatId);
           if (cooId) {
-            insertAudience.run(roomId, event.seq, cooId, scope.seatId);
+            await insertAudience.run(roomId, event.seq, cooId, scope.seatId);
             counts.audience += 1;
           }
         } else if (scope.kind === 'table') {
           for (const seatId of scope.seats) {
             const cooId = seatCoo.get(seatId);
             if (!cooId) continue;
-            insertAudience.run(roomId, event.seq, cooId, seatId);
+            await insertAudience.run(roomId, event.seq, cooId, seatId);
             counts.audience += 1;
           }
         }
@@ -434,9 +434,9 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
       // 5. 账本：先写条目（ref 置空），再把能对上的 ref 补回去，避免被旧版截断的引用炸外键。
       const entries = [...(ledger?.entries ?? [])].sort((left, right) => (left.ts || 0) - (right.ts || 0));
       const known = new Set(entries.map((entry) => entry.id));
-      const ensureLedgerCoo = (cooId: string, name: string): void => {
+      const ensureLedgerCoo = async (cooId: string, name: string): Promise<void> => {
         if (!cooId || cooId === 'room') return;
-        ensureCoo(db, cooId, 'legacy', name, ledger?.identities[cooId]?.secretHash ?? null, now());
+        await ensureCoo(db, cooId, 'legacy', name, ledger?.identities[cooId]?.secretHash ?? null, now());
       };
       const insertEntry = db.prepare(
         `INSERT INTO ledger_entries(id, ts, room_id, kind, visibility, from_kind, from_coo_id,
@@ -444,9 +444,9 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       );
       const insertParticipant = db.prepare(
-        'INSERT OR IGNORE INTO ledger_participants(entry_id, coo_id, position) VALUES (?, ?, ?)',
+        'INSERT INTO ledger_participants(entry_id, coo_id, position) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
       );
-      const insertWinner = db.prepare('INSERT OR IGNORE INTO ledger_winners(entry_id, coo_id) VALUES (?, ?)');
+      const insertWinner = db.prepare('INSERT INTO ledger_winners(entry_id, coo_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
       const insertTransfer = db.prepare(
         `INSERT INTO ledger_transfers(entry_id, from_kind, from_coo_id, to_kind, to_coo_id, amount)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -459,15 +459,15 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
         }
         const fromCoo = normalizeCoo(entry.from, roomId) || null;
         const toCoo = normalizeCoo(entry.to, roomId) || null;
-        if (fromCoo) ensureLedgerCoo(fromCoo, typeof entry.data?.fromName === 'string' ? entry.data.fromName : '');
-        if (toCoo) ensureLedgerCoo(toCoo, typeof entry.data?.toName === 'string' ? entry.data.toName : '');
-        for (const cooId of entry.participants ?? []) ensureLedgerCoo(normalizeCoo(cooId, roomId), '');
-        for (const cooId of entry.winners ?? []) ensureLedgerCoo(normalizeCoo(cooId, roomId), '');
+        if (fromCoo) await ensureLedgerCoo(fromCoo, typeof entry.data?.fromName === 'string' ? entry.data.fromName : '');
+        if (toCoo) await ensureLedgerCoo(toCoo, typeof entry.data?.toName === 'string' ? entry.data.toName : '');
+        for (const cooId of entry.participants ?? []) await ensureLedgerCoo(normalizeCoo(cooId, roomId), '');
+        for (const cooId of entry.winners ?? []) await ensureLedgerCoo(normalizeCoo(cooId, roomId), '');
         for (const transfer of entry.transfers ?? []) {
-          ensureLedgerCoo(normalizeCoo(transfer.from, roomId), '');
-          ensureLedgerCoo(normalizeCoo(transfer.to, roomId), '');
+          await ensureLedgerCoo(normalizeCoo(transfer.from, roomId), '');
+          await ensureLedgerCoo(normalizeCoo(transfer.to, roomId), '');
         }
-        insertEntry.run(
+        await insertEntry.run(
           entry.id,
           Number(entry.ts) || now(),
           entryRoom,
@@ -488,20 +488,20 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
         for (const raw of entry.participants ?? []) {
           const cooId = normalizeCoo(raw, roomId);
           if (!cooId) continue;
-          insertParticipant.run(entry.id, cooId, position);
+          await insertParticipant.run(entry.id, cooId, position);
           position += 1;
         }
         for (const raw of entry.winners ?? []) {
           const cooId = normalizeCoo(raw, roomId);
           if (!cooId) continue;
-          insertWinner.run(entry.id, cooId);
+          await insertWinner.run(entry.id, cooId);
         }
         for (const transfer of entry.transfers ?? []) {
           if (!Number.isSafeInteger(transfer.amount) || transfer.amount <= 0) continue;
           const from = transfer.from === 'room' ? 'room' : normalizeCoo(transfer.from, roomId);
           const to = transfer.to === 'room' ? 'room' : normalizeCoo(transfer.to, roomId);
           if (!from || !to) continue;
-          insertTransfer.run(
+          await insertTransfer.run(
             entry.id,
             from === 'room' ? 'room' : 'coo',
             from === 'room' ? null : from,
@@ -515,24 +515,24 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
       const updateRef = db.prepare('UPDATE ledger_entries SET ref_entry_id = ? WHERE id = ?');
       for (const entry of entries) {
         if (!entry.ref) continue;
-        if (known.has(entry.ref)) updateRef.run(entry.ref, entry.id);
+        if (known.has(entry.ref)) await updateRef.run(entry.ref, entry.id);
         else warnings.push(`账本条目 ${entry.id} 的 ref「${entry.ref}」不在旧文件里（被截断）；已置空。`);
       }
 
       // 6. 信箱：逐封已读；老游标只用来补 read_at。
       const insertMail = db.prepare(
-        `INSERT OR IGNORE INTO mail(seq, id, ts, coo_id, room_id, kind, action, from_name, text, entry_id, key, read_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO mail(seq, id, ts, coo_id, room_id, kind, action, from_name, text, entry_id, key, read_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
       );
       const cursor = mail?.read ?? {};
       for (const item of mail?.items ?? []) {
         const to = normalizeCoo(item.to, roomId);
         if (!to) { warnings.push(`信 ${item.id} 的收件人格式不对；跳过。`); continue; }
-        ensureCoo(db, to, 'legacy', '', ledger?.identities[to]?.secretHash ?? null, Number(item.ts) || now());
+        await ensureCoo(db, to, 'legacy', '', ledger?.identities[to]?.secretHash ?? null, Number(item.ts) || now());
         const readAt = item.read === true || item.seq <= (cursor[to] ?? 0)
           ? Number(item.ts) || now()
           : null;
-        insertMail.run(
+        await insertMail.run(
           item.seq,
           item.id,
           Number(item.ts) || now(),
@@ -552,10 +552,11 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
       // 7. 大富翁：只有未结束且明确允许作废时才落一条 abandoned 桌子留档。
       if (activity && activity.table && activity.table.status && activity.table.status !== 'ended') {
         const tableId = `legacy-${roomId}-monopoly`;
-        db.prepare(
-          `INSERT OR IGNORE INTO tables(id, room_id, room_epoch, game, status, host_seat_id, stake,
+        await db.prepare(
+          `INSERT INTO tables(id, room_id, room_epoch, game, status, host_seat_id, stake,
              state_json, turn_seq, created_at, started_at, ended_at, end_reason, updated_at)
-           VALUES (?, ?, ?, 'monopoly', 'abandoned', ?, 0, ?, 0, ?, ?, ?, 'migration', ?)`,
+           VALUES (?, ?, ?, 'monopoly', 'abandoned', ?, 0, ?, 0, ?, ?, ?, 'migration', ?)
+           ON CONFLICT DO NOTHING`,
         ).run(
           tableId,
           roomId,
@@ -568,12 +569,12 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
           now(),
         );
         const cancelSeq = lastSeq + 1;
-        insertEvent.run(
+        await insertEvent.run(
           roomId, cancelSeq, now(), 'parlor.table.cancel', 'system', 'system', 'room', null, null, null,
           '迁移时大富翁还有一局没结束，这一局作废（存档留在服务器上）。', null,
           JSON.stringify({ game: 'monopoly', reason: 'migration' }),
         );
-        db.prepare('UPDATE rooms SET seq = ? WHERE id = ?').run(cancelSeq, roomId);
+        await db.prepare('UPDATE rooms SET seq = ? WHERE id = ?').run(cancelSeq, roomId);
         counts.events += 1;
       }
 
@@ -590,10 +591,10 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
       for (const cooId of cooIds) {
         if (!isCoo(cooId)) continue;
         const old = oldBalance(ledger?.entries ?? [], cooId);
-        const current = (db.prepare(
+        const current = ((await db.prepare(
           `SELECT (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE to_coo_id = ?)
                 - (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE from_coo_id = ?) AS balance`,
-        ).get(cooId, cooId) as { balance: number }).balance;
+        ).get(cooId, cooId)) as { balance: number }).balance;
         const check = { name: cooId, old, now: current, match: old === current };
         balanceChecks.push(check);
         if (!check.match) throw new Error(`余额核对不过：${cooId} 旧 ${old} / 新 ${current}`);
@@ -604,9 +605,9 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
         if (!cooId) continue;
         const old = (mail?.items ?? []).filter((item) => normalizeCoo(item.to, roomId) === cooId
           && item.read !== true && item.seq > ((mail?.read ?? {})[cooId] ?? 0)).length;
-        const current = (db.prepare(
+        const current = ((await db.prepare(
           'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND read_at IS NULL',
-        ).get(cooId) as { n: number }).n;
+        ).get(cooId)) as { n: number }).n;
         const check = { name: cooId, old, now: current, match: old === current };
         unreadChecks.push(check);
         if (!check.match) throw new Error(`未读核对不过：${cooId} 旧 ${old} / 新 ${current}`);
@@ -614,16 +615,16 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
 
       const tokenChecks: Array<{ seat: string; ok: boolean }> = [];
       for (const seat of room.seats) {
-        const row = db.prepare(
+        const row = (await db.prepare(
           'SELECT id FROM room_seats WHERE room_id = ? AND token_hash = ?',
-        ).get(roomId, hashSeatToken(seat.token)) as { id: string } | undefined;
+        ).get(roomId, hashSeatToken(seat.token))) as { id: string } | undefined;
         const ok = row?.id === seat.id;
         tokenChecks.push({ seat: `${seat.id}/${seat.name}`, ok });
         if (!ok) throw new Error(`席位令牌核对不过：${seat.id}/${seat.name}`);
       }
 
       const runId = `mig-${sha256(`${roomId}:${startedAt}`).slice(0, 16)}`;
-      db.prepare(
+      await db.prepare(
         `INSERT INTO migration_runs(id, source_dir, source_hashes_json, started_at, finished_at,
            status, counts_json, notes_json)
          VALUES (?, ?, ?, ?, ?, 'complete', ?, ?)`,
@@ -642,7 +643,7 @@ export function migrateLegacyJson(options: MigrationOptions): MigrationReport {
       report.tokenChecks = tokenChecks;
     });
   } finally {
-    db.close();
+    await db.close();
   }
 
   return report;

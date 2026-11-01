@@ -1,5 +1,6 @@
 /** 席位被服务器释放后，World 不能拿着死令牌一直重试：要按同一身份重新入座。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,10 +12,10 @@ import { ParlorClient } from '../src/room/client.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
-const until = async (predicate: () => boolean, timeout = 8000): Promise<void> => {
+const until = async (predicate: () => boolean | Promise<boolean>, timeout = 8000): Promise<void> => {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error('等待超时');
@@ -38,7 +39,7 @@ afterEach(async () => {
 
 describe('席位被释放后的自动重入', () => {
   it('旧令牌 401 时换新令牌重新入座，并留一句说明', async () => {
-    server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
     await server.listen();
 
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
@@ -66,19 +67,21 @@ describe('席位被释放后的自动重入', () => {
     await friend.action(joined.token, { type: 'say', text: '@小满 在吗' }, 'hall');
     await until(() => host.events.some((event) => event.type === 'parlor.message'));
 
-    const activeSeat = () => server!.dbHandle.prepare(
-      "SELECT id FROM room_seats WHERE released_at IS NULL AND name = '小满'",
-    ).get() as { id: string } | undefined;
-    const before = activeSeat();
+    const activeSeat = async (): Promise<{ id: string } | undefined> => (
+      await server!.dbHandle.prepare(
+        "SELECT id FROM room_seats WHERE released_at IS NULL AND name = '小满'",
+      ).get() as { id: string } | undefined
+    );
+    const before = await activeSeat();
     expect(before).toBeDefined();
 
     // 模拟离线清理把席位收走：SSE 泵下一拍会发现席位不在并收掉连接，
     // World 拿旧令牌重连会 401。
-    server!.dbHandle.prepare('UPDATE room_seats SET released_at = ? WHERE id = ?')
+    await server!.dbHandle.prepare('UPDATE room_seats SET released_at = ? WHERE id = ?')
       .run(Date.now(), before!.id);
 
-    await until(() => {
-      const now = activeSeat();
+    await until(async () => {
+      const now = await activeSeat();
       return !!now && now.id !== before!.id;
     });
     await until(() => host.events.some(

@@ -62,25 +62,25 @@ interface InvitationRow {
   target_name?: string;
 }
 
-export const isRoomOwner = (db: Db, roomId: string, cooId: string): boolean => {
+export const isRoomOwner = async (db: Db, roomId: string, cooId: string): Promise<boolean> => {
   if (!cooId) return false;
-  const room = getRoom(db, roomId);
+  const room = await getRoom(db, roomId);
   return room !== null && room.ownerCooId === cooId;
 };
 
 /** 房主或 room_access 里 active 的人。 */
-export const hasRoomAccess = (db: Db, roomId: string, cooId: string): boolean => {
+export const hasRoomAccess = async (db: Db, roomId: string, cooId: string): Promise<boolean> => {
   if (!cooId) return false;
-  if (isRoomOwner(db, roomId, cooId)) return true;
+  if (await isRoomOwner(db, roomId, cooId)) return true;
   // 房主自己的家长玩家（accounts.player_coo_id）也算房主这边的人：
   // 它是「同一个家长的另一个身份」，不是被孩子邀请的第三方。
-  const family = db.prepare(
+  const family = await db.prepare(
     `SELECT 1 AS hit FROM accounts a
        JOIN rooms r ON r.owner_coo_id = a.coo_id
       WHERE r.id = ? AND a.player_coo_id = ? AND a.status = 'active' LIMIT 1`,
   ).get(roomId, cooId) as { hit: number } | undefined;
   if (family) return true;
-  const row = db.prepare(
+  const row = await db.prepare(
     `SELECT 1 AS hit FROM room_access
       WHERE room_id = ? AND coo_id = ? AND status = 'active' LIMIT 1`,
   ).get(roomId, cooId) as { hit: number } | undefined;
@@ -91,21 +91,21 @@ export const hasRoomAccess = (db: Db, roomId: string, cooId: string): boolean =>
  * 统一准入判定：所有入口（初次加入、换房、家长下场、邀请跳转、重发令牌）都走它。
  * 返回 null 表示可以进；否则是给人看的原因。
  */
-export const roomEntryRefusal = (db: Db, roomId: string, cooId: string): string | null => {
-  const room = getRoom(db, roomId);
+export const roomEntryRefusal = async (db: Db, roomId: string, cooId: string): Promise<string | null> => {
+  const room = await getRoom(db, roomId);
   if (!room) return '目标客厅不存在';
   if (room.archivedAt !== null) return '这个客厅已经归档';
   if (room.visibility !== 'private') return null;
-  if (hasRoomAccess(db, roomId, cooId)) return null;
+  if (await hasRoomAccess(db, roomId, cooId)) return null;
   return '这是私密客厅：要房主邀请并接受之后才能进';
 };
 
 /** 房主才能管理成员与可见性；家长代管由网关从账户关系推导，不在这里认。 */
-export const canManageRoom = (db: Db, roomId: string, cooId: string): boolean => (
+export const canManageRoom = async (db: Db, roomId: string, cooId: string): Promise<boolean> => (
   isRoomOwner(db, roomId, cooId)
 );
 
-export const grantRoomAccessTx = (
+export const grantRoomAccessTx = async (
   db: Db,
   input: {
     roomId: string;
@@ -114,8 +114,8 @@ export const grantRoomAccessTx = (
     grantedBy?: string;
     now: number;
   },
-): void => {
-  db.prepare(
+): Promise<void> => {
+  await db.prepare(
     `INSERT INTO room_access(room_id, coo_id, status, source, granted_by, granted_at, revoked_at)
      VALUES (?, ?, 'active', ?, ?, ?, NULL)
      ON CONFLICT(room_id, coo_id) DO UPDATE SET
@@ -124,8 +124,8 @@ export const grantRoomAccessTx = (
   ).run(input.roomId, input.cooId, input.source, input.grantedBy ?? null, input.now);
 };
 
-export const revokeRoomAccessTx = (db: Db, roomId: string, cooId: string, now: number, by?: string): void => {
-  db.prepare(
+export const revokeRoomAccessTx = async (db: Db, roomId: string, cooId: string, now: number, by?: string): Promise<void> => {
+  await db.prepare(
     `INSERT INTO room_access(room_id, coo_id, status, source, granted_by, granted_at, revoked_at)
      VALUES (?, ?, 'revoked', 'admin', ?, ?, ?)
      ON CONFLICT(room_id, coo_id) DO UPDATE SET
@@ -133,8 +133,8 @@ export const revokeRoomAccessTx = (db: Db, roomId: string, cooId: string, now: n
   ).run(roomId, cooId, by ?? null, now, now);
 };
 
-export const listRoomAccess = (db: Db, roomId: string): AccessView[] => {
-  const rows = db.prepare(
+export const listRoomAccess = async (db: Db, roomId: string): Promise<AccessView[]> => {
+  const rows = await db.prepare(
     `SELECT r.room_id, r.coo_id, r.status, r.source, r.granted_at, r.revoked_at,
             COALESCE(c.display_name, '') AS name
        FROM room_access r LEFT JOIN coos c ON c.id = r.coo_id
@@ -152,7 +152,7 @@ export const listRoomAccess = (db: Db, roomId: string): AccessView[] => {
 };
 
 /** 建一条待接受邀请；同一房间对同一人只保留最新一条 pending。 */
-export const createRoomInvitationTx = (
+export const createRoomInvitationTx = async (
   db: Db,
   input: {
     roomId: string;
@@ -161,29 +161,31 @@ export const createRoomInvitationTx = (
     now: number;
     ttlMs?: number;
   },
-): InvitationView => {
-  db.prepare(
+): Promise<InvitationView> => {
+  await db.prepare(
     `UPDATE room_invitations SET status = 'revoked', handled_at = ?
       WHERE room_id = ? AND target_coo_id = ? AND status = 'pending'`,
   ).run(input.now, input.roomId, input.targetCooId);
   const id = randomUUID();
   const expiresAt = input.now + (input.ttlMs ?? INVITE_TTL_MS);
-  db.prepare(
+  await db.prepare(
     `INSERT INTO room_invitations(id, room_id, invited_by, target_coo_id, status, created_at, expires_at)
      VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
   ).run(id, input.roomId, input.invitedBy, input.targetCooId, input.now, expiresAt);
-  return findInvitation(db, id)!;
+  return (await findInvitation(db, id))!;
 };
 
-const invitationRow = (db: Db, id: string): InvitationRow | undefined => db.prepare(
-  `SELECT i.*, r.name AS room_name, COALESCE(inv.display_name, '') AS inviter_name,
+const invitationRow = async (db: Db, id: string): Promise<InvitationRow | undefined> => (
+  await db.prepare(
+    `SELECT i.*, r.name AS room_name, COALESCE(inv.display_name, '') AS inviter_name,
           COALESCE(tgt.display_name, '') AS target_name
      FROM room_invitations i
      LEFT JOIN rooms r ON r.id = i.room_id
      LEFT JOIN coos inv ON inv.id = i.invited_by
      LEFT JOIN coos tgt ON tgt.id = i.target_coo_id
     WHERE i.id = ?`,
-).get(id) as InvitationRow | undefined;
+  ).get(id) as InvitationRow | undefined
+);
 
 const toInvitationView = (row: InvitationRow): InvitationView => ({
   id: row.id,
@@ -199,23 +201,23 @@ const toInvitationView = (row: InvitationRow): InvitationView => ({
   handledAt: row.handled_at,
 });
 
-export const findInvitation = (db: Db, id: string): InvitationView | null => {
-  const row = invitationRow(db, id);
+export const findInvitation = async (db: Db, id: string): Promise<InvitationView | null> => {
+  const row = await invitationRow(db, id);
   return row ? toInvitationView(row) : null;
 };
 
 /** 把过期但还挂着的邀请标成 expired；读列表前顺手清一遍。 */
-export const expireInvitations = (db: Db, now: number): number => {
-  const result = db.prepare(
+export const expireInvitations = async (db: Db, now: number): Promise<number> => {
+  const result = await db.prepare(
     `UPDATE room_invitations SET status = 'expired', handled_at = ?
       WHERE status = 'pending' AND expires_at <= ?`,
   ).run(now, now);
   return Number(result.changes);
 };
 
-export const pendingInvitationsForRoom = (db: Db, roomId: string, now: number): InvitationView[] => {
-  expireInvitations(db, now);
-  const rows = db.prepare(
+export const pendingInvitationsForRoom = async (db: Db, roomId: string, now: number): Promise<InvitationView[]> => {
+  await expireInvitations(db, now);
+  const rows = await db.prepare(
     `SELECT i.*, r.name AS room_name, COALESCE(inv.display_name, '') AS inviter_name,
             COALESCE(tgt.display_name, '') AS target_name
        FROM room_invitations i
@@ -228,9 +230,9 @@ export const pendingInvitationsForRoom = (db: Db, roomId: string, now: number): 
   return rows.map(toInvitationView);
 };
 
-export const pendingInvitationsForCoo = (db: Db, cooId: string, now: number): InvitationView[] => {
-  expireInvitations(db, now);
-  const rows = db.prepare(
+export const pendingInvitationsForCoo = async (db: Db, cooId: string, now: number): Promise<InvitationView[]> => {
+  await expireInvitations(db, now);
+  const rows = await db.prepare(
     `SELECT i.*, r.name AS room_name, COALESCE(inv.display_name, '') AS inviter_name,
             COALESCE(tgt.display_name, '') AS target_name
        FROM room_invitations i
@@ -246,57 +248,61 @@ export const pendingInvitationsForCoo = (db: Db, cooId: string, now: number): In
 export type InvitationDecision = 'ok' | 'not_found' | 'not_yours' | 'not_pending' | 'expired';
 
 /** 接受邀请：核对本人、目标、有效期、撤销状态，然后写长期授权（幂等）。 */
-export const acceptInvitationTx = (
+export const acceptInvitationTx = async (
   db: Db,
   id: string,
   cooId: string,
   now: number,
-): { decision: InvitationDecision; invitation?: InvitationView; room?: RoomRow } => {
-  const row = invitationRow(db, id);
+): Promise<{ decision: InvitationDecision; invitation?: InvitationView; room?: RoomRow }> => {
+  const row = await invitationRow(db, id);
   if (!row) return { decision: 'not_found' };
   if (row.target_coo_id !== cooId) return { decision: 'not_yours' };
   if (row.status === 'pending' && row.expires_at <= now) {
-    db.prepare("UPDATE room_invitations SET status = 'expired', handled_at = ? WHERE id = ?").run(now, id);
+    await db.prepare("UPDATE room_invitations SET status = 'expired', handled_at = ? WHERE id = ?").run(now, id);
     return { decision: 'expired' };
   }
   if (row.status !== 'pending') {
     // 已经接受过的再点一次：当成功处理（幂等），但不再重复授权。
     if (row.status === 'accepted') {
-      return { decision: 'ok', invitation: toInvitationView(row), room: getRoom(db, row.room_id) ?? undefined };
+      return {
+        decision: 'ok',
+        invitation: toInvitationView(row),
+        room: (await getRoom(db, row.room_id)) ?? undefined,
+      };
     }
     return { decision: 'not_pending' };
   }
-  const room = getRoom(db, row.room_id);
+  const room = await getRoom(db, row.room_id);
   if (!room) return { decision: 'not_found' };
-  grantRoomAccessTx(db, { roomId: row.room_id, cooId, source: 'invite', grantedBy: row.invited_by, now });
-  db.prepare("UPDATE room_invitations SET status = 'accepted', handled_at = ? WHERE id = ?").run(now, id);
+  await grantRoomAccessTx(db, { roomId: row.room_id, cooId, source: 'invite', grantedBy: row.invited_by, now });
+  await db.prepare("UPDATE room_invitations SET status = 'accepted', handled_at = ? WHERE id = ?").run(now, id);
   return { decision: 'ok', invitation: { ...toInvitationView(row), status: 'accepted', handledAt: now }, room };
 };
 
-export const declineInvitationTx = (
+export const declineInvitationTx = async (
   db: Db,
   id: string,
   cooId: string,
   now: number,
-): InvitationDecision => {
-  const row = invitationRow(db, id);
+): Promise<InvitationDecision> => {
+  const row = await invitationRow(db, id);
   if (!row) return 'not_found';
   if (row.target_coo_id !== cooId) return 'not_yours';
   if (row.status !== 'pending') return 'not_pending';
-  db.prepare("UPDATE room_invitations SET status = 'declined', handled_at = ? WHERE id = ?").run(now, id);
+  await db.prepare("UPDATE room_invitations SET status = 'declined', handled_at = ? WHERE id = ?").run(now, id);
   return 'ok';
 };
 
 /** 撤销某人在这间厅所有还挂着的邀请（移除成员/归档/改可见性时用）。 */
-export const revokeInvitationsFor = (db: Db, roomId: string, cooId: string | null, now: number): void => {
+export const revokeInvitationsFor = async (db: Db, roomId: string, cooId: string | null, now: number): Promise<void> => {
   if (cooId) {
-    db.prepare(
+    await db.prepare(
       `UPDATE room_invitations SET status = 'revoked', handled_at = ?
         WHERE room_id = ? AND target_coo_id = ? AND status = 'pending'`,
     ).run(now, roomId, cooId);
     return;
   }
-  db.prepare(
+  await db.prepare(
     `UPDATE room_invitations SET status = 'revoked', handled_at = ?
       WHERE room_id = ? AND status = 'pending'`,
   ).run(now, roomId);

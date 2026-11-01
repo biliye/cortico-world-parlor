@@ -1,5 +1,5 @@
 /**
- * 全局信箱的 SQLite store。
+ * 全局信箱的 store。
  *
  * 与 mail.ts 的 JSON 版是同一组语义：
  * - 已读按「每一封」记在 mail.read_at；没有 coo 级已读游标。
@@ -76,13 +76,13 @@ const clampPage = (limit: number, fallback: number): number => {
   return Math.max(1, Math.min(MAX_PAGE, value));
 };
 
-const toView = (db: Db, row: Record<string, unknown>): MailView => ({
+const toView = async (db: Db, row: Record<string, unknown>): Promise<MailView> => ({
   id: String(row.id),
   seq: Number(row.seq),
   ts: Number(row.ts),
   room: String(row.room_id),
   ...(typeof row.from_coo_id === 'string'
-    ? { fromCooId: row.from_coo_id, fromHandle: registeredHandle(db, row.from_coo_id) }
+    ? { fromCooId: row.from_coo_id, fromHandle: await registeredHandle(db, row.from_coo_id) }
     : {}),
   kind: row.kind as MailKind,
   ...(typeof row.action === 'string' ? { action: row.action } : {}),
@@ -145,48 +145,51 @@ export class MailDb {
   }
 
   /** 开库并建表；路径/权限问题会在这里抛出，不吞。 */
-  static open(file = ':memory:', options: MailDbOptions = {}): MailDb {
+  static async open(file = ':memory:', options: MailDbOptions = {}): Promise<MailDb> {
     const db = openDb(file);
-    migrate(db);
+    await migrate(db);
     return new MailDb(db, options);
   }
 
   /** 关掉这个 store 用的库；只有自己用 MailDb.open 开的时候才调。 */
-  close(): void {
-    this.db.close();
+  async close(): Promise<void> {
+    await this.db.close();
   }
 
   /** 投一封新信；返回视图（不带收件人）。 */
-  append(input: MailInput): MailView {
-    return this.tx(() => this.insert(input, input.key ?? null));
+  async append(input: MailInput): Promise<MailView> {
+    return await this.tx(() => this.insert(input, input.key ?? null));
   }
 
   /**
    * 幂等投递：同一个 key 已经投过就返回旧的那封，不新增。
    * 唯一约束是 schema 里的 ux_mail_key，重复靠事务内先查再插兜底。
    */
-  appendOnce(key: string, input: MailInput): MailView {
-    return this.tx(() => {
-      const existing = this.db.prepare(`SELECT ${VIEW_COLUMNS} FROM mail WHERE key = ?`).get(key);
-      if (existing) return toView(this.db, existing);
-      return this.insert(input, key);
+  async appendOnce(key: string, input: MailInput): Promise<MailView> {
+    return await this.tx(async () => {
+      const existing = await this.db.prepare(`SELECT ${VIEW_COLUMNS} FROM mail WHERE key = ?`).get(key);
+      if (existing) return await toView(this.db, existing);
+      return await this.insert(input, key);
     });
   }
 
-  private insert(input: MailInput, key: string | null): MailView {
+  private async insert(input: MailInput, key: string | null): Promise<MailView> {
     const id = randomUUID();
     const ts = this.now();
     const action = input.action ?? null;
     const entryId = input.entryId ?? null;
     const fromCooId = input.fromCooId ?? null;
     const invitationId = input.invitationId ?? null;
-    const result = this.db.prepare(
+    // seq 在 SQLite 是 AUTOINCREMENT、在 PG 是 IDENTITY；lastInsertRowid 在 PG 恒为 0，
+    // 两边都认的取法是 RETURNING seq。
+    const result = await this.db.prepare(
       `INSERT INTO mail(id, ts, coo_id, from_coo_id, room_id, kind, action, from_name, text, entry_id, invitation_id, key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, ts, input.to, fromCooId, input.room, input.kind, action, input.fromName, input.text, entryId, invitationId, key);
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING seq`,
+    ).get<{ seq: number }>(id, ts, input.to, fromCooId, input.room, input.kind, action, input.fromName, input.text, entryId, invitationId, key);
     return {
       id,
-      seq: Number(result.lastInsertRowid),
+      seq: Number(result?.seq),
       ts,
       room: input.room,
       ...(fromCooId ? { fromCooId } : {}),
@@ -201,13 +204,13 @@ export class MailDb {
   }
 
   /** 未读数；给了 room 就只算那个客厅，不给算全部。 */
-  unreadCount(cooId: string, room?: string): number {
-    return this.countUnread(cooId, room);
+  async unreadCount(cooId: string, room?: string): Promise<number> {
+    return await this.countUnread(cooId, room);
   }
 
   /** 每个客厅各多少未读；没有未读的客厅不出现。 */
-  unreadByRoom(cooId: string): Record<string, number> {
-    const rows = this.db.prepare(
+  async unreadByRoom(cooId: string): Promise<Record<string, number>> {
+    const rows = await this.db.prepare(
       `SELECT room_id, COUNT(*) AS n
          FROM mail
         WHERE coo_id = ? AND read_at IS NULL
@@ -223,58 +226,58 @@ export class MailDb {
    * 读最旧的未读；markRead=false 时只看不标记（peek）。
    * 给了 room 就只读那个客厅；回执里的 unreadByRoom 仍是所有客厅的。
    */
-  list(cooId: string, room?: string, limit = DEFAULT_PAGE, markRead = true): MailPage {
+  async list(cooId: string, room?: string, limit = DEFAULT_PAGE, markRead = true): Promise<MailPage> {
     const size = clampPage(limit, DEFAULT_PAGE);
-    return this.tx(() => {
-      const rows = this.selectUnread(cooId, room, size);
-      const unread = this.countUnread(cooId, room);
+    return await this.tx(async () => {
+      const rows = await this.selectUnread(cooId, room, size);
+      const unread = await this.countUnread(cooId, room);
       if (markRead && rows.length > 0) {
         const at = this.now();
         const update = this.db.prepare(
           'UPDATE mail SET read_at = ? WHERE coo_id = ? AND seq = ? AND read_at IS NULL',
         );
-        for (const row of rows) update.run(at, cooId, Number(row.seq));
+        for (const row of rows) await update.run(at, cooId, Number(row.seq));
       }
       return {
         unread,
         remaining: Math.max(0, unread - rows.length),
-        items: rows.map((row) => toView(this.db, row)),
+        items: await Promise.all(rows.map((row) => toView(this.db, row))),
         marked: markRead && rows.length > 0,
-        unreadByRoom: this.unreadByRoom(cooId),
+        unreadByRoom: await this.unreadByRoom(cooId),
       };
     });
   }
 
   /** 只标记一封；这封不存在、已经是已读、或不是他的信都返回 false。 */
-  readOne(cooId: string, seq: number): boolean {
-    const result = this.db.prepare(
+  async readOne(cooId: string, seq: number): Promise<boolean> {
+    const result = await this.db.prepare(
       'UPDATE mail SET read_at = ? WHERE coo_id = ? AND seq = ? AND read_at IS NULL',
     ).run(this.now(), cooId, seq);
     return Number(result.changes) > 0;
   }
 
   /** 最近几封（含已读），新的在前；不动已读状态。 */
-  recent(cooId: string, room?: string, limit = DEFAULT_RECENT): MailView[] {
+  async recent(cooId: string, room?: string, limit = DEFAULT_RECENT): Promise<MailView[]> {
     const requested = Math.trunc(Number(limit));
     const size = Number.isFinite(requested) ? Math.max(1, requested) : DEFAULT_RECENT;
     const rows = room === undefined
-      ? this.db.prepare(
+      ? await this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? ORDER BY seq DESC LIMIT ?`,
       ).all(cooId, size)
-      : this.db.prepare(
+      : await this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? ORDER BY seq DESC LIMIT ?`,
       ).all(cooId, room, size);
-    return rows.map((row) => toView(this.db, row));
+    return await Promise.all(rows.map((row) => toView(this.db, row)));
   }
 
   /** 私聊会话摘要：每个对方一条，按最后一条排序。只算带 from_coo_id 的信。 */
-  threads(cooId: string): DmThreadSummary[] {
-    const rows = this.db.prepare(
+  async threads(cooId: string): Promise<DmThreadSummary[]> {
+    const rows = (await this.db.prepare(
       `SELECT seq, ts, coo_id, from_coo_id, text
          FROM mail
         WHERE from_coo_id IS NOT NULL AND (coo_id = ? OR from_coo_id = ?)
         ORDER BY seq DESC LIMIT 500`,
-    ).all(cooId, cooId) as Record<string, unknown>[];
+    ).all(cooId, cooId)) as Record<string, unknown>[];
     const last = new Map<string, DmThreadSummary>();
     for (const row of rows) {
       const mine = String(row.coo_id) === cooId;
@@ -289,12 +292,12 @@ export class MailDb {
         unread: 0,
       });
     }
-    const unreadRows = this.db.prepare(
+    const unreadRows = (await this.db.prepare(
       `SELECT from_coo_id AS peer, COUNT(*) AS n
          FROM mail
         WHERE coo_id = ? AND from_coo_id IS NOT NULL AND read_at IS NULL
         GROUP BY from_coo_id`,
-    ).all(cooId) as { peer: string; n: number }[];
+    ).all(cooId)) as { peer: string; n: number }[];
     for (const row of unreadRows) {
       const item = last.get(row.peer);
       if (item) item.unread = Number(row.n);
@@ -303,17 +306,17 @@ export class MailDb {
   }
 
   /** 和某一个人的私聊历史；before=0 表示最新一页。 */
-  thread(cooId: string, peer: string, before = 0, limit = 50): { messages: DmThreadMessage[]; hasMore: boolean } {
+  async thread(cooId: string, peer: string, before = 0, limit = 50): Promise<{ messages: DmThreadMessage[]; hasMore: boolean }> {
     const size = Math.max(1, Math.min(100, Math.trunc(Number(limit)) || 50));
     const cursor = Number.isFinite(before) ? Math.max(0, Math.trunc(before)) : 0;
-    const rows = this.db.prepare(
+    const rows = (await this.db.prepare(
       `SELECT seq, ts, text, from_name, (read_at IS NULL) AS unread, (from_coo_id = ?) AS out_flag
          FROM mail
         WHERE from_coo_id IS NOT NULL
           AND ((coo_id = ? AND from_coo_id = ?) OR (coo_id = ? AND from_coo_id = ?))
           AND (? = 0 OR seq < ?)
         ORDER BY seq DESC LIMIT ?`,
-    ).all(cooId, cooId, peer, peer, cooId, cursor, cursor, size + 1) as Record<string, unknown>[];
+    ).all(cooId, cooId, peer, peer, cooId, cursor, cursor, size + 1)) as Record<string, unknown>[];
     const hasMore = rows.length > size;
     const page = rows.slice(0, size).reverse();
     return {
@@ -330,42 +333,42 @@ export class MailDb {
   }
 
   /** 把和某个人的来信全部标成已读；返回这次标了几封。 */
-  markThreadRead(cooId: string, peer: string): number {
-    const result = this.db.prepare(
+  async markThreadRead(cooId: string, peer: string): Promise<number> {
+    const result = await this.db.prepare(
       'UPDATE mail SET read_at = ? WHERE coo_id = ? AND from_coo_id = ? AND read_at IS NULL',
     ).run(this.now(), cooId, peer);
     return Number(result.changes);
   }
 
   /** 私聊未读总数（信箱角标用）。 */
-  dmUnread(cooId: string): number {
-    return Number(this.db.prepare(
+  async dmUnread(cooId: string): Promise<number> {
+    return Number((await this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND from_coo_id IS NOT NULL AND read_at IS NULL',
-    ).get(cooId)?.n ?? 0);
+    ).get(cooId))?.n ?? 0);
   }
 
   /** 全库信件数；迁移/巡检用。 */
-  count(): number {
-    return Number(this.db.prepare('SELECT COUNT(*) AS n FROM mail').get()?.n ?? 0);
+  async count(): Promise<number> {
+    return Number((await this.db.prepare('SELECT COUNT(*) AS n FROM mail').get())?.n ?? 0);
   }
 
   /**
    * 只读一页未读，不改已读状态。after 传上一页的 nextAfter 继续往下翻；
    * 不给 after 时从最旧的未读开始。
    */
-  unreadPage(cooId: string, room?: string, limit = DEFAULT_PAGE, after = 0): UnreadPage {
+  async unreadPage(cooId: string, room?: string, limit = DEFAULT_PAGE, after = 0): Promise<UnreadPage> {
     const size = clampPage(limit, DEFAULT_PAGE);
     const cursor = Number.isFinite(after) ? Math.trunc(after) : 0;
-    const rows = this.selectUnreadAfter(cooId, room, size, cursor);
-    const unread = this.countUnreadAfter(cooId, room, cursor);
+    const rows = await this.selectUnreadAfter(cooId, room, size, cursor);
+    const unread = await this.countUnreadAfter(cooId, room, cursor);
     const last = rows.length > 0 ? Number(rows[rows.length - 1].seq) : cursor;
     const remaining = Math.max(0, unread - rows.length);
     return {
       unread,
       remaining,
-      items: rows.map((row) => toView(this.db, row)),
+      items: await Promise.all(rows.map((row) => toView(this.db, row))),
       marked: false,
-      unreadByRoom: this.unreadByRoom(cooId),
+      unreadByRoom: await this.unreadByRoom(cooId),
       nextAfter: remaining > 0 ? last : null,
     };
   }
@@ -379,12 +382,12 @@ export class MailDb {
    * 缺 coo/客厅、重复 id/key 的信跳过并计数；entryId 指向还没导入的账本条目时
    * 保留信本身、只去掉链接，不让一条悬空外键毁掉整批迁移。
    */
-  importLegacy(source: string | LegacyMailState): LegacyImportResult {
+  async importLegacy(source: string | LegacyMailState): Promise<LegacyImportResult> {
     const state = typeof source === 'string' ? parseLegacyFile(source) : source;
     if (!state || state.version !== 1) throw new Error('旧信箱文件的 version 不是 1，拒绝导入');
     const items = Array.isArray(state.items) ? state.items.filter(isLegacyItem) : [];
     const cursors = readCursors(state.read);
-    const reuseSeq = this.count() === 0;
+    const reuseSeq = (await this.count()) === 0;
 
     const cooExists = this.db.prepare('SELECT 1 AS ok FROM coos WHERE id = ?');
     const roomExists = this.db.prepare('SELECT 1 AS ok FROM rooms WHERE id = ?');
@@ -400,18 +403,18 @@ export class MailDb {
        ON CONFLICT DO NOTHING`,
     );
 
-    return this.tx(() => {
+    return await this.tx(async () => {
       let imported = 0;
       let skipped = 0;
       for (const item of [...items].sort((left, right) => left.seq - right.seq)) {
-        if (!cooExists.get(item.to) || !roomExists.get(item.room)) {
+        if (!(await cooExists.get(item.to)) || !(await roomExists.get(item.room))) {
           skipped += 1;
           continue;
         }
         const read = typeof item.read === 'boolean'
           ? item.read
           : (cursors[item.to] ?? 0) >= item.seq;
-        const entryId = item.entryId && entryExists.get(item.entryId) ? item.entryId : null;
+        const entryId = item.entryId && (await entryExists.get(item.entryId)) ? item.entryId : null;
         const values = [
           item.id,
           item.ts,
@@ -426,8 +429,8 @@ export class MailDb {
           read ? item.ts : null,
         ];
         const result = reuseSeq && item.seq > 0
-          ? insertWithSeq.run(item.seq, ...values)
-          : insertAuto.run(...values);
+          ? await insertWithSeq.run(item.seq, ...values)
+          : await insertAuto.run(...values);
         if (Number(result.changes) > 0) imported += 1;
         else skipped += 1;
       }
@@ -436,56 +439,55 @@ export class MailDb {
   }
 
   /** 外层已开事务时并入，避免 BEGIN 套 BEGIN。 */
-  private tx<T>(fn: () => T): T {
-    if (this.db.isTransaction) return fn();
-    return withTransaction(this.db, fn);
+  private tx<T>(fn: () => Promise<T>): Promise<T> {
+    return this.db.isTransaction ? fn() : withTransaction(this.db, fn);
   }
 
-  private countUnread(cooId: string, room?: string): number {
+  private async countUnread(cooId: string, room?: string): Promise<number> {
     const row = room === undefined
-      ? this.db.prepare(
+      ? await this.db.prepare(
         'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND read_at IS NULL',
       ).get(cooId)
-      : this.db.prepare(
+      : await this.db.prepare(
         'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND room_id = ? AND read_at IS NULL',
       ).get(cooId, room);
     return Number(row?.n ?? 0);
   }
 
-  private countUnreadAfter(cooId: string, room: string | undefined, after: number): number {
+  private async countUnreadAfter(cooId: string, room: string | undefined, after: number): Promise<number> {
     const row = room === undefined
-      ? this.db.prepare(
+      ? await this.db.prepare(
         'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND read_at IS NULL AND seq > ?',
       ).get(cooId, after)
-      : this.db.prepare(
+      : await this.db.prepare(
         'SELECT COUNT(*) AS n FROM mail WHERE coo_id = ? AND room_id = ? AND read_at IS NULL AND seq > ?',
       ).get(cooId, room, after);
     return Number(row?.n ?? 0);
   }
 
-  private selectUnread(cooId: string, room: string | undefined, limit: number): Record<string, unknown>[] {
+  private async selectUnread(cooId: string, room: string | undefined, limit: number): Promise<Record<string, unknown>[]> {
     return room === undefined
-      ? this.db.prepare(
+      ? await this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND read_at IS NULL ORDER BY seq ASC LIMIT ?`,
       ).all(cooId, limit)
-      : this.db.prepare(
+      : await this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? AND read_at IS NULL ORDER BY seq ASC LIMIT ?`,
       ).all(cooId, room, limit);
   }
 
-  private selectUnreadAfter(
+  private async selectUnreadAfter(
     cooId: string,
     room: string | undefined,
     limit: number,
     after: number,
-  ): Record<string, unknown>[] {
+  ): Promise<Record<string, unknown>[]> {
     return room === undefined
-      ? this.db.prepare(
+      ? await this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail
           WHERE coo_id = ? AND read_at IS NULL AND seq > ?
           ORDER BY seq ASC LIMIT ?`,
       ).all(cooId, after, limit)
-      : this.db.prepare(
+      : await this.db.prepare(
         `SELECT ${VIEW_COLUMNS} FROM mail
           WHERE coo_id = ? AND room_id = ? AND read_at IS NULL AND seq > ?
           ORDER BY seq ASC LIMIT ?`,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -84,8 +85,8 @@ describe('狼人杀 · 网关与注册表', () => {
 
   it('HTTP：家长下场开桌、带版本入座开局；旧客户端开局被点名拒绝；历史路由与桌聊锁', async () => {
     dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-gw-'));
-    server = new WorldServer({
-      allowGuestJoin: true, dbFile: join(dir, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
+    server = await WorldServer.create({
+      allowGuestJoin: true, ...(await pgServerStorage(join(dir, 'parlor.db'))), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
     });
     await server.listen();
     const app = server;
@@ -166,8 +167,8 @@ describe('狼人杀 · 网关与注册表', () => {
 describe('狼人杀 · 牌桌时限基准', () => {
   it('tableTurnMs 把所有窗口按比例缩短：开局后两秒内进首夜（staging/本地测试用）', async () => {
     dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-ms-'));
-    server = new WorldServer({
-      allowGuestJoin: true, dbFile: join(dir, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
+    server = await WorldServer.create({
+      allowGuestJoin: true, ...(await pgServerStorage(join(dir, 'parlor.db'))), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
       tableTurnMs: 200,
     });
     await server.listen();
@@ -205,8 +206,8 @@ describe('狼人杀 · 牌桌时限基准', () => {
 describe('狼人杀 · 秘密出口矩阵', () => {  it('B1：狼聊暗号与身份只留在狼席位——非狼席位的补发/回放、家长页、观战出口都读不到', async () => {
     dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-b1-'));
     const clock = { now: 1_770_000_000_000 };
-    server = new WorldServer({
-      allowGuestJoin: true, dbFile: join(dir, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
+    server = await WorldServer.create({
+      allowGuestJoin: true, ...(await pgServerStorage(join(dir, 'parlor.db'))), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
       now: () => clock.now,
     });
     await server.listen();

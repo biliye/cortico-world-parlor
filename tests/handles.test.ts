@@ -1,5 +1,6 @@
 /** 短号：cooId 前 8 位；搜人、私聊、邀请都能按 #号 找人。 */
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,8 +22,9 @@ const C = 'coo-cccccccc';
 
 const start = async (): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-handles-'));
-  server = new WorldServer({
-    dbFile: join(dir, 'parlor.db'), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
+  server = await WorldServer.create({
+    ...(await pgServerStorage(join(dir, 'parlor.db'))),
+    port: 0, inviteCode: 'inv', defaultRoomId: 'lobby',
   });
   await server.listen();
   return server;
@@ -121,9 +123,9 @@ describe('按短号找人', () => {
     const a = await joinRoom(app.url, A, '阿岚');
     const now = Date.now();
     const db = app.dbHandle;
-    db.prepare("INSERT INTO coos(id, kind, display_name, created_at) VALUES (?, 'pet', ?, ?)")
+    await db.prepare("INSERT INTO coos(id, kind, display_name, created_at) VALUES (?, 'pet', ?, ?)")
       .run('abcdefgh-0000-4000-8000-000000000001', '双一', now);
-    db.prepare("INSERT INTO coos(id, kind, display_name, created_at) VALUES (?, 'pet', ?, ?)")
+    await db.prepare("INSERT INTO coos(id, kind, display_name, created_at) VALUES (?, 'pet', ?, ?)")
       .run('abcdefgh-0000-4000-8000-000000000002', '双二', now);
 
     const found = await get(app.url, '/v1/people?q=%23abcdefgh', bearer(a.token));

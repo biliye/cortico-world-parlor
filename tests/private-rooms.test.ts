@@ -3,6 +3,7 @@
  * 家长页在桌上有别的真人时藏起孩子的暗牌与私牌事件。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
 const O = 'coo-pv000001';
@@ -18,9 +19,9 @@ afterEach(async () => {
 });
 
 const start = async (clock = { now: 1_770_000_000_000 }): Promise<{ app: WorldServer; clock: { now: number } }> => {
-  server = new WorldServer({
+  server = await WorldServer.create({
     allowGuestJoin: false,
-    dbFile: ':memory:',
+    ...(await pgServerStorage(':memory:')),
     port: 0,
     inviteCode: 'inv',
     now: () => clock.now,

@@ -1,5 +1,5 @@
 /**
- * 全局账本的 SQLite store。
+ * 全局账本的 store。
  *
  * 与旧的 LedgerStore（JSON）同一组语义：只追加条目，余额由 ledger_transfers
  * 现算，承诺状态由指向它的 accept/decline/cancel/settle/default 按 ord 现算。
@@ -7,7 +7,10 @@
  * 并把 participants/winners/transfers 拆到各自的表。
  *
  * 事务交给调用方组合（进厅/送礼+账本+信箱），record 自己只在外层没有事务时
- * 才开一个；`db.isTransaction` 在 Node >= 22.13 可用。
+ * 才开一个。外层是否有事务由适配器按异步链判断（db.isTransaction）。
+ *
+ * 余额检查与扣款在 PostgreSQL 下要放在同一个事务里、并对涉及的 coos 行加锁，
+ * 由 RoomHost 的调用方负责；store 这里只保证「写」是原子的。
  */
 import { randomUUID } from 'node:crypto';
 import { migrate, openDb, withTransaction, type Db } from './db.ts';
@@ -27,6 +30,8 @@ import {
   type OpenLedgerItem,
   type PromiseStatus,
 } from './ledger.ts';
+import { isUniqueViolation } from './storage/errors.ts';
+import { jsonObject } from './storage/json.ts';
 
 export type LedgerRecordInput = Omit<LedgerEntry, 'id' | 'ts'> & {
   /** 显式标成补发；默认看 `data.refill === true`。 */
@@ -48,22 +53,7 @@ const STATUS_BY_KIND: Partial<Record<LedgerKind, PromiseStatus>> = {
   default: 'defaulted',
 };
 
-const isUniqueViolation = (error: unknown): boolean => (
-  error instanceof Error && /UNIQUE constraint failed/i.test(error.message)
-);
-
-const parseData = (raw: string | null): Record<string, unknown> | undefined => {
-  if (!raw) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-};
+const parseData = (raw: unknown): Record<string, unknown> | undefined => jsonObject(raw);
 
 interface EntryRow {
   ord: number;
@@ -78,7 +68,7 @@ interface EntryRow {
   to_coo_id: string | null;
   game: string | null;
   text: string;
-  data_json: string | null;
+  data_json: unknown;
   due_at: number | null;
   ref_entry_id: string | null;
   effect_id: string | null;
@@ -100,14 +90,14 @@ interface OpenRow {
   to_coo_id: string | null;
   text: string;
   due_at: number | null;
-  data_json: string | null;
+  data_json: unknown;
   status_kind: string | null;
 }
 
 interface GameRow {
   id: string;
   game: string | null;
-  data_json: string | null;
+  data_json: unknown;
   won: number;
 }
 
@@ -151,9 +141,9 @@ export class LedgerDb {
   }
 
   /** 开一个库并建表；多客厅共用一个库时直接用 new LedgerDb(db)。 */
-  static open(file = ':memory:', options: LedgerDbOptions = {}): LedgerDb {
+  static async open(file = ':memory:', options: LedgerDbOptions = {}): Promise<LedgerDb> {
     const db = openDb(file);
-    migrate(db);
+    await migrate(db);
     return new LedgerDb(db, options);
   }
 
@@ -161,36 +151,36 @@ export class LedgerDb {
    * 追加一条记录，写 entry + participants/winners/transfers，返回带 id/ts 的条目。
    * 同一个 effectId 只写一次：已有就原样返回旧的（长局重放/崩溃恢复）。
    */
-  record(input: LedgerRecordInput): LedgerEntry {
+  record(input: LedgerRecordInput): Promise<LedgerEntry> {
     const { isRefill, ...fields } = input;
-    return this.atomic(() => {
+    return this.atomic(async () => {
       if (fields.effectId) {
-        const existing = this.byEffectId(fields.effectId);
+        const existing = await this.byEffectId(fields.effectId);
         if (existing) return existing;
       }
       const entry: LedgerEntry = { ...fields, id: randomUUID(), ts: this.now() };
-      this.insert(entry, isRefill ?? entry.data?.refill === true);
+      await this.insert(entry, isRefill ?? entry.data?.refill === true);
       return entry;
     });
   }
 
-  byId(id: string): LedgerEntry | undefined {
-    const row = this.db.prepare('SELECT * FROM ledger_entries WHERE id = ?').get(id);
+  async byId(id: string): Promise<LedgerEntry | undefined> {
+    const row = await this.db.prepare('SELECT * FROM ledger_entries WHERE id = ?').get(id);
     return row ? this.entryOf(row as unknown as EntryRow) : undefined;
   }
 
-  byEffectId(effectId: string): LedgerEntry | undefined {
-    const row = this.db.prepare('SELECT * FROM ledger_entries WHERE effect_id = ?').get(effectId);
+  async byEffectId(effectId: string): Promise<LedgerEntry | undefined> {
+    const row = await this.db.prepare('SELECT * FROM ledger_entries WHERE effect_id = ?').get(effectId);
     return row ? this.entryOf(row as unknown as EntryRow) : undefined;
   }
 
   /** 一条记录的实际筹码转移（退款按开局明细原路退回时用）。 */
-  transfersOf(entryId: string): Array<{
+  async transfersOf(entryId: string): Promise<Array<{
     fromKind: 'coo' | 'room'; fromCooId?: string;
     toKind: 'coo' | 'room'; toCooId?: string;
     amount: number;
-  }> {
-    const rows = this.db.prepare(
+  }>> {
+    const rows = await this.db.prepare(
       `SELECT from_kind, from_coo_id, to_kind, to_coo_id, amount
          FROM ledger_transfers WHERE entry_id = ? ORDER BY id`,
     ).all(entryId) as Array<{
@@ -208,21 +198,22 @@ export class LedgerDb {
   }
 
   /** 按完整 id 或唯一前缀找条目；前缀撞了就返回 undefined。 */
-  find(idOrPrefix: string): LedgerEntry | undefined {
+  async find(idOrPrefix: string): Promise<LedgerEntry | undefined> {
     const needle = idOrPrefix.trim().toLowerCase();
     if (!needle) return undefined;
-    const exact = this.db.prepare('SELECT * FROM ledger_entries WHERE id = ? COLLATE NOCASE').get(needle);
+    // SQLite 用 COLLATE NOCASE，PG 没有这个排序规则；两边都认的写法是 lower()。
+    const exact = await this.db.prepare('SELECT * FROM ledger_entries WHERE lower(id) = ?').get(needle);
     if (exact) return this.entryOf(exact as unknown as EntryRow);
     const escaped = needle.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-    const hits = this.db
+    const hits = await this.db
       .prepare("SELECT * FROM ledger_entries WHERE LOWER(id) LIKE ? ESCAPE '\\' ORDER BY ord LIMIT 2")
       .all(`${escaped}%`);
     return hits.length === 1 ? this.entryOf(hits[0] as unknown as EntryRow) : undefined;
   }
 
   /** 余额：所有 transfers 里进出这个 cooId 的和；`room` 只发行，不计余额。 */
-  balanceOf(cooId: string): number {
-    const row = this.db.prepare(
+  async balanceOf(cooId: string): Promise<number> {
+    const row = await this.db.prepare(
       `SELECT
          (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE to_coo_id = ?) -
          (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE from_coo_id = ?) AS balance`,
@@ -235,11 +226,11 @@ export class LedgerDb {
    * accept/decline/cancel/settle/default；没有就是 pending。
    * 传入 id 也可以；不是 promise/debt 返回 null。
    */
-  promiseStatus(promise: LedgerEntry | string): PromiseStatus | null {
+  async promiseStatus(promise: LedgerEntry | string): Promise<PromiseStatus | null> {
     let id: string;
     let kind: string;
     if (typeof promise === 'string') {
-      const row = this.db
+      const row = await this.db
         .prepare('SELECT id, kind FROM ledger_entries WHERE id = ?')
         .get(promise) as { id: string; kind: string } | undefined;
       if (!row) return null;
@@ -250,7 +241,7 @@ export class LedgerDb {
       kind = promise.kind;
     }
     if (kind !== 'promise' && kind !== 'debt') return null;
-    const row = this.db.prepare(
+    const row = await this.db.prepare(
       `SELECT kind FROM ledger_entries
         WHERE ref_entry_id = ?
           AND kind IN ('accept','decline','cancel','settle','default')
@@ -261,8 +252,8 @@ export class LedgerDb {
   }
 
   /** 某人的未了结承诺（等对方回 / 已答应），按到期时间排，没期限的在后。 */
-  openFor(cooId: string): OpenLedgerItem[] {
-    const rows = this.db.prepare(
+  async openFor(cooId: string): Promise<OpenLedgerItem[]> {
+    const rows = await this.db.prepare(
       `SELECT e.id, e.kind, e.from_coo_id, e.to_coo_id, e.text, e.due_at, e.data_json,
          (SELECT s.kind FROM ledger_entries s
            WHERE s.ref_entry_id = e.id
@@ -296,13 +287,13 @@ export class LedgerDb {
     return open;
   }
 
-  countOpenPromises(cooId: string): number {
-    return this.openFor(cooId).length;
+  async countOpenPromises(cooId: string): Promise<number> {
+    return (await this.openFor(cooId)).length;
   }
 
   /** 这个 cooId 在 since 之后新写了多少条礼物 + 承诺（防刷屏用）。 */
-  socialCountSince(cooId: string, since: number): number {
-    const row = this.db.prepare(
+  async socialCountSince(cooId: string, since: number): Promise<number> {
+    const row = await this.db.prepare(
       `SELECT COUNT(*) AS n FROM ledger_entries
         WHERE from_coo_id = ? AND kind IN ('gift','promise') AND ts >= ?`,
     ).get(cooId, since) as { n: number };
@@ -310,15 +301,15 @@ export class LedgerDb {
   }
 
   /** 新身份第一次进房间发筹码；唯一索引保证一个 coo 只有一条非 refill grant。 */
-  ensureGrant(cooId: string, room: string): LedgerEntry | null {
+  async ensureGrant(cooId: string, room: string): Promise<LedgerEntry | null> {
     if (!cooId) return null;
-    return this.atomic(() => {
-      const existing = this.db.prepare(
+    return this.atomic(async () => {
+      const existing = await this.db.prepare(
         "SELECT 1 AS hit FROM ledger_entries WHERE kind = 'grant' AND to_coo_id = ? AND is_refill = 0 LIMIT 1",
       ).get(cooId);
       if (existing) return null;
       try {
-        return this.record({
+        return await this.record({
           kind: 'grant',
           room,
           from: 'room',
@@ -337,12 +328,12 @@ export class LedgerDb {
   }
 
   /** 余额见底时补一点，两次之间至少隔 REFILL_GAP_MS；返回新发的条目。 */
-  maybeRefill(cooId: string, room: string, now = this.now()): LedgerEntry | null {
+  async maybeRefill(cooId: string, room: string, now = this.now()): Promise<LedgerEntry | null> {
     if (!cooId) return null;
-    return this.atomic(() => {
-      const balance = this.balanceOf(cooId);
+    return this.atomic(async () => {
+      const balance = await this.balanceOf(cooId);
       if (balance >= REFILL_BELOW) return null;
-      const last = this.db.prepare(
+      const last = await this.db.prepare(
         `SELECT ts FROM ledger_entries
           WHERE kind = 'grant' AND to_coo_id = ? AND is_refill = 1
           ORDER BY ord DESC LIMIT 1`,
@@ -367,27 +358,27 @@ export class LedgerDb {
    * 到期没结的承诺追加一条 default；只扫 room 指定的客厅（不给就扫全部），
    * 已经有 settle/decline/cancel/default 的不再重复记。
    */
-  expire(now = this.now(), room?: string): LedgerEntry[] {
-    return this.atomic(() => {
-      const rows = this.db.prepare(
+  async expire(now = this.now(), room?: string): Promise<LedgerEntry[]> {
+    return this.atomic(async () => {
+      const rows = await this.db.prepare(
         `SELECT * FROM ledger_entries e
           WHERE e.kind = 'promise'
             AND e.due_at IS NOT NULL
             AND e.due_at <= ?
-            AND (? IS NULL OR e.room_id = ?)
+            AND (? = 0 OR e.room_id = ?)
             AND NOT EXISTS (
               SELECT 1 FROM ledger_entries s
                WHERE s.ref_entry_id = e.id
                  AND s.kind IN ('settle','decline','cancel','default')
             )
           ORDER BY e.ord`,
-      ).all(now, room ?? null, room ?? null) as unknown as EntryRow[];
+      ).all(now, room ? 1 : 0, room ?? null) as unknown as EntryRow[];
 
       const created: LedgerEntry[] = [];
       for (const row of rows) {
-        const promise = this.entryOf(row);
-        if (this.promiseStatus(promise) !== 'accepted') continue;
-        created.push(this.record({
+        const promise = await this.entryOf(row);
+        if (await this.promiseStatus(promise) !== 'accepted') continue;
+        created.push(await this.record({
           kind: 'default',
           ref: promise.id,
           room: promise.room,
@@ -413,8 +404,8 @@ export class LedgerDb {
    * 局数/胜负平/余额/未了结 + 按游戏拆分 + 最近 5 条。
    * 平局只算赢的人平，没赢的人算负；与旧 LedgerStore.summaryFor 一致。
    */
-  summaryFor(cooId: string): LedgerSummary {
-    const rows = this.db.prepare(
+  async summaryFor(cooId: string): Promise<LedgerSummary> {
+    const rows = await this.db.prepare(
       `SELECT e.id, e.game, e.data_json,
          EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id = e.id AND w.coo_id = ?) AS won
        FROM ledger_entries e
@@ -458,16 +449,18 @@ export class LedgerDb {
       }
     }
 
-    const recent = (this.db.prepare(
+    const recentRows = await this.db.prepare(
       `SELECT id FROM ledger_entries e
         WHERE e.from_coo_id = ? OR e.to_coo_id = ?
           OR EXISTS(SELECT 1 FROM ledger_participants p WHERE p.entry_id = e.id AND p.coo_id = ?)
           OR EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id = e.id AND w.coo_id = ?)
         ORDER BY e.ord DESC LIMIT 5`,
-    ).all(cooId, cooId, cooId, cooId) as { id: string }[])
-      .map((row) => this.byId(row.id))
-      .filter((entry): entry is LedgerEntry => !!entry)
-      .map((entry) => viewOf(entry, cooId));
+    ).all(cooId, cooId, cooId, cooId) as { id: string }[];
+    const recent: LedgerEntryView[] = [];
+    for (const row of recentRows) {
+      const entry = await this.byId(row.id);
+      if (entry) recent.push(viewOf(entry, cooId));
+    }
 
     return {
       cooId,
@@ -478,40 +471,43 @@ export class LedgerDb {
       byGame: [...byGame.values()].sort((left, right) => (
         right.games - left.games || left.game.localeCompare(right.game)
       )),
-      chips: this.balanceOf(cooId),
-      open: this.openFor(cooId),
+      chips: await this.balanceOf(cooId),
+      open: await this.openFor(cooId),
       recent,
     };
   }
 
   /** 本房最近的公开条目，给房间里的所有人看；不含别人的 cooId。 */
-  publicInRoom(room: string, limit = 5): LedgerEntryView[] {
-    return (this.db.prepare(
+  async publicInRoom(room: string, limit = 5): Promise<LedgerEntryView[]> {
+    const rows = await this.db.prepare(
       `SELECT id FROM ledger_entries
         WHERE room_id = ? AND visibility = 'room'
         ORDER BY ord DESC LIMIT ?`,
-    ).all(room, Math.max(1, Math.trunc(limit))) as { id: string }[])
-      .map((row) => this.byId(row.id))
-      .filter((entry): entry is LedgerEntry => !!entry)
-      .map((entry) => viewOf(entry));
+    ).all(room, Math.max(1, Math.trunc(limit))) as { id: string }[];
+    const items: LedgerEntryView[] = [];
+    for (const row of rows) {
+      const entry = await this.byId(row.id);
+      if (entry) items.push(viewOf(entry));
+    }
+    return items;
   }
 
-  count(): number {
-    const row = this.db.prepare('SELECT COUNT(*) AS n FROM ledger_entries').get() as { n: number };
+  async count(): Promise<number> {
+    const row = await this.db.prepare('SELECT COUNT(*) AS n FROM ledger_entries').get() as { n: number };
     return row.n;
   }
 
   /** 外层已有事务（WorldServer 组合送礼+账本+信箱）时不再套一层 BEGIN。 */
-  private atomic<T>(fn: () => T): T {
+  private atomic<T>(fn: () => Promise<T>): Promise<T> {
     return this.db.isTransaction ? fn() : withTransaction(this.db, fn);
   }
 
-  private insert(entry: LedgerEntry, isRefill: boolean): void {
+  private async insert(entry: LedgerEntry, isRefill: boolean): Promise<void> {
     const fromKind = entry.from === 'room' ? 'room' : 'coo';
     const toKind = entry.to === undefined || entry.to === ''
       ? 'none'
       : entry.to === 'room' ? 'room' : 'coo';
-    this.db.prepare(
+    await this.db.prepare(
       `INSERT INTO ledger_entries(
          id, ts, room_id, kind, visibility, from_kind, from_coo_id, to_kind, to_coo_id,
          game, text, data_json, due_at, ref_entry_id, effect_id, is_refill
@@ -543,7 +539,7 @@ export class LedgerDb {
       let position = 0;
       for (const cooId of participants) {
         if (typeof cooId !== 'string' || !cooId || cooId === 'room') continue;
-        statement.run(entry.id, cooId, position);
+        await statement.run(entry.id, cooId, position);
         position += 1;
       }
     }
@@ -555,14 +551,14 @@ export class LedgerDb {
       );
       for (const cooId of winners) {
         if (typeof cooId !== 'string' || !cooId || cooId === 'room') continue;
-        statement.run(entry.id, cooId);
+        await statement.run(entry.id, cooId);
       }
     }
 
-    for (const transfer of entry.transfers ?? []) this.insertTransfer(entry.id, transfer);
+    for (const transfer of entry.transfers ?? []) await this.insertTransfer(entry.id, transfer);
   }
 
-  private insertTransfer(entryId: string, transfer: ChipTransfer): void {
+  private async insertTransfer(entryId: string, transfer: ChipTransfer): Promise<void> {
     if (!Number.isSafeInteger(transfer.amount) || transfer.amount <= 0) {
       throw new Error(`筹码转移的数额必须是正整数：${String(transfer.amount)}`);
     }
@@ -571,7 +567,7 @@ export class LedgerDb {
     }
     const fromKind = transfer.from === 'room' ? 'room' : 'coo';
     const toKind = transfer.to === 'room' ? 'room' : 'coo';
-    this.db.prepare(
+    await this.db.prepare(
       `INSERT INTO ledger_transfers(entry_id, from_kind, from_coo_id, to_kind, to_coo_id, amount)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(
@@ -584,14 +580,15 @@ export class LedgerDb {
     );
   }
 
-  private entryOf(row: EntryRow): LedgerEntry {
-    const participants = (this.db
+  private async entryOf(row: EntryRow): Promise<LedgerEntry> {
+    const participants = (await this.db
       .prepare('SELECT coo_id FROM ledger_participants WHERE entry_id = ? ORDER BY position')
       .all(row.id) as { coo_id: string }[]).map((item) => item.coo_id);
-    const winners = (this.db
-      .prepare('SELECT coo_id FROM ledger_winners WHERE entry_id = ? ORDER BY rowid')
+    // SQLite 用 rowid 保插入顺序，PG 没有 rowid；赢家是无序集合，按 coo_id 排即可。
+    const winners = (await this.db
+      .prepare('SELECT coo_id FROM ledger_winners WHERE entry_id = ? ORDER BY coo_id')
       .all(row.id) as { coo_id: string }[]).map((item) => item.coo_id);
-    const transfers = (this.db
+    const transfers = (await this.db
       .prepare('SELECT from_kind, from_coo_id, to_kind, to_coo_id, amount FROM ledger_transfers WHERE entry_id = ? ORDER BY id')
       .all(row.id) as unknown as TransferRow[]).map((item) => ({
       from: item.from_kind === 'room' ? 'room' : item.from_coo_id ?? '',

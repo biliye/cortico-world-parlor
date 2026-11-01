@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
 let server: WorldServer | undefined;
@@ -16,7 +17,7 @@ const join = (url: string) => fetch(url + '/v1/player/join', {
 
 describe('网页访客入口开关', () => {
   it('默认关闭：healthz 报 false，/v1/player/join 回 403', async () => {
-    server = new WorldServer({ dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+    server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
     const address = await server.listen();
     const health = await (await fetch(address.url + '/healthz')).json() as { guestJoin: boolean };
     expect(health.guestJoin).toBe(false);
@@ -26,8 +27,9 @@ describe('网页访客入口开关', () => {
   });
 
   it('打开时能正常加入，healthz 报 true', async () => {
-    server = new WorldServer({
-      dbFile: ':memory:', port: 0, inviteCode: 'inv', allowGuestJoin: true,
+    server = await WorldServer.create({
+      ...(await pgServerStorage(':memory:')),
+      port: 0, inviteCode: 'inv', allowGuestJoin: true,
     });
     const address = await server.listen();
     const health = await (await fetch(address.url + '/healthz')).json() as { guestJoin: boolean };

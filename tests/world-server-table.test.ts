@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
 const A = 'coo-aaaaaaaa';
@@ -13,7 +14,7 @@ afterEach(async () => {
 });
 
 const start = async (): Promise<WorldServer> => {
-  server = new WorldServer({ allowGuestJoin: true, dbFile: ':memory:', port: 0, inviteCode: 'inv' });
+  server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
   await server.listen();
   return server;
 };

@@ -4,6 +4,7 @@
  * 但账本/筹码与孩子那份分开；孩子自己的席位不受影响。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,8 +24,8 @@ afterEach(async () => {
 
 const start = async (): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-parent-'));
-  server = new WorldServer({ allowGuestJoin: true,
-    dbFile: join(dir, 'parlor.db'),
+  server = await WorldServer.create({ allowGuestJoin: true,
+    ...(await pgServerStorage(join(dir, 'parlor.db'))),
     port: 0,
     inviteCode: 'inv',
     defaultRoomId: 'lobby',

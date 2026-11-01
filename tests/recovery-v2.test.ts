@@ -3,6 +3,7 @@
  * 被移出的人还能用自己的身份读账本。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,8 +31,8 @@ const fileDb = (): string => {
 };
 
 const start = async (file: string, now: () => number): Promise<WorldServer> => {
-  server = new WorldServer({
-    allowGuestJoin: false, dbFile: file, port: 0, inviteCode: 'inv', now,
+  server = await WorldServer.create({
+    allowGuestJoin: false, ...(await pgServerStorage(file)), port: 0, inviteCode: 'inv', now,
   });
   await server.listen();
   return server;
@@ -110,7 +111,7 @@ describe('恢复与故障', () => {
     const id = opened.body.tableId as string;
     await post(app.url, '/v1/action', { type: 'table_join', table: id, requestId: 'join' }, bearer(v));
     await post(app.url, '/v1/action', { type: 'table_start', table: id, requestId: 'start' }, bearer(u));
-    expect(new LedgerDb(app.dbHandle).balanceOf(U)).toBe(START_CHIPS - 5);
+    expect(await new LedgerDb(app.dbHandle).balanceOf(U)).toBe(START_CHIPS - 5);
 
     await app.close();
     server = undefined;
@@ -118,15 +119,15 @@ describe('恢复与故障', () => {
     // 停机 31 分钟：作废退款一次。
     const later = t0 + 31 * 60_000;
     const restarted = await start(file, () => later);
-    expect(new LedgerDb(restarted.dbHandle).balanceOf(U)).toBe(START_CHIPS);
-    expect(new LedgerDb(restarted.dbHandle).balanceOf(V)).toBe(START_CHIPS);
+    expect(await new LedgerDb(restarted.dbHandle).balanceOf(U)).toBe(START_CHIPS);
+    expect(await new LedgerDb(restarted.dbHandle).balanceOf(V)).toBe(START_CHIPS);
     await restarted.close();
     server = undefined;
 
     // 再停再起：旧桌已经 abandoned，不会再退第二次。
     const again = await start(file, () => later + 31 * 60_000);
-    expect(new LedgerDb(again.dbHandle).balanceOf(U)).toBe(START_CHIPS);
-    expect(new LedgerDb(again.dbHandle).balanceOf(V)).toBe(START_CHIPS);
+    expect(await new LedgerDb(again.dbHandle).balanceOf(U)).toBe(START_CHIPS);
+    expect(await new LedgerDb(again.dbHandle).balanceOf(V)).toBe(START_CHIPS);
   });
 
   it('坏快照只隔离那一桌，不猜、不重发牌', async () => {
@@ -139,7 +140,7 @@ describe('恢复与故障', () => {
     const id = opened.body.tableId as string;
     await post(app.url, '/v1/action', { type: 'table_join', table: id, requestId: 'join' }, bearer(v));
     await post(app.url, '/v1/action', { type: 'table_start', table: id, requestId: 'start' }, bearer(u));
-    app.dbHandle.prepare('UPDATE tables SET state_json = ? WHERE id = ?').run('{"broken":true}', id);
+    await app.dbHandle.prepare('UPDATE tables SET state_json = ? WHERE id = ?').run('{"broken":true}', id);
     await app.close();
     server = undefined;
 
@@ -207,7 +208,7 @@ describe('恢复与故障', () => {
 
     // 结算仍算 U 一份：账本参与人里有他，身份级账本能读到这一局。
     const ledger = new LedgerDb(app.dbHandle);
-    const gameEntry = ledger.byEffectId(`${tableId}/result`);
+    const gameEntry = await ledger.byEffectId(`${tableId}/result`);
     expect(gameEntry?.participants).toContain(U);
     expect(gameEntry?.participants).toContain(V);
     const meLedger = await get(app.url, '/v1/me/ledger', cooHeaders(U));
