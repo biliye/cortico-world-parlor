@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PARLOR_CLIENT_VERSION = '0.29.0';
+const PARLOR_CLIENT_VERSION = '0.30.0';
 
 const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) args.set(process.argv[i]!, process.argv[i + 1]!);
