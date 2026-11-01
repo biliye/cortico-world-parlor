@@ -97,6 +97,91 @@ const pushedText = (host: FakeHost): string => host.events
   .filter((event) => event.type === 'parlor.message' || event.type === 'parlor.digest')
   .map((event) => event.text).join('\n');
 
+/** 真正打完另一桌，覆盖开桌、入座、开局、行动和结算的公开广播。 */
+const playOtherTable = async (friend: ParlorClient, token: string): Promise<string[]> => {
+  const other = new ParlorClient(server!.url, {
+    cooId: 'coo-other-table', cooSecret: 'other-table-secret-0123456789',
+  });
+  const joined = await other.join('inv', { name: '隔壁桌玩家' }, 'lobby');
+  await friend.action(token, { type: 'table_open', game: 'dice', requestId: 'other-open' }, 'lobby');
+  const opened = await friend.snapshot(token, 0, 1, 'lobby');
+  const table = opened.table!.id;
+  await other.action(joined.token, { type: 'table_join', table, requestId: 'other-join' }, 'lobby');
+  await friend.action(token, { type: 'table_start', table, requestId: 'other-start' }, 'lobby');
+  const first = await friend.snapshot(token, 0, 1, 'lobby');
+  await friend.action(token, {
+    type: 'table_action', action: 'stand', table, revision: first.tablePrivate!.revision,
+    requestId: 'other-stand-1',
+  }, 'lobby');
+  const second = await other.snapshot(joined.token, 0, 1, 'lobby');
+  await other.action(joined.token, {
+    type: 'table_action', action: 'stand', table, revision: second.tablePrivate!.revision,
+    requestId: 'other-stand-2',
+  }, 'lobby');
+  const history = await friend.history(token, 0, 100, 'lobby');
+  const events = history.events.filter((event) => event.scope.kind === 'room'
+    && event.type.startsWith('parlor.table.') && event.data?.tableId === table);
+  expect(events.some((event) => event.type === 'parlor.table.end')).toBe(true);
+  return events.map((event) => event.text);
+};
+
+describe('其他桌的牌局不自动推给 Coo', () => {
+  it.each(['full', 'digest', 'quiet', 'off'] as const)('%s：不唤醒或夹带摘要，主动围观仍可看', async (tier) => {
+    const { host, friend, friendToken, ctx, secrets } = await startWorld({ tier });
+    const texts = await playOtherTable(friend, friendToken);
+    const snapshot = await friend.snapshot(friendToken, 0, 1, 'lobby');
+    await until(() => {
+      const cursor = JSON.parse(readFileSync(join(ctx.dataDir, 'parlor-cursor.json'), 'utf8'));
+      return cursor.rooms.lobby >= snapshot.latest;
+    });
+    for (const text of texts) expect(pushedText(host)).not.toContain(text);
+
+    await friend.action(friendToken, { type: 'say', text: '@小满 客厅照常点名' }, 'lobby');
+    if (tier !== 'off') {
+      await until(() => pushedText(host).includes('客厅照常点名'));
+      for (const text of texts) expect(pushedText(host)).not.toContain(text);
+    }
+    // 直接读与主动工具仍有公开牌局，不能为了消除通知而收掉围观权限。
+    const publicHistory = await friend.history(secrets.PARLOR_SEAT_TOKEN!, 0, 100, 'lobby');
+    for (const text of texts) expect(publicHistory.events.map((event) => event.text)).toContain(text);
+    expect(await call('parlor_table_view')).toContain('骰子');
+    const replay = await call('parlor_replay', { limit: 100 });
+    for (const text of texts) expect(replay).toContain(text);
+  });
+
+  it('重启补发不把其他桌的牌局夹进点名消息', async () => {
+    const { ctx, host, friend, friendToken } = await startWorld({ tier: 'quiet' });
+    await friend.action(friendToken, { type: 'say', text: '@小满 重启前保存游标' }, 'lobby');
+    await until(() => pushedText(host).includes('重启前保存游标'));
+    await world!.stop();
+    world = undefined;
+    const texts = await playOtherTable(friend, friendToken);
+    await friend.action(friendToken, { type: 'say', text: '@小满 离线后的客厅消息' }, 'lobby');
+    world = PARLOR.create(ctx);
+    const resumed = new FakeHost();
+    await world.start(resumed);
+    await until(() => pushedText(resumed).includes('离线后的客厅消息'));
+    for (const text of texts) expect(pushedText(resumed)).not.toContain(text);
+  });
+
+  it('自己在另一桌时不受干扰，本桌聊天与行动提醒照常', async () => {
+    const { host, friend, friendToken } = await startWorld();
+    await call('parlor_table_open', { game: 'dice' });
+    const mine = await call('parlor_table_view');
+    const texts = await playOtherTable(friend, friendToken);
+    expect(await call('parlor_table_view')).toBe(mine);
+    for (const text of texts) expect(pushedText(host)).not.toContain(text);
+    const snapshot = await friend.snapshot(friendToken, 0, 1, 'lobby');
+    const myTable = snapshot.tables!.find((table) => table.status === 'open')!.id;
+    await friend.action(friendToken, { type: 'table_join', table: myTable, requestId: 'my-join' }, 'lobby');
+    await friend.action(friendToken, { type: 'table_say', text: '本桌聊天仍收到' }, 'lobby');
+    await until(() => pushedText(host).includes('本桌聊天仍收到'));
+    await call('parlor_table_start');
+    await until(() => pushedText(host).includes('轮到你'));
+    expect(await call('parlor_table_action', { action: 'stand' })).toContain('停牌了');
+  });
+});
+
 describe('大厅进出不主动推给 Coo', () => {
   it.each(['full', 'digest', 'quiet', 'off'] as const)('%s：大厅进出不进推送或摘要，游标仍推进', async (tier) => {
     const { host, friend, friendToken, ctx } = await startWorld({ room: 'hall', tier });

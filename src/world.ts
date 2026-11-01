@@ -853,6 +853,13 @@ export class ParlorWorld implements World {
 
     // 牌桌事件会改桌面版本：合并刷新一次快照，免得下一次动作拿着旧版本被拒。
     if (event.type.startsWith('parlor.table.')) this.scheduleFocusRefresh();
+    // 公开牌局动态留给主动围观，不自动塞进桌外 Coo 的上下文或摘要。
+    // 游标已推进，重连补发同样过滤；私视图和同桌聊天仍按原规则投递。
+    if (event.type.startsWith('parlor.table.') && event.scope.kind === 'room') {
+      const tableId = typeof event.data?.tableId === 'string' ? event.data.tableId : undefined;
+      // 旧单间协议的动作没有桌号，但一间只有一桌，用专注状态兼容。
+      if (tableId ? tableId !== this.myTableId : !this.focused) return;
+    }
     // 窗口制的纯桌面刷新（队友交了刀票/发言）不是行动请求：快照刷新即可，不叫醒。
     if (event.type === 'parlor.table.turn' && event.data?.decision === false) return;
 
