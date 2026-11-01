@@ -1,4 +1,4 @@
-/** 斗地主（奶油客厅主推）：一张木头小牌桌。
+/** 斗地主：会馆里的绿色牌桌。
  *  左边/右边是对手的牌堆，中间是底牌与刚出的那手，最下面是我的扇形手牌。
  *  规则、牌型、提示、计分全在服务器；这里只摆牌、按钮和结果。 */
 import {
@@ -17,6 +17,7 @@ export function mountDdz(root, ctx) {
   let playBtn = null;
   let clearBtn = null;
   let selectedLabel = null;
+  let painted = '';
 
   // 窗口一变宽变窄，手牌要重新收一遍，不然会顶出桌沿。
   const onResize = () => {
@@ -28,9 +29,11 @@ export function mountDdz(root, ctx) {
   return {
     update(next) {
       view = next;
+      const paintKey = JSON.stringify([next.table, next.priv, [...next.names], next.online]);
+      if (paintKey === painted) return;
+      painted = paintKey;
       const hand = next.priv && Array.isArray(next.priv.hand) ? next.priv.hand.join(',') : '';
-      const nextSignature = hand + '|' + (next.priv && next.priv.status ? next.priv.status : '')
-        + '|' + (next.table && next.table.turn ? next.table.turn : '');
+      const nextSignature = hand + '|' + (next.priv && next.priv.status ? next.priv.status : '');
       if (nextSignature !== signature) {
         signature = nextSignature;
         selection = new Set();
@@ -491,7 +494,7 @@ export function mountDdz(root, ctx) {
 
     const actions = el('div', 'ddz-actions');
     actions.append(btn('再开一桌', () => ctx.openDdz(), { primary: true }));
-    actions.append(btn('回大厅', () => ctx.showLobby(), { ghost: true }));
+    actions.append(btn('返回客厅', () => ctx.showLobby(), { ghost: true }));
     panel.append(actions);
     box.append(panel);
   }

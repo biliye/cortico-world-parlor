@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.task-tmp/
 *.log
 
 # 部署用的密钥，永远不进仓库

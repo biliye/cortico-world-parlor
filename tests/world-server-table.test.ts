@@ -221,8 +221,10 @@ describe('WorldServer 大厅、邀请与网页', () => {
     const page = await fetch(`${app.url}/play`);
     expect(page.status).toBe(200);
     expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
-    expect(await page.text()).toContain('<script type="module" src="/play/assets/play.js">');
-    const script = await fetch(`${app.url}/play/assets/play.js`);
+    const html = await page.text();
+    const scriptPath = html.match(/<script type="module" src="(\/play\/assets\/play\.js(?:\?[^"]+)?)">/)?.[1];
+    expect(scriptPath).toBeTruthy();
+    const script = await fetch(`${app.url}${scriptPath}`);
     expect(script.status).toBe(200);
     expect(script.headers.get('content-type')).toContain('text/javascript');
   });

@@ -1,4 +1,4 @@
-/** 狼人杀（真人与 Coo 同桌）：一张固定九席的像素木桌。
+/** 狼人杀（真人与 Coo 同桌）：会馆里的固定九席圆桌。
  *  座号方向所有端一致（不为自己旋转）；发言/票型/历史都在右侧文字区；
  *  秘密（身份牌、查验、狼聊、药）只渲染本人私视图给的东西。
  *  规则、窗口、时限全在服务器；这里只摆座位、卡片、草稿与按钮。 */
@@ -709,7 +709,7 @@ export function mountWerewolf(root, ctx) {
     }
     panel.append(grid);
     const actions = el('div', 'wf-end-actions');
-    actions.append(btn('回大厅', () => ctx.showLobby(), { primary: true }));
+    actions.append(btn('返回客厅', () => ctx.showLobby(), { primary: true }));
     panel.append(actions);
     return panel;
   }

@@ -220,6 +220,7 @@ export interface RoomSnapshot {
   id: string;
   /** 给人看的客厅名；旧数据没有时回落到 id。 */
   name?: string;
+  topic?: string;
   /** 调用者自己的席位。 */
   seat: Seat;
   seats: Seat[];
@@ -267,6 +268,10 @@ export interface RoomSummary {
   capacity: number;
   /** 现在坐着的会说话席位（不含观看者）。 */
   seats: number;
+  /** 目录只给桌数与游戏种类，不给任何牌局或私有状态。 */
+  tableCount?: number;
+  games?: string[];
+  mine?: boolean;
   archived: boolean;
   lastActiveAt: number;
 }

@@ -551,6 +551,7 @@ export class RoomHost {
     return {
       id: this.roomId,
       name: room.name,
+      topic: room.topic,
       seat: await seatOfRow(this.db, seat),
       seats,
       maxSeats: room.capacity,

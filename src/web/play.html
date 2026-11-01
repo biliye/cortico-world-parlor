@@ -3,15 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#fff8ee">
-  <meta name="color-scheme" content="light">
-  <title>客厅 · 一起玩</title>
+  <meta name="theme-color" content="#10191b">
+  <meta name="color-scheme" content="dark">
+  <title>鲸语会馆 · 今晚，来一局</title>
   <link rel="stylesheet" href="/play/assets/play.css">
-  <link rel="modulepreload" href="/play/assets/play.js">
+  <link rel="stylesheet" href="/play/assets/club.css?v=club-20261101">
+  <link rel="modulepreload" href="/play/assets/play.js?v=club-20261101">
 </head>
-<body class="theme-cozy">
+<body class="theme-club">
   <svg class="sprite" aria-hidden="true" width="0" height="0" focusable="false">
     <defs>
+      <symbol id="i-whale" viewBox="0 0 40 40"><path d="M6 17c-4 0-4-6-4-6s7 0 8 5c7-9 24-7 25 4 2 12-21 15-25 3-3 1-7 0-8-4 0 0 2-1 4-2Z" fill="currentColor" stroke="none"/><circle cx="28" cy="19" r="1.5" fill="#142025" stroke="none"/><path d="M21 9V5m-4 2-2-2m9 2 2-2"/></symbol>
       <symbol id="i-lamp" viewBox="0 0 24 24">
         <path d="M4 20h16M6 20V9a6 6 0 0 1 12 0v11M9 20v-7a3 3 0 0 1 6 0v7M12 3v3"/>
       </symbol>
@@ -101,6 +103,6 @@
   <div id="app" class="app"><div class="booting" id="boot-note">正在打开客厅…</div></div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <noscript><p class="noscript">这个页面要开 JavaScript 才能玩。</p></noscript>
-  <script type="module" src="/play/assets/play.js"></script>
+  <script type="module" src="/play/assets/play.js?v=club-20261101"></script>
 </body>
 </html>

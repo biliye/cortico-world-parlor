@@ -1,11 +1,24 @@
 /** 客厅网页客户端：家长自己的席位，和 Coo 同桌玩。
- *  布局是三维（我的席位 / 牌桌 / 聊天），牌桌与聊天都接真实快照与 SSE；
+ *  导航为大厅 / 客厅 / 牌桌三层，牌桌与聊天接真实快照和 SSE；
  *  牌桌 tab 发的是桌内私聊（只有同桌看得见），客厅 tab 才是全房间公开。 */
 import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
   isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
-import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js';
+import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261101';
+import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
+
+const club = createClubState({
+  getItem: key => sessionStorage.getItem(key),
+  setItem: (key, value) => sessionStorage.setItem(key, value),
+});
+let draftScope = '';
+let hallFilter = 'all';
+let hallQuery = '';
+let roomSwitching = false;
+let tableChatScope = '';
+let crumbSignature = '';
+let sheetFocus = null;
 
 const STORE_KEY = 'parlor-play-v1';
 const app = document.getElementById('app');
@@ -17,7 +30,7 @@ const RULES = {
   monopoly: '24 格外圈棋盘，买地、升级、道具与托管都在中间面板；回合超时自动托管。',
 };
 
-/** 这版大厅只露出斗地主；哪些游戏露出来由 games/registry.js 的 enabled 决定。 */
+/** 可开游戏由 games/registry.js 的 enabled 决定。 */
 
 /** 普通客厅固定 30 人；大厅容量由服务器单独管理。 */
 const ROOM_CAPACITY = 30;
@@ -166,9 +179,16 @@ async function boot() {
     note('正在读取客厅状态…');
     await refreshSnapshot();
     state.latest = state.snap.latest;
-    state.view = inHall() ? 'hall' : hasLiveTable() ? 'table' : 'lobby';
-    state.tab = hasLiveTable() ? 'table' : 'room';
+    const route = readRoute(location.search);
+    if (route.room && route.room !== currentRoom()) {
+      if (await goRoom(route.room, { replace: true })) return;
+    }
+    state.watchTableId = route.table;
+    normalizeWatch();
+    state.view = inHall() ? 'hall' : route.view;
+    state.tab = state.view === 'table' && activePrivate() ? 'table' : 'room';
     buildShell();
+    writeRoute(true);
     render();
     // 回放补历史；它之后不再补一次快照——SSE 从第一份快照的游标接上，中间漏的会补发。
     await seedLog();
@@ -401,6 +421,8 @@ function normalizeWatch() {
 function tableChatOpen() {
   const table = myTable();
   if (!table || table.status === 'ended') return false;
+  if (tableIdOf(activeTable()) !== tableIdOf(table)) return false;
+  if (table.game === 'werewolf' && table.status !== 'open') return false;
   const me = state.snap.seat && state.snap.seat.id;
   return (table.seats || []).some((seat) => seat && seat.id === me);
 }
@@ -558,7 +580,9 @@ function renderTableParts() {
     renderTableHead();
     renderGame();
   }
-  document.title = (state.snap.tablePrivate && state.snap.tablePrivate.yourTurn ? '轮到你 · 客厅' : '客厅 · 一起玩');
+  if (state.view === 'lobby') renderLobby();
+  renderClubNav();
+  document.title = (state.snap.tablePrivate && state.snap.tablePrivate.yourTurn ? '轮到你 · 鲸语会馆' : '鲸语会馆 · 一起玩');
 }
 
 /** 一个在途、后续请求合并成一次；期间有回执落地就丢掉这份旧的。 */
@@ -881,7 +905,7 @@ function pushLog(event, seed = false) {
 
   const tableBucket = isTableBucket(event);
   const roomNode = lineOf(event, false);
-  const tableNode = tableBucket ? lineOf(event, true) : null;
+  const tableNode = tableBucket && eventMatchesChatTable(event) ? lineOf(event, true) : null;
   // 桌上说的话只进牌桌栏：客厅那栏看不见它，所以 roomNode 是 null。
   if (!roomNode && !tableNode) return;
 
@@ -922,7 +946,7 @@ function pushLog(event, seed = false) {
  */
 function chatVisible(tab) {
   if (state.tab !== tab) return false;
-  if (window.matchMedia('(min-width: 821px)').matches) return true;
+  if (window.matchMedia('(min-width: 1101px)').matches) return club.chatOpen;
   return state.sheet === 'chat';
 }
 
@@ -1000,9 +1024,19 @@ function avatarNode(id, size = 'avatar-sm', options = {}) {
 function buildShell() {
   clear(app);
   state.shell = true;
+  crumbSignature = '';
+  tableChatScope = '';
+  draftScope = '';
+  try {
+    const filter = sessionStorage.getItem('parlor-hall-filter');
+    if (['all', 'mine', 'favorites'].includes(filter)) hallFilter = filter;
+    sessionStorage.removeItem('parlor-hall-filter');
+  } catch {}
 
   const top = el('header', 'topbar');
   const brand = brandNode();
+  const breadcrumb = el('nav', 'club-breadcrumb');
+  breadcrumb.setAttribute('aria-label', '当前位置');
   const roomPill = el('button', 'room-pill');
   roomPill.type = 'button';
   roomPill.title = '换客厅';
@@ -1068,8 +1102,11 @@ function buildShell() {
   menuBtn.append(icon('menu'));
   menuBtn.addEventListener('click', () => openSheet('me'));
 
-  topRight.append(conn, mailBtn, dmBtn, leaveBtn, topMe, menuBtn);
-  top.append(brand, roomPill, viewSwitch, topRight);
+  const chatToggle = btn('聊天', () => toggleChat(), { ghost: true, small: true });
+  chatToggle.classList.add('chat-toggle');
+  chatToggle.setAttribute('aria-controls', 'chatPanel');
+  topRight.append(conn, mailBtn, dmBtn, leaveBtn, topMe, chatToggle, menuBtn);
+  top.append(brand, breadcrumb, roomPill, viewSwitch, topRight);
 
   const banner = el('div', 'banner');
   banner.hidden = true;
@@ -1090,6 +1127,19 @@ function buildShell() {
   const leftHead = el('div', 'sheet-head');
   leftHead.append(el('span', 'eyebrow', '我的'), sheetClose());
   leftRail.append(leftHead);
+  const clubNav = el('nav', 'club-nav');
+  clubNav.setAttribute('aria-label', '会馆导航');
+  for (const [filter, label, symbol] of [['all', '发现客厅', 'lamp'], ['mine', '我的客厅', 'users'], ['favorites', '收藏的地方', 'spark']]) {
+    const button = btn(label, () => {
+      hallFilter = filter;
+      if (inHall()) { setView('hall'); renderHall(); }
+      else { try { sessionStorage.setItem('parlor-hall-filter', filter); } catch {} void goRoom('hall'); }
+    }, { ghost: true });
+    button.prepend(icon(symbol));
+    button.dataset.filter = filter;
+    clubNav.append(button);
+  }
+  leftRail.append(clubNav);
 
   const seatCard = el('section', 'panel seat-card');
   const seatTop = el('div', 'seat-card-top');
@@ -1160,14 +1210,20 @@ function buildShell() {
   center.setAttribute('aria-label', '牌桌、客厅与大厅');
 
   const viewTable = el('div', 'view view-table');
+  const tableNavigation = el('div', 'club-page-nav');
+  tableNavigation.append(btn('← 返回客厅', () => { setView('lobby'); setTab('room'); }, { ghost: true, small: true }),
+    btn('邀请朋友', () => inviteToRoom(), { ghost: true, small: true }));
   const tableHead = el('div', 'table-head-host');
   const mobileTicker = el('div', 'mobile-ticker');
   const game = el('div', 'game');
   const ticker = el('div', 'ticker');
-  viewTable.append(tableHead, mobileTicker, game, ticker);
+  viewTable.append(tableNavigation, tableHead, mobileTicker, game, ticker);
 
   const viewLobby = el('div', 'view view-lobby');
   const lobbyHead = el('div', 'lobby-head');
+  const roomNavigation = el('div', 'club-page-nav');
+  roomNavigation.append(btn('← 返回大厅', () => setView('hall'), { ghost: true, small: true }),
+    btn('邀请来客厅', () => inviteToRoom(), { ghost: true, small: true }));
   const lobbyCopy = el('div');
   const lobbyEyebrow = el('span', 'eyebrow');
   const lobbyTitle = el('h1', '', '灯还亮着。');
@@ -1188,16 +1244,30 @@ function buildShell() {
   membersHead.append(membersTitle, membersCount);
   const memberRow = el('div', 'member-row');
   members.append(membersHead, memberRow);
-  viewLobby.append(lobbyHead, gameGrid, guide, lobbyNotice, members);
+  const roomWelcome = el('section', 'club-welcome');
+  roomWelcome.append(el('span', 'eyebrow', 'MAKE YOURSELF AT HOME'),
+    el('h2', '', '先聊两句，再挑一张桌。'),
+    el('p', '', '同一个客厅，不同的好时光。想玩就入座，想聊就坐一会儿。'), clubScene('ddz'));
+  const roomTables = el('div', 'club-table-grid');
+  const tableSectionHead = el('div', 'club-section-head');
+  tableSectionHead.append(el('h2', '', '挑张桌，坐下来'), el('span', 'muted', '斗地主 3 席 · 狼人杀 9 席'));
+  const stay = el('div', 'club-stay');
+  stay.append(el('strong', '', '✳  不玩游戏，也欢迎留下来。'), el('p', '', '打开聊天，和这个客厅里的朋友说两句。'));
+  viewLobby.append(roomNavigation, lobbyHead, roomWelcome, members, tableSectionHead, roomTables, gameGrid, lobbyNotice, stay, guide);
 
   /* 中间：大厅（会话世界）——谁在大厅、有哪些客厅、开一间 */
   const viewHall = el('div', 'view view-hall');
   const hallHead = el('div', 'hall-head');
   hallHead.append(
-    el('span', 'eyebrow', '会话世界 · 大厅'),
-    el('h1', '', '大厅'),
-    el('p', 'muted', '谁在这里、有哪些客厅。挑一间进去，或者自己开一间。'),
+    el('span', 'eyebrow', 'A LITTLE PLAY, A LITTLE COMPANY.'),
+    el('h1', '', '今晚，来一局。'),
+    el('p', 'muted', '找个舒服的位置，和朋友、Coo 一起把时间慢下来。'),
   );
+  const createShortcut = btn('＋ 开一间客厅', () => {
+    hallCreate.scrollIntoView({ behavior: 'smooth', block: 'center' }); hallCreateName.focus({ preventScroll: true });
+  }, { ghost: true });
+  hallHead.append(createShortcut);
+  const hallHero = el('section', 'club-hero');
   const hallPeople = el('section', 'panel hall-people');
   const hallPeopleHead = el('div', 'panel-head');
   const hallPeopleCount = el('span', 'muted');
@@ -1211,15 +1281,28 @@ function buildShell() {
   hallRefresh.type = 'button';
   hallRefresh.addEventListener('click', () => { void loadHall(true); });
   hallRoomsHead.append(el('h2', '', '客厅'), hallRefresh);
+  const discovery = el('div', 'club-discovery');
+  const search = el('input', 'club-search');
+  search.type = 'search'; search.placeholder = '搜索客厅名字、话题…'; search.setAttribute('aria-label', '搜索客厅');
+  search.addEventListener('input', () => { hallQuery = search.value; renderHall(); });
+  const filters = el('div', 'club-filters');
+  filters.setAttribute('aria-label', '筛选客厅');
+  for (const [value, label] of [['all', '全部'], ['ddz', '斗地主'], ['werewolf', '狼人杀'], ['favorites', '收藏']]) {
+    const button = btn(label, () => { hallFilter = value; renderHall(); }, { ghost: true, small: true });
+    button.dataset.filter = value; filters.append(button);
+  }
+  discovery.append(search, filters);
   const hallRoomsList = el('div', 'rooms-list hall-rooms-list');
-  hallRooms.append(hallRoomsHead, hallRoomsList,
+  hallRooms.append(hallRoomsHead, discovery, hallRoomsList,
     el('p', 'muted hall-note', '公开客厅谁都能进；不公开的要先被邀请。'));
   const hallCreate = el('section', 'panel hall-create');
   const hallCreateName = el('input');
   hallCreateName.type = 'text';
   hallCreateName.maxLength = 32;
   hallCreateName.placeholder = '客厅名字（2–32 个字）';
+  hallCreateName.setAttribute('aria-label', '新客厅名字');
   const hallCreateVis = el('select');
+  hallCreateVis.setAttribute('aria-label', '客厅可见性');
   for (const [value, label] of [['public', '公开'], ['unlisted', '不公开'], ['private', '私密']]) {
     const option = el('option', '', label);
     option.value = value;
@@ -1231,7 +1314,7 @@ function buildShell() {
   hallCreateRow.append(hallCreateName, hallCreateVis, hallCreateCap, hallCreateBtn);
   hallCreate.append(el('h2', '', '开一间新的'), hallCreateRow,
     el('p', 'muted hall-note', '公开的客厅会出现在别人的目录里；不公开的只有成员看得到。'));
-  viewHall.append(hallHead, hallPeople, hallRooms, hallCreate);
+  viewHall.append(hallHead, hallHero, hallRooms, hallPeople, hallCreate);
   center.append(viewTable, viewLobby, viewHall);
 
   /* 右栏：聊天 / 牌桌信息 */
@@ -1243,7 +1326,7 @@ function buildShell() {
   const chatHead = el('div', 'chat-head');
   const chatCopy = el('div');
   const chatEyebrow = el('span', 'eyebrow', '客厅 · 牌桌');
-  chatCopy.append(chatEyebrow, el('h2', '', '聊天'));
+  chatCopy.append(chatEyebrow, el('h2', '', '有话慢慢聊'));
   const chatActions = el('div', 'chat-head-actions');
   const backRoom = el('button', 'link', '切回客厅');
   backRoom.type = 'button';
@@ -1251,7 +1334,9 @@ function buildShell() {
   backRoom.addEventListener('click', () => setTab('room'));
   const markRead = btn('都看过了', () => markMailRead(), { ghost: true, small: true });
   markRead.hidden = true;
-  chatActions.append(markRead, backRoom, sheetClose());
+  const collapseChat = btn('收起', () => toggleChat(false), { ghost: true, small: true });
+  collapseChat.setAttribute('aria-label', '收起聊天');
+  chatActions.append(markRead, backRoom, collapseChat);
   chatHead.append(chatCopy, chatActions);
 
   const chatTabs = el('div', 'chat-tabs');
@@ -1285,6 +1370,7 @@ function buildShell() {
   sayInput.maxLength = 400;
   sayInput.autocomplete = 'off';
   sayInput.setAttribute('aria-label', '在客厅说话');
+  sayInput.addEventListener('input', () => club.saveDraft(draftScope, sayInput.value));
   sayInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       // 中文输入法里回车是确认候选词，不该顺手把半句话发出去。确认那一下有的浏览器
@@ -1339,7 +1425,8 @@ function buildShell() {
   layout.append(leftRail, center, rightRail);
 
   Object.assign(ui, {
-    top, conn, connText, mailBtn, mailBadge, dmBtn, dmBadge, banner, bannerText, bannerGo,
+    top, conn, connText, mailBtn, mailBadge, dmBtn, dmBadge, banner, bannerText, bannerGo, chatToggle,
+    layout, clubNav, hallHero, roomTables, breadcrumb,
     roomPillText: pillText, roomPillSub: pillSub,
     viewButtons: [topHall, topRoom, topTable],
     topAvatar, topName, topSub, chipsText,
@@ -1356,15 +1443,17 @@ function buildShell() {
     navHall, navRoom, navTable, navChat, backdrop,
   });
   syncViewButtons();
+  state.sheet = !window.matchMedia('(min-width: 1101px)').matches && club.mobileChatOpen ? 'chat' : null;
   syncSheet();
+  if (window.matchMedia('(min-width: 1101px)').matches) syncChatCollapse();
 }
 
 function brandNode() {
   const brand = el('div', 'brand');
   const mark = el('span', 'brand-mark');
-  mark.append(icon('lamp'));
+  mark.append(icon('whale'));
   const text = el('span', 'brand-text');
-  text.append(el('span', 'brand-name', '客厅'), el('span', 'brand-sub', 'LIVING ROOM · 一起玩'));
+  text.append(el('span', 'brand-name', '鲸语'), el('span', 'brand-sub', 'PARLOR CLUB'));
   brand.append(mark, text);
   return brand;
 }
@@ -1476,7 +1565,8 @@ function render() {
   renderTableInfo();
   renderCenter();
   syncNav();
-  document.title = (state.snap.tablePrivate && state.snap.tablePrivate.yourTurn ? '轮到你 · 客厅' : '客厅 · 一起玩');
+  renderClubNav();
+  document.title = (state.snap.tablePrivate && state.snap.tablePrivate.yourTurn ? '轮到你 · 鲸语会馆' : '鲸语会馆 · 一起玩');
 }
 
 function renderTopbar() {
@@ -2116,11 +2206,34 @@ function renderHall() {
     if (visible.filter(other => other.name.toLowerCase() === seat.name.toLowerCase()).length > 1) chip.classList.add('has-same-name');
     ui.hallPeopleRow.append(chip);
   }
-  const rooms = (data.rooms || []).filter((room) => !room.archived);
+  const allRooms = (data.rooms || []).filter((room) => !room.archived);
+  const query = hallQuery.trim().toLocaleLowerCase();
+  const rooms = allRooms.filter(room => {
+    if (query && !(room.name + ' ' + (room.topic || '')).toLocaleLowerCase().includes(query)) return false;
+    if (hallFilter === 'favorites') return club.isFavorite(room.id);
+    if (hallFilter === 'mine') return room.mine;
+    if (hallFilter === 'ddz' || hallFilter === 'werewolf') return (room.games || []).includes(hallFilter);
+    return true;
+  });
+  clear(ui.hallHero);
+  const featured = allRooms.find(room => room.seats > 0) || allRooms[0];
+  const copy = el('div', 'club-hero-copy');
+  copy.append(el('span', 'eyebrow', '留个位置，慢慢相聚  /  PARLOR CLUB'),
+    el('h2', '', featured ? featured.name : '好朋友，也可以是新朋友。'),
+    el('p', '', featured?.topic || '先在客厅聊聊天，再选一张喜欢的桌。人和 Coo，都有自己的座位。'));
+  if (featured) {
+    copy.append(el('p', 'club-hero-meta', `${featured.seats} / ${featured.capacity} 人在客厅 · ${featured.tableCount ?? '—'} 张桌`),
+      btn('走进这间客厅  ↗', () => void goRoom(featured.id), { primary: true }));
+  } else copy.append(btn('开一间客厅', () => ui.hallCreateName.focus(), { primary: true }));
+  ui.hallHero.append(copy, clubScene('ddz', true));
   if (!rooms.length) {
-    ui.hallRoomsList.append(el('p', 'muted', '还没有公开的客厅；开一间吧。'));
+    ui.hallRoomsList.append(el('p', 'club-empty', allRooms.length ? '还没有符合条件的客厅。换个筛选，或开一间自己的。' : '还没有客厅，开一间等朋友吧。'));
   }
   for (const room of rooms) ui.hallRoomsList.append(hallRoomRow(room));
+  for (const button of document.querySelectorAll('[data-filter]')) {
+    const active = button.dataset.filter === hallFilter;
+    button.classList.toggle('is-active', active); button.setAttribute('aria-pressed', String(active));
+  }
   if (data.error) ui.hallRoomsList.append(el('p', 'warn', '刷新失败：' + data.error));
 }
 
@@ -2140,26 +2253,41 @@ function hallSeatChip(seat) {
 }
 
 function hallRoomRow(room) {
-  const row = el('button', 'rooms-row');
-  row.type = 'button';
-  const text = el('span', 'rooms-row-text');
+  const row = el('article', 'club-room-card');
+  const art = clubScene((room.games || []).includes('werewolf') ? 'werewolf' : 'ddz');
+  const favorite = btn(club.isFavorite(room.id) ? '★' : '☆', () => {
+    club.toggleFavorite(room.id); renderHall();
+  }, { ghost: true, small: true });
+  favorite.classList.add('club-favorite');
+  favorite.setAttribute('aria-label', (club.isFavorite(room.id) ? '取消收藏 ' : '收藏 ') + room.name);
+  favorite.setAttribute('aria-pressed', String(club.isFavorite(room.id)));
+  const text = el('div', 'club-room-copy');
   const visibility = room.visibility === 'public' ? '公开'
     : room.visibility === 'unlisted' ? '不公开' : '私密';
   text.append(
-    el('strong', '', room.name),
-    el('small', '', `${room.seats}/${room.capacity} 人 · ${visibility}${room.topic ? ' · ' + room.topic : ''}`),
+    el('span', 'eyebrow', visibility + '客厅'),
+    el('h3', '', room.name),
+    el('p', '', room.topic || '牌可以慢慢打，话也可以慢慢聊。'),
   );
-  row.append(text);
-  if (room.id === currentRoom()) {
-    row.classList.add('is-here');
-    row.append(el('span', 'rooms-here', '这里'));
-  } else {
-    row.append(icon('arrow'));
-  }
-  row.addEventListener('click', () => {
-    if (room.id !== currentRoom()) void goRoom(room.id);
-  });
+  const foot = el('div', 'club-room-foot');
+  foot.append(el('span', '', `${room.seats} / ${room.capacity} 人 · ${room.tableCount ?? '—'} 桌`),
+    btn('进客厅 ↗', () => void goRoom(room.id), { ghost: true, small: true }));
+  text.append(foot); row.append(art, favorite, text);
   return row;
+}
+
+/** Pure CSS/SVG illustration; every displayed player/count comes from the server. */
+function clubScene(game, large = false) {
+  const scene = el('div', 'club-scene' + (game === 'werewolf' ? ' is-night' : '') + (large ? ' is-large' : ''));
+  scene.setAttribute('aria-hidden', 'true');
+  const felt = el('div', 'club-felt');
+  if (game === 'werewolf') felt.append(el('span', 'club-moon', '☾'));
+  else {
+    for (const value of ['A♠', 'K♥', 'Q♣']) felt.append(el('span', 'club-playing-card', value));
+  }
+  scene.append(el('span', 'club-orbit', '✳'), felt, el('span', 'club-scene-label', 'GOOD COMPANY. GREAT HANDS.'));
+  for (let index = 0; index < (game === 'werewolf' ? 5 : 3); index++) scene.append(el('i', 'club-chair chair-' + index));
+  return scene;
 }
 
 async function createHallRoom() {
@@ -2193,33 +2321,52 @@ function renderLobby() {
   const table = snap.table;
   const signup = snap.monopoly && snap.monopoly.signup;
   const seated = snap.seats.filter((seat) => seat.kind !== 'observer').length;
-  const hero = heroGame();
-  const mine = table && table.game === hero ? table : null;
   const legacy = table && !ENABLED_GAMES.includes(table.game) && table.status !== 'ended' ? table : null;
-  const names = namesMap();
-  ui.lobbyEyebrow.textContent = '今晚 · ' + gameLabel(hero) + ' · ' + fmtClock(serverNow()).slice(0, 5) + ' · 服务器时间';
-  if (mine) {
-    const on = (mine.seats || []).map((seat) => names.get(seat.id) || seat.name).join('、');
-    ui.lobbyTitle.textContent = mine.status === 'playing' || mine.status === 'bidding'
-      ? gameLabel(hero) + '正打着。'
-      : mine.status === 'ended' ? '这一局打完了。' : gameLabel(hero) + '桌还开着。';
-    ui.lobbySub.textContent = mine.status === 'ended'
-      ? (on ? '这局是 ' + on + ' 打的。' : '三个人就能开。')
-      : (on ? '桌上：' + on + '。' : '三个人就能开。');
-  } else if (legacy) {
-    ui.lobbyTitle.textContent = '先把桌上这局打完。';
-    ui.lobbySub.textContent = gameLabel(legacy.game) + ' 先收起了，但这局还能打完。';
-  } else {
-    ui.lobbyTitle.textContent = '灯还亮着。';
-    ui.lobbySub.textContent = seated + ' 个人在客厅。先来一局' + gameLabel(hero) + '？';
+  ui.lobbyEyebrow.textContent = '客厅 / ' + seated + ' / 30 人 · ' + tableList().filter(t => t.status !== 'ended').length + ' 张桌';
+  ui.lobbyTitle.textContent = snap.name || '客厅';
+  ui.lobbySub.textContent = snap.topic || '想玩就坐下来，想聊就留一会儿。';
+  const tables = tableList().filter(table => table.status !== 'abandoned');
+  const cardsKey = JSON.stringify([myTableId(), tables.map(table => [tableIdOf(table), table.status, table.label,
+    (table.seats || []).map(seat => [seat.id, seat.name, seat.bot])])]);
+  if (ui.roomTables.dataset.snapshot !== cardsKey) {
+    ui.roomTables.dataset.snapshot = cardsKey;
+    clear(ui.roomTables);
+    for (const table of tables) ui.roomTables.append(clubTableCard(table));
+    if (!tables.length) ui.roomTables.append(el('p', 'club-empty', '桌子还空着。选个游戏，开一桌等朋友。'));
+    clear(ui.gameGrid);
+    for (const game of ENABLED_GAMES) ui.gameGrid.append(lobbyCard(game));
   }
-  clear(ui.gameGrid);
-  for (const game of ENABLED_GAMES) ui.gameGrid.append(lobbyCard(game));
-  renderGuides();
+  if (!ui.guide.childElementCount) renderGuides();
   clear(ui.lobbyNotice);
   if (legacy) ui.lobbyNotice.append(legacyNotice(legacy));
   if (signup) ui.lobbyNotice.append(signupNotice(signup));
   renderMembers();
+}
+
+function clubTableCard(table) {
+  const id = tableIdOf(table);
+  const card = el('article', 'club-table-card' + (table.game === 'werewolf' ? ' is-night' : ''));
+  const seats = table.seats || [];
+  const capacity = table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : 4;
+  const header = el('div', 'club-section-head');
+  header.append(el('span', '', gameLabel(table.game)), el('span', 'muted', `${seats.length} / ${capacity} 席`));
+  const scene = clubScene(table.game);
+  const avatars = el('div', 'club-table-avatars');
+  for (const seat of seats.slice(0, 9)) avatars.append(avatarNode(seat.id, 'avatar-sm', { name: seat.name }));
+  scene.append(avatars);
+  const copy = el('div', 'club-table-copy');
+  copy.append(el('h3', '', table.label || gameLabel(table.game)), el('small', 'muted', '桌号 ' + id),
+    el('p', '', (STATUS_LABELS[table.status] || table.status) + ' · ' + (seats.map(seat => seat.name).join('、') || '等待朋友入座')));
+  const mine = seats.some(seat => seat.id === state.snap.seat.id);
+  const open = table.status === 'open';
+  const ended = table.status === 'ended';
+  const actions = el('div', 'club-room-foot');
+  const enter = () => { state.watchTableId = id; setView('table'); setTab(mine ? 'table' : 'room'); };
+  if (open && !mine && !myTable()) {
+    actions.append(btn('入座一起玩 ↗', () => actAndGo({ type: 'table_join', table: id }), { primary: true, small: true, disabled: seats.length >= capacity }));
+  }
+  actions.append(btn(mine ? '回到我的桌 ↗' : ended ? '查看结果 ↗' : '围观这桌 ↗', enter, { ghost: true, small: true }));
+  copy.append(actions); card.append(header, scene, copy); return card;
 }
 
 /** 大厅底部的玩法说明：每张启用的桌子一段，文案在 games/registry.js 的 guide 里。 */
@@ -2253,68 +2400,25 @@ function legacyNotice(table) {
 function lobbyCard(game) {
   const def = gameOf(game);
   if (!def) return el('div');
-  const snap = state.snap;
-  const table = snap.table;
-  const mine = table && table.game === game ? table : null;
-  const other = table && table.game !== game && table.status !== 'ended' ? table : null;
-  const names = namesMap();
+  const mine = myTable();
+  const occupied = !!mine && mine.status !== 'ended';
+  const same = occupied && mine.game === game;
   const card = el('article', 'game-card game-card-live game-card-hero');
-  const art = el('div', 'game-card-art art-' + gameIcon(game));
-  art.append(gameArt(game));
   const body = el('div', 'game-card-body');
-  const kicker = el('div', 'game-card-kicker');
-  let pill;
-  if (mine) {
-    pill = el('span', 'status-pill ' + (mine.status === 'ended' ? 'quiet' : 'live'));
-    if (mine.status !== 'ended') pill.append(el('span', 'live-dot'));
-    pill.append(document.createTextNode(STATUS_LABELS[mine.status] || mine.status));
-  } else if (other) {
-    pill = el('span', 'status-pill quiet', '先结束桌上那局');
-  } else {
-    pill = el('span', 'status-pill quiet', '可开局');
-  }
-  kicker.append(pill);
-  if (mine) kicker.append(el('span', 'muted', (mine.seats || []).length + ' 人'));
-  body.append(kicker, el('h2', '', def.label));
-  let sub;
-  if (mine && mine.status === 'ended') {
-    // 结束就是下桌了：别再说「在桌上」，也别让人以为还得先退桌。
-    sub = '这局打完了。开一张新桌就能再来一局。';
-  } else if (mine) {
-    sub = (mine.seats || []).map((seat) => names.get(seat.id) || seat.name).join('、')
-      + ' 在桌上 · ' + (STATUS_LABELS[mine.status] || mine.status);
-  } else if (other) {
-    sub = gameLabel(other.game) + ' 还在桌上；先打完再开' + def.label + '。';
-  } else {
-    sub = def.blurb;
-  }
-  body.append(el('p', '', sub));
-
+  body.append(el('span', 'eyebrow', same ? '我的牌桌' : '开一张新桌'), el('h2', '', def.label), el('p', '', def.blurb));
   const foot = el('div', 'game-card-foot');
-  if (mine) {
-    const avatars = el('div', 'mini-avatars');
-    for (const seat of (mine.seats || []).slice(0, 3)) avatars.append(avatarNode(seat.id, 'avatar-xs', { online: false }));
-    foot.append(avatars);
-    const go = btn(mine.status === 'ended' ? '看结果' : '看牌桌', () => setView('table'), { primary: true, small: true });
-    go.append(icon('arrow'));
-    foot.append(go);
-    const seatedNow = (mine.seats || []).some((seat) => seat.id === snap.seat.id);
-    if (mine.status === 'open' && seatedNow) {
-      foot.append(btn(mine.host === snap.seat.id ? '收桌' : '退桌', () => actAndGo({ type: 'table_leave' }, 'lobby'), {
-        ghost: true,
-        small: true,
-      }));
-    }
-  } else if (other) {
-    foot.append(el('span', 'muted', '这版先做' + gameLabel(heroGame())));
-    foot.append(btn('看那桌', () => setView('table'), { small: true }));
+  foot.append(el('span', 'muted', def.foot));
+  if (same) {
+    foot.append(btn('回到我的桌', () => { watchMine(); setView('table'); }, { primary: true, small: true }));
+    if (mine.status === 'open') foot.append(btn(mine.host === state.snap.seat.id ? '收桌' : '退桌',
+      () => actAndGo({ type: 'table_leave' }, 'lobby'), { ghost: true, small: true }));
   } else {
-    foot.append(el('span', 'muted', def.foot));
-    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game }), { primary: true, small: true }));
+    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game }), {
+      primary: true, small: true, disabled: occupied,
+      title: occupied ? '先结束或离开自己的牌桌' : '',
+    }));
   }
-  body.append(foot);
-  card.append(art, body);
-  return card;
+  body.append(foot); card.append(body); return card;
 }
 
 function gameArt(game) {
@@ -2384,6 +2488,7 @@ function renderMembers() {
 /* —— 聊天 —— */
 
 function renderChat() {
+  syncConversation();
   renderChatBadges();
   syncChatTabs();
   const tab = state.tab;
@@ -2424,8 +2529,10 @@ function renderChat() {
         ui.sayInput.title = '';
       }
     } else {
-      ui.scopeText.textContent = '你不在这一桌 · 想去客厅说就切到「客厅」';
-      ui.sayInput.placeholder = '不在这桌上，说不了…';
+      ui.scopeText.textContent = activeTable()?.game === 'werewolf' && activeTable()?.status !== 'open'
+        ? '狼人杀进行中 · 发言和狼聊请使用游戏内面板'
+        : '围观只读 · 聊天请切到「客厅」';
+      ui.sayInput.placeholder = '当前桌聊不可用';
       ui.sayInput.title = '';
     }
   }
@@ -2486,11 +2593,110 @@ function setView(view) {
     return;
   }
   state.view = view;
+  if (view === 'table') state.tab = activePrivate() ? 'table' : 'room';
+  else if (state.tab !== 'mail') state.tab = 'room';
+  writeRoute();
   syncViewButtons();
-  closeSheet();
+  if (state.sheet === 'me') closeSheet();
   if (view === 'hall') void loadHall();
   render();
 }
+
+function currentDraftKey() {
+  return conversationKey(state.cfg?.cooId || state.cfg?.seatId, currentRoom(), state.tab, tableIdOf(activeTable()));
+}
+
+function eventMatchesChatTable(event) {
+  const id = tableIdOf(activeTable());
+  const eventId = event.data && event.data.tableId;
+  return !!activePrivate() && (!eventId ? !id : eventId === id);
+}
+
+function syncConversation() {
+  if (!ui.sayInput) return;
+  const next = currentDraftKey();
+  if (next !== draftScope) {
+    if (draftScope) club.saveDraft(draftScope, ui.sayInput.value);
+    draftScope = next;
+    ui.sayInput.value = club.draft(next);
+  }
+  const tableScope = conversationKey(state.cfg?.cooId || state.cfg?.seatId, currentRoom(), 'table', tableIdOf(activeTable()))
+    + ':' + !!activePrivate();
+  if (tableScope !== tableChatScope) {
+    tableChatScope = tableScope;
+    clear(ui.logTable);
+    for (const event of state.log) {
+      if (isTableBucket(event) && eventMatchesChatTable(event)) {
+        const node = lineOf(event, true); if (node) ui.logTable.append(node);
+      }
+    }
+    if (!ui.logTable.children.length) ui.logTable.append(el('p', 'chat-empty', activePrivate() ? '同桌的话，留在这一桌。' : '围观不开放同桌聊天。'));
+  }
+  ui.sayInput.setAttribute('aria-label', state.tab === 'table' ? '发送到当前牌桌' : inHall() ? '发送到大厅' : '发送到当前客厅');
+}
+
+function syncChatCollapse() {
+  if (!ui.layout) return;
+  const desktop = window.matchMedia('(min-width: 1101px)').matches;
+  ui.layout.classList.toggle('chat-collapsed', desktop && !club.chatOpen);
+  const expanded = desktop ? club.chatOpen : state.sheet === 'chat';
+  ui.chatToggle.setAttribute('aria-expanded', String(expanded));
+  ui.chatToggle.setAttribute('aria-label', expanded ? '收起聊天侧栏' : '展开聊天侧栏');
+  ui.chatToggle.replaceChildren(icon('chat'), el('span', 'chat-toggle-label', expanded ? '收起聊天' : '打开聊天'));
+  window.dispatchEvent(new Event('resize'));
+}
+
+function toggleChat(force) {
+  const desktop = window.matchMedia('(min-width: 1101px)').matches;
+  const next = force ?? !(desktop ? club.chatOpen : state.sheet === 'chat');
+  if (desktop) club.setChatOpen(next);
+  else club.setMobileChatOpen(next);
+  if (!desktop) { if (next) openSheet('chat'); else closeSheet(); }
+  syncChatCollapse();
+  if (next && (state.tab === 'room' || state.tab === 'table')) state.unread[state.tab] = 0;
+  renderChatBadges();
+}
+
+function writeRoute(replace = false) {
+  const url = routeUrl(currentRoom(), state.view, state.view === 'table' ? tableIdOf(activeTable()) : '');
+  if (location.pathname + location.search === url && !replace) return;
+  history[replace ? 'replaceState' : 'pushState']({ parlor: true }, '', url);
+}
+
+function renderClubNav() {
+  if (!ui.breadcrumb) return;
+  const signature = [currentRoom(), state.snap?.name, state.view, tableIdOf(activeTable())].join('|');
+  if (signature === crumbSignature) return;
+  crumbSignature = signature;
+  clear(ui.breadcrumb);
+  ui.breadcrumb.append(btn('大厅', () => setView('hall'), { ghost: true, small: true }));
+  if (!inHall()) {
+    ui.breadcrumb.append(el('span', '', '/'), btn(state.snap.name || '客厅', () => setView('lobby'), { ghost: true, small: true }));
+    if (state.view === 'table') ui.breadcrumb.append(el('span', '', '/'), el('span', '', activeTable() ? tableTitle(activeTable()) : '牌桌'));
+  } else ui.breadcrumb.append(el('span', '', '/ 发现客厅'));
+}
+
+async function inviteToRoom() {
+  const url = location.origin + routeUrl(currentRoom(), 'lobby');
+  try { await navigator.clipboard.writeText(url); showToast('客厅链接已复制；朋友进入后再选桌。私密厅仍需成员邀请。'); }
+  catch { prompt('复制客厅链接（私密厅还需要成员邀请）', url); }
+}
+
+window.addEventListener('popstate', async () => {
+  if (!state.shell || roomSwitching) return;
+  const route = readRoute(location.search);
+  if (route.room && route.room !== currentRoom()) {
+    if (!await goRoom(route.room, { replace: true })) writeRoute(true);
+    return;
+  }
+  state.watchTableId = route.table; normalizeWatch();
+  state.view = inHall() ? 'hall' : route.view;
+  state.tab = state.view === 'table' && activePrivate() ? 'table' : 'room';
+  syncViewButtons(); render();
+});
+window.addEventListener('pagehide', () => { if (draftScope && ui.sayInput) club.saveDraft(draftScope, ui.sayInput.value); });
+window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
+window.matchMedia('(min-width: 1101px)').addEventListener('change', () => { closeSheet({ preserveChat: true }); syncChatCollapse(); });
 
 function syncViewButtons() {
   for (const node of (ui.viewButtons || [])) {
@@ -2667,8 +2873,18 @@ function openMailTab() {
 /* —— 抽屉 —— */
 
 function openSheet(which) {
+  if (which === 'chat' && window.matchMedia('(min-width: 1101px)').matches) {
+    club.setChatOpen(true); syncChatCollapse();
+    state.sheet = null; syncSheet(); return;
+  }
   state.sheet = which;
+  if (which === 'chat') club.setMobileChatOpen(true);
+  sheetFocus = document.activeElement;
   syncSheet();
+  requestAnimationFrame(() => {
+    const panel = which === 'chat' ? ui.chatPanel : ui.leftRail;
+    panel.querySelector('button:not(:disabled),input:not(:disabled)')?.focus({ preventScroll: true });
+  });
   if (which === 'chat') {
     // 抽屉拉开了，当前频道就算看过了；信封里的未读另有它自己的标记。
     if (state.tab === 'room' || state.tab === 'table') state.unread[state.tab] = 0;
@@ -2677,9 +2893,12 @@ function openSheet(which) {
   }
 }
 
-function closeSheet() {
+function closeSheet(options = {}) {
+  const wasOpen = !!state.sheet;
+  if (state.sheet === 'chat' && !options.preserveChat) club.setMobileChatOpen(false);
   state.sheet = null;
   syncSheet();
+  if (wasOpen && sheetFocus?.isConnected) sheetFocus.focus({ preventScroll: true });
 }
 
 function syncSheet() {
@@ -2687,12 +2906,35 @@ function syncSheet() {
   const open = !!state.sheet;
   ui.leftRail.classList.toggle('is-open', state.sheet === 'me');
   ui.chatPanel.classList.toggle('is-open', state.sheet === 'chat');
+  for (const [panel, active] of [[ui.leftRail, state.sheet === 'me'], [ui.chatPanel, state.sheet === 'chat']]) {
+    if (active) { panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); }
+    else { panel.removeAttribute('role'); panel.removeAttribute('aria-modal'); }
+  }
   ui.backdrop.hidden = !open;
   if (open) requestAnimationFrame(() => ui.backdrop.classList.add('is-show'));
   else ui.backdrop.classList.remove('is-show');
   document.body.classList.toggle('sheet-open', open);
+  if (ui.chatToggle && !window.matchMedia('(min-width: 1101px)').matches) {
+    ui.chatToggle.setAttribute('aria-expanded', String(state.sheet === 'chat'));
+    ui.chatToggle.setAttribute('aria-label', state.sheet === 'chat' ? '收起聊天侧栏' : '展开聊天侧栏');
+    ui.chatToggle.replaceChildren(icon('chat'), el('span', 'chat-toggle-label', state.sheet === 'chat' ? '收起聊天' : '打开聊天'));
+  }
   syncNav();
 }
+
+document.addEventListener('keydown', event => {
+  if (!state.sheet) return;
+  if (event.key === 'Escape') { event.preventDefault(); closeSheet(); return; }
+  if (event.key !== 'Tab') return;
+  const panel = state.sheet === 'chat' ? ui.chatPanel : ui.leftRail;
+  const nodes = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]')]
+    .filter(node => node.getClientRects().length && !node.closest('[hidden]'));
+  if (!nodes.length) return;
+  const first = nodes[0], last = nodes[nodes.length - 1];
+  if (!panel.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
+  else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
 
 /* —— 换客厅 —— */
 
@@ -2798,8 +3040,9 @@ async function openRooms() {
   }
 }
 
-async function goRoom(id) {
+async function goRoom(id, options = {}) {
   if (!state.cfg) return;
+  if (roomSwitching || state.busy) { showToast('正在处理动作，请稍等再换客厅。'); return false; }
   const from = (state.snap && state.snap.id) || currentRoom();
   if (!from) {
     showToast('还没进过客厅，先加入一个', 'bad');
@@ -2807,8 +3050,9 @@ async function goRoom(id) {
   }
   if (id === from) {
     if (roomsDialog) roomsDialog.close();
-    return;
+    return true;
   }
+  roomSwitching = true;
   try {
     const moved = await api(`/v1/rooms/${encodeURIComponent(from)}/switch`, {
       method: 'POST',
@@ -2822,9 +3066,16 @@ async function goRoom(id) {
       seatId: moved.seat.id,
       name: moved.seat.name,
     });
-    location.href = '/play?room=' + encodeURIComponent(moved.room);
+    if (draftScope && ui.sayInput) club.saveDraft(draftScope, ui.sayInput.value);
+    const target = routeUrl(moved.room, 'lobby');
+    if (options.replace) location.replace(target);
+    else location.assign(target);
+    return true;
   } catch (error) {
     showToast(error.message || '换不了客厅', 'bad');
+    return false;
+  } finally {
+    roomSwitching = false;
   }
 }
 
@@ -3098,6 +3349,7 @@ async function saveVisibility(select, before, button) {
 /* —— 说话 / 小工具 —— */
 
 async function sendSay() {
+  if (state.busy || roomSwitching) { showToast('正在发送，请稍等。'); return; }
   const text = ui.sayInput.value.trim();
   if (!text) return;
   // 牌桌 tab 发的是桌内私聊（只有同桌看得见）；客厅 tab 仍是全房间公开。
@@ -3106,11 +3358,14 @@ async function sendSay() {
     showToast('你不在这一桌；想去客厅说就切到「客厅」。');
     return;
   }
+  const scope = draftScope;
   ui.sayInput.value = '';
+  club.saveDraft(scope, '');
   try {
     await act(toTable ? { type: 'table_say', text } : { type: 'say', text });
   } catch {
-    ui.sayInput.value = text;
+    if (!club.draft(scope)) club.saveDraft(scope, text);
+    if (draftScope === scope && !ui.sayInput.value) ui.sayInput.value = club.draft(scope);
   }
 }
 

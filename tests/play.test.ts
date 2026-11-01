@@ -304,12 +304,13 @@ describe('网页玩家', () => {
     expect(stand.body.turn).toBe('B');
   });
 
-  it('奶油客厅没有赌场文案，筹码图同源，聊天三 tab 的边界写清楚', () => {
+  it('鲸语会馆主题、筹码图同源，聊天三 tab 的边界写清楚', () => {
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
     const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const html = readFileSync(new URL('../src/web/play.html', import.meta.url), 'utf8');
     expect(css).toContain('assets/coo-chip.png');
-    expect(html).toContain('content="#fff8ee"');
+    expect(html).toContain('content="#10191b"');
+    expect(html).toContain('/play/assets/club.css');
     for (const text of [css, js, html]) {
       expect(text).not.toContain('底池');
       expect(text).not.toContain('底注');
@@ -436,7 +437,7 @@ describe('网页玩家', () => {
     const ddz = readFileSync(new URL('../src/web/games/ddz.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
     // 入口清单只在注册表里；play.js 不再写死游戏名单。
-    expect(js).toContain("from './games/registry.js'");
+    expect(js).toMatch(/from '\.\/games\/registry\.js(?:\?[^']+)?'/);
     expect(js).not.toContain("const ENABLED_GAMES = ['ddz']");
     for (const line of ["label: '斗地主'", "label: '骰子'", "label: '大富翁'", 'enabled: true', 'enabled: false', 'guide: [']) {
       expect(reg).toContain(line);

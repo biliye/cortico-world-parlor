@@ -188,17 +188,24 @@ const seatOfRow = async (db: Db, roomId: string, seat: {
   handle: await registeredHandle(db, seat.cooId),
 });
 
-const roomSummary = async (db: Db, room: RoomRow) => ({
-  id: room.id,
-  kind: room.kind,
-  name: room.name,
-  topic: room.topic,
-  visibility: room.visibility,
-  capacity: room.capacity,
-  seats: (await activeSeats(db, room.id)).filter((seat) => seat.kind !== 'observer').length,
-  archived: room.archivedAt !== null,
-  lastActiveAt: room.lastActiveAt,
-});
+const roomSummary = async (db: Db, room: RoomRow) => {
+  const tables = await db.prepare(
+    "SELECT game, COUNT(*) AS n FROM tables WHERE room_id = ? AND status IN ('open', 'bidding', 'playing') GROUP BY game ORDER BY game",
+  ).all(room.id) as { game: string; n: number }[];
+  return {
+    id: room.id,
+    kind: room.kind,
+    name: room.name,
+    topic: room.topic,
+    visibility: room.visibility,
+    capacity: room.capacity,
+    seats: (await activeSeats(db, room.id)).filter((seat) => seat.kind !== 'observer').length,
+    tableCount: tables.reduce((total, row) => total + Number(row.n), 0),
+    games: tables.map(row => row.game),
+    archived: room.archivedAt !== null,
+    lastActiveAt: room.lastActiveAt,
+  };
+};
 
 export class WorldServer {
   private readonly db: Db;
@@ -1113,7 +1120,10 @@ export class WorldServer {
         if (!all || cooId === null) continue;
         if (room.ownerCooId === cooId || (await memberOf(this.db, room.id, cooId)) !== null) rooms.push(room);
       }
-      json(res, 200, { rooms: await Promise.all(rooms.map((room) => roomSummary(this.db, room))) });
+      json(res, 200, { rooms: await Promise.all(rooms.map(async (room) => ({
+        ...await roomSummary(this.db, room),
+        mine: cooId !== null && (room.ownerCooId === cooId || (await memberOf(this.db, room.id, cooId)) !== null),
+      }))) });
       return;
     }
 
