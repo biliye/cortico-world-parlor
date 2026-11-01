@@ -11,9 +11,11 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     env: { CORTICO_LANGUAGE: 'zh' },
-    testTimeout: 60_000,
+    // 冷启动的嵌入式 PG（fsync + 空缓存）比常驻库慢很多，狼人杀整局这类测试要留足时间。
+    testTimeout: 120_000,
     hookTimeout: 60_000,
     pool: 'forks',
+    globalSetup: ['tests/helpers/pg-global.ts'],
     poolOptions: { forks: { minForks: 1, maxForks: 4 } },
   },
 });
