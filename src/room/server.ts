@@ -12,6 +12,7 @@ import { shortHandle } from './handles.ts';
 import { RoomError, RoomKernel, type StoredSeat } from './kernel.ts';
 import { LedgerStore } from './ledger.ts';
 import { MailStore } from './mail.ts';
+import { isBlockedPort } from './ports.ts';
 import { REPLAY_RETENTION_DAYS, ReplayStore } from './replay.ts';
 import { serverClock } from './clock.ts';
 import { sendWebAsset } from './web-assets.ts';
@@ -184,19 +185,26 @@ export class ParlorServer {
     if (this.address) return this.address;
     const host = this.options.host ?? '127.0.0.1';
     const port = this.options.port ?? 8790;
-    const server = createServer((req, res) => {
-      void this.route(req, res).catch((error: unknown) => this.fail(req, res, error));
-    });
-    this.server = server;
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error): void => { server.off('listening', onListening); reject(error); };
-      const onListening = (): void => { server.off('error', onError); resolve(); };
-      server.once('error', onError);
-      server.once('listening', onListening);
-      server.listen(port, host);
-    });
-    const actual = server.address();
-    const actualPort = typeof actual === 'object' && actual ? actual.port : port;
+    let actualPort = port;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const server = createServer((req, res) => {
+        void this.route(req, res).catch((error: unknown) => this.fail(req, res, error));
+      });
+      this.server = server;
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error): void => { server.off('listening', onListening); reject(error); };
+        const onListening = (): void => { server.off('error', onError); resolve(); };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(port, host);
+      });
+      const actual = server.address();
+      actualPort = typeof actual === 'object' && actual ? actual.port : port;
+      // 端口 0 由系统分配，偶尔会落到 fetch 规范禁用的端口（undici 直接报 bad port）。
+      // 这时换一个：只在「让系统分配」时有这个问题，生产固定端口不会走这条。
+      if (port !== 0 || !isBlockedPort(actualPort)) break;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
     this.address = { url: `http://${localUrlHost(host)}:${actualPort}`, host, port: actualPort };
     return this.address;
   }
