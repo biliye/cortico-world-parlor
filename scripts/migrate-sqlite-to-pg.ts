@@ -7,7 +7,7 @@
  *
  * 选项：
  *   --dry-run       只审计与预估，不写任何东西
- *   --force         目标里有同一批次（同一来源哈希）的数据时，清掉重跑
+ *   --force         仅清理同一失败批次的审计记录；已完成或有业务数据时拒绝覆盖
  *   --batch <n>     每条 INSERT 带多少行（默认 500）
  *   --shallow       跳过逐行 JSON 检查（大库用；不推荐）
  *
@@ -66,7 +66,8 @@ const main = async (): Promise<number> => {
   const started = Date.now();
   const report = await runMigration({
     source: args.source,
-    ...(args.target ? { targetUrl: args.target } : {}),
+    ...((args.target ?? process.env.PARLOR_DATABASE_URL)
+      ? { targetUrl: args.target ?? process.env.PARLOR_DATABASE_URL } : {}),
     ...(args.dryRun ? { dryRun: true } : {}),
     ...(args.force ? { force: true } : {}),
     ...(args.batch !== undefined && Number.isFinite(args.batch) ? { batch: args.batch } : {}),

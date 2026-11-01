@@ -76,12 +76,12 @@ class PgPrepared implements PreparedStatement {
   async get<T = Record<string, unknown>>(...params: SqlParam[]): Promise<T | undefined> {
     const result = await this.execute(() => this.owner.query(this.text, normalizeParams(params)));
     const row = result.rows[0];
-    return row ? normalizeRow<T>(row as Record<string, unknown>) : undefined;
+    return row ? normalizeRow<T>(row as Record<string, unknown>, result.fields) : undefined;
   }
 
   async all<T = Record<string, unknown>>(...params: SqlParam[]): Promise<T[]> {
     const result = await this.execute(() => this.owner.query(this.text, normalizeParams(params)));
-    return result.rows.map((row) => normalizeRow<T>(row as Record<string, unknown>));
+    return result.rows.map((row) => normalizeRow<T>(row as Record<string, unknown>, result.fields));
   }
 
   async run(...params: SqlParam[]): Promise<RunResult> {

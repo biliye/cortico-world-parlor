@@ -19,6 +19,7 @@ import { runMigration } from '../src/room/migration/run.ts';
 import { openSource, auditSource } from '../src/room/migration/source.ts';
 import { digestSource, digestTarget, verifyAll } from '../src/room/migration/verify.ts';
 import { openStorage } from '../src/room/storage/open.ts';
+import { enableGlobalIdentity } from '../src/room/global-identity.ts';
 import { pgTestEnabled, pgServerStorage } from './helpers/pg.ts';
 
 const A = 'coo-mg000001';
@@ -79,6 +80,58 @@ const targetUrl = async (): Promise<string> => {
 };
 
 describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
+  it('历史升级追加的列顺序不同，仍按相同列名顺序逐行核验', async () => {
+    const file = join(dir!, 'parlor.db');
+    const { db } = await seedSource(file);
+    // 线上旧账户表是后来 ALTER ADD 的 player_coo_id，位于最后一列。
+    await db.exec('ALTER TABLE accounts DROP COLUMN player_coo_id');
+    await db.exec('ALTER TABLE accounts ADD COLUMN player_coo_id TEXT REFERENCES coos(id)');
+    await db.prepare(
+      'INSERT INTO accounts(id, coo_id, display_name, owner_key_hash, created_at, player_coo_id) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('account-vintage', OWNER, '旧账户', 'hash-vintage-owner', 1_770_000_000_000, A);
+    await db.close();
+    const report = await runMigration({ source: file, targetUrl: await targetUrl() });
+    expect(report.ok, report.error).toBe(true);
+    expect(report.verify?.mismatched).toEqual([]);
+  });
+
+  it('JSON 顶层数组、字符串、布尔和 null 保持语义，不当成 PG 数组或 SQL NULL', async () => {
+    const file = join(dir!, 'parlor.db');
+    const { db } = await seedSource(file);
+    const original = await db.prepare('SELECT room_id, seq FROM events ORDER BY room_id, seq LIMIT 1').get() as {
+      room_id: string; seq: number;
+    };
+    const update = db.prepare('UPDATE events SET scope_seats_json = ?, mentions_json = ?, data_json = ? WHERE room_id = ? AND seq = ?');
+    await update.run(JSON.stringify(['seat-a', 'seat-b']), JSON.stringify(['阿岚']), 'null', original.room_id, original.seq);
+    await db.prepare("UPDATE ledger_entries SET data_json = ? WHERE ord = (SELECT MIN(ord) FROM ledger_entries)")
+      .run(JSON.stringify('a JSON string'));
+    await db.prepare("UPDATE action_receipts SET receipt_json = ? WHERE request_id = 'open-1'").run('false');
+    await db.close();
+    const url = await targetUrl();
+    const report = await runMigration({ source: file, targetUrl: url });
+    expect(report.ok, report.error).toBe(true);
+    const target = await openStorage({ storage: 'postgres', url });
+    try {
+      const row = await target.prepare(
+        'SELECT scope_seats_json, mentions_json, jsonb_typeof(data_json) AS kind FROM events WHERE room_id = ? AND seq = ?',
+      ).get(original.room_id, original.seq) as Record<string, unknown>;
+      expect(row.scope_seats_json).toEqual(['seat-a', 'seat-b']);
+      expect(row.mentions_json).toEqual(['阿岚']);
+      expect(row.kind).toBe('null');
+    } finally { await target.close(); }
+  });
+
+  it('统一身份的重名席位先调整目标索引，再导入全部历史席位', async () => {
+    const file = join(dir!, 'parlor.db');
+    const { db } = await seedSource(file);
+    await enableGlobalIdentity(db);
+    await db.prepare('UPDATE room_seats SET name = ? WHERE coo_id IN (?, ?)').run('同一个昵称', A, B);
+    await db.close();
+    const report = await runMigration({ source: file, targetUrl: await targetUrl() });
+    expect(report.ok, report.error).toBe(true);
+    expect(report.verify?.ok).toBe(true);
+  });
+
   it('全表搬运 + 逐行核验 + 审计记录；再跑一次会被非空目标挡住', async () => {
     const file = join(dir!, 'parlor.db');
     const { db, tableId } = await seedSource(file);
@@ -177,9 +230,10 @@ describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
     expect(second.ok).toBe(false);
     expect(second.stage).toBe('target');
     expect(second.error).toContain('不是空的');
-    // 同一批次的来源可以 --force 重跑：清掉再导一遍，结果一样。
+    // 一旦完整迁移，目标可能已接收新业务写入；同来源哈希也不能再覆盖。
     const forced = await runMigration({ source: file, targetUrl: url, force: true, log: () => {} });
-    expect(forced.ok).toBe(true);
+    expect(forced.ok).toBe(false);
+    expect(forced.error).toContain('禁止 --force 覆盖');
   });
 
   it('核验真的会看内容：目标库被改掉一行，摘要就对不上', async () => {

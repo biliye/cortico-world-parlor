@@ -20,10 +20,15 @@ export const normalizeParams = (params: SqlParam[]): SqlParam[] => params.map((v
  * SQLite 返回 0/1。业务代码按 0/1 写的，这里把结果里的布尔压回 0/1，
  * 让两边读出来的形状一致。
  */
-export const normalizeRow = <T>(row: Record<string, unknown>): T => {
+export const normalizeRow = <T>(
+  row: Record<string, unknown>,
+  fields?: ReadonlyArray<{ name: string; dataTypeID: number }>,
+): T => {
+  const jsonColumns = new Set(fields?.filter((field) => field.dataTypeID === 114 || field.dataTypeID === 3802)
+    .map((field) => field.name));
   for (const key of Object.keys(row)) {
     const value = row[key];
-    if (typeof value === 'boolean') row[key] = value ? 1 : 0;
+    if (typeof value === 'boolean' && !jsonColumns.has(key)) row[key] = value ? 1 : 0;
   }
   return row as T;
 };

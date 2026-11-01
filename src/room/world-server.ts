@@ -171,7 +171,7 @@ const statusOf = (error: unknown): number => {
  * fetch 规范里禁用的端口：undici 连之前就拒绝（bad port）。
  * 只影响「让系统分配端口（port 0）」的测试/staging；生产用固定端口。
  */
-const BLOCKED_PORTS = new Set([2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6679, 6697, 10080]);
+const BLOCKED_PORTS = new Set([1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6679, 6697, 10080]);
 const isBlockedPort = (port: number): boolean => (
   port < 1024 || BLOCKED_PORTS.has(port) || (port >= 6665 && port <= 6669)
 );
@@ -2008,21 +2008,13 @@ export class WorldServer {
   private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {
     const host = await this.host(roomId);
     const seat = await host.seatByToken(token);
-    res.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-    });
-    res.flushHeaders?.();
-    res.write('retry: 3000\n\n');
+    // PG 查询会让出事件循环。发出 200 之前先完成在线登记，否则客户端已
+    // 看到 SSE 建连成功时，离线清理仍可能把它当成没有连接的旧席位释放。
     const initial = await host.eventsSince(seat.cooId, since, 200);
-    let cursor = since;
-    for (const event of initial) {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-      cursor = event.seq;
-    }
     const now = this.now();
+    await touchSeatSeen(this.db, roomId, seat.id, now);
+    if (req.destroyed || res.destroyed) return;
+    const cursor = initial.length > 0 ? initial[initial.length - 1]!.seq : since;
     const client: SseClient = {
       cooId: seat.cooId,
       seatId: seat.id,
@@ -2039,7 +2031,6 @@ export class WorldServer {
       this.sse.set(roomId, clients);
     }
     clients.add(client);
-    await touchSeatSeen(this.db, roomId, seat.id, now);
     // 掉线排查用：一行开、一行关（谁断的、持续多久）。不带令牌。
     console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条）`);
     req.on('close', () => {
@@ -2052,6 +2043,15 @@ export class WorldServer {
       const ms = Math.max(0, this.now() - client.openedAt);
       console.log(`parlor: SSE 关闭 ${roomId}/${client.seatName} 持续 ${Math.round(ms / 1000)} 秒（${client.closeReason ?? '客户端断开'}）`);
     });
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    res.flushHeaders?.();
+    res.write('retry: 3000\n\n');
+    for (const event of initial) res.write(`data: ${JSON.stringify(event)}\n\n`);
   }
 
   private checkParentKeyRate(req: IncomingMessage): void {

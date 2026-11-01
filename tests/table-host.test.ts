@@ -139,10 +139,16 @@ describe('客厅牌桌（骰子）', () => {
     const summary = await ledger.summaryFor(A);
     expect(summary.games).toBe(1);
     expect(summary.byGame[0]).toMatchObject({ game: 'dice', label: '骰子', games: 1 });
-    // 两人一人赢：赢家 = START_CHIPS + 5，输家 = START_CHIPS - 5。
+    // 骰点真实随机，平局时两位赢家各分回 5；非平局才有一赢一输。
     const balances = [await ledger.balanceOf(A), await ledger.balanceOf(B)].sort((x, y) => x - y);
-    expect(balances).toEqual([START_CHIPS - 5, START_CHIPS + 5]);
-    expect(summary.chips === START_CHIPS + 5 || summary.chips === START_CHIPS - 5).toBe(true);
+    const result = await host.tablePublic();
+    const winners = Array.isArray(result?.winners) ? result.winners : [];
+    expect(winners.length).toBeGreaterThan(0);
+    const expected = winners.length === 2
+      ? [START_CHIPS, START_CHIPS]
+      : [START_CHIPS - 5, START_CHIPS + 5];
+    expect(balances).toEqual(expected);
+    expect(expected).toContain(summary.chips);
   });
 
   it('游戏锁：未开局也锁，退桌/收桌后才放行', async () => {

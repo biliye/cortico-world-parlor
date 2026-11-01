@@ -155,7 +155,13 @@ export const runMigration = async (options: MigrateOptions): Promise<MigrateRepo
           + `${filled.length > 5 ? ' 等' : ''}）；${batch ? `这是同一批次 ${batch}，可加 --force 重跑` : '换一个空库'}`,
         );
       }
-      log(`目标里有同一批次 ${batch} 的旧数据：--force 允许覆盖重跑（旧数据会被清掉）。`);
+      const previous = await db.prepare('SELECT status FROM migration_runs WHERE id = ?').get(batch) as
+        { status: string } | undefined;
+      if (previous?.status !== 'failed' || filled.some((entry) => !['meta', 'migration_runs'].includes(entry.table))) {
+        return emptyReport(audit, 'target',
+          '该批次已完成或目标已有业务数据，禁止 --force 覆盖；请使用新的空目标库，保留现有数据');
+      }
+      log(`目标只有同一失败批次 ${batch} 的审计记录：--force 允许清理审计后重跑。`);
       await db.runInTransaction(async () => {
         for (const table of [...MIGRATION_TABLES].reverse()) {
           const exists = await db.prepare('SELECT to_regclass(?) AS name').get(`public.${table.name}`) as { name: string | null } | undefined;
@@ -191,6 +197,11 @@ export const runMigration = async (options: MigrateOptions): Promise<MigrateRepo
     // 目标库里不会留下半份数据；回滚之后再补一条 failed 的审计记录。
     try {
       await db.runInTransaction(async () => {
+        // 空 PG 库默认保留旧身份模式的重名限制。统一身份源允许重名，必须在
+        // 插入 room_seats 之前移除索引；导入完才移除已经来不及。
+        const globalIdentity = source.prepare("SELECT value FROM meta WHERE key = 'global_identity'").get() as
+          { value?: string } | undefined;
+        if (globalIdentity?.value === '1') await db.exec('DROP INDEX IF EXISTS ux_active_seat_name');
         await db.prepare(
           `INSERT INTO migration_runs(id, source_dir, source_hashes_json, started_at, status, notes_json)
            VALUES (?, ?, ?, ?, 'running', ?)`,

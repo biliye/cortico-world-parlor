@@ -273,12 +273,20 @@ export class TableHost {
    * 不同桌互不等待。返回 release，调用方必须在 finally 里放掉。
    */
   private async lockTable(key: string): Promise<() => void> {
+    // 外层管理事务可能已持有房间行锁；不能再等正在等该行的牌桌队列。
+    if (this.db.isTransaction && this.tableChains.has(key)) {
+      throw new HostError('conflict', '牌桌正在处理另一项操作，请稍后重试');
+    }
     const tail = this.tableChains.get(key) ?? Promise.resolve();
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
-    this.tableChains.set(key, tail.then(() => held, () => held));
+    const queued = tail.then(() => held, () => held);
+    this.tableChains.set(key, queued);
     await tail.catch(() => undefined);
-    return () => { release(); };
+    return () => {
+      release();
+      if (this.tableChains.get(key) === queued) this.tableChains.delete(key);
+    };
   }
 
   async init(): Promise<void> {
@@ -473,8 +481,10 @@ export class TableHost {
       await this.markHealthy(now);
       return appended;
     });
-    this.tables.set(table.id, table);
-    this.pruneEnded();
+    this.db.afterCommit(() => {
+      this.tables.set(table.id, table);
+      this.pruneEnded();
+    });
     return { tableId: table.id, event, receipt };
     } finally {
       releaseOpen();
@@ -540,9 +550,7 @@ export class TableHost {
       await this.storeReceipt(cooId, requestId, table.id, { type: 'table_join', tableId: table.id }, receipt, now);
       return row;
     });
-    table.engine = draft;
-    table.revision = revision;
-    table.stateJson = stateJson;
+    this.publishState(table, draft, revision, stateJson);
     return { event: appended, tableId: table.id, receipt };
     } finally {
       releaseTable();
@@ -622,13 +630,15 @@ export class TableHost {
       nextEngine = draft;
       return row;
     });
-    if (closing) {
-      this.tables.delete(table.id);
-    } else if (nextEngine) {
-      table.engine = nextEngine;
-      table.revision = nextRevision;
-      table.stateJson = nextState;
-    }
+    this.db.afterCommit(() => {
+      if (closing) {
+        this.tables.delete(table.id);
+      } else if (nextEngine) {
+        table.engine = nextEngine;
+        table.revision = nextRevision;
+        table.stateJson = nextState;
+      }
+    });
     return { event, closed: closing, receipt };
     } finally {
       releaseTable();
@@ -686,7 +696,6 @@ export class TableHost {
           data: { game: draft.game, gameLabel: draft.label, stake: table.stake, pot, tableId: table.id },
         });
       }
-      table.startedAt = now;
       await this.insertBotSeats(table, draft, now);
       await this.recordStep(table, draft, step, now);
       await this.updateTableState(table.id, draft, revision, stateJson, now, { startedAt: now });
@@ -700,9 +709,7 @@ export class TableHost {
       throw error;
     });
     if (duplicateStart) return duplicateStart;
-    table.engine = draft;
-    table.revision = revision;
-    table.stateJson = stateJson;
+    this.publishState(table, draft, revision, stateJson, now);
     return { ...receipt, seats: this.rosterOf(draft) };
     } finally {
       releaseTable();
@@ -765,9 +772,7 @@ export class TableHost {
       throw error;
     });
     if (duplicateAct) return duplicateAct;
-    table.engine = draft;
-    table.revision = revision;
-    table.stateJson = stateJson;
+    this.publishState(table, draft, revision, stateJson);
     return receipt;
     } finally {
       releaseTable();
@@ -883,11 +888,13 @@ export class TableHost {
     const ids: string[] = [];
     for (const table of this.liveTables()) {
       if (!table.engine.has(seat.id)) continue;
-      await this.db.prepare(
+      const updated = await this.db.prepare(
         'UPDATE table_seats SET auto = 1 WHERE table_id = ? AND seat_id = ? AND left_at IS NULL',
       ).run(table.id, seat.id);
-      table.autoSeats.add(seat.id);
-      ids.push(table.id);
+      if (updated.changes > 0) {
+        this.db.afterCommit(() => { table.autoSeats.add(seat.id); });
+        ids.push(table.id);
+      }
     }
     return ids;
   }
@@ -952,6 +959,16 @@ export class TableHost {
 
   // —— 内部：提交与事件 ——
 
+  /** 嵌套宿主操作可能只释放 SAVEPOINT；内存只跟随最外层 COMMIT。 */
+  private publishState(table: LiveTable, engine: TableEngine, revision: number, stateJson: string, startedAt?: number): void {
+    this.db.afterCommit(() => {
+      table.engine = engine;
+      table.revision = revision;
+      table.stateJson = stateJson;
+      if (startedAt !== undefined) table.startedAt = startedAt;
+    });
+  }
+
   private async commitTick(table: LiveTable, draft: TableEngine, step: TableStep, now: number): Promise<void> {
     const revision = table.revision + 1;
     const stateJson = JSON.stringify(draft.exportState());
@@ -959,9 +976,7 @@ export class TableHost {
       await this.recordStep(table, draft, step, now);
       await this.updateTableState(table.id, draft, revision, stateJson, now, step.ended ? { endedAt: now } : {});
     });
-    table.engine = draft;
-    table.revision = revision;
-    table.stateJson = stateJson;
+    this.publishState(table, draft, revision, stateJson);
   }
 
   /** 把一步引擎结果写进事件流：公开事件 + 每个席位的私视图；结束时结算。 */
@@ -1124,7 +1139,7 @@ export class TableHost {
         data: { game: table.game, tableId: table.id, reason },
       }, now);
     });
-    this.tables.delete(table.id);
+    this.db.afterCommit(() => { this.tables.delete(table.id); });
   }
 
   /**

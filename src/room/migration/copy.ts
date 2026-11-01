@@ -37,9 +37,9 @@ const convertRow = (
   const value = row[column];
   if (value === undefined || value === null) return null;
   if (jsonSet.has(column)) {
-    // SQLite 里是 TEXT；PG 侧给对象，驱动会序列化成 JSONB。
-    if (typeof value === 'string') return JSON.parse(value);
-    return value;
+    // 显式传 JSON 文本。pg 会把顶层 JS 数组当 PostgreSQL 数组，把 null 当
+    // SQL NULL；字符串/布尔标量也不能依赖驱动的普通参数编码。
+    return JSON.stringify(typeof value === 'string' ? JSON.parse(value) : value);
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {

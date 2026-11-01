@@ -112,7 +112,9 @@ export const digestSource = async (
   const table = MIGRATION_TABLES.find((entry) => entry.name === tableName);
   if (!table) throw new Error(`不认识的表：${tableName}`);
   if (audit.counts[tableName] === undefined) return null;
-  const columns = audit.columns[tableName] ?? [];
+  // 历史 SQLite 的 ALTER ADD 把列追加在末尾，PG 则按新 DDL 排列。
+  // 值按列名已经正确搬运，两侧摘要也必须使用相同的规范列顺序。
+  const columns = targetColumns().get(tableName) ?? [];
   if (columns.length === 0) return null;
   const jsonSet = new Set(table.json ?? []);
   const hash = createHash('sha256');
@@ -162,6 +164,9 @@ export const digestTarget = async (
   const jsonSet = new Set(table.json ?? []);
   const hash = createHash('sha256');
   const skip = filterFor(tableName, extraFilters);
+  // 与 SQLite 一样按 JSON 文本核验：区分 JSON null / SQL NULL，且避免
+  // PG 解码后的 JSON 字符串被当成「尚未解析的 JSON 文本」再次 JSON.parse。
+  const selected = columns.map((column) => jsonSet.has(column) ? `${column}::text AS ${column}` : column).join(', ');
   // 与导入时同一套过滤：meta 里那两行属于目标环境自己，两边都不算。
   const digestRows = (page: Record<string, unknown>[]): number => {
     let kept = 0;
@@ -174,7 +179,7 @@ export const digestTarget = async (
   };
   let count = 0;
   const first = await target.query(
-    `SELECT ${columns.join(', ')} FROM ${tableName} ORDER BY ${table.key.join(', ')} LIMIT ${limit}`,
+    `SELECT ${selected} FROM ${tableName} ORDER BY ${table.key.join(', ')} LIMIT ${limit}`,
   );
   let rows = first.rows;
   count += digestRows(rows);
@@ -185,7 +190,7 @@ export const digestTarget = async (
       ? `${table.key[0]} > $1`
       : `(${table.key.join(', ')}) > (${slots.join(', ')})`;
     const next = await target.query(
-      `SELECT ${columns.join(', ')} FROM ${tableName} WHERE ${predicate}`
+      `SELECT ${selected} FROM ${tableName} WHERE ${predicate}`
       + ` ORDER BY ${table.key.join(', ')} LIMIT ${limit}`,
       after,
     );

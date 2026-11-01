@@ -34,6 +34,48 @@ afterEach(async () => {
 });
 
 describe('并发正确性', () => {
+  it('最后一手结算下桌后重试原请求，仍返回原回执且不重复结算', async () => {
+    for (const id of ['coo-last-a', 'coo-last-b']) await seedCoo(id);
+    await seedRoom('room-last', 8, 'coo-last-a');
+    const host = await RoomHost.create(db, 'room-last');
+    await host.join('coo-last-a', { name: '最后一手甲' });
+    await host.join('coo-last-b', { name: '最后一手乙' });
+    const opened = await host.openTable('coo-last-a', { game: 'dice' }, 'last-open');
+    await host.joinTable('coo-last-b', opened.tableId, 'last-join');
+    await host.startTable('coo-last-a', opened.tableId, 'last-start');
+    const revisionA = (await host.snapshot('coo-last-a')).tablePrivate?.revision as number;
+    await host.tableAction('coo-last-a', { type: 'stand' }, {
+      tableId: opened.tableId, revision: revisionA, requestId: 'last-a',
+    });
+    const revisionB = (await host.snapshot('coo-last-b')).tablePrivate?.revision as number;
+    const options = { tableId: opened.tableId, revision: revisionB, requestId: 'last-b' };
+    const receipt = await host.tableAction('coo-last-b', { type: 'stand' }, options);
+    await expect(host.tableAction('coo-last-b', { type: 'stand' }, options)).resolves.toEqual(receipt);
+    const finalized = await db.prepare('SELECT COUNT(*) AS n FROM table_finalizations WHERE table_id = ?').get(opened.tableId) as { n: number };
+    expect(finalized.n).toBe(1);
+  });
+
+  it('外层事务失败后，开桌草稿和退桌操作都不污染内存中的已提交桌', async () => {
+    await seedCoo('coo-outer');
+    await seedRoom('room-outer', 8, 'coo-outer');
+    const host = await RoomHost.create(db, 'room-outer');
+    await host.join('coo-outer', { name: '事务测试' });
+    await expect(db.runInTransaction(async () => {
+      await host.openTable('coo-outer', { game: 'dice' }, 'rolled-back-open');
+      throw new Error('外层失败');
+    })).rejects.toThrow('外层失败');
+    expect((await host.snapshot('coo-outer')).tables).toEqual([]);
+
+    const opened = await host.openTable('coo-outer', { game: 'dice' }, 'committed-open');
+    await expect(db.runInTransaction(async () => {
+      await host.leaveTable('coo-outer', opened.tableId, 'rolled-back-leave');
+      throw new Error('外层失败');
+    })).rejects.toThrow('外层失败');
+    expect((await host.snapshot('coo-outer')).table?.id).toBe(opened.tableId);
+    const row = await db.prepare('SELECT status FROM tables WHERE id = ?').get(opened.tableId) as { status: string };
+    expect(row.status).toBe('open');
+  });
+
   it('同一客厅并发入座：成功数不超过容量，活跃席位与容量一致', async () => {
     const capacity = 3;
     // 主人 + 20 个抢座的人；主人自己不坐。
