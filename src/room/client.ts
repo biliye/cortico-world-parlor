@@ -25,7 +25,7 @@ export interface ReplayResponse {
  * 能不能玩需要新能力的游戏（狼人杀要 ≥ 0.29.0）。
  * 它跟 npm 包版本解耦——发新版时在这里抬一格即可（有测试盯着别忘）。
  */
-export const PARLOR_CLIENT_VERSION = '0.32.0';
+export const PARLOR_CLIENT_VERSION = '0.33.0';
 
 export class ParlorHttpError extends Error {
   readonly status: number;
