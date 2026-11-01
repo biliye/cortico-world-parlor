@@ -241,6 +241,10 @@ export class WorldServer {
   private pumping = false;
   private clocking = false;
   private closing = false;
+  /** 有新事件的客厅：提交后立刻推，不等节拍。 */
+  private readonly dirtyRooms = new Set<string>();
+  private pumpScheduled = false;
+  private lastSweepAt = 0;
   /** 大厅 id 的同步快照：init() 建完大厅后填上，供 hallId 这个同步属性读。 */
   private hallIdValue = '';
 
@@ -451,6 +455,7 @@ export class WorldServer {
       now: this.now,
       ...(this.tableTurnMs !== undefined ? { turnMs: this.tableTurnMs } : {}),
       recovery: this.recovery,
+      onCommit: (id: string) => this.markDirty(id),
     }).then((host) => {
       this.hosts.set(roomId, host);
       this.hostPending.delete(roomId);
@@ -2260,14 +2265,36 @@ export class WorldServer {
     if (!sendWebAsset(rel, req, res, page)) throw new HttpError(404, '没有这个文件');
   }
 
+  /**
+   * 某个客厅刚提交了新事件：如果有人在订阅，下一轮事件循环就推。
+   * 没有订阅者就不记，省得干净。
+   */
+  private markDirty(roomId: string): void {
+    if (this.closing || !this.sse.has(roomId)) return;
+    this.dirtyRooms.add(roomId);
+    if (this.pumpScheduled) return;
+    this.pumpScheduled = true;
+    setImmediate(() => {
+      this.pumpScheduled = false;
+      void this.pump().catch((error) => { console.error('parlor: 推送循环出错', error); });
+    });
+  }
+
   private async pump(): Promise<void> {
     if (this.closing) return;
     // 上一轮还没跑完就跳过这一轮：两条循环同时读 client.since 会把同一批事件推两遍。
     if (this.pumping) return;
     this.pumping = true;
     const now = this.now();
+    // 有 dirty 就只推那些客厅；每 2 秒补一次全扫，兜住漏掉的通知与 ping。
+    const fullSweep = now - this.lastSweepAt >= 2_000;
+    if (fullSweep) this.lastSweepAt = now;
+    const targets = fullSweep ? [...this.sse.keys()] : [...this.dirtyRooms];
     try {
-      for (const [roomId, clients] of this.sse) {
+      for (const roomId of targets) {
+        this.dirtyRooms.delete(roomId);
+        const clients = this.sse.get(roomId);
+        if (!clients) continue;
         const host = await this.host(roomId);
         for (const client of [...clients]) {
           try {

@@ -44,5 +44,10 @@ export interface Db {
   exec(sql: string): Promise<void>;
   /** 开一层事务；已在事务里时用 SAVEPOINT 嵌套。 */
   runInTransaction<T>(fn: () => Promise<T>): Promise<T>;
+  /**
+   * 事务提交后执行（不在事务里时立即执行）；事务回滚则丢弃。
+   * 推送、内存发布这类「只在提交成功后做」的事用它，不要在事务中间发。
+   */
+  afterCommit(fn: () => void): void;
   close(): Promise<void>;
 }

@@ -27,9 +27,19 @@ type SqliteStatement = ReturnType<SqliteHandle['prepare']>;
 
 interface TxStore {
   db: SqliteDb;
+  /** 提交后要跑的回调；回滚时整段丢掉。 */
+  afterCommit: Array<() => void>;
 }
 
 let savepointSeq = 0;
+
+/** 提交成功后依次跑登记的回调；回调自己的错不影响已经提交的事务。 */
+const runAfterCommit = (store: TxStore): void => {
+  const callbacks = store.afterCommit.splice(0);
+  for (const callback of callbacks) {
+    try { callback(); } catch { /* 忽略 */ }
+  }
+};
 
 class SqlitePrepared implements PreparedStatement {
   constructor(private readonly owner: SqliteDb, private readonly stmt: SqliteStatement) {}
@@ -78,6 +88,15 @@ export class SqliteDb implements Db {
     return this.als.getStore()?.db === this;
   }
 
+  afterCommit(fn: () => void): void {
+    const store = this.als.getStore();
+    if (store?.db === this) {
+      store.afterCommit.push(fn);
+      return;
+    }
+    fn();
+  }
+
   prepare(sql: string): PreparedStatement {
     // 这里同步 prepare：SQL 有错在 prepare 时就炸，和以前一样，不拖到执行时才报。
     return new SqlitePrepared(this, this.handle.prepare(sql));
@@ -93,10 +112,11 @@ export class SqliteDb implements Db {
     if (this.isTransaction) return this.savepoint(fn);
     return this.acquire(async () => {
       this.handle.exec('BEGIN IMMEDIATE');
-      const store: TxStore = { db: this };
+      const store: TxStore = { db: this, afterCommit: [] };
       try {
         const value = await this.als.run(store, fn);
         this.handle.exec('COMMIT');
+        runAfterCommit(store);
         return value;
       } catch (error) {
         try { this.handle.exec('ROLLBACK'); } catch { /* 连接可能已经坏了 */ }
@@ -133,12 +153,16 @@ export class SqliteDb implements Db {
   private async savepoint<T>(fn: () => Promise<T>): Promise<T> {
     savepointSeq += 1;
     const name = `sp_${savepointSeq}`;
+    const store = this.als.getStore();
+    const mark = store?.afterCommit.length ?? 0;
     this.handle.exec(`SAVEPOINT ${name}`);
     try {
       const value = await fn();
       this.handle.exec(`RELEASE SAVEPOINT ${name}`);
       return value;
     } catch (error) {
+      // 这一段回滚了：它登记过的「提交后回调」也不能跑。
+      if (store) store.afterCommit.length = mark;
       try {
         this.handle.exec(`ROLLBACK TO SAVEPOINT ${name}`);
         this.handle.exec(`RELEASE SAVEPOINT ${name}`);

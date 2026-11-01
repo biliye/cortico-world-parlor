@@ -41,6 +41,8 @@ export interface RoomHostOptions {
   turnMs?: number;
   /** 启动恢复用的健康基准（由网关从 meta.last_healthy_at 读一次，所有客厅共用）。 */
   recovery?: { lastHealthyAt?: number; maxDowntimeMs?: number; minHumanMs?: number };
+  /** 事件提交后通知网关；推送用它立刻发，不再等 400ms 节拍。 */
+  onCommit?: (roomId: string) => void;
 }
 
 export interface JoinResult {
@@ -166,7 +168,7 @@ export class RoomHost {
   ) {
     this.db = db;
     this.roomId = roomId;
-    this.events = new EventDb(db);
+    this.events = new EventDb(db, options.onCommit ? () => options.onCommit!(roomId) : undefined);
     this.now = options.now ?? Date.now;
     this.mail = parts.mail;
     this.ledger = parts.ledger;

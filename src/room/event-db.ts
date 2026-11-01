@@ -95,9 +95,12 @@ const clampLimit = (value: number | undefined, fallback = 50): number => (
 
 export class EventDb {
   private readonly db: Db;
+  /** 提交之后通知网关「这个客厅有新事件」，推送不用等 400ms 节拍。 */
+  private readonly onAppend?: () => void;
 
-  constructor(db: Db) {
+  constructor(db: Db, onAppend?: () => void) {
     this.db = db;
+    this.onAppend = onAppend;
   }
 
   async latest(roomId: string): Promise<number> {
@@ -174,6 +177,8 @@ export class EventDb {
         }
       }
 
+      // 提交成功后通知网关（回滚时这条登记会被丢掉）。
+      this.db.afterCommit(() => this.onAppend?.());
       return {
         seq,
         ts: input.ts,

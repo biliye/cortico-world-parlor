@@ -34,9 +34,19 @@ export interface PgDbOptions {
 
 interface TxStore {
   client: PoolClient;
+  /** 提交后要跑的回调；回滚时整段丢掉。 */
+  afterCommit: Array<() => void>;
 }
 
 let savepointSeq = 0;
+
+/** 提交成功后依次跑登记的回调；回调自己的错不影响已经提交的事务。 */
+const runAfterCommit = (store: TxStore): void => {
+  const callbacks = store.afterCommit.splice(0);
+  for (const callback of callbacks) {
+    try { callback(); } catch { /* 忽略 */ }
+  }
+};
 let parsersInstalled = false;
 
 const safeInt = (value: string): number => {
@@ -136,6 +146,15 @@ export class PgDb implements Db {
     return this.als.getStore() !== undefined;
   }
 
+  afterCommit(fn: () => void): void {
+    const store = this.als.getStore();
+    if (store) {
+      store.afterCommit.push(fn);
+      return;
+    }
+    fn();
+  }
+
   prepare(sql: string): PreparedStatement {
     return new PgPrepared(this, sql);
   }
@@ -153,9 +172,10 @@ export class PgDb implements Db {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const store: TxStore = { client };
+      const store: TxStore = { client, afterCommit: [] };
       const value = await this.als.run(store, fn);
       await client.query('COMMIT');
+      runAfterCommit(store);
       return value;
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch { /* 连接可能已经坏了 */ }
@@ -191,12 +211,16 @@ export class PgDb implements Db {
   private async savepoint<T>(client: PoolClient, fn: () => Promise<T>): Promise<T> {
     savepointSeq += 1;
     const name = `sp_${savepointSeq}`;
+    const store = this.als.getStore();
+    const mark = store?.afterCommit.length ?? 0;
     await client.query(`SAVEPOINT ${name}`);
     try {
       const value = await fn();
       await client.query(`RELEASE SAVEPOINT ${name}`);
       return value;
     } catch (error) {
+      // 这一段回滚了：它登记过的「提交后回调」也不能跑。
+      if (store) store.afterCommit.length = mark;
       try {
         await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
         await client.query(`RELEASE SAVEPOINT ${name}`);
