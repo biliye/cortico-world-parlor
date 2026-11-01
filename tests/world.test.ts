@@ -155,7 +155,7 @@ describe('客厅 World', () => {
     await client.action(friend.token, { type: 'table_say', text: '这句只有桌上看得见' });
     const said = (): typeof host.events[number] | undefined => host.events.slice(before)
       .find((event) => event.type === 'parlor.message' && event.text.includes('这句只有桌上看得见'));
-    await until(() => !!said());
+    await until(() => !!said(), 7_000);
     expect(said()!.text).toContain('阿岚 在牌桌上对你们说：这句只有桌上看得见');
 
     // 不在桌上的人看不到这句。

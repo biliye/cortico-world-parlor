@@ -655,9 +655,10 @@ export class RoomHost {
   }
 
   async tableSay(cooId: string, text: string, tableId?: string): Promise<RoomEvent> {
-    await this.requireSeat(cooId);
+    const seat = await this.requireSeat(cooId);
+    const body = cleanText(text);
     this.checkSayGap(cooId);
-    return this.tableHost.say(cooId, text, tableId);
+    return this.tableHost.say(cooId, body, tableId, await this.mentionsIn(body, seat));
   }
 
   tablePublic(tableId?: string, cooId?: string) {

@@ -206,6 +206,25 @@ describe('客厅牌桌（骰子）', () => {
 });
 
 describe('客厅牌桌（斗地主）与桌聊', () => {
+  it('桌聊记录点名对象并支持短号，桌外人不在接收范围', async () => {
+    fixture = await setup();
+    const { host, clock } = fixture;
+    await enter(host, A, '阿岚');
+    const b = await enter(host, B, '小满');
+    const c = await enter(host, C, '小柚');
+    await host.openTable(A, { game: 'ddz' });
+    await host.joinTable(B);
+    const said = await host.tableSay(A, '@小满 @小柚 一起看看');
+    expect(said.mentions).toEqual([b.seat.id]);
+    expect(said.scope).toMatchObject({ kind: 'table' });
+    if (said.scope.kind === 'table') expect(said.scope.seats).not.toContain(c.seat.id);
+    clock.now += 100;
+    const shortHandle = (await host.snapshot(B)).seat.handle;
+    expect(shortHandle).toBeTruthy();
+    const handle = await host.tableSay(A, `@#${shortHandle} 短号点名`);
+    expect(handle.mentions).toEqual([b.seat.id]);
+  });
+
   it('开桌补脚本陪练；桌内说话只有同桌看得到', async () => {
     fixture = await setup();
     const { host, clock } = fixture;

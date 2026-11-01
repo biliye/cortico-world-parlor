@@ -852,7 +852,7 @@ export class TableHost {
   }
 
   /** 桌内说话：只给那一刻坐在桌上的人（和回放）看。 */
-  async say(cooId: string, text: string, tableId?: string): Promise<RoomEvent> {
+  async say(cooId: string, text: string, tableId?: string, mentions: string[] = []): Promise<RoomEvent> {
     const table = await this.requireMyTable(cooId, tableId);
     const seat = await this.requireSeat(cooId);
     if (table.engine.status === 'ended') throw new HostError('invalid', '这张桌子已经结束了，回客厅说吧');
@@ -872,6 +872,7 @@ export class TableHost {
       from: seat.id,
       scope: { kind: 'table', tableId: table.id, seats },
       text: body,
+      mentions: mentions.filter((id) => seats.includes(id)),
       data: { name: seat.name, tableId: table.id },
     });
   }

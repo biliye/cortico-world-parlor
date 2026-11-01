@@ -174,7 +174,7 @@ describe('其他桌的牌局不自动推给 Coo', () => {
     const snapshot = await friend.snapshot(friendToken, 0, 1, 'lobby');
     const myTable = snapshot.tables!.find((table) => table.status === 'open')!.id;
     await friend.action(friendToken, { type: 'table_join', table: myTable, requestId: 'my-join' }, 'lobby');
-    await friend.action(friendToken, { type: 'table_say', text: '本桌聊天仍收到' }, 'lobby');
+    await friend.action(friendToken, { type: 'table_say', text: '@小满 本桌聊天仍收到' }, 'lobby');
     await until(() => pushedText(host).includes('本桌聊天仍收到'));
     await call('parlor_table_start');
     await until(() => pushedText(host).includes('轮到你'));
@@ -391,7 +391,7 @@ describe('World 多客厅', () => {
     }, 'lobby');
     await until(() => host.events.some((event) => event.type === 'parlor.digest'
       && event.text.includes('打牌期间的客厅')));
-    const digest = host.events.find((event) => event.type === 'parlor.digest')!;
+    const digest = host.events.find((event) => event.type === 'parlor.digest' && event.text.includes('打牌期间的客厅'))!;
     expect(digest.text).toContain('打牌期间随口一句');
   });
 

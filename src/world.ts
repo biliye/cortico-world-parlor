@@ -16,6 +16,7 @@ import { gameLabelOf } from './room/game-labels.ts';
 import { IDENTITY_FILE, loadOrCreateIdentity, saveIdentity, type CooIdentity } from './room/identity.ts';
 import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
+import { AmbientWakeBudget } from './wake-budget.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed,
   type ActionRequest, type ActionResponse, type HallView, type MeView,
@@ -36,17 +37,59 @@ const CURSOR_NAME = 'parlor-cursor.json';
 const ROOM_NAME = 'parlor-room.json';
 
 const DIGEST_MS = 60_000;
+const CHAT_BATCH_MS = 5_000;
 const LINK_GAP_MS = 60_000;
 const PENDING_MAX = 50;
-const WAKE_WINDOW_MS = 3_600_000;
+const PENDING_TEXT_MAX = 12_000;
 
-/** 每小时最多叫醒几次；被 @ / 私聊不受这个限制。 */
+/** 只限制普通闲聊投递；直接消息、同桌聊天和行动提醒独立。 */
 const TIER_BUDGET: Readonly<Record<WakeTier, number>> = {
   full: 60,
   digest: 30,
-  quiet: 6,
+  quiet: 0,
   off: 0,
 };
+
+interface WakeBatch {
+  events: RoomEvent[];
+  omitted: number;
+  focus: boolean;
+}
+
+/** 超出待发上限的旧消息仍在服务器历史里，投递时明确提示省略。 */
+class PendingMessages {
+  private events: RoomEvent[] = [];
+  private omitted = 0;
+  private focus = false;
+  get length(): number { return this.events.length; }
+
+  push(event: RoomEvent): void {
+    this.events.push(event);
+    let chars = this.events.reduce((sum, item) => sum + item.text.length, 0);
+    while (this.events.length > PENDING_MAX || (chars > PENDING_TEXT_MAX && this.events.length > 1)) {
+      chars -= this.events.shift()!.text.length;
+      this.omitted += 1;
+    }
+  }
+
+  merge(batch: WakeBatch): void {
+    this.omitted += batch.omitted;
+    this.focus ||= batch.focus;
+    for (const event of batch.events) this.push(event);
+  }
+
+  take(): WakeBatch {
+    const batch = { events: this.events, omitted: this.omitted, focus: this.focus };
+    this.clear();
+    return batch;
+  }
+
+  clear(): void {
+    this.events = [];
+    this.omitted = 0;
+    this.focus = false;
+  }
+}
 
 const KIND_LABELS: Readonly<Record<string, string>> = { pet: 'Coo', human: '人', observer: '观看' };
 
@@ -268,7 +311,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_say',
-    description: 'Say something only the people sitting at your table can see — the rest of the parlor cannot. You must be seated at a live table (open, bidding or playing). Everyone at the table is woken by it, so keep it short and occasional.',
+    description: 'Say something only the people sitting at your table can see — the rest of the parlor cannot. You must be seated at a live table (open, bidding or playing). Coos batch ordinary table chat for up to 5 seconds; a direct @ or action reminder delivers it immediately. Keep it short and occasional.',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -424,12 +467,15 @@ export class ParlorWorld implements World {
   private myTableId?: string;
   private myTableRevision?: number;
   private focusRefreshQueued = false;
-  private focusBacklog: RoomEvent[] = [];
+  private readonly focusBacklog = new PendingMessages();
   private abort?: AbortController;
   private streamTask?: Promise<void>;
   private digestTimer?: NodeJS.Timeout;
-  private pending: RoomEvent[] = [];
-  private readonly wakeTimes: number[] = [];
+  private readonly pending = new PendingMessages();
+  private readonly tableChat = new PendingMessages();
+  private readonly ambientBudget = new AmbientWakeBudget();
+  private ambientTimer?: NodeJS.Timeout;
+  private tableChatTimer?: NodeJS.Timeout;
   private lastLinkAt = 0;
   private stopped = false;
   /** 访客入口由运营者在部署 .env 里控制；默认关。 */
@@ -579,6 +625,7 @@ export class ParlorWorld implements World {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.clearPendingMessages();
     this.abort?.abort();
     if (this.digestTimer) clearInterval(this.digestTimer);
     this.digestTimer = undefined;
@@ -675,8 +722,7 @@ export class ParlorWorld implements World {
         || error.status !== 403 || !error.message.includes('已经归档')) throw error;
       joined = await client.join(this.inviteCode, request, 'hall');
       this.currentRoom = 'hall';
-      this.pending = [];
-      this.focusBacklog = [];
+      this.clearPendingMessages();
       this.focused = false;
       await this.reportLink('原客厅已被房主删除，已回到大厅。');
     }
@@ -863,22 +909,35 @@ export class ParlorWorld implements World {
     // 窗口制的纯桌面刷新（队友交了刀票/发言）不是行动请求：快照刷新即可，不叫醒。
     if (event.type === 'parlor.table.turn' && event.data?.decision === false) return;
 
-    // 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒进 focusBacklog；
-    // @ / 私聊 / 桌聊 / 轮到本人照常叫醒；本桌散了才一次性给一份摘要。
+    // 普通桌聊最多等五秒合并；真正点名、私聊或行动请求会立即带上这批话。
+    if (event.type === 'parlor.table.say' && !event.mentions?.includes(this.seat.id)) {
+      if (this.seat.tier === 'off' || this.seat.kind === 'observer') return;
+      this.tableChat.push(event);
+      if (!this.tableChatTimer) {
+        this.tableChatTimer = setTimeout(() => {
+          this.tableChatTimer = undefined;
+          if (this.stopped || this.seat?.tier === 'off') { this.tableChat.clear(); return; }
+          void this.pushWake(this.tableChat.take(), true);
+        }, CHAT_BATCH_MS);
+        this.tableChatTimer.unref?.();
+      }
+      return;
+    }
+
+    // 专注 B：客厅闲聊攒到局后再按额度投递；直接消息与本人行动及时提醒。
     if (this.focused) {
       if (event.type === 'parlor.table.end') {
         const endTableId = typeof event.data?.tableId === 'string' ? event.data.tableId : undefined;
         if (endTableId && this.myTableId && endTableId !== this.myTableId) return;
         this.focused = false;
-        this.focusBacklog.push(event);
+        // 结算及时交付；局间积攒的客厅闲聊另走普通投递额度。
+        if (this.seat.tier !== 'off') void this.pushDirect(event, false);
         void this.flushFocus();
         return;
       }
       const decision = decideWake(event, this.seat);
       if (decision.wake && isAddressed(event, this.seat.id)) {
-        const batch = this.pending.splice(0);
-        batch.push(event);
-        void this.pushWake(batch, true);
+        void this.pushDirect(event, true);
         return;
       }
       // 牌桌自己的动作不进摘要：正在打的人有私视图，重复一边只会吵。
@@ -886,76 +945,104 @@ export class ParlorWorld implements World {
         && !event.type.startsWith('parlor.table.');
       if (ordinary && this.seat.tier !== 'off') {
         this.focusBacklog.push(event);
-        if (this.focusBacklog.length > PENDING_MAX) this.focusBacklog.shift();
       }
       return;
     }
 
     const decision = decideWake(event, this.seat);
-    if (decision.wake) {
-      const batch = this.pending.splice(0);
-      batch.push(event);
-      void this.pushWake(batch, decision.addressed);
+    if (decision.wake && decision.addressed) {
+      void this.pushDirect(event, true);
       return;
     }
     if (this.seat.tier === 'off') return;
     this.pending.push(event);
-    if (this.pending.length > PENDING_MAX) this.pending.shift();
+    if (this.seat.tier === 'full' && !this.focused) this.scheduleAmbient(CHAT_BATCH_MS);
   }
 
   private async flushDigest(): Promise<void> {
     if (this.stopped) return;
     await this.reconcileTier();
-    // 专注期间不跑周期摘要；牌局结束时由 flushFocus 一次性给。
+    // 专注期间不跑周期摘要；牌局结束后再把闲聊移回普通投递队列。
     if (this.focused) return;
     if (!this.seat || this.pending.length === 0) return;
     if (this.seat.tier !== 'digest' && this.seat.tier !== 'full') return;
-    if (!this.hasAmbientBudget()) return;
-    const events = this.pending.splice(0);
-    await this.pushWake(events, false);
+    await this.flushAmbient();
   }
 
-  /** 牌局结束：打牌期间攒下的客厅闲聊合成一份摘要，只这一次。 */
+  private scheduleAmbient(delayMs: number): void {
+    if (this.ambientTimer || this.stopped) return;
+    this.ambientTimer = setTimeout(() => {
+      this.ambientTimer = undefined;
+      void this.flushAmbient();
+    }, delayMs);
+    this.ambientTimer.unref?.();
+  }
+
+  private async flushAmbient(): Promise<void> {
+    if (this.stopped || !this.host || !this.seat || this.focused || !this.pending.length) return;
+    const limit = TIER_BUDGET[this.seat.tier];
+    if (!limit || this.seat.kind === 'observer') return;
+    const wait = this.ambientBudget.reserve(limit, Date.now());
+    if (wait > 0) { this.scheduleAmbient(wait); return; }
+    if (this.ambientTimer) clearTimeout(this.ambientTimer);
+    this.ambientTimer = undefined;
+    await this.pushWake(this.pending.take(), false);
+  }
+
+  /** 牌局结束：客厅闲聊回到受预算约束的队列，避免局后摘要绕过限额。 */
   private async flushFocus(): Promise<void> {
     if (this.stopped || !this.host) return;
-    const events = this.focusBacklog.splice(0);
-    if (events.length === 0) return;
+    const batch = this.focusBacklog.take();
+    if (batch.events.length === 0) return;
     if (!this.seat || this.seat.tier === 'off') return;
-    this.wakeTimes.push(Date.now());
-    this.trimWakeTimes();
-    await this.host.pushEvent({
-      type: 'parlor.digest',
-      ts: nowIso(this.ctx.timezone),
-      source: this.id,
-      origin: 'external',
-      senderKey: 'parlor',
-      text: `【打牌期间的客厅】\n${this.render(events)}`,
-      meta: {
-        from: events[0].from,
-        seq: events[events.length - 1].seq,
-        count: events.length,
-        addressed: false,
-        focus: true,
-      },
-    }, { trigger: 'debounce' });
+    this.pending.merge({ ...batch, focus: true });
+    await this.flushAmbient();
   }
 
-  private async pushWake(events: RoomEvent[], addressed: boolean): Promise<void> {
-    if (!this.host || events.length === 0) return;
-    this.wakeTimes.push(Date.now());
-    this.trimWakeTimes();
+  /** 有人直接找我时带上积压消息；豁免投递不消耗普通闲聊的额度。 */
+  private async pushDirect(event: RoomEvent, addressed: boolean): Promise<void> {
+    const batch = this.pending.take();
+    const chat = this.tableChat.take();
+    const merged = new PendingMessages();
+    merged.merge({
+      events: [...batch.events, ...chat.events, event].sort((a, b) => a.seq - b.seq),
+      omitted: batch.omitted + chat.omitted,
+      focus: batch.focus,
+    });
+    if (this.ambientTimer) clearTimeout(this.ambientTimer);
+    if (this.tableChatTimer) clearTimeout(this.tableChatTimer);
+    this.ambientTimer = undefined;
+    this.tableChatTimer = undefined;
+    await this.pushWake(merged.take(), addressed);
+  }
+
+  private clearPendingMessages(): void {
+    if (this.ambientTimer) clearTimeout(this.ambientTimer);
+    if (this.tableChatTimer) clearTimeout(this.tableChatTimer);
+    this.ambientTimer = undefined;
+    this.tableChatTimer = undefined;
+    this.pending.clear();
+    this.focusBacklog.clear();
+    this.tableChat.clear();
+  }
+
+  private async pushWake(batch: WakeBatch, addressed: boolean): Promise<void> {
+    const { events, omitted, focus } = batch;
+    if (this.stopped || !this.host || events.length === 0) return;
     await this.host.pushEvent({
       type: addressed ? 'parlor.message' : 'parlor.digest',
       ts: nowIso(this.ctx.timezone),
       source: this.id,
       origin: 'external',
       senderKey: 'parlor',
-      text: this.render(events),
+      text: `${focus ? '【打牌期间的客厅】\n' : ''}${omitted ? `（省略了 ${omitted} 条较早消息，可主动查看服务器历史。）\n` : ''}${this.render(events)}`,
       meta: {
         from: events[0].from,
         seq: events[events.length - 1].seq,
         count: events.length,
         addressed,
+        ...(focus ? { focus: true } : {}),
+        ...(omitted ? { omitted } : {}),
       },
     }, { trigger: 'debounce' });
   }
@@ -993,17 +1080,6 @@ export class ParlorWorld implements World {
     return lines.join('\n');
   }
 
-  private trimWakeTimes(): void {
-    const cutoff = Date.now() - WAKE_WINDOW_MS;
-    while (this.wakeTimes.length && this.wakeTimes[0] < cutoff) this.wakeTimes.shift();
-  }
-
-  private hasAmbientBudget(): boolean {
-    if (!this.seat) return false;
-    this.trimWakeTimes();
-    return this.wakeTimes.length < (TIER_BUDGET[this.seat.tier] ?? 0);
-  }
-
   private async reconcileTier(): Promise<void> {
     if (!this.client || !this.token || !this.seat) return;
     const wanted = this.ctx.cfg.wakeTier;
@@ -1011,6 +1087,7 @@ export class ParlorWorld implements World {
     try {
       await this.client.action(this.token, { type: 'set_tier', tier: wanted }, this.roomArg());
       this.seat = { ...this.seat, tier: wanted };
+      if (wanted === 'off') this.clearPendingMessages();
     } catch { /* 下一轮再试 */ }
   }
 
@@ -1150,8 +1227,7 @@ export class ParlorWorld implements World {
       this.token = moved.token;
       this.seat = moved.seat;
       this.lastSeq = moved.joinSeq;
-      this.pending = [];
-      this.focusBacklog = [];
+      this.clearPendingMessages();
       this.focused = false;
       this.saveCursor();
       try {
@@ -1275,7 +1351,7 @@ export class ParlorWorld implements World {
         text: String(args.text ?? ''),
         ...(table ? { table } : {}),
       }, this.roomArg());
-      return this.receipt(result, '同桌的人都收到了。');
+      return this.receipt(result, '已发到本桌。');
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -1516,6 +1592,7 @@ export class ParlorWorld implements World {
     try {
       const result = await this.client.action(this.token, { type: 'set_tier', tier }, this.roomArg());
       if (this.seat) this.seat = { ...this.seat, tier };
+      if (tier === 'off') this.clearPendingMessages();
       this.ctx.persist({ wakeTier: tier });
       return this.receipt(result, `提醒挡位改成了「${WAKE_TIER_LABELS[tier]}」。`);
     } catch (error) {
