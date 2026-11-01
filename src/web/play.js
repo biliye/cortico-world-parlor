@@ -7,6 +7,7 @@ import {
 } from './common.js';
 import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261101';
 import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
+import { createRoomCarousel } from './room-carousel.js';
 
 const club = createClubState({
   getItem: key => sessionStorage.getItem(key),
@@ -78,6 +79,7 @@ const state = {
   timerTotal: 0,
 };
 const ui = {};
+const featuredCarousel = createRoomCarousel(renderFeaturedRoom, { paused: window.matchMedia('(prefers-reduced-motion: reduce)').matches });
 let toastTimer = 0;
 let mailTimer = 0;
 
@@ -1022,6 +1024,7 @@ function avatarNode(id, size = 'avatar-sm', options = {}) {
 /* —— 页面骨架 —— */
 
 function buildShell() {
+  featuredCarousel.setActive(false);
   clear(app);
   state.shell = true;
   crumbSignature = '';
@@ -1268,6 +1271,14 @@ function buildShell() {
   }, { ghost: true });
   hallHead.append(createShortcut);
   const hallHero = el('section', 'club-hero');
+  hallHero.setAttribute('aria-label', '热门客厅推荐');
+  hallHero.setAttribute('aria-roledescription', '轮播');
+  let heroHovered = false, heroFocused = false;
+  const blockHero = () => featuredCarousel.setBlocked(heroHovered || heroFocused);
+  hallHero.addEventListener('mouseenter', () => { heroHovered = true; blockHero(); });
+  hallHero.addEventListener('mouseleave', () => { heroHovered = false; blockHero(); });
+  hallHero.addEventListener('focusin', () => { heroFocused = true; blockHero(); });
+  hallHero.addEventListener('focusout', event => { heroFocused = hallHero.contains(event.relatedTarget); blockHero(); });
   const hallPeople = el('section', 'panel hall-people');
   const hallPeopleHead = el('div', 'panel-head');
   const hallPeopleCount = el('span', 'muted');
@@ -1442,6 +1453,8 @@ function buildShell() {
     infoGame, infoStake, infoStatus, infoTurn, ruleNote, infoClock,
     navHall, navRoom, navTable, navChat, backdrop,
   });
+  ui.featured = null;
+  featuredCarousel.setBlocked(false);
   syncViewButtons();
   state.sheet = !window.matchMedia('(min-width: 1101px)').matches && club.mobileChatOpen ? 'chat' : null;
   syncSheet();
@@ -1586,6 +1599,7 @@ function render() {
   renderCenter();
   syncNav();
   renderClubNav();
+  syncFeaturedRotation();
   document.title = (state.snap.tablePrivate && state.snap.tablePrivate.yourTurn ? '轮到你 · 鲸语会馆' : '鲸语会馆 · 一起玩');
 }
 
@@ -2235,17 +2249,8 @@ function renderHall() {
     if (hallFilter === 'ddz' || hallFilter === 'werewolf') return (room.games || []).includes(hallFilter);
     return true;
   });
-  clear(ui.hallHero);
-  const featured = allRooms.find(room => room.seats > 0) || allRooms[0];
-  const copy = el('div', 'club-hero-copy');
-  copy.append(el('span', 'eyebrow', '留个位置，慢慢相聚  /  PARLOR CLUB'),
-    el('h2', '', featured ? featured.name : '好朋友，也可以是新朋友。'),
-    el('p', '', featured?.topic || '先在客厅聊聊天，再选一张喜欢的桌。人和 Coo，都有自己的座位。'));
-  if (featured) {
-    copy.append(el('p', 'club-hero-meta', `${featured.seats} / ${featured.capacity} 人在客厅 · ${featured.tableCount ?? '—'} 张桌`),
-      btn('走进这间客厅  ↗', () => void goRoom(featured.id), { primary: true }));
-  } else copy.append(btn('开一间客厅', () => ui.hallCreateName.focus(), { primary: true }));
-  ui.hallHero.append(copy, clubScene('ddz', true));
+  featuredCarousel.setRooms(allRooms);
+  syncFeaturedRotation();
   if (!rooms.length) {
     ui.hallRoomsList.append(el('p', 'club-empty', allRooms.length ? '还没有符合条件的客厅。换个筛选，或开一间自己的。' : '还没有客厅，开一间等朋友吧。'));
   }
@@ -2255,6 +2260,63 @@ function renderHall() {
     button.classList.toggle('is-active', active); button.setAttribute('aria-pressed', String(active));
   }
   if (data.error) ui.hallRoomsList.append(el('p', 'warn', '刷新失败：' + data.error));
+}
+
+function syncFeaturedRotation() {
+  featuredCarousel.setActive(state.shell && state.view === 'hall' && !document.hidden && !state.sheet);
+}
+
+function renderFeaturedRoom(model) {
+  if (!ui.hallHero?.isConnected) return;
+  if (!ui.featured) {
+    const copy = el('div', 'club-hero-copy');
+    const kicker = el('span', 'eyebrow'), title = el('h2'), description = el('p'), meta = el('p', 'club-hero-meta');
+    const enter = btn('', () => {
+      const room = featuredCarousel.snapshot().current;
+      if (room) void goRoom(room.id);
+      else if (state.hallData?.rooms?.length) ui.hallRoomsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      else ui.hallCreateName.focus();
+    }, { primary: true });
+    copy.append(kicker, title, description, meta, enter);
+    const controls = el('div', 'club-carousel-controls');
+    const status = el('span', 'club-carousel-status');
+    const previous = btn('←', () => featuredCarousel.move(-1), { ghost: true, small: true });
+    previous.setAttribute('aria-label', '上一个热门客厅');
+    const next = btn('→', () => featuredCarousel.move(1), { ghost: true, small: true });
+    next.setAttribute('aria-label', '下一个热门客厅');
+    const pause = btn('', () => featuredCarousel.setPaused(!featuredCarousel.snapshot().paused), { ghost: true, small: true });
+    const dots = el('div', 'club-carousel-dots');
+    dots.setAttribute('aria-label', '选择热门客厅');
+    controls.append(status, previous, dots, next, pause);
+    const art = clubScene('ddz', true);
+    ui.hallHero.replaceChildren(copy, art, controls);
+    ui.featured = { kicker, title, description, meta, enter, controls, status, pause, dots, art, dotKey: '' };
+  }
+  const nodes = ui.featured, room = model.current;
+  nodes.kicker.textContent = room ? '热闹正在发生  /  PARLOR CLUB' : '留个位置，慢慢相聚  /  PARLOR CLUB';
+  nodes.title.textContent = room ? room.name : '好朋友，也可以是新朋友。';
+  nodes.description.textContent = room?.topic || '先在客厅聊聊天，再选一张喜欢的桌。人和 Coo，都有自己的座位。';
+  nodes.meta.hidden = !room;
+  nodes.meta.textContent = room ? `${room.seats} / ${room.capacity} 人在客厅 · ${room.tableCount ?? '—'} 张桌` : '';
+  nodes.enter.textContent = room ? '走进这间客厅  ↗' : state.hallData?.rooms?.length ? '逛逛客厅  ↘' : '开一间客厅';
+  nodes.controls.hidden = model.rooms.length < 2;
+  nodes.status.textContent = `${model.index + 1} / ${model.rooms.length} · 每 6 秒轮换`;
+  nodes.pause.textContent = model.paused ? '开始轮播' : '暂停轮播';
+  nodes.pause.setAttribute('aria-label', model.paused ? '开始热门客厅自动轮播' : '暂停热门客厅自动轮播');
+  const key = model.rooms.map(entry => entry.id).join('|');
+  if (nodes.dotKey !== key) {
+    nodes.dotKey = key; clear(nodes.dots);
+    if (model.rooms.length <= 7) model.rooms.forEach((entry, index) => {
+      const dot = el('button', 'club-carousel-dot'); dot.type = 'button';
+      dot.setAttribute('aria-label', '推荐客厅：' + entry.name);
+      dot.addEventListener('click', () => featuredCarousel.select(index)); nodes.dots.append(dot);
+    });
+  }
+  [...nodes.dots.children].forEach((dot, index) => {
+    dot.setAttribute('aria-current', index === model.index ? 'true' : 'false');
+    dot.setAttribute('aria-label', '推荐客厅：' + model.rooms[index].name);
+  });
+  ui.hallHero.classList.toggle('has-carousel', model.rooms.length > 1);
 }
 
 function hallSeatChip(seat) {
@@ -2714,7 +2776,7 @@ window.addEventListener('popstate', async () => {
   state.tab = state.view === 'table' && activePrivate() ? 'table' : 'room';
   syncViewButtons(); render();
 });
-window.addEventListener('pagehide', () => { if (draftScope && ui.sayInput) club.saveDraft(draftScope, ui.sayInput.value); });
+window.addEventListener('pagehide', () => { featuredCarousel.setActive(false); if (draftScope && ui.sayInput) club.saveDraft(draftScope, ui.sayInput.value); });
 window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
 window.matchMedia('(min-width: 1101px)').addEventListener('change', () => { closeSheet({ preserveChat: true }); syncChatCollapse(); });
 
@@ -2940,6 +3002,7 @@ function syncSheet() {
     ui.chatToggle.replaceChildren(icon('chat'), el('span', 'chat-toggle-label', state.sheet === 'chat' ? '收起聊天' : '打开聊天'));
   }
   syncNav();
+  syncFeaturedRotation();
 }
 
 document.addEventListener('keydown', event => {
@@ -3431,6 +3494,7 @@ function renderTableInfo() {
 /* —— 加入 / 离线 —— */
 
 function renderJoin(message = '') {
+  featuredCarousel.setActive(false);
   state.shell = false;
   disposeGame();
   clear(app);
@@ -3522,6 +3586,7 @@ function renderJoin(message = '') {
 }
 
 function renderOffline(message) {
+  featuredCarousel.setActive(false);
   state.shell = false;
   disposeGame();
   clear(app);
@@ -3635,6 +3700,7 @@ setInterval(() => {
 }, 20000);
 
 document.addEventListener('visibilitychange', () => {
+  syncFeaturedRotation();
   if (document.hidden) return;
   // 手机/浏览器切回来时 EventSource 可能已经悄悄断了；没开着就立刻重连，别等 3 秒定时器。
   if (state.cfg && (!state.stream || state.stream.readyState !== EventSource.OPEN)) connect();
