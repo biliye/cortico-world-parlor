@@ -103,6 +103,13 @@ input::placeholder,textarea::placeholder { color:#92a69a; }
 .hall-head h1:after { content:'✳'; color:var(--accent); font-size:30px; margin-left:18px; }
 .hall-head>p,.lobby-head p { font-size:12px; line-height:1.9; color:var(--muted); max-width:540px; }
 .hall-head>.btn { position:absolute; right:0; top:26px; }
+.view-hall.is-collection .hall-head { margin-bottom:20px; }
+.view-hall.is-collection .hall-head h1 { font-size:28px; margin:0 0 8px; }
+.view-hall.is-collection .hall-head h1:after { content:none; }
+.view-hall.is-collection .hall-head>p { margin:0; }
+.view-hall.is-collection .hall-head>.btn { top:0; }
+.view-hall.is-collection .hall-rooms .panel-head h2 { font-size:13px; color:var(--muted); }
+.view-hall.is-collection .announce-banner.collection-hidden { display:none; }
 .club-hero { position:relative; display:grid; grid-template-columns:1fr 1fr; min-height:285px; overflow:hidden; border:1px solid #52714e; background:#223e32; border-radius:18px; margin-bottom:32px; }
 .club-hero-copy { padding:31px; position:relative; z-index:1; }
 .club-hero-copy h2 { font-size:32px; line-height:1.45; font-weight:550; letter-spacing:1px; margin:21px 0 12px; overflow-wrap:anywhere; }

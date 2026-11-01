@@ -17,6 +17,7 @@ const club = createClubState({
   setItem: (key, value) => sessionStorage.setItem(key, value),
 });
 let draftScope = '';
+let hallSection = 'all';
 let hallFilter = 'all';
 let hallQuery = '';
 let roomSwitching = false;
@@ -202,7 +203,7 @@ async function boot() {
     void loadDmThreads();
   } catch (error) {
     if (error && error.status === 401) {
-      await handleExpiredSeat(state.cfg ? state.cfg.token : '');
+      await handleExpiredSeat(error.seatToken || (state.cfg ? state.cfg.token : ''));
       return;
     }
     renderOffline(bootFailureText(error));
@@ -279,6 +280,8 @@ async function tryParentEntry(key = '', options = {}) {
 async function handleExpiredSeat(token) {
   const stored = readStore();
   if (stored && token && stored.token !== token) {
+    // 本页刚换好席位，迟到的旧请求不能清掉新令牌，也不用重载旧地址。
+    if (state.cfg && state.cfg.token === stored.token) return;
     location.reload();
     return;
   }
@@ -460,6 +463,7 @@ async function api(path, init = {}) {
   if (!response.ok) {
     const error = new Error((body && body.error) || ('请求失败（' + response.status + '）'));
     error.status = response.status;
+    error.seatToken = (headers.get('authorization') || '').replace(/^Bearer /, '');
     throw error;
   }
   return body;
@@ -483,7 +487,7 @@ function scheduleRefresh(delay = 120) {
       render();
     } catch (error) {
       if (error && error.status === 401) {
-        void handleExpiredSeat(state.cfg ? state.cfg.token : '');
+        void handleExpiredSeat(error.seatToken || (state.cfg ? state.cfg.token : ''));
       }
     }
   }, delay);
@@ -608,7 +612,7 @@ async function refreshTable() {
     if (applyTablePatch(slice)) renderTableParts();
   } catch (error) {
     if (error && error.status === 401) {
-      void handleExpiredSeat(state.cfg ? state.cfg.token : '');
+      void handleExpiredSeat(error.seatToken || (state.cfg ? state.cfg.token : ''));
       return;
     }
     // 老服务器没有桌接口、或网络抖了一下：退回整份快照重新同步。
@@ -1035,7 +1039,7 @@ function buildShell() {
   draftScope = '';
   try {
     const filter = sessionStorage.getItem('parlor-hall-filter');
-    if (['all', 'mine', 'favorites'].includes(filter)) hallFilter = filter;
+    if (['all', 'mine', 'favorites'].includes(filter)) hallSection = filter;
     sessionStorage.removeItem('parlor-hall-filter');
   } catch {}
 
@@ -1136,13 +1140,9 @@ function buildShell() {
   const clubNav = el('nav', 'club-nav');
   clubNav.setAttribute('aria-label', '会馆导航');
   for (const [filter, label, symbol] of [['all', '发现客厅', 'lamp'], ['mine', '我的客厅', 'users'], ['favorites', '收藏的地方', 'spark']]) {
-    const button = btn(label, () => {
-      hallFilter = filter;
-      if (inHall()) { setView('hall'); renderHall(); }
-      else { try { sessionStorage.setItem('parlor-hall-filter', filter); } catch {} void goRoom('hall'); }
-    }, { ghost: true });
+    const button = btn(label, () => selectHallSection(filter), { ghost: true });
     button.prepend(icon(symbol));
-    button.dataset.filter = filter;
+    button.dataset.section = filter;
     clubNav.append(button);
   }
   leftRail.append(clubNav);
@@ -1265,10 +1265,11 @@ function buildShell() {
   /* 中间：大厅（会话世界）——谁在大厅、有哪些客厅、开一间 */
   const viewHall = el('div', 'view view-hall');
   const hallHead = el('div', 'hall-head');
+  const hallEyebrow = el('span', 'eyebrow', 'A LITTLE PLAY, A LITTLE COMPANY.');
+  const hallTitle = el('h1', '', '今晚，来一局。');
+  const hallDescription = el('p', 'muted', '找个舒服的位置，和朋友、Coo 一起把时间慢下来。');
   hallHead.append(
-    el('span', 'eyebrow', 'A LITTLE PLAY, A LITTLE COMPANY.'),
-    el('h1', '', '今晚，来一局。'),
-    el('p', 'muted', '找个舒服的位置，和朋友、Coo 一起把时间慢下来。'),
+    hallEyebrow, hallTitle, hallDescription,
   );
   const createShortcut = btn('＋ 开一间客厅', () => {
     hallCreate.scrollIntoView({ behavior: 'smooth', block: 'center' }); hallCreateName.focus({ preventScroll: true });
@@ -1295,21 +1296,22 @@ function buildShell() {
   const hallRefresh = el('button', 'link', '刷新');
   hallRefresh.type = 'button';
   hallRefresh.addEventListener('click', () => { void loadHall(true); });
-  hallRoomsHead.append(el('h2', '', '客厅'), hallRefresh);
+  const hallRoomsTitle = el('h2', '', '客厅');
+  hallRoomsHead.append(hallRoomsTitle, hallRefresh);
   const discovery = el('div', 'club-discovery');
   const search = el('input', 'club-search');
   search.type = 'search'; search.placeholder = '搜索客厅名字、话题…'; search.setAttribute('aria-label', '搜索客厅');
   search.addEventListener('input', () => { hallQuery = search.value; renderHall(); });
   const filters = el('div', 'club-filters');
   filters.setAttribute('aria-label', '筛选客厅');
-  for (const [value, label] of [['all', '全部'], ['ddz', '斗地主'], ['werewolf', '狼人杀'], ['favorites', '收藏']]) {
+  for (const [value, label] of [['all', '全部'], ['ddz', '斗地主'], ['werewolf', '狼人杀']]) {
     const button = btn(label, () => { hallFilter = value; renderHall(); }, { ghost: true, small: true });
     button.dataset.filter = value; filters.append(button);
   }
   discovery.append(search, filters);
   const hallRoomsList = el('div', 'rooms-list hall-rooms-list');
-  hallRooms.append(hallRoomsHead, discovery, hallRoomsList,
-    el('p', 'muted hall-note', '公开客厅谁都能进；不公开的要先被邀请。'));
+  const hallRoomsNote = el('p', 'muted hall-note', '公开客厅谁都能进；不公开的要先被邀请。');
+  hallRooms.append(hallRoomsHead, discovery, hallRoomsList, hallRoomsNote);
   const hallCreate = el('section', 'panel hall-create');
   const hallCreateName = el('input');
   hallCreateName.type = 'text';
@@ -1333,7 +1335,7 @@ function buildShell() {
   center.append(viewTable, viewLobby, viewHall);
   // 运营公告横幅：首屏（大厅、客厅）才有，牌桌上不占地方；没有新公告时不渲染出来。
   mountAnnouncementBanner(viewLobby);
-  mountAnnouncementBanner(viewHall);
+  const hallAnnouncement = mountAnnouncementBanner(viewHall);
   startAnnouncementWatch(() => state.cfg && state.cfg.token);
 
   /* 右栏：聊天 / 牌桌信息 */
@@ -1446,6 +1448,8 @@ function buildShell() {
   Object.assign(ui, {
     top, conn, connText, mailBtn, mailBadge, dmBtn, dmBadge, banner, bannerText, bannerGo, chatToggle,
     layout, clubNav, hallHero, roomTables, breadcrumb,
+    hallHead, hallEyebrow, hallTitle, hallDescription, createShortcut, hallPeople, hallCreate, hallAnnouncement,
+    hallRoomsTitle, hallRoomsNote, hallSearch: search,
     roomPillText: pillText, roomPillSub: pillSub,
     viewButtons: [topHall, topRoom, topTable],
     topAvatar, topName, topSub, chipsText,
@@ -2227,12 +2231,59 @@ async function loadHall(force = false) {
   }
 }
 
+function selectHallSection(section) {
+  hallSection = section;
+  hallFilter = 'all';
+  hallQuery = '';
+  if (ui.hallSearch) ui.hallSearch.value = '';
+  if (inHall()) {
+    setView('hall');
+    window.scrollTo({ top: 0 });
+  } else {
+    try { sessionStorage.setItem('parlor-hall-filter', section); } catch {}
+    void goRoom('hall');
+  }
+}
+
+function renderHallSection() {
+  const discover = hallSection === 'all';
+  const mine = hallSection === 'mine';
+  ui.viewHall.classList.toggle('is-collection', !discover);
+  ui.hallEyebrow.hidden = !discover;
+  ui.hallTitle.textContent = discover ? '今晚，来一局。' : mine ? '我的客厅' : '收藏的地方';
+  ui.hallDescription.textContent = discover ? '找个舒服的位置，和朋友、Coo 一起把时间慢下来。'
+    : mine ? '你创建或加入的客厅，都在这里。' : '喜欢的客厅，随时回来坐坐。';
+  ui.hallHero.hidden = !discover;
+  ui.hallPeople.hidden = !discover;
+  ui.hallCreate.hidden = !discover && !mine;
+  ui.createShortcut.hidden = !discover && !mine;
+  ui.hallRoomsNote.hidden = !discover;
+  ui.hallSearch.placeholder = discover ? '搜索客厅名字、话题…' : mine ? '搜索我的客厅…' : '搜索收藏的客厅…';
+  ui.hallSearch.setAttribute('aria-label', discover ? '搜索客厅' : mine ? '搜索我的客厅' : '搜索收藏的客厅');
+  // 公告仍由同一订阅维护，只在发现页占据首屏；切换范围不标记已读。
+  ui.hallAnnouncement.classList.toggle('collection-hidden', !discover);
+  for (const button of ui.clubNav.querySelectorAll('[data-section]')) {
+    const active = button.dataset.section === hallSection;
+    button.classList.toggle('is-active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  for (const button of ui.viewHall.querySelectorAll('[data-filter]')) {
+    const active = button.dataset.filter === hallFilter;
+    button.classList.toggle('is-active', active); button.setAttribute('aria-pressed', String(active));
+  }
+  renderClubNav();
+  syncFeaturedRotation();
+}
+
 function renderHall() {
   if (!ui.hallRoomsList) return;
+  renderHallSection();
   const data = state.hallData;
   const hall = data && data.hall;
   clear(ui.hallPeopleRow);
   clear(ui.hallRoomsList);
+  ui.hallRoomsTitle.textContent = hallSection === 'all' ? '客厅' : '客厅列表';
   if (data && data.error && !hall) {
     ui.hallPeopleCount.textContent = '';
     ui.hallRoomsList.append(el('p', 'warn', '取不到大厅：' + data.error));
@@ -2240,7 +2291,7 @@ function renderHall() {
   }
   if (!hall) {
     ui.hallPeopleCount.textContent = '';
-    ui.hallPeopleRow.append(el('p', 'muted', '正在打开大厅…'));
+    ui.hallRoomsList.append(el('p', 'muted', '正在加载客厅…'));
     return;
   }
   const seats = hall.seats || [];
@@ -2256,29 +2307,36 @@ function renderHall() {
     ui.hallPeopleRow.append(chip);
   }
   const allRooms = (data.rooms || []).filter((room) => !room.archived);
+  const scopedRooms = allRooms.filter(room => hallSection === 'mine' ? room.mine
+    : hallSection === 'favorites' ? club.isFavorite(room.id) : true);
   const query = hallQuery.trim().toLocaleLowerCase();
-  const rooms = allRooms.filter(room => {
+  const rooms = scopedRooms.filter(room => {
     if (query && !(room.name + ' ' + (room.topic || '')).toLocaleLowerCase().includes(query)) return false;
-    if (hallFilter === 'favorites') return club.isFavorite(room.id);
-    if (hallFilter === 'mine') return room.mine;
     if (hallFilter === 'ddz' || hallFilter === 'werewolf') return (room.games || []).includes(hallFilter);
     return true;
   });
   featuredCarousel.setRooms(allRooms);
   syncFeaturedRotation();
+  if (hallSection !== 'all') ui.hallRoomsTitle.textContent = `${rooms.length} 间客厅`;
   if (!rooms.length) {
-    ui.hallRoomsList.append(el('p', 'club-empty', allRooms.length ? '还没有符合条件的客厅。换个筛选，或开一间自己的。' : '还没有客厅，开一间等朋友吧。'));
+    const empty = el('div', 'club-empty');
+    const filtered = !!query || hallFilter !== 'all';
+    empty.append(el('p', '', filtered ? '没有找到符合条件的客厅，试试其他关键词或游戏。'
+      : hallSection === 'mine' ? '你还没有创建或加入客厅，先去发现一间喜欢的吧。'
+      : hallSection === 'favorites' ? '还没有收藏的客厅。在客厅卡片上点一下星标，下次就能在这里找到。'
+      : '还没有客厅，开一间等朋友吧。'));
+    if (filtered) empty.append(btn('清除筛选', () => {
+      hallQuery = ''; hallFilter = 'all'; ui.hallSearch.value = ''; renderHall();
+    }, { ghost: true, small: true }));
+    else if (hallSection !== 'all') empty.append(btn('去发现客厅 ↗', () => selectHallSection('all'), { ghost: true, small: true }));
+    ui.hallRoomsList.append(empty);
   }
   for (const room of rooms) ui.hallRoomsList.append(hallRoomRow(room));
-  for (const button of document.querySelectorAll('[data-filter]')) {
-    const active = button.dataset.filter === hallFilter;
-    button.classList.toggle('is-active', active); button.setAttribute('aria-pressed', String(active));
-  }
   if (data.error) ui.hallRoomsList.append(el('p', 'warn', '刷新失败：' + data.error));
 }
 
 function syncFeaturedRotation() {
-  featuredCarousel.setActive(state.shell && state.view === 'hall' && !document.hidden && !state.sheet);
+  featuredCarousel.setActive(state.shell && state.view === 'hall' && hallSection === 'all' && !document.hidden && !state.sheet);
 }
 
 function renderFeaturedRoom(model) {
@@ -2762,15 +2820,15 @@ function writeRoute(replace = false) {
 
 function renderClubNav() {
   if (!ui.breadcrumb) return;
-  const signature = [currentRoom(), state.snap?.name, state.view, tableIdOf(activeTable())].join('|');
+  const signature = [currentRoom(), state.snap?.name, state.view, tableIdOf(activeTable()), hallSection].join('|');
   if (signature === crumbSignature) return;
   crumbSignature = signature;
   clear(ui.breadcrumb);
-  ui.breadcrumb.append(btn('大厅', () => setView('hall'), { ghost: true, small: true }));
+  ui.breadcrumb.append(btn('大厅', () => selectHallSection('all'), { ghost: true, small: true }));
   if (!inHall()) {
     ui.breadcrumb.append(el('span', '', '/'), btn(state.snap.name || '客厅', () => setView('lobby'), { ghost: true, small: true }));
     if (state.view === 'table') ui.breadcrumb.append(el('span', '', '/'), el('span', '', activeTable() ? tableTitle(activeTable()) : '牌桌'));
-  } else ui.breadcrumb.append(el('span', '', '/ 发现客厅'));
+  } else ui.breadcrumb.append(el('span', '', '/ ' + (hallSection === 'mine' ? '我的客厅' : hallSection === 'favorites' ? '收藏的地方' : '发现客厅')));
 }
 
 async function inviteToRoom() {
