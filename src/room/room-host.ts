@@ -30,6 +30,7 @@ import {
   type LedgerEntry,
 } from './ledger.ts';
 import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt } from './table-host.ts';
+import type { TablePrivateSummary, TableSummary } from './table-engine.ts';
 import type { DeliveryReceipt, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
 export { HostError, type HostErrorCode } from './host-error.ts';
@@ -147,6 +148,9 @@ const wrapSeatError = (error: unknown): never => {
   throw error;
 };
 
+/** 补给扫描的最短间隔：补给本身是 6 小时一次的节奏，30 秒一拍足够。 */
+const REFILL_SCAN_MS = 30_000;
+
 export class RoomHost {
   readonly roomId: string;
   private readonly events: EventDb;
@@ -157,6 +161,8 @@ export class RoomHost {
   private readonly makeToken: () => string;
   /** 客厅发言与桌内发言共用同一个间隔，防止交替发绕过限速。 */
   private readonly lastSay = new Map<string, number>();
+  /** 下一次扫余额补给的时刻；补给节奏是 6 小时一次，扫描不必每秒。 */
+  private nextRefillAt = 0;
 
   private readonly db: Db;
 
@@ -566,6 +572,27 @@ export class RoomHost {
     };
   }
 
+  /**
+   * 牌桌增量：只给「当前桌」需要的那几块（桌列表、指定那张桌、我的私视图）。
+   * 不含席位名单、事件、账本与信箱——那些只有整份快照才给。
+   * 权限与投影复用 public()/private()：看别人的桌拿不到他的暗牌。
+   */
+  async tableSlice(cooId: string, tableId?: string): Promise<{
+    tables: TableSummary[];
+    table: TableSummary | null;
+    tablePrivate: TablePrivateSummary | null;
+  }> {
+    const seat = await this.requireSeat(cooId);
+    const table = tableId
+      ? (await this.tableHost.tableSummary(tableId, cooId)) ?? null
+      : (await this.tableHost.public(cooId)) ?? null;
+    return {
+      tables: this.tableHost.list(),
+      table,
+      tablePrivate: this.tableHost.private(seat.id),
+    };
+  }
+
   /** 这个客厅里的未读；跨厅邀请在全局未读里。 */
   mailUnread(cooId: string): Promise<number> {
     return this.mail.unreadCount(cooId, this.roomId);
@@ -683,7 +710,37 @@ export class RoomHost {
   async tickClock(now = this.now()): Promise<void> {
     await this.tableHost.tick();
     await this.expireLedger(now);
-    await this.refillLedger(now);
+    // 补给是 6 小时的节奏，没必要每秒对每个席位查一次余额：按 30 秒一拍扫。
+    if (now >= this.nextRefillAt) {
+      this.nextRefillAt = now + REFILL_SCAN_MS;
+      await this.refillLedger(now);
+    }
+  }
+
+  /**
+   * 下一次这个客厅需要被推一下的时刻：牌桌到点、承诺到期、下一次补给扫描。
+   * 都没有就是 undefined——网关据此决定睡到什么时候。
+   */
+  async nextWakeAt(now = this.now()): Promise<number | undefined> {
+    let next = this.tableHost.nextWakeAt(now);
+    const promise = await this.nextPromiseAt();
+    if (promise !== undefined && (next === undefined || promise < next)) next = promise;
+    if (next === undefined || this.nextRefillAt < next) next = this.nextRefillAt;
+    return next;
+  }
+
+  /** 最早一条还没了结的承诺什么时候到期；一条索引查询。 */
+  private async nextPromiseAt(): Promise<number | undefined> {
+    const row = await this.db.prepare(
+      `SELECT MIN(e.due_at) AS at FROM ledger_entries e
+        WHERE e.kind = 'promise' AND e.room_id = ? AND e.due_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ledger_entries s
+             WHERE s.ref_entry_id = e.id AND s.kind IN ('settle','decline','cancel','default')
+          )`,
+    ).get(this.roomId) as { at: number | null } | undefined;
+    const at = row && row.at !== null && row.at !== undefined ? Number(row.at) : NaN;
+    return Number.isFinite(at) ? at : undefined;
   }
 
   // —— 账本：礼物 / 承诺 / 回应 ——

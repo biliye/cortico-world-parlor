@@ -42,7 +42,15 @@ const runAfterCommit = (store: TxStore): void => {
 };
 
 class SqlitePrepared implements PreparedStatement {
-  constructor(private readonly owner: SqliteDb, private readonly stmt: SqliteStatement) {}
+  // 不用参数属性（`constructor(private readonly x)`）：那段语法过不了 Node 的
+  // `--experimental-strip-types`，`pnpm serve:world` 会在加载时直接报错。
+  private readonly owner: SqliteDb;
+  private readonly stmt: SqliteStatement;
+
+  constructor(owner: SqliteDb, stmt: SqliteStatement) {
+    this.owner = owner;
+    this.stmt = stmt;
+  }
 
   get<T = Record<string, unknown>>(...params: SqlParam[]): Promise<T | undefined> {
     return this.owner.read(() => this.stmt.get(...(normalizeParams(params) as SQLInputValue[])) as T | undefined);

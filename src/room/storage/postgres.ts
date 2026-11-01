@@ -64,8 +64,12 @@ const safeNumeric = (value: string): number => {
 };
 
 class PgPrepared implements PreparedStatement {
+  private readonly owner: PgDb;
   private readonly text: string;
-  constructor(private readonly owner: PgDb, sql: string) {
+
+  // 同 sqlite.ts：不用参数属性，strip-only 的 TypeScript 解析器不认。
+  constructor(owner: PgDb, sql: string) {
+    this.owner = owner;
     this.text = toPgPlaceholders(sql);
   }
 

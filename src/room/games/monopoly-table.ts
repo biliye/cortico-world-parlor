@@ -328,6 +328,18 @@ export class MonopolyTable implements TableEngine {
     return this.timeout(now);
   }
 
+  /**
+   * 三个时间点里最早的一个：整局时限、当前席位的回合截止、脚本陪练的延迟。
+   * 托管席位是「下一拍就代打」——给一秒后，不是「现在」，否则会把网关拖成空转。
+   */
+  nextWakeAt(now: number): number | undefined {
+    if (this.status !== 'playing') return undefined;
+    const seatId = this.engine.currentSeatId;
+    if (this.bots.has(seatId)) return this.turnStartedAt + BOT_DELAY_MS;
+    if (this.auto.has(seatId)) return now + 1_000;
+    return Math.min(this.deadline, this.endsAt);
+  }
+
   view(seatId: string): unknown | null {
     const seat = this.seats.find((entry) => entry.id === seatId);
     if (!seat) return null;

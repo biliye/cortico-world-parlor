@@ -192,6 +192,12 @@ export class DoudizhuTable implements TableEngine {
     return this.pass(seat.id, now, !seat.bot);
   }
 
+  /** 斗地主只有一个截止（叫地主 30 秒 / 出牌 60 秒，陪练是 1.5 秒），到点由 tick 代打。 */
+  nextWakeAt(): number | undefined {
+    if (this.status !== 'bidding' && this.status !== 'playing') return undefined;
+    return this.deadline;
+  }
+
   view(seatId: string): unknown | null {
     const seat = this.seats.find((entry) => entry.id === seatId);
     if (!seat) return null;

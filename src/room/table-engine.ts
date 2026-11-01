@@ -74,6 +74,12 @@ export interface TableEngine {
   start(by: string, now: number): TableStep;
   act(seatId: string, action: unknown, now: number): TableStep;
   tick(now: number): TableStep | null;
+  /**
+   * 下一次「tick 会真的推进」的服务器时刻；不实现 = 每秒 tick 一次（旧的兜底）。
+   * 必须覆盖最早的内部节点，不只是公开的回合截止：狼人杀的夜晚分 A/B 两段，
+   * 公开截止是天亮，内部真正要醒来的是 A 段结束。返回过去时刻表示「现在就该跑」。
+   */
+  nextWakeAt?(now: number): number | undefined;
   /** 给该席位的私视图；不在桌上返回 null。 */
   view(seatId: string): unknown | null;
   /** 公开视图；不含任何人的隐藏信息。 */

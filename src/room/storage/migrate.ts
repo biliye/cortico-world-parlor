@@ -247,23 +247,37 @@ export const migratePg = async (db: PgDb): Promise<void> => {
       }
 
       // 与 SQLite 侧同一批数据兜底。都在版本迁移之后，可重复执行。
-      const global = await client.query("SELECT 1 FROM meta WHERE key = 'global_identity' AND value = '1'");
-      if (global.rowCount) {
-        await client.query('DROP INDEX IF EXISTS ux_active_seat_name');
-      } else {
-        await client.query(
-          'CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name ON room_seats(room_id, lower(name)) WHERE released_at IS NULL',
-        );
-      }
-      await client.query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity = $3', [HALL_CAPACITY, 'hall', 32]);
-      await client.query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity <> $1', [MAX_USER_ROOM_CAPACITY, 'room']);
-      await client.query(
-        "INSERT INTO meta(key, value) VALUES ('storage_mode', 'postgres') ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-      );
+      await applyPgDataRules((sql, params) => client.query(sql, params));
     } finally {
       await client.query('SELECT pg_advisory_unlock(hashtext($1))', ['cortico-world-parlor-schema']);
     }
   });
+};
+
+/**
+ * 版本迁移之外的「数据兜底」：每次打开都对一遍，可重复执行。
+ *
+ * 迁移工具导入完也要跑一遍——它启动时 `migrate()` 看到的是空库（那时
+ * `global_identity` 还没搬过来，建的是「同名唯一」索引），导入之后必须按来源库的
+ * 真实开关重来一次。
+ */
+export const applyPgDataRules = async (
+  query: (sql: string, params?: unknown[]) => Promise<unknown>,
+): Promise<void> => {
+  const global = await query("SELECT 1 FROM meta WHERE key = 'global_identity' AND value = '1'") as { rowCount?: number; rows?: unknown[] } | unknown[];
+  const enabled = Array.isArray(global) ? global.length > 0 : Number((global as { rowCount?: number })?.rowCount ?? 0) > 0;
+  if (enabled) {
+    await query('DROP INDEX IF EXISTS ux_active_seat_name');
+  } else {
+    await query(
+      'CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name ON room_seats(room_id, lower(name)) WHERE released_at IS NULL',
+    );
+  }
+  await query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity = $3', [HALL_CAPACITY, 'hall', 32]);
+  await query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity <> $1', [MAX_USER_ROOM_CAPACITY, 'room']);
+  await query(
+    "INSERT INTO meta(key, value) VALUES ('storage_mode', 'postgres') ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+  );
 };
 
 /** 按库的类型分派。 */

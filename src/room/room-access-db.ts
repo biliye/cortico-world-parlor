@@ -215,6 +215,13 @@ export const expireInvitations = async (db: Db, now: number): Promise<number> =>
   return Number(result.changes);
 };
 
+/**
+ * 过期的先标掉，再读还没过期的。
+ *
+ * 读的条件里**同时**带 `expires_at > now`：标过期与读列表是两条语句，PG 下别的连接
+ * 完全可能在这中间插进来（比如同一秒接受一条刚要过期的邀请）。带上时间条件以后，
+ * 就算那边的 UPDATE 还没落地，这一份列表也不会把过期邀请当成可用的。
+ */
 export const pendingInvitationsForRoom = async (db: Db, roomId: string, now: number): Promise<InvitationView[]> => {
   await expireInvitations(db, now);
   const rows = await db.prepare(
@@ -224,9 +231,9 @@ export const pendingInvitationsForRoom = async (db: Db, roomId: string, now: num
        LEFT JOIN rooms r ON r.id = i.room_id
        LEFT JOIN coos inv ON inv.id = i.invited_by
        LEFT JOIN coos tgt ON tgt.id = i.target_coo_id
-      WHERE i.room_id = ? AND i.status = 'pending'
+      WHERE i.room_id = ? AND i.status = 'pending' AND i.expires_at > ?
       ORDER BY i.created_at`,
-  ).all(roomId) as unknown as InvitationRow[];
+  ).all(roomId, now) as unknown as InvitationRow[];
   return rows.map(toInvitationView);
 };
 
@@ -239,9 +246,9 @@ export const pendingInvitationsForCoo = async (db: Db, cooId: string, now: numbe
        LEFT JOIN rooms r ON r.id = i.room_id
        LEFT JOIN coos inv ON inv.id = i.invited_by
        LEFT JOIN coos tgt ON tgt.id = i.target_coo_id
-      WHERE i.target_coo_id = ? AND i.status = 'pending'
+      WHERE i.target_coo_id = ? AND i.status = 'pending' AND i.expires_at > ?
       ORDER BY i.created_at`,
-  ).all(cooId) as unknown as InvitationRow[];
+  ).all(cooId, now) as unknown as InvitationRow[];
   return rows.map(toInvitationView);
 };
 

@@ -176,6 +176,15 @@ const isBlockedPort = (port: number): boolean => (
   port < 1024 || BLOCKED_PORTS.has(port) || (port >= 6665 && port <= 6669)
 );
 
+/**
+ * 时钟的兜底拍：就算所有客厅都说「没东西要推进」，最多睡这么久也要醒一次，
+ * 兜住漏掉的 poke（比如别处直接改了库）。有牌局在跑时这一拍只是一次空扫：
+ * 没到点的桌不进 hydrate、不查库，省下来的正是每桌每秒的那份开销。
+ */
+const CLOCK_SAFETY_MS = 1_000;
+/** 一张桌、一条承诺都没有时的空扫间隔：只是看一眼有没有新席位/新牌局。 */
+const CLOCK_IDLE_MS = 10_000;
+
 const messageOf = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
 );
@@ -220,7 +229,6 @@ export class WorldServer {
   private baseUrl = '';
   private readonly sse = new Map<string, Set<SseClient>>();
   private pumpTimer?: NodeJS.Timeout;
-  private clockTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
   private janitorTimer?: NodeJS.Timeout;
   private janitorFirstTimer?: NodeJS.Timeout;
@@ -241,6 +249,9 @@ export class WorldServer {
   private pumping = false;
   private clocking = false;
   private closing = false;
+  /** 时钟是「睡到下一次要推进的时刻」的自调度定时器，不是每秒 setInterval。 */
+  private clockTimer?: NodeJS.Timeout;
+  private clockAt = 0;
   /** 有新事件的客厅：提交后立刻推，不等节拍。 */
   private readonly dirtyRooms = new Set<string>();
   private pumpScheduled = false;
@@ -345,10 +356,9 @@ export class WorldServer {
       void this.pump().catch((error) => { console.error('parlor: 推送循环出错', error); });
     }, 400);
     this.pumpTimer.unref?.();
-    this.clockTimer = setInterval(() => {
-      void this.tickClock().catch((error) => { console.error('parlor: 客厅时钟出错', error); });
-    }, 1000);
-    this.clockTimer.unref?.();
+    // 时钟不再每秒空转：睡到「下一次要推进的时刻」。动作提交后会 poke 一次，
+    // 所以新产生的更早截止不会等满这一觉。
+    this.scheduleClock(this.now());
     // 健康心跳：只反映「进程和数据库都能写」。有未结束牌局时每 5 秒一次。
     this.heartbeatTimer = setInterval(() => {
       void this.heartbeat().catch((error) => { console.error('parlor: 健康心跳写入失败', error); });
@@ -372,8 +382,9 @@ export class WorldServer {
     this.closing = true;
     if (this.pumpTimer) clearInterval(this.pumpTimer);
     this.pumpTimer = undefined;
-    if (this.clockTimer) clearInterval(this.clockTimer);
+    if (this.clockTimer) clearTimeout(this.clockTimer);
     this.clockTimer = undefined;
+    this.clockAt = 0;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
     // 等正在跑的推送/时钟收尾：它们的 await 还挂在库上，直接关池会报
@@ -523,15 +534,45 @@ export class WorldServer {
   }
 
   /**
-   * 每秒：牌桌超时、承诺到期、余额补给。
-   * 没人访问的客厅也要走到：先按「有活跃席位 / 有到期承诺」把 host 建出来。
+   * 睡到下一次需要推进的时刻。同一时刻已经有更早的定时器就不动它；
+   * 运行期 poke 进来的更早时刻会把这一觉叫醒。
+   */
+  private scheduleClock(at: number): void {
+    if (this.closing) return;
+    if (this.clockTimer && this.clockAt <= at) return;
+    if (this.clockTimer) clearTimeout(this.clockTimer);
+    this.clockAt = at;
+    this.clockTimer = setTimeout(() => {
+      this.clockTimer = undefined;
+      this.clockAt = 0;
+      void this.tickClock().catch((error) => { console.error('parlor: 客厅时钟出错', error); });
+    }, Math.max(0, at - this.now()));
+    this.clockTimer.unref?.();
+  }
+
+  /**
+   * 有事刚提交（出牌、开桌、承诺）：让时钟马上重算一次。
+   * 错过这一下也不会错—错误只是多睡一会儿，兜底扫描会补上。
+   */
+  pokeClock(): void {
+    this.scheduleClock(this.now());
+  }
+
+  /**
+   * 一次时钟推进：牌桌超时、承诺到期、余额补给。
+   * 没人访问的客厅也要走到：先按「有活跃席位 / 有到期承诺 / 有未结束牌局」把 host 建出来。
+   * 跑完按各客厅给出的下一拍重新睡；没东西要推进就睡到兜底扫描。
    */
   private async tickClock(): Promise<void> {
     if (this.closing) return;
-    // 上一轮还没跑完（库慢）就跳过这一轮：同一个超时不能连做两次。
-    if (this.clocking) return;
+    // 上一轮还没跑完（库慢）就跳过这一轮，但要把下一拍排上，别把链断了。
+    if (this.clocking) {
+      this.scheduleClock(this.now() + 50);
+      return;
+    }
     this.clocking = true;
     const now = this.now();
+    let next: number | undefined;
     try {
       const occupied = await this.db.prepare(
         'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
@@ -540,10 +581,20 @@ export class WorldServer {
         `SELECT DISTINCT room_id FROM ledger_entries
           WHERE kind = 'promise' AND due_at IS NOT NULL AND due_at <= ? AND room_id IS NOT NULL`,
       ).all(now) as { room_id: string }[];
-      for (const row of [...occupied, ...due]) await this.host(row.room_id);
+      // 席位可能都走了，但牌局还挂着：这些客厅也得继续推进。
+      const tables = await this.db.prepare(
+        "SELECT DISTINCT room_id FROM tables WHERE status IN ('open','bidding','playing')",
+      ).all() as { room_id: string }[];
+      for (const row of [...occupied, ...due, ...tables]) await this.host(row.room_id);
       for (const host of this.hosts.values()) {
         try { await host.tickClock(now); } catch (error) {
           console.error('parlor: 客厅时钟出错', error);
+        }
+        try {
+          const at = await host.nextWakeAt(now);
+          if (at !== undefined && (next === undefined || at < next)) next = at;
+        } catch (error) {
+          console.error('parlor: 客厅下一次推进时刻算不出来', error);
         }
       }
       if (now - this.lastPrune >= 3_600_000) {
@@ -555,6 +606,14 @@ export class WorldServer {
     } finally {
       this.clocking = false;
     }
+    // 运行期间有人 poke 过就一直排着更早的一拍，别再往后推。
+    if (this.clockTimer) return;
+    // 有牌局/承诺：一拍一秒（与旧的每秒 tick 同节奏，但没到点的桌不 hydrate）；
+    // 什么都没有：十秒空扫一次，等席位或牌局出现。
+    const at = next !== undefined
+      ? Math.min(next, now + CLOCK_SAFETY_MS)
+      : now + CLOCK_IDLE_MS;
+    this.scheduleClock(at);
   }
 
   /**
@@ -1190,6 +1249,8 @@ export class WorldServer {
             tables = await host.markTableAuto(target.cooId);
             removedSeat = await host.remove(target.cooId, now) !== null;
           });
+          // 席位一变、托管一开，下一拍就该重算（托管要按拍代打）。
+          this.pokeClock();
           json(res, 200, { ok: true, cooId: target.cooId, name: target.name, removedSeat, tables });
           return;
         }
@@ -1335,7 +1396,7 @@ export class WorldServer {
       json(res, 200, { room: target.id, token: joined.token, seat: await seatOfRow(this.db, target.id, joined.seat),
         identity: { cooId: person.cooId, cooSecret: 'seat-only' } }); return;
     }
-    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|history|action|mail|stream|replay|table-log)$/);
+    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|table|history|action|mail|stream|replay|table-log)$/);
     if (route) {
       const roomId = route[1];
       const action = route[2];
@@ -1356,6 +1417,7 @@ export class WorldServer {
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
+      this.pokeClock();
       const account = await this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: this.defaultRoomId,
@@ -1398,7 +1460,7 @@ export class WorldServer {
       return;
     }
 
-    const alias = url.pathname.match(/^\/v1\/(room|history|action|mail|stream|replay)$/);
+    const alias = url.pathname.match(/^\/v1\/(room|table|history|action|mail|stream|replay)$/);
     if (alias) {
       await this.roomRoute(req, res, url, this.defaultRoomId, alias[1], method);
       return;
@@ -1636,6 +1698,7 @@ export class WorldServer {
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
+      this.pokeClock();
       const account = await this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: roomId,
@@ -1688,6 +1751,15 @@ export class WorldServer {
       return;
     }
 
+    if (action === 'table' && method === 'GET') {
+      // 牌桌增量：只补当前桌需要的三块。整份快照（含席位、事件、账本、信箱）仍走 /room。
+      const seat = await this.seatAuth(req, roomId);
+      const tableId = url.searchParams.get('table')?.trim() || undefined;
+      const slice = await (await this.host(roomId)).tableSlice(seat.cooId, tableId);
+      json(res, 200, { ok: true, ...slice });
+      return;
+    }
+
     if (action === 'history' && method === 'GET') {
       const seat = await this.seatAuth(req, roomId);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
@@ -1721,6 +1793,10 @@ export class WorldServer {
       let revision: number | undefined;
       let receiptSeq: number | undefined;
       let closed: boolean | undefined;
+      /** 这次动作碰到的桌（离桌也要：动之前先记下）。回执按它附桌视图。 */
+      let touchedTable: string | undefined;
+      /** 上/下桌、开桌这种会改桌列表的动作：回执连 tables 一起带。 */
+      let tablesChanged = false;
 
       if (type === 'say') {
         await host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
@@ -1774,6 +1850,8 @@ export class WorldServer {
         receiptSeq = opened.receipt.seq;
         deadline = opened.receipt.deadline;
         turn = opened.receipt.turn;
+        touchedTable = opened.tableId;
+        tablesChanged = true;
       } else if (type === 'table_join') {
         // 客户端自报协议能力版本（狼人杀开局前用它校验每只 Coo）；旧版不带 = 旧版。
         const clientVersion = headerValue(req, 'x-parlor-client').trim() || undefined;
@@ -1783,11 +1861,17 @@ export class WorldServer {
         receiptSeq = joined.receipt.seq;
         deadline = joined.receipt.deadline;
         turn = joined.receipt.turn;
+        touchedTable = joined.tableId;
+        tablesChanged = true;
       } else if (type === 'table_leave') {
+        // 离桌后这张桌可能就被收起来了；先记下桌号，回执照样能给出「那张桌已经不在了」。
+        const before = await host.tablePublic(tableArg, seat.cooId);
         const left = await host.leaveTable(seat.cooId, tableArg, requestId);
         revision = left.receipt.revision;
         receiptSeq = left.receipt.seq;
         closed = left.closed;
+        touchedTable = before ? (before.tableId ?? before.id) : undefined;
+        tablesChanged = true;
       } else if (type === 'table_start') {
         const receipt = await host.startTable(seat.cooId, tableArg, requestId);
         tableId = receipt.tableId;
@@ -1796,6 +1880,8 @@ export class WorldServer {
         seats = receipt.seats;
         deadline = receipt.deadline;
         turn = receipt.turn;
+        touchedTable = receipt.tableId;
+        tablesChanged = true;
       } else {
         // 牌桌动作按注册表分发：加一个游戏不用再改这里，只要它在 games/registry.ts 里登记过。
         const game = gameByActionType(type);
@@ -1818,6 +1904,7 @@ export class WorldServer {
           receiptSeq = receipt.seq;
           deadline = receipt.deadline;
           turn = receipt.turn;
+          touchedTable = receipt.tableId;
         } else if (type === 'monopoly') {
           throw new HttpError(400, '这台服务器只跑骰子与斗地主；大富翁请用旧服务器');
         } else {
@@ -1826,6 +1913,20 @@ export class WorldServer {
       }
 
       const ts = this.now();
+      // 动作可能改了下一次截止（换手、进入下一段、结算）：叫时钟重算，别等满兜底那一拍。
+      this.pokeClock();
+      // 动作碰到桌就附一份增量：客户端拿回执直接重画，不必再拉整份快照。
+      // 没有桌的动作（说话、送礼、私聊）不附，回执形状与旧版一致。
+      const tablePatch = touchedTable !== undefined
+        ? await (async () => {
+          const slice = await host.tableSlice(seat.cooId, touchedTable);
+          return {
+            ...(tablesChanged ? { tables: slice.tables } : {}),
+            table: slice.table,
+            tablePrivate: slice.tablePrivate,
+          };
+        })()
+        : {};
       json(res, 200, {
         ok: true,
         seq: receiptSeq ?? await host.latest(),
@@ -1840,6 +1941,7 @@ export class WorldServer {
         ...(turn ? { turn } : {}),
         ...(text ? { text } : {}),
         ...(closed !== undefined ? { closed } : {}),
+        ...tablePatch,
       });
       return;
     }

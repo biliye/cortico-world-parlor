@@ -974,6 +974,27 @@ export class WerewolfTable implements TableEngine {
     }
   }
 
+  /**
+   * 引擎自己知道的下一个「真的会推进」的时刻。夜晚分 A/B 两段：公开截止是天亮
+   * （B 段结束），但 A 段结束时就要锁刀口——所以这里给的是阶段内部的截止，
+   * 不是 `publicDeadline()`。发言段还有「读完三秒进入下一位」的 readUntil。
+   */
+  nextWakeAt(): number | undefined {
+    if (this.status !== 'playing') return undefined;
+    const phase = this.phase;
+    switch (phase.kind) {
+      case 'reveal':
+      case 'night':
+      case 'vote':
+      case 'shoot':
+        return phase.deadline;
+      case 'speech':
+        return phase.stage === 'speak' ? phase.deadline : phase.readUntil;
+      default:
+        return undefined;
+    }
+  }
+
   /** A 段到点：锁定刀口（相对多数唯一，否则空刀），进入 B 段。对外没有事件。 */
   private closeNightA(now: number): TableStep {
     const night = this.night!;

@@ -83,6 +83,7 @@
     "serve": "node --experimental-strip-types scripts/serve.ts",
     "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
     "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts",
+    "migrate:pg": "node --experimental-transform-types scripts/migrate-sqlite-to-pg.ts",
     "test:pg": "vitest run --config vitest.pg.config.ts"
   },
   "devDependencies": {

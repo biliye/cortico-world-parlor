@@ -35,6 +35,8 @@ import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 
 const OPEN_MS = 10 * 60_000;
+/** 托管席位（Coo 掉线/被移出）由脚本代打的节拍：一秒一拍，与旧的每秒 tick 一致。 */
+const AUTO_TICK_MS = 1_000;
 const MAX_TABLE_TEXT = 400;
 /** 一房同时未结束的桌数上限（30 人分 10 桌斗地主）。 */
 export const MAX_LIVE_TABLES = 10;
@@ -776,6 +778,8 @@ export class TableHost {
   async tick(): Promise<void> {
     for (const table of this.liveTables()) {
       if (table.frozen) continue;
+      // 没到点的桌直接跳过：不 hydrate、不查库——这是「按需调度」省下来的主要开销。
+      if (!this.tableDue(table, this.now())) continue;
       // 一轮 tick 对一张桌的推进与玩家动作互斥。
       const releaseTable = await this.lockTable(table.id);
       try {
@@ -804,6 +808,42 @@ export class TableHost {
         releaseTable();
       }
     }
+  }
+
+  /** 这张桌现在到点了吗；没到点的桌 tick 直接跳过。 */
+  private tableDue(table: LiveTable, now: number): boolean {
+    if (table.engine.status === 'open') return now >= table.openDeadlineAt;
+    // 托管席位要「轮到就代打」：tick 被叫到就跑；叫醒的节奏由 nextWakeAt 控制（每秒一拍）。
+    if (table.autoSeats.size > 0) return true;
+    const wake = table.engine.nextWakeAt;
+    // 引擎没实现查询：退回每秒 tick，语义与以前完全一致。
+    if (typeof wake !== 'function') return true;
+    const at = wake.call(table.engine, now);
+    return at === undefined || at <= now;
+  }
+
+  /**
+   * 下一次需要推进这张客厅里任何一张桌的时刻。没有桌、或桌上的引擎都说不用再推进
+   * 就是 undefined。只看内存里的引擎，不查库、不 hydrate。
+   */
+  nextWakeAt(now = this.now()): number | undefined {
+    let next: number | undefined;
+    for (const table of this.liveTables()) {
+      if (table.frozen) continue;
+      let at: number | undefined;
+      if (table.engine.status === 'open') {
+        at = table.openDeadlineAt;
+      } else if (table.autoSeats.size > 0) {
+        // 托管席位是「按拍代打」：给下一拍，绝不给「现在」，否则网关会空转。
+        at = now + AUTO_TICK_MS;
+      } else {
+        const wake = table.engine.nextWakeAt;
+        at = typeof wake === 'function' ? wake.call(table.engine, now) : now;
+      }
+      if (at === undefined) continue;
+      if (next === undefined || at < next) next = at;
+    }
+    return next;
   }
 
   /** 桌内说话：只给那一刻坐在桌上的人（和回放）看。 */

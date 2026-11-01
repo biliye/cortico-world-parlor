@@ -32,6 +32,16 @@ const state = {
   stream: null,
   reconnect: null,
   refreshTimer: null,
+  /** 牌桌增量：一个在途、后续合并成一次；syncEpoch 挡住比回执更旧的响应。 */
+  tableTimer: null,
+  tableBusy: false,
+  tableQueued: false,
+  syncEpoch: 0,
+  /** 回执已经覆盖到的房间游标：自己动作的回显事件不用再补一次增量。 */
+  appliedSeq: 0,
+  ledgerTimer: null,
+  ledgerBusy: false,
+  ledgerQueued: false,
   mounted: null,
   shell: false,
   busy: false,
@@ -211,6 +221,7 @@ async function tryParentEntry(key = '', options = {}) {
     if (body.globalEntry) { beginGlobalEntry(body.globalEntry, { room: body.room, parent: true }); return true; }
     if (options.hadSeat) {
       state.latest = 0;
+      state.appliedSeq = 0;
       state.seen = new Set();
       state.log = [];
       state.snap = null;
@@ -299,7 +310,7 @@ function roomPath(path) {
   const room = currentRoom();
   if (!room) return path;
   const [base, query] = path.split('?');
-  const match = /^\/v1\/(room|action|mail|replay|history|stream)$/.exec(base);
+  const match = /^\/v1\/(room|table|action|mail|replay|history|stream)$/.exec(base);
   if (!match) return path;
   let q = query || '';
   if (match[1] === 'mail' && !/(^|&)all=/.test(q)) q = q ? q + '&all=1' : 'all=1';
@@ -464,6 +475,172 @@ function scheduleHallRefresh() {
   }, 1200);
 }
 
+/* —— 牌桌增量：自己的回执直接用，别人的事件只补当前桌 —— */
+
+/**
+ * 迟到的桌视图不能盖掉更新的一版：同一张桌按 revision 比，不同桌各管各的。
+ * 表与私视图都带 revision；老服务器没有就按「可以替换」处理。
+ */
+function newerTable(incoming, current) {
+  if (!incoming) return false;
+  if (!current) return true;
+  const nextId = tableIdOf(incoming);
+  const haveId = tableIdOf(current);
+  if (nextId && haveId && nextId !== haveId) return true;
+  const next = typeof incoming.revision === 'number' ? incoming.revision : 0;
+  const have = typeof current.revision === 'number' ? current.revision : 0;
+  return next >= have;
+}
+
+/** 桌列表里换掉同一张桌（没有就补上）；别的行不碰。 */
+function patchTableEntry(table) {
+  const snap = state.snap;
+  if (!snap || !table) return;
+  const id = tableIdOf(table);
+  if (!id) {
+    snap.table = table;
+    return;
+  }
+  if (!Array.isArray(snap.tables)) snap.tables = [];
+  const index = snap.tables.findIndex((entry) => tableIdOf(entry) === id);
+  if (index < 0) snap.tables.push(table);
+  else if (newerTable(table, snap.tables[index])) snap.tables[index] = table;
+}
+
+/**
+ * 把一份增量贴进本地快照：tables 是服务器给的整份桌列表（只在内存里算，不查库），
+ * table 是「我的桌」，tablePrivate 是「我的私视图」。返回动没动，动过才重画。
+ */
+function applyTablePatch(patch) {
+  const snap = state.snap;
+  if (!snap || !patch) return false;
+  let touched = false;
+  if (Array.isArray(patch.tables)) {
+    snap.tables = patch.tables;
+    touched = true;
+  }
+  if ('table' in patch) {
+    const next = patch.table || null;
+    if (!next) {
+      // 服务器说「你的桌没了」才清；in-flight 的旧响应由 syncEpoch 提前挡掉。
+      if (snap.table) {
+        snap.table = null;
+        touched = true;
+      }
+    } else if (newerTable(next, snap.table)) {
+      snap.table = next;
+      touched = true;
+    }
+    if (next) patchTableEntry(next);
+  }
+  if ('tablePrivate' in patch) {
+    const next = patch.tablePrivate || null;
+    if (next ? newerTable(next, snap.tablePrivate) : true) {
+      if (snap.tablePrivate !== next) touched = true;
+      snap.tablePrivate = next;
+    }
+  }
+  if (touched) normalizeWatch();
+  return touched;
+}
+
+/** 只重画跟着牌桌变的那几块；聊天记录、席位名单与信箱不归它管。 */
+function renderTableParts() {
+  if (!state.shell || !state.snap) return;
+  renderTopbar();
+  renderSeatCard();
+  renderLedger();
+  renderTablesRail();
+  renderBanner();
+  renderChat();
+  renderTableInfo();
+  if (state.view === 'table') {
+    renderTableHead();
+    renderGame();
+  }
+  document.title = (state.snap.tablePrivate && state.snap.tablePrivate.yourTurn ? '轮到你 · 客厅' : '客厅 · 一起玩');
+}
+
+/** 一个在途、后续请求合并成一次；期间有回执落地就丢掉这份旧的。 */
+async function refreshTable() {
+  if (!state.cfg || !state.snap) return;
+  // 自己的动作：事件常常比 POST 的回执先到（SSE 是另一条连接）。回执落地后
+  // 本地状态已经覆盖到最新游标，这一趟就不用跑了。
+  if (state.appliedSeq > 0 && state.appliedSeq >= state.latest) return;
+  if (state.tableBusy) {
+    state.tableQueued = true;
+    return;
+  }
+  state.tableBusy = true;
+  try {
+    const epoch = state.syncEpoch;
+    const slice = await api('/v1/table');
+    if (epoch !== state.syncEpoch) return;
+    if (applyTablePatch(slice)) renderTableParts();
+  } catch (error) {
+    if (error && error.status === 401) {
+      void handleExpiredSeat(state.cfg ? state.cfg.token : '');
+      return;
+    }
+    // 老服务器没有桌接口、或网络抖了一下：退回整份快照重新同步。
+    scheduleRefresh(0);
+  } finally {
+    state.tableBusy = false;
+    if (state.tableQueued) {
+      state.tableQueued = false;
+      scheduleTableRefresh(0);
+    }
+  }
+}
+
+function scheduleTableRefresh(delay = 120) {
+  if (!state.cfg) return;
+  if (state.tableTimer) return;
+  state.tableTimer = setTimeout(() => {
+    state.tableTimer = null;
+    void refreshTable();
+  }, delay);
+}
+
+/** 筹码只在开局押注、结算、礼物这几处变；单独取一次账本，不拖整份快照。 */
+async function refreshLedger() {
+  if (!state.cfg || !state.snap) return;
+  if (state.ledgerBusy) {
+    state.ledgerQueued = true;
+    return;
+  }
+  state.ledgerBusy = true;
+  try {
+    const body = await api('/v1/me/ledger');
+    if (body && body.ledger) {
+      state.snap.ledger = body.ledger;
+      renderTopbar();
+      renderSeatCard();
+      renderLedger();
+    }
+  } catch { /* 拿不到就等下一次整份快照 */ } finally {
+    state.ledgerBusy = false;
+    if (state.ledgerQueued) {
+      state.ledgerQueued = false;
+      scheduleLedgerRefresh(0);
+    }
+  }
+}
+
+function scheduleLedgerRefresh(delay = 200) {
+  if (!state.cfg) return;
+  if (state.ledgerTimer) return;
+  state.ledgerTimer = setTimeout(() => {
+    state.ledgerTimer = null;
+    void refreshLedger();
+  }, delay);
+}
+
+/** 账本变化才动筹码的地方：牌局结算、作废退款。 */
+function touchesLedger(type) {
+  return type === 'parlor.table.end' || type === 'parlor.table.cancel';
+}
+
 /** 服务器按 requestId 去重的动作：网络掉线时可以原样重发一次。 */
 const IDEMPOTENT_ACTIONS = new Set([
   'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
@@ -547,8 +724,19 @@ async function act(body) {
       && receipt && typeof receipt.tableId === 'string' && receipt.tableId) {
       state.watchTableId = receipt.tableId;
     }
-    await refreshSnapshot();
-    render();
+    // 回执里已经带了桌、私视图（有的还带整份桌列表）：直接贴上去重画，不再拉整份快照。
+    // 旧服务器没有这些字段，就还按原来的路：拉一份快照。
+    if (receipt && ('table' in receipt || 'tablePrivate' in receipt || Array.isArray(receipt.tables))) {
+      state.syncEpoch += 1;
+      if (typeof receipt.seq === 'number') state.appliedSeq = Math.max(state.appliedSeq, receipt.seq);
+      applyTablePatch(receipt);
+      renderTableParts();
+      // 开局押注会立刻扣筹码：账本单独补一次，别为它拉整份快照。
+      if (payload.type === 'table_start') scheduleLedgerRefresh(0);
+    } else {
+      await refreshSnapshot();
+      render();
+    }
     return receipt;
   } catch (error) {
     showToast(error.message || '动作没成功', 'bad');
@@ -623,8 +811,14 @@ function handleEvent(event) {
   const type = event.type || '';
   if (type === 'parlor.say' || type === 'parlor.table.say') return;
   const seatChange = type === 'parlor.joined' || type === 'parlor.left';
-  if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')
-    || type === 'parlor.ledger' || type === 'parlor.whisper') {
+  // 结算/作废会改筹码；账本单独取，不跟牌桌增量绑在一起。
+  if (touchesLedger(type)) scheduleLedgerRefresh();
+  if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')) {
+    // 桌事件只补当前桌：别人的出牌、超时代打、开局与结算都走这条。
+    // 自己的动作已经用回执重画过（回执的 seq 覆盖到这儿），别再多跑一趟网络。
+    if (event.seq > state.appliedSeq) scheduleTableRefresh();
+  } else if (type === 'parlor.ledger' || type === 'parlor.whisper') {
+    // 收礼/承诺/私聊要动信箱未读，这些还在整份快照里。
     scheduleRefresh();
   } else if (seatChange && (state.view === 'lobby' || state.view === 'hall')) {
     // 人名单在客厅页与大厅页显示；大厅那份还要拿快照的 online 筛掉离线，进出都要跟着刷。
@@ -3040,6 +3234,7 @@ function renderJoin(message = '') {
         cooSecret: body.identity.cooSecret,
       });
       state.latest = 0;
+      state.appliedSeq = 0;
       state.seen = new Set();
       state.log = [];
       await boot();

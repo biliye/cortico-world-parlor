@@ -203,6 +203,12 @@ export class DiceTable implements TableEngine {
     }]);
   }
 
+  /** 骰子只有一个截止：当前回合的 deadline。等人开局不算（那是宿主看的开桌截止）。 */
+  nextWakeAt(now: number): number | undefined {
+    if (this.status !== 'playing') return undefined;
+    return this.deadline;
+  }
+
   view(seatId: string): TablePrivate | null {
     const seat = this.seats.find((entry) => entry.id === seatId);
     if (!seat) return null;
