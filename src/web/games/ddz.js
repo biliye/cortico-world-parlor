@@ -18,6 +18,8 @@ export function mountDdz(root, ctx) {
   let clearBtn = null;
   let selectedLabel = null;
   let painted = '';
+  /** 没坐在桌上时（围观、被邀请来看、或者这一局没赶上）：三家都要摆，只是没有手牌。 */
+  let spectating = false;
 
   // 窗口一变宽变窄，手牌要重新收一遍，不然会顶出桌沿。
   const onResize = () => {
@@ -75,9 +77,13 @@ export function mountDdz(root, ctx) {
 
     const grid = el('div', 'ddz-grid');
     const mine = seats.findIndex((seat) => seat.id === me.id);
-    const mySeat = mine >= 0 ? seats[mine] : null;
-    const leftSeat = mine >= 0 ? seats[(mine + 1) % seats.length] : seats[1] || null;
-    const rightSeat = mine >= 0 ? seats[(mine + seats.length - 1) % seats.length] : seats[2] || null;
+    // 观战没有自己的席：以 0 号位当轴。原先这里留空，于是左右分别是 1、2 号位，
+    // 0 号位（开桌的人，常常正是地主）整席连人带牌都没地方画。
+    const anchor = mine >= 0 ? mine : 0;
+    spectating = mine < 0;
+    const mySeat = seats[anchor] || null;
+    const leftSeat = seats.length ? seats[(anchor + 1) % seats.length] : null;
+    const rightSeat = seats.length ? seats[(anchor + seats.length - 1) % seats.length] : null;
     if (leftSeat) grid.append(seatColumn(leftSeat, table, 'left'));
     grid.append(centerArea(table, mySeat, leftSeat, rightSeat, myTurn));
     if (rightSeat) grid.append(seatColumn(rightSeat, table, 'right'));
@@ -118,10 +124,10 @@ export function mountDdz(root, ctx) {
         '地主 ' + (view.names.get(table.landlord) || table.landlord)));
     }
     const left = el('span', 'ddz-seat-mine');
-    left.append(document.createTextNode(
-      (view.names.get(view.me.id) || view.me.name)
-      + (priv && Array.isArray(priv.hand) ? ' · 手牌 ' + priv.hand.length + ' 张' : ''),
-    ));
+    left.append(document.createTextNode(spectating
+      ? '旁观中'
+      : (view.names.get(view.me.id) || view.me.name)
+        + (priv && Array.isArray(priv.hand) ? ' · 手牌 ' + priv.hand.length + ' 张' : '')));
     bar.append(left);
     return bar;
   }
@@ -227,9 +233,10 @@ export function mountDdz(root, ctx) {
     if (!seat) return slot;
     const entry = entries.get(seat.id);
     const name = el('span', 'ddz-play-name');
-    name.append(document.createTextNode(side === 'me'
-      ? '你'
-      : (view.names.get(seat.id) || seat.name)));
+    const whose = side === 'me' && !spectating ? '你' : (view.names.get(seat.id) || seat.name);
+    // 观战这一席没有旁边的牌堆，剩几张只能写在这儿。
+    const left = spectating && side === 'me' ? ' · 剩 ' + (Math.max(0, Number(seat.cardsLeft) || 0)) + ' 张' : '';
+    name.append(document.createTextNode(whose + left));
     if (entry && entry.label) name.append(document.createTextNode(' · ' + entry.label));
     slot.append(name);
     const cards = el('div', 'ddz-play-cards');

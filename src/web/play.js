@@ -5,7 +5,7 @@ import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
   isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
-import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261101';
+import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261102';
 import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
 import { createRoomCarousel } from './room-carousel.js';
 import { supportLink } from './support-link.js';
@@ -1109,7 +1109,7 @@ function buildShell() {
   const chatToggle = btn('聊天', () => toggleChat(), { ghost: true, small: true });
   chatToggle.classList.add('chat-toggle');
   chatToggle.setAttribute('aria-controls', 'chatPanel');
-  topRight.append(conn, mailBtn, dmBtn, leaveBtn, topMe, themeButton(), chatToggle, menuBtn);
+  topRight.append(conn, mailBtn, dmBtn, leaveBtn, topMe, themePicker(), chatToggle, menuBtn);
   top.append(brand, breadcrumb, roomPill, viewSwitch, topRight);
 
   const banner = el('div', 'banner');
@@ -1473,25 +1473,32 @@ function brandNode() {
   return brand;
 }
 
-function themeButton() {
-  const button = btn('', () => window.parlorTheme?.toggle(), { ghost: true, small: true });
-  button.classList.add('theme-toggle');
-  button.setAttribute('role', 'switch');
-  button.setAttribute('aria-label', '浅色模式');
-  paintThemeButton(button);
-  return button;
+/** 外观选单：深色 / 浅色 / 奶油。切换只换颜色，桌子里的牌、草稿和焦点都不动。 */
+const THEME_LABELS = [['dark', '深色'], ['light', '浅色'], ['cream', '奶油']];
+
+function themePicker() {
+  const wrap = el('label', 'theme-picker');
+  wrap.append(icon('sun'));
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', '外观');
+  for (const [value, label] of THEME_LABELS) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  }
+  select.value = (window.parlorTheme && window.parlorTheme.value) || 'dark';
+  select.addEventListener('change', () => window.parlorTheme?.set(select.value));
+  wrap.append(select);
+  return wrap;
 }
 
-function paintThemeButton(button) {
-  const light = document.documentElement.dataset.theme === 'light';
-  button.setAttribute('aria-checked', String(light));
-  button.title = light ? '切换为深色模式' : '切换为浅色模式';
-  button.replaceChildren(icon(light ? 'sun' : 'moon'), el('span', 'theme-toggle-label', light ? '浅色' : '深色'));
+function syncThemePickers() {
+  const value = (window.parlorTheme && window.parlorTheme.value) || 'dark';
+  document.querySelectorAll('.theme-picker select').forEach((select) => { select.value = value; });
 }
 
-document.addEventListener('parlor:themechange', () => {
-  document.querySelectorAll('.theme-toggle').forEach(paintThemeButton);
-});
+document.addEventListener('parlor:themechange', syncThemePickers);
 
 function sheetGrip() {
   const grip = el('div', 'sheet-grip');
@@ -3502,7 +3509,7 @@ function renderJoin(message = '') {
   clear(app);
   const join = el('div', 'join');
   const panel = el('section', 'panel');
-  panel.append(themeButton(), brandNode());
+  panel.append(themePicker(), brandNode());
   panel.append(el('h1', '', state.guestJoin ? '客厅 · 下场玩' : '客厅 · 入口已关闭'));
   if (!state.guestJoin) {
     panel.append(el('p', 'sub', message
@@ -3594,7 +3601,7 @@ function renderOffline(message) {
   clear(app);
   const join = el('div', 'join');
   const panel = el('section', 'panel');
-  panel.append(themeButton(), brandNode());
+  panel.append(themePicker(), brandNode());
   panel.append(el('h1', '', '连不上客厅'));
   panel.append(el('p', 'sub', message || '网络没有通。'));
   const actions = el('div', 'actions');
