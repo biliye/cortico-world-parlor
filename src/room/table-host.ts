@@ -34,7 +34,7 @@ import {
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 
-const OPEN_MS = 10 * 60_000;
+const OPEN_MS = 30 * 60_000;
 /** 托管席位（Coo 掉线/被移出）由脚本代打的节拍：一秒一拍，与旧的每秒 tick 一致。 */
 const AUTO_TICK_MS = 1_000;
 const MAX_TABLE_TEXT = 400;
@@ -55,7 +55,7 @@ export interface TableHostOptions {
   now?: () => number;
   /** 每手时限（测试里调短）。 */
   turnMs?: number;
-  /** 开桌后多久没开局自动收起。 */
+  /** 等人桌连续多久没有入座、退座或桌聊才收起。 */
   openMs?: number;
   /**
    * 启动恢复的基准：最后一次「服务还在正常推进」的时刻。
@@ -637,6 +637,7 @@ export class TableHost {
         table.engine = nextEngine;
         table.revision = nextRevision;
         table.stateJson = nextState;
+        table.openDeadlineAt = now + this.openMs;
       }
     });
     return { event, closed: closing, receipt };
@@ -791,7 +792,7 @@ export class TableHost {
       const now = this.now();
       if (table.engine.status === 'open') {
         if (now < table.openDeadlineAt) continue;
-        await this.abort(table, 'timeout', `${table.engine.label}桌 ${Math.round(this.openMs / 60_000)} 分钟没开局，已经收起来了。`);
+        await this.abort(table, 'timeout', `${table.engine.label}桌连续 ${Math.round(this.openMs / 60_000)} 分钟没有入座、退座或桌聊，已经收起来了。`);
         continue;
       }
       const draft = await this.draft(table);
@@ -854,6 +855,8 @@ export class TableHost {
   /** 桌内说话：只给那一刻坐在桌上的人（和回放）看。 */
   async say(cooId: string, text: string, tableId?: string, mentions: string[] = []): Promise<RoomEvent> {
     const table = await this.requireMyTable(cooId, tableId);
+    const releaseTable = await this.lockTable(table.id);
+    try {
     const seat = await this.requireSeat(cooId);
     if (table.engine.status === 'ended') throw new HostError('invalid', '这张桌子已经结束了，回客厅说吧');
     if (!table.engine.has(seat.id)) throw new HostError('invalid', '你不在这一桌，回客厅说吧');
@@ -866,15 +869,25 @@ export class TableHost {
     for (const seatId of table.engine.seatIds()) {
       if (await this.seatById(seatId)) seats.push(seatId);
     }
-    return this.events.append(this.roomId, {
+    const now = this.now();
+    return await withTransaction(this.db, async () => {
+    const event = await this.events.append(this.roomId, {
       type: 'parlor.table.say',
-      ts: this.now(),
+      ts: now,
       from: seat.id,
       scope: { kind: 'table', tableId: table.id, seats },
       text: body,
       mentions: mentions.filter((id) => seats.includes(id)),
       data: { name: seat.name, tableId: table.id },
     });
+    if (table.engine.status === 'open') {
+      const deadline = now + this.openMs;
+      await this.db.prepare('UPDATE tables SET deadline_at = ?, updated_at = ? WHERE id = ?').run(deadline, now, table.id);
+      this.db.afterCommit(() => { table.openDeadlineAt = deadline; });
+    }
+    return event;
+    });
+    } finally { releaseTable(); }
   }
 
   // —— 移除/托管 ——
@@ -962,10 +975,12 @@ export class TableHost {
 
   /** 嵌套宿主操作可能只释放 SAVEPOINT；内存只跟随最外层 COMMIT。 */
   private publishState(table: LiveTable, engine: TableEngine, revision: number, stateJson: string, startedAt?: number): void {
+    const openDeadlineAt = this.now() + this.openMs;
     this.db.afterCommit(() => {
       table.engine = engine;
       table.revision = revision;
       table.stateJson = stateJson;
+      if (engine.status === 'open') table.openDeadlineAt = openDeadlineAt;
       if (startedAt !== undefined) table.startedAt = startedAt;
     });
   }
@@ -1281,7 +1296,7 @@ export class TableHost {
         stake: row.stake,
         createdAt: row.created_at,
         ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
-        openDeadlineAt: row.deadline_at ?? row.created_at + this.openMs,
+        openDeadlineAt: row.deadline_at ?? row.updated_at + this.openMs,
         revision: row.revision,
         stateJson: stateTextOf(row.state_json),
         frozen: false,
@@ -1289,7 +1304,7 @@ export class TableHost {
       };
       if (engine.status === 'open') {
         if (now >= live.openDeadlineAt) {
-          await this.abort(live, 'timeout', `${engine.label}桌 ${Math.round(this.openMs / 60_000)} 分钟没开局，已经收起来了。`);
+          await this.abort(live, 'timeout', `${engine.label}桌连续 ${Math.round(this.openMs / 60_000)} 分钟没有活动，已经收起来了。`);
           continue;
         }
         this.tables.set(live.id, live);
@@ -1660,7 +1675,7 @@ export class TableHost {
       `INSERT INTO tables(id, room_id, room_epoch, game, status, host_seat_id, stake, state_json,
          engine_version, turn_seq, revision, state_version, deadline_at, created_at, started_at,
          ended_at, end_reason, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?, NULL, NULL, NULL, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
     ).run(
       table.id,
       this.roomId,
@@ -1673,6 +1688,7 @@ export class TableHost {
       `${table.game}/${table.engine.stateVersion}`,
       table.revision,
       table.engine.stateVersion,
+      table.openDeadlineAt,
       now,
       now,
     );
@@ -1698,7 +1714,7 @@ export class TableHost {
       `${engine.game}/${engine.stateVersion}`,
       revision,
       revision,
-      this.deadlineOf(engine) ?? null,
+      engine.status === 'open' ? now + this.openMs : this.deadlineOf(engine) ?? null,
       now,
       extra.startedAt ?? null,
       extra.endedAt ?? null,

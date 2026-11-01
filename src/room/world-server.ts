@@ -5,7 +5,7 @@
  * 现有旧 World 通过 `/v1/...` 别名落到默认客厅；新客户端走 `/v1/rooms/:id/...`。
  * 牌桌/家长门户/大厅目录还没接进来；这一步先把多房 + 可见区间 + 全局账户跑通。
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -35,8 +35,11 @@ import {
 } from './room-access-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 import { sendWebAsset } from './web-assets.ts';
+import { SupportDb } from './support-db.ts';
 
 export interface WorldServerOptions {
+  /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
+  operatorKey?: string;
   /** 存储后端；不设就是 sqlite（老部署零改动）。 */
   storage?: StorageKind;
   /** SQLite 的库文件；只用于 sqlite 路径。 */
@@ -209,6 +212,7 @@ const roomSummary = async (db: Db, room: RoomRow) => {
 
 export class WorldServer {
   private readonly db: Db;
+  private readonly operatorHash?: Buffer;
   private readonly identityAuthority?: string;
   private readonly publicUrl?: string;
   private readonly registry: IdentityRegistry;
@@ -260,6 +264,7 @@ export class WorldServer {
 
   private constructor(db: Db, options: WorldServerOptions = {}) {
     this.db = db;
+    if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.coo = new CooAccountDb(this.db, { now: this.now });
     this.identityAuthority = options.identityAuthority === 'self' ? 'self'
@@ -773,6 +778,41 @@ export class WorldServer {
     }
     if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
     if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
+
+    if (url.pathname.startsWith('/v1/support/')) {
+      res.setHeader('cache-control', 'no-store');
+      const support = new SupportDb(this.db, this.now);
+      const path = url.pathname.slice('/v1/support/'.length);
+      if (path === 'announcements' && method === 'GET') {
+        await this.cooOrSeat(req);
+        json(res, 200, { announcements: await support.announcements() }); return;
+      }
+      if (path === 'feedback' && (method === 'GET' || method === 'POST')) {
+        const cooId = await this.cooOrSeat(req);
+        if (method === 'GET') { json(res, 200, { feedback: await support.feedback(cooId) }); return; }
+        const body = await readJson(req);
+        const person = await this.personInfo(cooId);
+        json(res, 200, { feedback: await support.submit(cooId, person.name, body.text, body.requestId) }); return;
+      }
+      if (path.startsWith('operator/')) {
+        if (!this.operatorHash) throw new HttpError(503, '运营入口尚未配置');
+        const hash = createHash('sha256').update(bearer(req)).digest();
+        if (!timingSafeEqual(hash, this.operatorHash)) throw new HttpError(403, '运营钥匙不对');
+        if (path === 'operator/feedback' && method === 'GET') {
+          json(res, 200, { feedback: await support.feedback() }); return;
+        }
+        if (path === 'operator/reply' && method === 'POST') {
+          const body = await readJson(req);
+          await support.reply(String(body.id ?? ''), body.text, body.status);
+          json(res, 200, { ok: true }); return;
+        }
+        if (path === 'operator/announcements' && method === 'POST') {
+          const body = await readJson(req);
+          json(res, 200, { announcement: await support.announce(body.text, body.requestId) }); return;
+        }
+      }
+      throw new HttpError(404, '没有这个反馈通道地址');
+    }
 
     if (method === 'GET' && url.pathname === '/healthz') {
       const room = await getRoom(this.db, this.defaultRoomId);
@@ -2343,6 +2383,9 @@ export class WorldServer {
 
   /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
   private serveWeb(pathname: string, req: IncomingMessage, res: ServerResponse): boolean {
+    if (pathname === '/support' || pathname === '/support/') {
+      this.sendWeb('support.html', req, res, true); return true;
+    }
     if (pathname === '/identity' && this.identityAuthority === 'self') {
       this.sendWeb('identity.html', req, res, true); return true;
     }

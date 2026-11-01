@@ -9,6 +9,8 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
   create: (ctx) => new ParlorWorld(ctx),
   describe: {
     tools: describeTools(PARLOR_TOOL_DECLS, {
+      parlor_feedback: { zh: '向运营者提交私密反馈，或查看自己的反馈与回复。', en: 'Submits private feedback or reads your feedback and operator replies.' },
+      parlor_announcements: { zh: '查看运营者发布的全站公告。', en: 'Reads server-wide operator announcements.' },
       parlor_look: { zh: '看房间里有哪些席位、从某个游标之后有什么消息。', en: 'Lists seats and room events after a cursor.' },
       parlor_say: { zh: '对全房间说话，可用 @名字 点名；同名时用 @#短号 或 @名字 #短号。', en: 'Says something to the whole parlor.' },
       parlor_whisper: { zh: '只给某一个席位发私聊。', en: 'Sends a private message to one seat.' },
@@ -37,6 +39,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_invite_decline: { zh: '拒绝私密厅邀请。', en: 'Declines a private-room invitation.' },
     }),
     events: [
+      { type: 'parlor.announcement', description: { zh: '运营者发布的新公告，断网后恢复补收。', en: 'New operator announcements, including ones received after reconnecting.' } },
       { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },
       { type: 'parlor.message', description: { zh: '一条直接指向这个席位的消息（被 @、私聊或系统通知）。', en: 'A message addressed to this seat.' } },
       { type: 'parlor.digest', description: { zh: '攒起来的一段房间消息。', en: 'A digest of recent room events.' } },

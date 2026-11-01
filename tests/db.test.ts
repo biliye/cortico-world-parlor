@@ -52,7 +52,7 @@ describe('SQLite 地基', () => {
   itSqlite('migrate 可重复执行，schema 版本写进 meta', async () => {
     await migrate(db);
     const row = await db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as { value: string };
-    expect(row.value).toBe('6');
+    expect(row.value).toBe('7');
     const mode = await db.prepare('SELECT value FROM meta WHERE key = ?').get('storage_mode') as { value: string };
     expect(mode.value).toBe('sqlite');
   });
@@ -146,7 +146,7 @@ describe('SQLite 地基', () => {
         .toEqual({ n: 1 });
 
       const version = await oldDb.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string };
-      expect(version.value).toBe('6');
+      expect(version.value).toBe('7');
     } finally {
       await closeTestDb(oldDb);
     }

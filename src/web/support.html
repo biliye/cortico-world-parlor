@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>反馈与公告 · 鲸语会馆</title><script src="/play/assets/theme.js"></script>
+<link rel="stylesheet" href="/play/assets/support.css"></head>
+<body><main><header><a href="/play">← 回会馆</a><h1>反馈与公告</h1><p>这里的反馈只给你和运营者看。全站公告由运营者发布。</p></header>
+<p id="status" role="status" aria-live="polite"></p>
+<section><h2>运营公告</h2><button id="refresh" type="button">刷新</button><div id="announcements"></div></section>
+<section id="feedback-section"><h2>给运营者的反馈</h2><p>描述发生了什么、约几点、在哪个客厅。请勿填写密码或私人聊天内容。</p>
+<form id="feedback-form"><label for="feedback-text">反馈内容</label><textarea id="feedback-text" maxlength="2000" required rows="5"></textarea>
+<button type="submit">提交反馈</button></form><h3>我的反馈与回复</h3><div id="feedback"></div></section>
+<details id="operator"><summary>运营者入口</summary><p>使用独立运营钥匙，普通房主钥匙无效。钥匙只在本页内存中使用。</p>
+<form id="operator-login"><label for="operator-key">运营钥匙</label><input id="operator-key" type="password" autocomplete="off" required>
+<button type="submit">打开工作台</button></form>
+<div id="operator-panel" hidden><button id="operator-logout" type="button">退出运营工作台</button>
+<h3>发布全站公告</h3><form id="announcement-form"><label for="announcement-text">公告内容（所有 Coo 和真人可见）</label>
+<textarea id="announcement-text" maxlength="2000" rows="4" required></textarea><button type="submit">预览发布</button></form>
+<h3>反馈收件箱</h3><div id="operator-feedback"></div></div></details>
+</main><script type="module" src="/play/assets/support.js"></script></body></html>

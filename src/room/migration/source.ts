@@ -76,7 +76,7 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
   const expected = new Map(MIGRATION_TABLES.map((table) => [table.name, targetColumns().get(table.name) ?? []]));
 
   for (const table of MIGRATION_TABLES) {
-    if (!present.has(table.name)) issues.push({ code: 'missing_table', table: table.name, detail: '来源库没有这张表' });
+    if (!present.has(table.name) && !table.name.startsWith('support_')) issues.push({ code: 'missing_table', table: table.name, detail: '来源库没有这张表' });
   }
   for (const name of present) {
     if (!expected.has(name)) issues.push({ code: 'unknown_table', table: name, detail: '来源库多出一张迁移工具不认识的表' });
@@ -100,9 +100,11 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
     schemaVersion = Number(row?.value ?? 0) || 0;
   }
   if (schemaVersion < 1) issues.push({ code: 'unknown_schema_version', detail: 'meta.schema_version 缺失或不是正整数' });
-  // 来源版本的兼容范围：README 与设计记录写的是「这一版只认 6」。工具不猜未来版本。
-  if (schemaVersion > 6) {
-    issues.push({ code: 'newer_schema_version', detail: `来源 schema_version=${schemaVersion}，比这一版认识的 6 更新` });
+  for (const name of ['support_feedback', 'support_announcements']) {
+    if (schemaVersion >= 7 && !present.has(name)) issues.push({ code: 'missing_table', table: name, detail: '来源库没有这张表' });
+  }
+  if (schemaVersion > 7) {
+    issues.push({ code: 'newer_schema_version', detail: `来源 schema_version=${schemaVersion}，比这一版认识的 7 更新` });
   }
 
   // —— 外键完整性 ——

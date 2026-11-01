@@ -185,7 +185,7 @@ export const runMigration = async (options: MigrateOptions): Promise<MigrateRepo
         return emptyReport(audit, 'target', `目标库 ${table.name} 缺列：${missing.join(', ')}`);
       }
     }
-    log('目标结构就位（28 张表、索引、容量触发器）。');
+    log(`目标结构就位（${MIGRATION_TABLES.length} 张表、索引、容量触发器）。`);
 
     const runId = `mig-${randomUUID()}`;
     const startedAt = now();

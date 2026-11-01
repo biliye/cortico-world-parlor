@@ -12,7 +12,9 @@
  * 迁移按版本号走：PG 有自己的一套编号，不沿用来源 SQLite 的 schema_version。
  */
 
-export const PG_SCHEMA_VERSION = 1;
+import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+
+export const PG_SCHEMA_VERSION = 2;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -418,4 +420,5 @@ export interface PgMigration {
 /** 按版本顺序执行；只在 meta.schema_version 之后追加，不改已发布的段。 */
 export const PG_MIGRATIONS: PgMigration[] = [
   { version: 1, name: 'initial', sql: PG_SCHEMA_SQL },
+  { version: 2, name: 'feedback-and-announcements', sql: SUPPORT_SCHEMA_SQL },
 ];

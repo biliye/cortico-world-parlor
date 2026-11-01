@@ -132,6 +132,7 @@ try {
     host,
     port,
     inviteCode: invite,
+    operatorKey: process.env.PARLOR_OPERATOR_KEY,
     defaultRoomId,
     allowGuestJoin,
     identityAuthority: args.get('--identity-authority') ?? process.env.PARLOR_IDENTITY_AUTHORITY ?? DEFAULT_SERVER_URL,

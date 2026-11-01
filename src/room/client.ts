@@ -4,6 +4,7 @@ import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
 import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } from './global-identity.ts';
 import type { MailPage } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
+import type { Announcement, Feedback } from './support-db.ts';
 import type {
   ActionRequest, ActionResponse, HallView, InviteResponse, JoinRequest, JoinResponse, MeView,
   RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
@@ -37,6 +38,15 @@ export class ParlorHttpError extends Error {
 }
 
 export class ParlorClient {
+  async support(token: string, action: 'feedback' | 'announcements', body?: { text: string; requestId: string }): Promise<{ feedback?: Feedback[] | Feedback; announcements?: Announcement[] }> {
+    const response = await fetch(this.url(`/v1/support/${action}`), {
+      method: body ? 'POST' : 'GET',
+      headers: await this.headers({ authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
   readonly baseUrl: string;
   private readonly identity?: CooIdentity;
   private global?: { authority: string; audience: string; invite: string; name: string };
@@ -317,22 +327,36 @@ export class ParlorClient {
     roomId?: string,
     onOpen?: () => void,
   ): Promise<void> {
+    // 服务端每 15 秒发心跳；覆盖连响应头都收不到、以及 TCP 半开不再收数据的情况。
+    const connection = new AbortController();
+    const abort = () => connection.abort(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    let watchdog: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => connection.abort(new Error('客厅连接 45 秒未收到数据，正在重新连接')), 45_000);
+      watchdog.unref?.();
+    };
+    arm();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
     const query = new URLSearchParams({ since: String(since) });
     const response = await fetch(`${this.path('stream', roomId)}?${query}`, {
       headers: await this.headers({ authorization: `Bearer ${token}`, accept: 'text/event-stream' }),
-      signal,
+      signal: connection.signal,
     });
     if (!response.ok || !response.body) {
       throw new ParlorHttpError(response.status, await errorText(response));
     }
     onOpen?.();
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    try {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) return;
+        arm();
         buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         let boundary: number;
         while ((boundary = buffer.indexOf('\n\n')) !== -1) {
@@ -349,7 +373,9 @@ export class ParlorClient {
         }
       }
     } finally {
-      try { await reader.cancel(); } catch { /* 已结束 */ }
+      clearTimeout(watchdog!);
+      signal?.removeEventListener('abort', abort);
+      try { await reader?.cancel(); } catch { /* 已结束 */ }
     }
   }
 

@@ -189,7 +189,7 @@ describe('客厅牌桌（骰子）', () => {
     await expect(host.switchTo(B, 'other', {})).rejects.toThrow(/牌局还没结束/);
   });
 
-  it('开桌 10 分钟没开局自动收起，锁跟着解除', async () => {
+  it('等人桌连续 30 分钟无活动收起，10 分钟仍保留，锁跟着解除', async () => {
     fixture = await setup();
     const { host, clock } = fixture;
     await enter(host, A, '阿岚');
@@ -199,9 +199,39 @@ describe('客厅牌桌（骰子）', () => {
 
     clock.now += 10 * 60_000 + 1;
     await host.tickClock();
+    expect((await host.tablePublic())?.status).toBe('open');
+    clock.now += 20 * 60_000;
+    await host.tickClock();
     expect(await host.tablePublic()).toBeUndefined();
     expect(await host.tableLock(A)).toBeNull();
     expect((await host.history(A, { since: 0, limit: 100 })).some((event) => event.type === 'parlor.table.cancel')).toBe(true);
+  });
+
+  it('入座、退座和有效桌聊重置等待期限，查看不续期，重启沿用存下的期限', async () => {
+    const file = fileDb();
+    fixture = await setup(file);
+    const { host, clock, db } = fixture;
+    await enter(host, A, '阿岚'); await enter(host, B, '小满');
+    const opened = await host.openTable(A, { game: 'dice' });
+    clock.now += 29 * 60_000;
+    await host.joinTable(B);
+    clock.now += 29 * 60_000;
+    await host.tickClock();
+    expect((await host.tablePublic())?.status).toBe('open');
+    await host.leaveTable(B);
+    clock.now += 29 * 60_000;
+    await host.tableSay(A, '再等一会儿');
+    const saved = await db.prepare('SELECT deadline_at FROM tables WHERE id = ?').get(opened.tableId) as { deadline_at: number };
+    expect(saved.deadline_at).toBe(clock.now + 30 * 60_000);
+    const resumed = await RoomHost.create(db, 'lobby', { now: () => clock.now });
+    clock.now += 29 * 60_000;
+    await resumed.tickClock();
+    expect((await resumed.tablePublic())?.status).toBe('open');
+    await resumed.snapshot(A);
+    await expect(resumed.tableSay(A, '')).rejects.toThrow();
+    clock.now += 60_000;
+    await resumed.tickClock();
+    expect(await resumed.tablePublic()).toBeUndefined();
   });
 });
 

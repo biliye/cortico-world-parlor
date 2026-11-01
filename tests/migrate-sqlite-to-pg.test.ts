@@ -20,6 +20,7 @@ import { openSource, auditSource } from '../src/room/migration/source.ts';
 import { digestSource, digestTarget, verifyAll } from '../src/room/migration/verify.ts';
 import { openStorage } from '../src/room/storage/open.ts';
 import { enableGlobalIdentity } from '../src/room/global-identity.ts';
+import { SupportDb } from '../src/room/support-db.ts';
 import { pgTestEnabled, pgServerStorage } from './helpers/pg.ts';
 
 const A = 'coo-mg000001';
@@ -80,6 +81,35 @@ const targetUrl = async (): Promise<string> => {
 };
 
 describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
+  it('schema 7 的反馈、回复和公告逐行搬运；schema 6 缺少新表仍能迁移', async () => {
+    for (const legacy of [false, true]) {
+      const file = join(dir!, `support-${legacy}.db`);
+      const { db } = await seedSource(file);
+      if (legacy) {
+        await db.exec('DROP TABLE support_feedback; DROP TABLE support_announcements;');
+        await db.prepare("UPDATE meta SET value = '6' WHERE key = 'schema_version'").run();
+      } else {
+        const support = new SupportDb(db);
+        const item = await support.submit(A, '阿岚', '持久反馈', 'request-1');
+        await support.reply(item.id, '已处理', 'closed');
+        await support.announce('迁库公告', 'notice-1');
+      }
+      await db.close();
+      const url = await targetUrl();
+      const report = await runMigration({ source: file, targetUrl: url });
+      expect(report.ok, report.error).toBe(true);
+      const target = await openStorage({ storage: 'postgres', url });
+      try {
+        const support = new SupportDb(target);
+        if (legacy) {
+          expect(await support.feedback(A)).toEqual([]);
+        } else {
+          expect((await support.feedback(A))[0]).toMatchObject({ text: '持久反馈', reply: '已处理', status: 'closed' });
+          expect((await support.announcements())[0].text).toBe('迁库公告');
+        }
+      } finally { await target.close(); }
+    }
+  });
   it('历史升级追加的列顺序不同，仍按相同列名顺序逐行核验', async () => {
     const file = join(dir!, 'parlor.db');
     const { db } = await seedSource(file);

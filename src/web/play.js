@@ -8,6 +8,7 @@ import {
 import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261101';
 import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
 import { createRoomCarousel } from './room-carousel.js';
+import { supportLink } from './support-link.js';
 
 const club = createClubState({
   getItem: key => sessionStorage.getItem(key),
@@ -1168,6 +1169,7 @@ function buildShell() {
   progress.append(progressHead, progressBar);
   seatCard.append(seatTop, stats, progress);
   leftRail.append(seatCard);
+  leftRail.append(supportLink(() => state.cfg?.token));
 
   const ledgerCard = el('section', 'panel ledger-card');
   const ledgerHead = el('div', 'panel-head');

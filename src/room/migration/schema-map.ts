@@ -6,6 +6,7 @@
  * 两边 schema 一旦漂移，先在这里被拦下，不会悄悄漏列。
  */
 import { PG_SCHEMA_SQL } from '../storage/pg-schema.ts';
+import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 
 export interface TableMap {
   name: string;
@@ -59,12 +60,14 @@ export const MIGRATION_TABLES: TableMap[] = [
   },
   { name: 'global_handles', key: ['coo_id'] },
   { name: 'identity_tickets', key: ['token_hash'] },
+  { name: 'support_feedback', key: ['id'] },
+  { name: 'support_announcements', key: ['id'] },
 ];
 
 /** 从 PG 的 DDL 里解析出每张表的列名，供「来源库列 === 目标库列」的比对用。 */
 export const targetColumns = (): Map<string, string[]> => {
   const out = new Map<string, string[]>();
-  const blocks = PG_SCHEMA_SQL.split(/CREATE TABLE IF NOT EXISTS /).slice(1);
+  const blocks = (PG_SCHEMA_SQL + SUPPORT_SCHEMA_SQL).split(/CREATE TABLE IF NOT EXISTS /).slice(1);
   for (const block of blocks) {
     const name = /^([a-z_][a-z0-9_]*)/.exec(block)?.[1];
     if (!name) continue;

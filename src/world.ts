@@ -93,11 +93,6 @@ class PendingMessages {
 
 const KIND_LABELS: Readonly<Record<string, string>> = { pet: 'Coo', human: '人', observer: '观看' };
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
-  const timer = setTimeout(resolve, ms);
-  timer.unref?.();
-});
-
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /** 注册表里的每张桌子各出一个动作工具（含 extraTools 的查询工具）；顺序与 GAME_LIST 一致。 */
@@ -118,6 +113,16 @@ const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.flatM
 
 /** 全部工具的声明；定义里的 describe 与 `tools()` 都取它。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
+  {
+    name: 'parlor_feedback', tags: ['write'],
+    description: 'Submit private feedback to the parlor operator (only you and the operator can read it), or omit text to list your feedback and replies. Saved does not mean read. Reuse requestId when retrying a submission.',
+    parameters: { type: 'object', properties: { text: { type: 'string', maxLength: 2000 }, requestId: { type: 'string', maxLength: 100 } } },
+  },
+  {
+    name: 'parlor_announcements', tags: ['read'],
+    description: 'Read the latest server-wide announcements published by the parlor operator. Ordinary room owners cannot publish here.',
+    parameters: { type: 'object', properties: {} },
+  },
   {
     name: 'parlor_look',
     description: 'Look at the parlor: who is seated here and what you can see since a cursor. Does not wake anyone and does not mark messages as read.',
@@ -478,6 +483,9 @@ export class ParlorWorld implements World {
   private tableChatTimer?: NodeJS.Timeout;
   private lastLinkAt = 0;
   private stopped = false;
+  private supportTimer?: NodeJS.Timeout;
+  private supportBusy = false;
+  private seenAnnouncements: string[] = [];
   /** 访客入口由运营者在部署 .env 里控制；默认关。 */
   private readonly allowGuestJoin: boolean;
 
@@ -504,6 +512,8 @@ export class ParlorWorld implements World {
     const byName = new Map(PARLOR_TOOL_DECLS.map((decl) => [decl.name, decl]));
     const tool = (name: string, handler: ToolDef['handler']): ToolDef => ({ ...byName.get(name)!, handler });
     return [
+      tool('parlor_feedback', (args) => this.supportRequest('feedback', args)),
+      tool('parlor_announcements', () => this.supportRequest('announcements')),
       tool('parlor_look', (args) => this.look(args)),
       tool('parlor_say', (args) => this.say(args)),
       tool('parlor_whisper', (args) => this.whisper(args)),
@@ -612,6 +622,11 @@ export class ParlorWorld implements World {
     this.digestTimer = setInterval(() => { void this.flushDigest(); }, DIGEST_MS);
     this.digestTimer.unref?.();
     this.streamTask = this.runStream();
+    if (this.multiRoom) {
+      this.supportTimer = setInterval(() => { void this.pollAnnouncements(); }, 60_000);
+      this.supportTimer.unref?.();
+      void this.pollAnnouncements();
+    }
     await host.pushEvent({
       type: 'parlor.started',
       ts: nowIso(this.ctx.timezone),
@@ -625,6 +640,8 @@ export class ParlorWorld implements World {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.supportTimer) clearInterval(this.supportTimer);
+    this.supportTimer = undefined;
     this.clearPendingMessages();
     this.abort?.abort();
     if (this.digestTimer) clearInterval(this.digestTimer);
@@ -724,7 +741,7 @@ export class ParlorWorld implements World {
       this.currentRoom = 'hall';
       this.clearPendingMessages();
       this.focused = false;
-      await this.reportLink('原客厅已被房主删除，已回到大厅。');
+      await this.reportLink('原客厅已被房主删除，已回到大厅。', true);
     }
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
@@ -752,7 +769,7 @@ export class ParlorWorld implements World {
     if (!client || !this.inviteCode) return false;
     try {
       await this.joinRoom(client);
-      await this.reportLink(`席位被释放了，已重新入座：${this.seat?.name ?? '未知'}。`);
+      await this.reportLink(`席位被释放了，已重新入座：${this.seat?.name ?? '未知'}。`, true);
       return true;
     } catch {
       return false;
@@ -770,6 +787,7 @@ export class ParlorWorld implements World {
     try {
       const raw = JSON.parse(readFileSync(this.cursorFile, 'utf8')) as {
         room?: string; seq?: number; rooms?: Record<string, unknown>;
+        announcements?: string[];
       };
       const rooms: Record<string, number> = {};
       if (raw.rooms && typeof raw.rooms === 'object') {
@@ -781,6 +799,7 @@ export class ParlorWorld implements World {
         rooms[raw.room] = raw.seq;
       }
       this.cursors = rooms;
+      this.seenAnnouncements = Array.isArray(raw.announcements) ? raw.announcements.filter(id => typeof id === 'string').slice(-100) : [];
     } catch {
       this.cursors = {};
     }
@@ -830,7 +849,7 @@ export class ParlorWorld implements World {
       mkdirSync(dirname(this.cursorFile), { recursive: true });
       writeFileSync(
         this.cursorFile,
-        JSON.stringify({ version: 2, current: this.currentRoom, rooms: this.cursors }),
+        JSON.stringify({ version: 2, current: this.currentRoom, rooms: this.cursors, announcements: this.seenAnnouncements }),
         { mode: 0o600 },
       );
     } catch { /* 游标写不进去只会多补一遍 */ }
@@ -840,6 +859,15 @@ export class ParlorWorld implements World {
     this.abort = new AbortController();
     const signal = this.abort.signal;
     let backoff = 1000;
+    let disconnected = false;
+    let lastDownAt = -Infinity;
+    let lastUpAt = -Infinity;
+    const reportDisconnected = async (text: string) => {
+      disconnected = true;
+      if (Date.now() - lastDownAt < LINK_GAP_MS) return;
+      lastDownAt = Date.now();
+      await this.reportLink(text, true);
+    };
     while (!signal.aborted && !this.stopped) {
       let clean = false;
       try {
@@ -847,7 +875,17 @@ export class ParlorWorld implements World {
           this.token, this.lastSeq, (event) => this.onRoomEvent(event), signal, this.roomArg(),
           // 连上了就说明上一次退避已经过期：别让「断过很久」留下的 60 秒等待
           // 拖到下一次掉线。下一次真的断了，从 1 秒重试开始。
-          () => { backoff = 1000; },
+          () => {
+            backoff = 1000;
+            if (disconnected) {
+              disconnected = false;
+              if (Date.now() - lastUpAt >= LINK_GAP_MS) {
+                lastUpAt = Date.now();
+                void this.reportLink('客厅连接已恢复，继续从上次游标接收消息。', true);
+              }
+              void this.refreshFocus();
+            }
+          },
         );
         clean = true;
       } catch (error) {
@@ -858,24 +896,31 @@ export class ParlorWorld implements World {
           backoff = 1000;
           continue;
         }
-        await this.reportLink(`客厅连接断了：${messageOf(error)}`);
+        if (!disconnected) {
+          await reportDisconnected(`客厅连接断了：${messageOf(error)}。会自动重试，恢复后通知。`);
+        }
       }
       if (signal.aborted || this.stopped) return;
       if (clean) {
-        backoff = 1000;
-        await sleep(1000);
-      } else {
-        await sleep(backoff);
-        backoff = Math.min(backoff * 2, 60_000);
+        if (!disconnected) {
+          await reportDisconnected('客厅连接已结束，会自动重新连接。');
+        }
       }
+      await new Promise<void>((resolve) => {
+        const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
+        const timer = setTimeout(done, backoff);
+        signal.addEventListener('abort', done, { once: true });
+        if (signal.aborted) done();
+      });
+      backoff = Math.min(backoff * 2, 60_000);
     }
   }
 
-  private async reportLink(text: string): Promise<void> {
+  private async reportLink(text: string, force = false): Promise<void> {
     const now = Date.now();
-    if (now - this.lastLinkAt < LINK_GAP_MS) return;
+    if (!force && now - this.lastLinkAt < LINK_GAP_MS) return;
     this.lastLinkAt = now;
-    await this.host?.pushEvent({
+    try { await this.host?.pushEvent({
       type: 'parlor.link',
       ts: nowIso(this.ctx.timezone),
       source: this.id,
@@ -883,7 +928,7 @@ export class ParlorWorld implements World {
       senderKey: this.id,
       text,
       meta: { address: this.baseUrl },
-    }, { trigger: 'debounce' });
+    }, { trigger: 'debounce' }); } catch { /* 通知写入失败不能终止网络恢复循环。 */ }
   }
 
   private onRoomEvent(event: RoomEvent): void {
@@ -1092,6 +1137,40 @@ export class ParlorWorld implements World {
   }
 
   // —— 多客厅：目录 / 大厅 / 串门 / 邀请 ——
+
+  private async supportRequest(action: 'feedback' | 'announcements', args: Record<string, unknown> = {}): Promise<string | ToolOutcome> {
+    if (!this.client || !this.multiRoom) return this.failed('反馈和公告需要支持该通道的多客厅服务器');
+    try {
+      const body = typeof args.text === 'string' && args.text.trim()
+        ? { text: args.text, requestId: typeof args.requestId === 'string' ? args.requestId : randomUUID() } : undefined;
+      const result = await this.client.support(this.token, action, body);
+      if (body && result.feedback && !Array.isArray(result.feedback)) {
+        return `反馈已保存，编号 ${result.feedback.id}。仅你和运营者可见；不代表运营者已读。用 parlor_feedback 查看回复。`;
+      }
+      if (action === 'announcements') return result.announcements?.map(item => `【运营公告 ${item.id}】${item.text}`).join('\n\n') || '暂时没有运营公告。';
+      return Array.isArray(result.feedback) ? result.feedback.map(item => `【${item.id} · ${item.status === 'closed' ? '已处理' : '待处理'}】${item.text}\n运营回复：${item.reply || '暂无'}`).join('\n\n') || '还没有提交反馈。' : '还没有提交反馈。';
+    } catch (error) { return this.failed(messageOf(error)); }
+  }
+
+  private async pollAnnouncements(): Promise<void> {
+    if (this.supportBusy || this.stopped || !this.client || !this.token || this.ctx.cfg.wakeTier === 'off') return;
+    this.supportBusy = true;
+    try {
+      const { announcements = [] } = await this.client.support(this.token, 'announcements');
+      if (this.stopped) return;
+      const unread = announcements.filter(item => !this.seenAnnouncements.includes(item.id));
+      if (!unread.length) return;
+      await this.host?.pushEvent({
+        type: 'parlor.announcement', ts: nowIso(this.ctx.timezone), source: this.id, origin: 'external', senderKey: 'parlor-operator',
+        text: unread.slice(0, 5).reverse().map(item => `【运营公告】${item.text}`).join('\n\n')
+          + (unread.length > 5 ? '\n更早的公告请用 parlor_announcements 查看。' : ''),
+        meta: { ids: unread.map(item => item.id) },
+      }, { trigger: 'debounce' });
+      this.seenAnnouncements = [...this.seenAnnouncements, ...unread.map(item => item.id)].slice(-100);
+      this.saveCursor();
+    } catch { /* 老服务器或临时断网：下次再查，不刷通知。 */ }
+    finally { this.supportBusy = false; }
+  }
 
   private async rooms(): Promise<string | ToolOutcome> {
     if (!this.client) return this.failed('还没连上客厅');
