@@ -857,36 +857,36 @@ export class TableHost {
     const table = await this.requireMyTable(cooId, tableId);
     const releaseTable = await this.lockTable(table.id);
     try {
-    const seat = await this.requireSeat(cooId);
-    if (table.engine.status === 'ended') throw new HostError('invalid', '这张桌子已经结束了，回客厅说吧');
-    if (!table.engine.has(seat.id)) throw new HostError('invalid', '你不在这一桌，回客厅说吧');
-    // 狼人杀进行中锁普通桌聊：发言次数/狼聊限制走游戏动作，不能从桌聊绕过去。
-    if (table.engine.chatLocked?.()) {
-      throw new HostError('conflict', `${table.engine.label}进行中，桌上的发言走游戏动作（发言机会只有一次），不能用普通桌聊`);
-    }
-    const body = clampText(text);
-    const seats: string[] = [];
-    for (const seatId of table.engine.seatIds()) {
-      if (await this.seatById(seatId)) seats.push(seatId);
-    }
-    const now = this.now();
-    return await withTransaction(this.db, async () => {
-    const event = await this.events.append(this.roomId, {
-      type: 'parlor.table.say',
-      ts: now,
-      from: seat.id,
-      scope: { kind: 'table', tableId: table.id, seats },
-      text: body,
-      mentions: mentions.filter((id) => seats.includes(id)),
-      data: { name: seat.name, tableId: table.id },
-    });
-    if (table.engine.status === 'open') {
-      const deadline = now + this.openMs;
-      await this.db.prepare('UPDATE tables SET deadline_at = ?, updated_at = ? WHERE id = ?').run(deadline, now, table.id);
-      this.db.afterCommit(() => { table.openDeadlineAt = deadline; });
-    }
-    return event;
-    });
+      const seat = await this.requireSeat(cooId);
+      if (table.engine.status === 'ended') throw new HostError('invalid', '这张桌子已经结束了，回客厅说吧');
+      if (!table.engine.has(seat.id)) throw new HostError('invalid', '你不在这一桌，回客厅说吧');
+      // 狼人杀进行中锁普通桌聊：发言次数/狼聊限制走游戏动作，不能从桌聊绕过去。
+      if (table.engine.chatLocked?.()) {
+        throw new HostError('conflict', `${table.engine.label}进行中，桌上的发言走游戏动作（发言机会只有一次），不能用普通桌聊`);
+      }
+      const body = clampText(text);
+      const seats: string[] = [];
+      for (const seatId of table.engine.seatIds()) {
+        if (await this.seatById(seatId)) seats.push(seatId);
+      }
+      const now = this.now();
+      return await withTransaction(this.db, async () => {
+        const event = await this.events.append(this.roomId, {
+          type: 'parlor.table.say',
+          ts: now,
+          from: seat.id,
+          scope: { kind: 'table', tableId: table.id, seats },
+          text: body,
+          mentions: mentions.filter((id) => seats.includes(id)),
+          data: { name: seat.name, tableId: table.id },
+        });
+        if (table.engine.status === 'open') {
+          const deadline = now + this.openMs;
+          await this.db.prepare('UPDATE tables SET deadline_at = ?, updated_at = ? WHERE id = ?').run(deadline, now, table.id);
+          this.db.afterCommit(() => { table.openDeadlineAt = deadline; });
+        }
+        return event;
+      });
     } finally { releaseTable(); }
   }
 
