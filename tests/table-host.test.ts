@@ -76,6 +76,32 @@ const fileDb = (): string => {
 };
 
 describe('客厅牌桌（骰子）', () => {
+  it('斗地主两家过牌后，重新领出通知携带该手的已提交版本，可直接出牌', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    const a = await enter(host, A, '阿岚');
+    await enter(host, B, '小满');
+    await enter(host, C, '小柚');
+    await host.openTable(A, { game: 'ddz' });
+    await host.joinTable(B);
+    await host.joinTable(C);
+    await host.startTable(A);
+    await act(host, A, { move: 'bid', call: true }, 'ddz-bid');
+    const hand = host.tablePrivate(a.seat.id)!.hand as string[];
+    await act(host, A, { move: 'play', cards: [hand[0]] }, 'ddz-play');
+    await act(host, B, { move: 'pass' }, 'ddz-pass-b');
+    const passed = await act(host, C, { move: 'pass' }, 'ddz-pass-c');
+    const latest = (await host.history(A, { since: 0, limit: 200 }))
+      .filter(event => event.type === 'parlor.table.turn').at(-1)!;
+    const notified = latest.data!.table as Record<string, unknown>;
+    expect(latest.text).toContain('这一轮你先出');
+    expect(notified).toMatchObject({ tableId: latest.data!.tableId, revision: passed.revision });
+    const remaining = host.tablePrivate(a.seat.id)!.hand as string[];
+    await expect(host.tableAction(A, { move: 'play', cards: [remaining[0]] }, {
+      revision: notified.revision as number, requestId: 'ddz-lead-again',
+    })).resolves.toMatchObject({ revision: passed.revision + 1 });
+  });
+
   it('开桌/坐下/开始/停牌/结算；暗骰只在本人私视图里', async () => {
     fixture = await setup();
     const { host, clock } = fixture;

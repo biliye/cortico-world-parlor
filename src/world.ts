@@ -471,6 +471,8 @@ export class ParlorWorld implements World {
   /** 我在哪张桌上、看到的是哪一版；多桌时动作靠这两个字段选桌与防迟到。 */
   private myTableId?: string;
   private myTableRevision?: number;
+  /** 桌面版本对应的事件游标；慢快照和断线补发不能把它退回上一手。 */
+  private tableStateCursor?: { room: string; seat: string; seq: number };
   private focusRefreshQueued = false;
   private readonly focusBacklog = new PendingMessages();
   private abort?: AbortController;
@@ -807,8 +809,12 @@ export class ParlorWorld implements World {
 
   /** 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒不叫。 */
   private applySnapshot(snapshot: RoomSnapshot): void {
-    const wasFocused = this.focused;
+    if (snapshot.seat.id !== this.seat?.id) return;
     const priv = snapshot.tablePrivate;
+    if (priv?.tableId === this.myTableId && typeof priv?.revision === 'number'
+      && this.myTableRevision !== undefined && priv.revision < this.myTableRevision) return;
+    if (!this.acceptTableState(snapshot.latest)) return;
+    const wasFocused = this.focused;
     this.focused = priv !== null && priv !== undefined
       && snapshot.table !== undefined && snapshot.table.status !== 'ended';
     this.mailUnread = snapshot.mailUnread ?? this.mailUnread;
@@ -821,6 +827,14 @@ export class ParlorWorld implements World {
       this.myTableRevision = undefined;
     }
     if (wasFocused && !this.focused) void this.flushFocus();
+  }
+
+  private acceptTableState(seq: number): boolean {
+    const seat = this.seat?.id ?? '';
+    const previous = this.tableStateCursor;
+    if (previous?.room === this.currentRoom && previous.seat === seat && seq < previous.seq) return false;
+    this.tableStateCursor = { room: this.currentRoom, seat, seq };
+    return true;
   }
 
   /** 别的席位出牌后，我的桌面版本也会变；合并成一次快照刷新。 */
@@ -936,6 +950,18 @@ export class ParlorWorld implements World {
     this.lastSeq = event.seq;
     this.saveCursor();
     if (event.from === this.seat.id) return;
+
+    // 行动通知已经带着这一手的私视图：先同步版本，再叫醒，不能等后台 HTTP 刷新。
+    if (event.type === 'parlor.table.turn' && event.scope.kind === 'seat' && event.scope.seatId === this.seat.id) {
+      const table = event.data?.table as Record<string, unknown> | undefined;
+      const tableId = event.data?.tableId;
+      if (table?.seat === this.seat.id && typeof tableId === 'string'
+        && typeof table.revision === 'number' && this.acceptTableState(event.seq)) {
+        this.myTableId = tableId;
+        this.myTableRevision = table.revision;
+        this.focused = table.status !== 'ended';
+      }
+    }
 
     // 大厅进出仍留在网页和主动查看的历史里，不进入 Coo 的即时消息或待发摘要。
     // 在这里过滤，游标已推进；断线补发也会走同一条，普通客厅不受影响。
@@ -1350,6 +1376,7 @@ export class ParlorWorld implements World {
     const from = explicitSince ? since : Math.max(0, this.lastSeq - window);
     try {
       const snapshot = await this.client.snapshot(this.token, from, window, this.roomArg());
+      this.applySnapshot(snapshot);
       const events = explicitSince ? snapshot.events : snapshot.events.slice(-limit);
       return this.formatSnapshot({ ...snapshot, events });
     } catch (error) {
@@ -1814,6 +1841,7 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
       const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
+      this.applySnapshot(snapshot);
       const tables = (snapshot.tables ?? []).filter((table) => table.status !== 'ended');
       const wanted = typeof args.table === 'string' ? args.table.trim() : '';
       const lines = [`服务器时刻：${snapshot.at}（UTC+8）。`];

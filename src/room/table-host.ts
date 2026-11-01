@@ -1015,7 +1015,9 @@ export class TableHost {
         scope: { kind: 'seat', seatId },
         text,
         data: {
-          table: view,
+          // recordStep 写的是本次提交后的引擎状态；通知与快照必须用同一版，
+          // 否则 Coo 已被叫醒、后台快照还没返回时会拿上一手的 revision 出牌。
+          table: { ...view, tableId: table.id, revision: table.revision + 1 },
           tableId: table.id,
           game: engine.game,
           // decision:false = 只是桌面更新（队友交了刀票/发言），不当成新的行动请求；
