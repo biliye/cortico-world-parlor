@@ -109,8 +109,10 @@ export function mountWerewolf(root, ctx) {
     const table = view.table;
     if (!table) return;
     clear(box);
+    const inspections = inspectionPanel(view.priv);
     if (table.status === 'ended') {
       box.append(renderEnd());
+      if (inspections) box.append(inspections);
       return;
     }
     const priv = view.priv;
@@ -131,6 +133,7 @@ export function mountWerewolf(root, ctx) {
 
     const side = el('div', 'wf-side');
     side.append(nowSpeechCard(table));
+    if (inspections) side.append(inspections);
     side.append(historyPanel(table));
     main.append(side);
     box.append(main);
@@ -599,10 +602,24 @@ export function mountWerewolf(root, ctx) {
     return composer;
   }
 
+  // 查验记录属于整局私视图，不能随验人动作槽关闭而消失。
+  function inspectionPanel(priv) {
+    if (priv?.role !== 'seer' || !priv.inspections?.length) return null;
+    const panel = el('section', 'wf-panel wf-inspections');
+    panel.append(el('h3', 'wf-panel-title', '我的查验记录（仅自己可见）'));
+    const history = el('div', 'wf-tabbody');
+    for (const entry of priv.inspections) {
+      history.append(el('p', 'wf-role-mates',
+        `第${entry.day}夜 · ${seatLabel(entry.target)}：${entry.result === 'wolf' ? '狼人' : '好人'}`));
+    }
+    panel.append(history);
+    return panel;
+  }
+
   function inspectComposer(priv) {
     const composer = el('div', 'wf-composer');
     if ((priv.submitted ?? []).includes('inspect') || (priv.inspections ?? []).some((entry) => entry.day === view.table.day)) {
-      composer.append(el('p', 'wf-composer-hint', '今夜的槽已交；结果进你的秘密记录（见下面历史）。'));
+      composer.append(el('p', 'wf-composer-hint', '今夜的槽已交；结果见「我的查验记录」。'));
     } else {
       const targets = (view.table?.seats ?? []).filter((seat) => seat.alive && seat.seatNo !== mySeatNo).map((seat) => seat.seatNo);
       composer.append(el('p', 'wf-composer-hint', '查验一名其他存活玩家；不查就点「今夜不查」。'));
@@ -613,11 +630,6 @@ export function mountWerewolf(root, ctx) {
       }, { primary: true }));
       row.append(btn('今夜不查', () => { void act({ move: 'inspect' }); }, { ghost: true }));
       composer.append(row);
-    }
-    const history = priv.inspections ?? [];
-    if (history.length) {
-      composer.append(el('p', 'wf-role-mates', '查验历史：'
-        + history.map((entry) => `第${entry.day}夜 ${entry.target}号=${entry.result === 'wolf' ? '狼人' : '好人'}`).join('；')));
     }
     return composer;
   }

@@ -12,7 +12,7 @@
 import { mountDice } from './dice.js';
 import { mountDdz } from './ddz.js?v=club-20261102';
 import { mountMonopoly } from './monopoly.js';
-import { mountWerewolf } from './werewolf.js?v=club-20261102';
+import { mountWerewolf } from './werewolf.js?v=seer-history-20261101';
 
 export const GAMES = {
   dice: {
