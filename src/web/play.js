@@ -5,10 +5,12 @@ import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
   isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
-import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261102';
+import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=club-20261103c';
 import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
 import { createRoomCarousel } from './room-carousel.js';
-import { supportLink } from './support-link.js';
+import { supportLink } from './support-link.js?v=club-20261103c';
+import { mountAnnouncementBanner } from './announcement-banner.js?v=club-20261103c';
+import { startAnnouncementWatch } from './announcements.js?v=club-20261103c';
 
 const club = createClubState({
   getItem: key => sessionStorage.getItem(key),
@@ -1329,6 +1331,10 @@ function buildShell() {
     el('p', 'muted hall-note', '公开的客厅会出现在别人的目录里；不公开的只有成员看得到。'));
   viewHall.append(hallHead, hallHero, hallRooms, hallPeople, hallCreate);
   center.append(viewTable, viewLobby, viewHall);
+  // 运营公告横幅：首屏（大厅、客厅）才有，牌桌上不占地方；没有新公告时不渲染出来。
+  mountAnnouncementBanner(viewLobby);
+  mountAnnouncementBanner(viewHall);
+  startAnnouncementWatch(() => state.cfg && state.cfg.token);
 
   /* 右栏：聊天 / 牌桌信息 */
   const rightRail = el('aside', 'right-rail');
