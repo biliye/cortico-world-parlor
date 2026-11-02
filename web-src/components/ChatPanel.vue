@@ -6,9 +6,9 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { clockText, initialOf, readable } from '../lib/text.ts';
 import {
-  chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sendSay, sending, sheetOpen, tab, toggleChat, unread,
+  chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, tab, toggleChat, unread,
 } from '../stores/chat.ts';
-import { log, snapshot } from '../stores/parlor.ts';
+import { act, activeTable, log, myTable, snapshot, tableIdOf } from '../stores/parlor.ts';
 
 interface Line {
   key: number;
@@ -21,6 +21,17 @@ interface Line {
 
 const inHall = computed(() => snapshot.value?.id === 'hall');
 const roomLabel = computed(() => (inHall.value ? '大厅' : '客厅'));
+const myTableId = computed(() => tableIdOf(myTable.value));
+
+/** 与旧版 tableChatOpen 一致：桌还在、我坐在这张桌上、看着的就是这张桌。 */
+const tableOpen = computed(() => {
+  const table = myTable.value;
+  if (!table || table.status === 'ended') return false;
+  if (tableIdOf(activeTable.value) !== tableIdOf(table)) return false;
+  if (table.game === 'werewolf' && table.status !== 'open') return false;
+  const me = snapshot.value?.seat?.id;
+  return !!me && (table.seats || []).some((person) => person.id === me);
+});
 
 function nameOf(from?: string): string {
   const seats = snapshot.value?.seats || [];
@@ -36,7 +47,12 @@ const lines = computed<Line[]>(() => {
     if (type.startsWith('parlor.table.') && type !== 'parlor.table.say') continue;
     if (type.startsWith('parlor.monopoly.')) continue;
     if (channel === 'room' && type === 'parlor.table.say') continue;
-    if (channel === 'table' && type !== 'parlor.table.say') continue;
+    if (channel === 'table') {
+      if (type !== 'parlor.table.say') continue;
+      // 只认自己这张桌的话；没有桌号的老事件按「是」处理。
+      const eventId = event.data && typeof event.data.tableId === 'string' ? event.data.tableId : '';
+      if (eventId && myTableId.value && eventId !== myTableId.value) continue;
+    }
     if (channel === 'mail') continue;
     const time = clockText(event.ts);
     if (event.from === 'system' || !event.from) {
@@ -81,20 +97,32 @@ watch(tab, () => { void nextTick(toBottom); });
 
 const input = ref('');
 const notice = ref('');
-const scopeKey = computed(() => draftKey(tab.value === 'table' ? 'table' : 'room'));
+const scopeKey = computed(() => draftKey(tab.value === 'table' ? 'table' : 'room', tab.value === 'table' ? myTableId.value : ''));
 
 watch(scopeKey, (next) => { input.value = draftFor(next); }, { immediate: true });
 
 const scopeText = computed(() => {
-  if (tab.value === 'table') return '牌桌聊天在第 3 刀接';
   if (tab.value === 'mail') return '';
+  if (tab.value === 'table') {
+    if (tableOpen.value) {
+      const watching = activeTable.value;
+      const mine = myTable.value;
+      const elsewhere = !!watching && !!mine && tableIdOf(watching) !== tableIdOf(mine);
+      return elsewhere ? '只发到我的桌 · 你现在看的是另一桌' : '只发到这一桌 · 客厅和不在桌上的人看不见';
+    }
+    return activeTable.value?.game === 'werewolf' && activeTable.value?.status !== 'open'
+      ? '狼人杀进行中 · 发言和狼聊请使用游戏内面板'
+      : '围观只读 · 聊天请切到「客厅」';
+  }
   return inHall.value ? '发到大厅 · 大厅里的人都看得见' : '发到客厅 · 房间里的人都看得见';
 });
 
 const placeholder = computed(() => {
-  if (tab.value === 'table') return '牌桌聊天在第 3 刀接';
+  if (tab.value === 'table') return tableOpen.value ? '对同桌说点什么…' : '当前桌聊不可用';
   return inHall.value ? '在大厅说点什么…' : '在客厅说点什么…';
 });
+
+const canSend = computed(() => tab.value === 'room' || (tab.value === 'table' && tableOpen.value));
 
 function onInput(): void {
   saveDraftFor(scopeKey.value, input.value);
@@ -109,13 +137,13 @@ function onKey(event: KeyboardEvent): void {
 }
 
 async function submit(): Promise<void> {
-  if (tab.value !== 'room' || !input.value.trim()) return;
+  if (!canSend.value || !input.value.trim()) return;
   const text = input.value.trim();
   notice.value = '';
   input.value = '';
   saveDraftFor(scopeKey.value, '');
   try {
-    await sendSay(text);
+    await act(tab.value === 'table' ? { type: 'table_say', text } : { type: 'say', text });
   } catch (error) {
     notice.value = (error as Error).message || '没发出去';
     if (!draftFor(scopeKey.value)) {
@@ -167,7 +195,10 @@ function closeDrawer(): void {
       <div class="chat-body">
         <div v-if="tab !== 'mail'" ref="logBox" class="chat-log">
           <p v-if="!lines.length" class="chat-empty">
-            {{ tab === 'table' ? '牌桌聊天在第 3 刀接。客厅的话在「' + roomLabel + '」那一栏。' : '这里还没人说话。' }}
+            <template v-if="tab === 'table'">
+              {{ tableOpen ? '同桌的话，留在这一桌。' : '围观不开放同桌聊天。' }}
+            </template>
+            <template v-else>这里还没人说话。</template>
           </p>
           <template v-for="line in lines" :key="line.key">
             <div v-if="line.kind === 'system'" class="system-line">
@@ -204,13 +235,13 @@ function closeDrawer(): void {
             type="text"
             maxlength="400"
             autocomplete="off"
-            :disabled="tab !== 'room'"
+            :disabled="!canSend"
             :placeholder="placeholder"
             :aria-label="scopeText"
             @input="onInput"
             @keydown="onKey"
           >
-          <button class="send-btn" type="button" aria-label="发送" :disabled="tab !== 'room' || sending" @click="submit">
+          <button class="send-btn" type="button" aria-label="发送" :disabled="!canSend" @click="submit">
             <svg class="icon" aria-hidden="true"><use href="#i-send" /></svg>
           </button>
         </div>

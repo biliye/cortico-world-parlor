@@ -3,7 +3,6 @@
  * 只放浏览器侧状态；消息本身在 parlor 的 log 里，发送走 /v1/action。
  */
 import { reactive, ref } from 'vue';
-import { api } from '../api/client.ts';
 import { club, saveDraft, draft as readDraft, persistClub } from './club.ts';
 import { seat } from './session.ts';
 
@@ -12,7 +11,6 @@ export type ChatTab = 'room' | 'table' | 'mail';
 export const tab = ref<ChatTab>('room');
 export const unread = reactive({ room: 0, table: 0 });
 export const sheetOpen = ref(false);
-export const sending = ref(false);
 
 function desktop(): boolean {
   return window.matchMedia('(min-width: 1101px)').matches;
@@ -79,18 +77,4 @@ export function noteChatEvent(event: { type?: string }): void {
   if (!channel) return;
   if (tab.value === channel && chatExpanded()) return;
   unread[channel] += 1;
-}
-
-export async function sendSay(text: string): Promise<void> {
-  if (sending.value) return;
-  sending.value = true;
-  try {
-    await api('/v1/action', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'say', text }),
-    });
-  } finally {
-    sending.value = false;
-  }
 }
