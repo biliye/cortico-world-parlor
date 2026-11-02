@@ -172,7 +172,6 @@ async function createRoom(): Promise<void> {
 <template>
   <div class="view view-hall" :class="'section-' + section">
     <AnnouncementBanner />
-    <LobbyMatching v-if="section === 'all'" />
 
     <!-- ═════════ 发现：舞台 ═════════ -->
     <template v-if="section === 'all'">
@@ -239,6 +238,7 @@ async function createRoom(): Promise<void> {
             </button>
             <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
           </div>
+          <LobbyMatching />
         </div>
 
         <div class="scene" aria-hidden="true">
@@ -305,7 +305,7 @@ async function createRoom(): Promise<void> {
             <p>{{ emptyText() }}</p>
             <button class="btn ghost small" type="button" @click="showDiscover">去发现客厅 ↗</button>
           </div>
-          <article v-for="room in filteredRooms" :key="room.id" class="poster club-room-card">
+          <article v-for="room in filteredRooms" :key="room.id" class="poster club-room-card" @click="enter(room)">
             <div class="poster-art" :class="artFor(room)">
               <span class="poster-chip" :class="{ live: isLive(room) }">
                 <i class="dot" :class="{ live: isLive(room) }" />{{ isLive(room) ? '正在对局' : '等你入座' }}
@@ -330,7 +330,7 @@ async function createRoom(): Promise<void> {
                 <span><b>{{ room.seats }}</b> / {{ room.capacity }} 人</span>
                 <span>·</span>
                 <span><b>{{ room.tableCount ?? '—' }}</b> 张桌</span>
-                <span class="poster-go">{{ visibilityLabel(room) }} · 进客厅 ↗</span>
+                <button class="poster-go" type="button" :aria-label="'进入客厅 ' + room.name" @click.stop="enter(room)">{{ visibilityLabel(room) }} · 进客厅 ↗</button>
               </div>
             </div>
           </article>

@@ -50,7 +50,7 @@ function joinRecruit(item: TableRecruitment): void {
 </template>
 
 <style scoped>
-.recruit-area { margin-block: 20px; }
+.recruit-area { width: 100%; max-width: 560px; min-width: 0; box-sizing: border-box; margin: 20px 0 0; }
 .recruit-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .recruit-heading h2, .recruit-heading h3 { margin-block: 8px; }
 .recruit-select { display: flex; align-items: center; gap: 8px; }
