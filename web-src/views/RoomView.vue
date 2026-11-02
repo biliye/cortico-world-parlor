@@ -7,6 +7,8 @@ import {
   goRoom, joinRoomTable, leaveRoomTable, myTable, openRoomTable, snapshot, startRoomTable, tableIdOf, tableList,
 } from '../stores/parlor.ts';
 import { enterTable } from '../stores/view.ts';
+import { seat } from '../stores/session.ts';
+import { showToast } from '../stores/ui.ts';
 import type { TableSummary } from '../api/types.ts';
 
 const notice = ref('');
@@ -63,13 +65,25 @@ function leave(): void {
 function backToHall(): void {
   void run(() => goRoom('hall'));
 }
+
+/** 与旧版同一句话、同一个链接：朋友先进客厅，再选桌。 */
+async function invite(): Promise<void> {
+  const room = seat.value?.room || '';
+  const url = location.origin + '/play' + (room ? '?room=' + encodeURIComponent(room) : '');
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast('客厅链接已复制；朋友进入后再选桌。私密厅仍需成员邀请。');
+  } catch {
+    window.prompt('复制客厅链接（私密厅还需要成员邀请）', url);
+  }
+}
 </script>
 
 <template>
   <div class="view view-lobby">
     <div class="club-page-nav">
       <button class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
-      <button class="btn ghost small" type="button" disabled title="邀请入口第 3 刀后半接">邀请来客厅</button>
+      <button class="btn ghost small" type="button" @click="invite">邀请来客厅</button>
     </div>
 
     <div class="lobby-head">
