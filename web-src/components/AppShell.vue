@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /** 页面骨架：顶栏 + 左栏 + 中间内容 + 右栏聊天。内容由 App 通过默认插槽放进来。 */
-import { computed, watch } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import ChatPanel from './ChatPanel.vue';
+import DmWindow from './DmWindow.vue';
 import Icon from './Icon.vue';
 import { initialOf } from '../lib/text.ts';
 import { club } from '../stores/club.ts';
 import { chatExpanded, closeSheet, sheetOpen, toggleChat } from '../stores/chat.ts';
+import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { connection, snapshot } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
@@ -22,6 +24,8 @@ const sections = [
 ] as const;
 
 watch(sheetOpen, (open) => { document.body.classList.toggle('sheet-open', open); }, { immediate: true });
+
+onMounted(() => { void loadThreads(); });
 </script>
 
 <template>
@@ -32,10 +36,15 @@ watch(sheetOpen, (open) => { document.body.classList.toggle('sheet-open', open);
       <span class="conn-text">{{ connection === 'on' ? '已连接' : connection === 'off' ? '重连中…' : '连接中…' }}</span>
     </span>
     <span class="muted top-me-text">{{ name }} · {{ roomLabel }}</span>
+    <button class="ghost-btn dm-btn dm-toggle" type="button" @click="toggleDm">
+      私聊<span v-if="dmUnread" class="badge">{{ dmUnread }}</span>
+    </button>
     <button class="btn ghost small" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
       {{ chatExpanded() ? '收起聊天' : '打开聊天' }}
     </button>
   </header>
+
+  <DmWindow />
 
   <div class="layout" :class="{ 'chat-collapsed': !club.chatOpen }">
     <aside class="left-rail">

@@ -6,6 +6,7 @@
 import { computed, ref } from 'vue';
 import { api, beginGlobalEntry, finishGlobalEntry, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
 import { noteChatEvent } from './chat.ts';
+import { noteWhisper } from './dm.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
 import { showToast } from './ui.ts';
 import { backToRoom, enterTable, watchTableId } from './view.ts';
@@ -190,6 +191,7 @@ function handleEvent(event: ChatEvent): void {
   pushLog(event);
   noteChatEvent(event);
   const type = event.type || '';
+  if (type === 'parlor.whisper') noteWhisper();
   if (type === 'parlor.say' || type === 'parlor.table.say') return;
   if (type === 'parlor.joined' || type === 'parlor.left') {
     scheduleRefresh(1000);
