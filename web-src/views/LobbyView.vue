@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 大厅：谁在、有哪些客厅、开一间。数据来自 /v1/hall 与 /v1/rooms?all=1，SSE 进出会触发刷新。 */
+/** 大厅：会馆首屏（B 版：一整间房间）+ 客厅目录海报墙（A 版）。数据仍来自 /v1/hall 与 /v1/rooms。 */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import { api } from '../api/client.ts';
@@ -21,6 +21,7 @@ const createVisibility = ref<'public' | 'unlisted' | 'private'>('public');
 const creating = ref(false);
 const notice = ref('');
 const createInputEl = ref<HTMLInputElement | null>(null);
+const directoryEl = ref<HTMLElement | null>(null);
 
 const model = ref<CarouselModel>({ rooms: [], index: 0, current: null, paused: false });
 const carousel = createRoomCarousel((next) => { model.value = next; }, {
@@ -59,12 +60,31 @@ function syncActive(): void {
   carousel.setActive(hallSection.value === 'all' && !document.hidden && !sheetOpen.value);
 }
 
+/** 首屏底部那排：热门客厅优先（人数 > 10 的轮播池），没有热门就取目录前几间。 */
+const topRooms = computed(() => (model.value.rooms.length ? model.value.rooms : rooms.value).slice(0, 3));
+
+/** 海报画：狼人杀月色、斗地主牌扇、其余骰子。 */
+function artFor(room: RoomCard): string {
+  const games = room.games || [];
+  if (games.includes('werewolf')) return 'art-moon';
+  if (games.includes('ddz')) return 'art-cards';
+  return 'art-dice';
+}
+
+function isLive(room: RoomCard): boolean {
+  return (room.tableCount || 0) > 0;
+}
+
+function scrollToRooms(): void {
+  directoryEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function heroEnter(): void {
   if (model.value.current) {
     void enter(model.value.current);
     return;
   }
-  if (rooms.value.length) document.querySelector('.hall-rooms-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (rooms.value.length) scrollToRooms();
   else createInputEl.value?.focus();
 }
 
@@ -90,14 +110,8 @@ const filteredRooms = computed(() => {
   });
 });
 
-/** 首屏推荐：轮播只挑人数 > 10 的客厅（规则在旧 room-carousel.js 里，单测也在那边）。 */
-
 function initial(name: string): string {
   return (name || '？').trim().slice(0, 1).toUpperCase();
-}
-
-function visibilityLabel(room: RoomCard): string {
-  return room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开' : '私密';
 }
 
 function emptyText(): string {
@@ -143,118 +157,164 @@ async function createRoom(): Promise<void> {
 <template>
   <div class="view view-hall">
     <AnnouncementBanner />
-    <div class="hall-head">
-      <span class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</span>
-      <h1>{{ section === 'all' ? '今晚，来一局。' : section === 'mine' ? '我的客厅。' : '收藏的地方。' }}</h1>
-      <p class="muted">
-        {{ section === 'all' ? '找个舒服的位置，和朋友、Coo 一起把时间慢下来。'
-          : section === 'mine' ? '你创建或加入的客厅都在这里。'
-            : '点过星标的客厅都在这里。' }}
-      </p>
-    </div>
 
     <section
-      v-if="hallSection === 'all'"
-      class="club-hero"
-      :class="{ 'has-carousel': model.rooms.length > 1 }"
-      aria-label="热门客厅推荐"
-      aria-roledescription="轮播"
+      class="hero"
+      aria-label="会馆首屏"
       @mouseenter="heroHover = true"
       @mouseleave="heroHover = false"
       @focusin="heroFocus = true"
       @focusout="heroFocus = false"
     >
-      <div class="club-hero-copy">
-        <span class="eyebrow">{{ model.current ? '热闹正在发生 / PARLOR CLUB' : '留个位置，慢慢相聚 / PARLOR CLUB' }}</span>
-        <h2>{{ model.current?.name || '好朋友，也可以是新朋友。' }}</h2>
-        <p>{{ model.current?.topic || '先在客厅聊聊天，再选一张喜欢的桌。人和 Coo，都有自己的座位。' }}</p>
-        <p v-if="model.current" class="club-hero-meta">
-          {{ model.current.seats }} / {{ model.current.capacity }} 人在客厅 · {{ model.current.tableCount ?? '—' }} 张桌
+      <div class="hero-copy">
+        <p class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</p>
+        <h1>
+          <template v-if="section === 'all'">今晚，<br>来一局。<span class="spark">✳</span></template>
+          <template v-else-if="section === 'mine'">我的客厅。</template>
+          <template v-else>收藏的地方。</template>
+        </h1>
+        <p class="hero-sub">
+          <template v-if="section === 'all'">会馆里灯亮着，牌已经洗好。找个位置坐下，和朋友、Coo 一起把时间慢下来。</template>
+          <template v-else-if="section === 'mine'">你创建或加入的客厅都在这里。坐下就好，位置一直给你留着。</template>
+          <template v-else>点过星标的客厅都在这里。想去哪儿，先来这儿看看。</template>
         </p>
-        <button class="btn primary" type="button" @click="heroEnter">
-          {{ model.current ? '走进这间客厅 ↗' : rooms.length ? '逛逛客厅 ↘' : '开一间客厅' }}
+        <div class="hero-actions">
+          <button class="cta" type="button" @click="heroEnter">
+            {{ model.current && section === 'all' ? '走进这间客厅' : rooms.length ? '逛逛客厅' : '开一间客厅' }}
+            <span class="cta-arrow">↗</span>
+          </button>
+          <button class="ghost-link" type="button" @click="scrollToRooms">逛逛其他客厅 ↓</button>
+        </div>
+
+        <div v-if="model.current && section === 'all'" class="hero-now">
+          <span class="hero-now-kicker"><i class="dot" />热闹正在发生 / PARLOR CLUB</span>
+          <div class="hero-now-row">
+            <div class="hero-now-main">
+              <h2>{{ model.current.name }}</h2>
+              <p>{{ model.current.topic || '先在客厅聊聊天，再选一张喜欢的桌。' }}</p>
+              <p class="hero-now-meta">
+                <b>{{ model.current.seats }}</b> / {{ model.current.capacity }} 人在客厅
+                <span>·</span>
+                <b>{{ model.current.tableCount ?? '—' }}</b> 张桌
+              </p>
+            </div>
+            <div v-if="model.rooms.length > 1" class="hero-carousel">
+              <button class="car-btn" type="button" aria-label="上一个热门客厅" @click="carousel.move(-1)">←</button>
+              <span class="car-count">{{ model.index + 1 }} / {{ model.rooms.length }}</span>
+              <span class="car-dots">
+                <button
+                  v-for="(room, index) in model.rooms.length <= 7 ? model.rooms : []"
+                  :key="room.id"
+                  class="car-dot"
+                  type="button"
+                  :class="{ 'is-on': index === model.index }"
+                  :aria-label="'推荐客厅：' + room.name"
+                  :aria-current="index === model.index ? 'true' : 'false'"
+                  @click="carousel.select(index)"
+                />
+              </span>
+              <button class="car-btn" type="button" aria-label="下一个热门客厅" @click="carousel.move(1)">→</button>
+              <button
+                class="car-pause"
+                type="button"
+                :aria-label="model.paused ? '开始轮播' : '暂停轮播'"
+                @click="carousel.setPaused(!model.paused)"
+              >{{ model.paused ? '▶' : 'Ⅱ' }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scene" aria-hidden="true">
+        <span class="scene-lamp" />
+        <span class="spark spark-a">✳</span>
+        <span class="spark spark-b">✳</span>
+        <span class="spark spark-c">✳</span>
+        <div class="scene-table">
+          <div class="scene-felt"><span class="scene-felt-mark">GOOD COMPANY · GREAT HANDS</span></div>
+          <div class="scene-seat seat-a" />
+          <div class="scene-seat seat-b" />
+          <div class="scene-cards">
+            <span class="scard black">A<span>♠</span></span>
+            <span class="scard red">K<span>♥</span></span>
+            <span class="scard black">Q<span>♣</span></span>
+          </div>
+        </div>
+        <span class="scene-caption">THE PARLOR SESSIONS · VOL. 03</span>
+      </div>
+
+      <div v-if="section === 'all'" class="hero-chips">
+        <p class="hero-chips-label">今晚有人的客厅 <b>{{ topRooms.length }}</b> 间</p>
+        <button v-for="room in topRooms" :key="room.id" class="rchip" type="button" @click="enter(room)">
+          <span class="rchip-top">
+            <i class="dot" :class="{ live: isLive(room) }" />{{ isLive(room) ? '正在对局' : '等你入座' }}
+          </span>
+          <span class="rchip-name">{{ room.name }}</span>
+          <span class="rchip-meta">
+            <b>{{ room.seats }}</b> / {{ room.capacity }} 人
+            <span>·</span>
+            <b>{{ room.tableCount ?? '—' }}</b> 张桌
+          </span>
         </button>
-      </div>
-      <div class="club-scene is-large" aria-hidden="true">
-        <span class="club-orbit">✳</span>
-        <div class="club-felt">
-          <span v-for="value in ['A♠', 'K♥', 'Q♣']" :key="value" class="club-playing-card">{{ value }}</span>
-        </div>
-        <span class="club-scene-label">GOOD COMPANY. GREAT HANDS.</span>
-      </div>
-      <div v-if="model.rooms.length > 1" class="club-carousel-controls">
-        <span class="club-carousel-status">{{ model.index + 1 }} / {{ model.rooms.length }} · 每 6 秒轮换</span>
-        <button class="btn ghost small" type="button" aria-label="上一个热门客厅" @click="carousel.move(-1)">←</button>
-        <div class="club-carousel-dots" aria-label="选择热门客厅">
-          <button
-            v-for="(room, index) in model.rooms.length <= 7 ? model.rooms : []"
-            :key="room.id"
-            class="club-carousel-dot"
-            type="button"
-            :aria-label="'推荐客厅：' + room.name"
-            :aria-current="index === model.index ? 'true' : 'false'"
-            @click="carousel.select(index)"
-          />
-        </div>
-        <button class="btn ghost small" type="button" aria-label="下一个热门客厅" @click="carousel.move(1)">→</button>
-        <button
-          class="btn ghost small"
-          type="button"
-          :aria-label="model.paused ? '开始热门客厅自动轮播' : '暂停热门客厅自动轮播'"
-          @click="carousel.setPaused(!model.paused)"
-        >{{ model.paused ? '开始轮播' : '暂停轮播' }}</button>
+        <button class="rchip all" type="button" @click="scrollToRooms">全部客厅 ↓</button>
       </div>
     </section>
 
-    <section class="panel hall-rooms">
-      <div class="panel-head">
-        <h2>{{ section === 'all' ? '客厅' : filteredRooms.length + ' 间客厅' }}</h2>
-        <button class="link" type="button" @click="loadHall(true)">刷新</button>
-      </div>
-      <div class="club-discovery">
-        <input v-model="query" class="club-search" type="search" placeholder="搜索客厅名字、话题…" aria-label="搜索客厅">
-        <div class="club-filters" aria-label="筛选客厅">
-          <button
-            v-for="item in [{ id: 'all', label: '全部' }, { id: 'ddz', label: '斗地主' }, { id: 'werewolf', label: '狼人杀' }] as const"
-            :key="item.id"
-            class="btn ghost small"
-            type="button"
-            :class="{ 'is-active': filter === item.id }"
-            :aria-pressed="filter === item.id"
-            @click="filter = item.id"
-          >{{ item.label }}</button>
+    <section ref="directoryEl" class="directory hall-rooms" :aria-label="section === 'all' ? '全部客厅' : '我的客厅'">
+      <header class="directory-head">
+        <h2>{{ section === 'all' ? '全部客厅' : section === 'mine' ? '我的客厅' : '收藏的地方' }}</h2>
+        <span class="directory-count">{{ filteredRooms.length }} 间</span>
+        <div class="directory-tools">
+          <input v-model="query" class="search" type="search" placeholder="搜客厅名字、话题…" aria-label="搜索客厅">
+          <div class="filters" aria-label="筛选客厅">
+            <button
+              v-for="item in [{ id: 'all', label: '全部' }, { id: 'ddz', label: '斗地主' }, { id: 'werewolf', label: '狼人杀' }] as const"
+              :key="item.id"
+              class="filter"
+              type="button"
+              :class="{ 'is-on': filter === item.id }"
+              :aria-pressed="filter === item.id"
+              @click="filter = item.id"
+            >{{ item.label }}</button>
+          </div>
+          <button class="refresh" type="button" @click="loadHall(true)">刷新</button>
         </div>
-      </div>
+      </header>
+
       <p v-if="notice" class="warn">{{ notice }}</p>
-      <p v-if="!hallLoaded" class="muted">正在加载客厅…</p>
-      <p v-else-if="hallError && !rooms.length" class="warn">取不到大厅：{{ hallError }}</p>
-      <div v-else class="rooms-list hall-rooms-list">
+      <p v-if="!hallLoaded" class="muted hall-note">正在加载客厅…</p>
+      <p v-else-if="hallError && !rooms.length" class="warn hall-note">取不到大厅：{{ hallError }}</p>
+      <div v-else class="posters hall-rooms-list">
         <div v-if="!filteredRooms.length" class="club-empty">
           <p>{{ emptyText() }}</p>
           <button v-if="section !== 'all'" class="btn ghost small" type="button" @click="showDiscover">去发现客厅 ↗</button>
         </div>
-        <article v-for="room in filteredRooms" :key="room.id" class="club-room-card">
-          <div class="club-scene" :class="{ 'is-night': (room.games || []).includes('werewolf') }" aria-hidden="true">
-            <span class="club-orbit">✳</span>
-            <div class="club-felt">
-              <span v-for="value in ['A♠', 'K♥', 'Q♣']" :key="value" class="club-playing-card">{{ value }}</span>
-            </div>
-            <span class="club-scene-label">GOOD COMPANY. GREAT HANDS.</span>
+        <article v-for="room in filteredRooms" :key="room.id" class="poster club-room-card">
+          <div class="poster-art" :class="artFor(room)">
+            <span class="chip" :class="{ live: isLive(room) }">
+              <i class="dot" :class="{ live: isLive(room) }" />{{ isLive(room) ? '正在对局' : '等你入座' }}
+            </span>
+            <button
+              class="poster-fav club-favorite"
+              type="button"
+              :aria-label="(isFavorite(room.id) ? '取消收藏 ' : '收藏 ') + room.name"
+              :aria-pressed="isFavorite(room.id)"
+              @click.stop="toggleFavorite(room.id)"
+            >{{ isFavorite(room.id) ? '★' : '☆' }}</button>
+            <span class="poster-motif">
+              <template v-if="artFor(room) === 'art-cards'"><i>A♠</i><i>K♥</i><i>Q♣</i></template>
+              <template v-else-if="artFor(room) === 'art-moon'"><i class="moon-disc" /></template>
+              <template v-else><i class="die one" /><i class="die two" /></template>
+            </span>
           </div>
-          <button
-            class="btn ghost small club-favorite"
-            type="button"
-            :aria-label="(isFavorite(room.id) ? '取消收藏 ' : '收藏 ') + room.name"
-            :aria-pressed="isFavorite(room.id)"
-            @click="toggleFavorite(room.id)"
-          >{{ isFavorite(room.id) ? '★' : '☆' }}</button>
-          <div class="club-room-copy">
-            <span class="eyebrow">{{ visibilityLabel(room) }}客厅</span>
+          <div class="poster-body">
             <h3>{{ room.name }}</h3>
             <p>{{ room.topic || '牌可以慢慢打，话也可以慢慢聊。' }}</p>
-            <div class="club-room-foot">
-              <span>{{ room.seats }} / {{ room.capacity }} 人 · {{ room.tableCount ?? '—' }} 桌</span>
-              <button class="btn ghost small" type="button" @click="enter(room)">进客厅 ↗</button>
+            <div class="poster-foot">
+              <span><b>{{ room.seats }}</b> / {{ room.capacity }} 人</span>
+              <span>·</span>
+              <span><b>{{ room.tableCount ?? '—' }}</b> 张桌</span>
+              <span class="poster-go">{{ room.visibility === 'public' ? '进客厅' : '成员可见' }} ↗</span>
             </div>
           </div>
         </article>
@@ -262,10 +322,10 @@ async function createRoom(): Promise<void> {
       <p class="muted hall-note">公开客厅谁都能进；不公开的要先被邀请。</p>
     </section>
 
-    <section v-if="section === 'all'" class="panel hall-people">
-      <div class="panel-head">
+    <section v-if="section === 'all'" class="people">
+      <div class="people-head">
         <h2>大厅里</h2>
-        <span class="muted">{{ visibleSeats.length }} 人</span>
+        <span class="directory-count">{{ visibleSeats.length }} 人</span>
       </div>
       <div class="member-row">
         <p v-if="!visibleSeats.length" class="muted">大厅里现在没有在线的人。</p>
@@ -278,10 +338,9 @@ async function createRoom(): Promise<void> {
           <span v-if="person.kind === 'pet'" class="tag tag-coo">Coo</span>
         </span>
       </div>
-      <p class="muted hall-note">在别的客厅里的人不在这里显示；离线的不显示。</p>
     </section>
 
-    <section v-if="section !== 'favorites'" class="panel hall-create">
+    <section v-if="section !== 'favorites'" class="create hall-create">
       <h2>开一间新的</h2>
       <div class="hall-create-row">
         <input ref="createInputEl" v-model="createName" type="text" maxlength="32" placeholder="客厅名字（2–32 个字）" aria-label="新客厅名字">

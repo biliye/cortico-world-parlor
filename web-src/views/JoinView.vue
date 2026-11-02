@@ -85,6 +85,19 @@ async function parentPlay(): Promise<void> {
 
 <template>
   <div class="join">
+    <div class="join-scene" aria-hidden="true">
+      <span class="join-lamp" />
+      <div class="join-felt">
+        <span class="join-felt-mark">GOOD COMPANY · GREAT HANDS</span>
+      </div>
+      <div class="join-cards">
+        <span class="scard black">A<span>♠</span></span>
+        <span class="scard red">K<span>♥</span></span>
+        <span class="scard black">Q<span>♣</span></span>
+      </div>
+      <span class="spark spark-a">✳</span>
+      <span class="spark spark-b">✳</span>
+    </div>
     <ThemePicker />
     <section class="panel">
       <p class="brand">鲸语 <small>PARLOR CLUB</small></p>

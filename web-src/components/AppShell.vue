@@ -1,5 +1,8 @@
 <script setup lang="ts">
-/** 页面骨架：顶栏 + 左栏 + 中间内容 + 右栏聊天。内容由 App 通过默认插槽放进来。 */
+/**
+ * 应用外壳：左侧窄门牌栏 + 顶部细条 + 内容 + 浮起来的「有话慢慢聊」。
+ * 三层结构不变：大厅 → 客厅 → 牌桌；门牌栏负责在会馆里走动，顶条负责工具。
+ */
 import { computed, onMounted, ref, watch } from 'vue';
 import ChatPanel from './ChatPanel.vue';
 import DmWindow from './DmWindow.vue';
@@ -7,12 +10,11 @@ import Icon from './Icon.vue';
 import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
 import { initialOf } from '../lib/text.ts';
-import { club } from '../stores/club.ts';
 import { chatExpanded, chooseTab, closeSheet, sheetOpen, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { loadMail, setUnread, unread as mailUnread } from '../stores/mail.ts';
-import { connection, snapshot } from '../stores/parlor.ts';
+import { connection, goRoom, hallSeats, snapshot } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
 
@@ -22,10 +24,19 @@ const inHall = computed(() => snapshot.value?.id === 'hall');
 const switcherOpen = ref(false);
 
 const sections = [
-  { id: 'all', label: '发现客厅', icon: 'lamp' },
-  { id: 'mine', label: '我的客厅', icon: 'users' },
-  { id: 'favorites', label: '收藏的地方', icon: 'spark' },
+  { id: 'all', label: '发现', long: '发现客厅', icon: 'lamp' },
+  { id: 'mine', label: '我的', long: '我的客厅', icon: 'users' },
+  { id: 'favorites', label: '收藏', long: '收藏的地方', icon: 'spark' },
 ] as const;
+
+/** 顶条上的在线数：大厅看名单，客厅看快照里的在线集合。 */
+const presence = computed(() => {
+  if (inHall.value) return hallSeats.value.length;
+  const online = new Set(snapshot.value?.online || []);
+  return (snapshot.value?.seats || []).filter((person) => online.has(person.id)).length;
+});
+const connected = computed(() => connection.value === 'on');
+const connectionText = computed(() => (connection.value === 'off' ? '重连中…' : '连接中…'));
 
 watch(sheetOpen, (open) => { document.body.classList.toggle('sheet-open', open); }, { immediate: true });
 
@@ -40,80 +51,87 @@ function openMail(): void {
   void loadMail(true);
 }
 
+/** 门牌栏的三项只在大厅里换目录范围；不在大厅就先回大厅。 */
+async function goSection(id: 'all' | 'mine' | 'favorites'): Promise<void> {
+  selectHallSection(id);
+  if (!inHall.value) await goRoom('hall');
+}
+
 onMounted(() => {
   void loadThreads();
 });
 </script>
 
 <template>
-  <header class="topbar">
-    <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
-    <button class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
-      <span class="live-dot" />
-      <span class="room-pill-main">{{ roomLabel }}</span>
-    </button>
-    <div class="top-right">
-      <span class="conn" :class="connection">
-        <span class="dot" />
-        <span class="conn-text">{{ connection === 'on' ? '已连接' : connection === 'off' ? '重连中…' : '连接中…' }}</span>
-      </span>
-      <button class="ghost-btn mail-btn" type="button" @click="openMail">
-        <Icon name="mail" />信箱<span v-if="mailUnread" class="badge">{{ mailUnread }}</span>
-      </button>
-      <button class="ghost-btn dm-btn dm-toggle" type="button" @click="toggleDm">
-        <Icon name="chat" />私聊<span v-if="dmUnread" class="badge">{{ dmUnread }}</span>
-      </button>
-      <span class="top-me">
-        <span class="top-me-text">
-          <span class="top-me-name">{{ name }} · {{ roomLabel }}</span>
-        </span>
-      </span>
-      <ThemePicker />
-      <button class="btn ghost small chat-toggle" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
-        <Icon name="chat" /><span class="chat-toggle-label">{{ chatExpanded() ? '收起聊天' : '打开聊天' }}</span>
-      </button>
-    </div>
-  </header>
-
-  <DmWindow />
-  <RoomSwitcher v-model:open="switcherOpen" />
-
-  <div class="layout" :class="{ 'chat-collapsed': !club.chatOpen }">
-    <aside class="left-rail">
-      <nav v-if="inHall" class="club-nav" aria-label="会馆导航">
+  <div class="shell" :class="{ 'chat-open': chatExpanded(), 'in-hall': inHall }">
+    <aside class="rail" aria-label="会馆门牌">
+      <a class="rail-mark" href="/play" aria-label="鲸语会馆">
+        <Icon name="whale" />
+      </a>
+      <nav class="rail-nav" aria-label="会馆导航">
         <button
           v-for="item in sections"
           :key="item.id"
-          class="btn ghost"
+          class="rail-btn"
           type="button"
-          :class="{ 'is-active': hallSection === item.id }"
-          :aria-current="hallSection === item.id ? 'page' : undefined"
-          @click="selectHallSection(item.id)"
+          :class="{ 'is-on': inHall && hallSection === item.id }"
+          :title="item.long"
+          @click="goSection(item.id)"
         >
-          <Icon :name="item.icon" />{{ item.label }}
+          <Icon :name="item.icon" />
+          <span>{{ item.label }}</span>
         </button>
       </nav>
-      <section class="panel seat-card">
-        <div class="seat-card-top">
-          <span class="avatar avatar-sm">{{ initialOf(name) }}</span>
-          <div class="seat-card-copy">
-            <span class="eyebrow">我的席位</span>
-            <h2 class="seat-card-name">{{ name }}</h2>
-            <p class="seat-card-sub">{{ roomLabel }}</p>
-          </div>
-        </div>
-      </section>
-      <a class="ghost-btn" href="/parent" target="_blank" rel="noopener">家长页</a>
+      <span class="rail-sep" />
+      <span class="rail-spacer" />
+      <a class="rail-parent" href="/parent" target="_blank" rel="noopener" title="家长页">
+        <Icon name="lock" />
+        <span>家长</span>
+      </a>
+      <span class="rail-me" :title="name + ' · ' + roomLabel">{{ initialOf(name) }}</span>
     </aside>
 
-    <section class="center" aria-label="大厅、客厅与牌桌">
-      <slot />
-    </section>
+    <main class="stage" aria-label="大厅、客厅与牌桌">
+      <header class="topbar">
+        <a class="brand" href="/play"><b>鲸语</b><span>PARLOR CLUB</span></a>
+        <button class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
+          <i class="live-dot" :class="{ off: !connected }" />
+          <span class="room-pill-name">{{ roomLabel }}</span>
+          <span class="room-pill-arrow">▾</span>
+        </button>
+        <span class="presence">
+          <i class="pulse" :class="{ off: !connected }" />
+          <b>{{ presence }}</b> 位朋友在这里
+        </span>
+        <span v-if="!connected" class="conn-chip">{{ connectionText }}</span>
+        <div class="top-right">
+          <button class="tool" type="button" @click="openMail">
+            <Icon name="mail" /><span class="tool-label">信箱</span>
+            <span v-if="mailUnread" class="tool-badge">{{ mailUnread }}</span>
+          </button>
+          <button class="tool" type="button" @click="toggleDm">
+            <Icon name="chat" /><span class="tool-label">私聊</span>
+            <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
+          </button>
+          <ThemePicker />
+          <button class="tool dock" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
+            <Icon name="chat" /><span class="tool-label">{{ chatExpanded() ? '收起聊天' : '有话慢慢聊' }}</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="stage-body">
+        <slot />
+      </div>
+    </main>
 
     <ChatPanel />
+    <DmWindow />
+    <RoomSwitcher v-model:open="switcherOpen" />
+    <div class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
+    <button v-if="!chatExpanded()" class="chat-fab" type="button" @click="toggleChat(true)">
+      <Icon name="chat" />有话慢慢聊
+    </button>
+    <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>
   </div>
-
-  <div class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
-
-  <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>
 </template>

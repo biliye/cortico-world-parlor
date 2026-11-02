@@ -1,0 +1,1507 @@
+/* ============================================================================
+   夜航会馆 · Vue 客户端视觉层（2026-11-02）
+   ----------------------------------------------------------------------------
+   只作用于 <html class="vue-app">：旧页（?legacy=1）继续用 play.css / club.css。
+   结构：窄门牌栏 + 顶部细条 + 舞台内容 + 浮起的「有话慢慢聊」。
+   颜色 token 在这里重定义；两套外观 = 深色（默认）与浅色「白天模式」。
+   ========================================================================== */
+
+/* ——— token ——— */
+html.vue-app {
+  --bg: #060c0a;
+  --bg-soft: #0a1311;
+  --panel: #0f1a17;
+  --panel-glass: rgba(11, 20, 17, .78);
+  --panel-2: #13221d;
+  --line: rgba(206, 232, 201, .10);
+  --line-2: rgba(206, 232, 201, .20);
+  --text: #eef4e8;
+  --muted: #a5b8aa;
+  --dim: #7f9485;
+  --lime: #d9f87d;
+  --lime-ink: #14210e;
+  --lamp: #f3d6a0;
+  --felt: #2f5b45;
+  --felt-deep: #17332a;
+  --paper: #f4efdf;
+  --paper-ink: #26352c;
+  --red: #c75b5f;
+  --radius: 20px;
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --num: "Bahnschrift", "DIN Alternate", "Segoe UI Variable Display", "Segoe UI", var(--font);
+  color-scheme: dark;
+  --shadow-lg: 0 30px 70px rgba(0, 0, 0, .55);
+  --shadow-md: 0 16px 36px rgba(0, 0, 0, .38);
+}
+
+html.vue-app[data-theme="light"] {
+  --bg: #f1f3e8;
+  --bg-soft: #e9ecdf;
+  --panel: #ffffff;
+  --panel-glass: rgba(255, 255, 255, .84);
+  --panel-2: #eef1e5;
+  --line: rgba(38, 53, 44, .12);
+  --line-2: rgba(38, 53, 44, .22);
+  --text: #26352c;
+  --muted: #5d7365;
+  --dim: #7a8d80;
+  --lime: #5d7c2a;
+  --lime-ink: #f6fbe6;
+  --lamp: #b9813a;
+  --felt: #3f7a5e;
+  --felt-deep: #2c5b45;
+  --paper: #ffffff;
+  --paper-ink: #26352c;
+  --red: #a64347;
+  --shadow-lg: 0 26px 60px rgba(55, 70, 58, .18);
+  --shadow-md: 0 12px 28px rgba(55, 70, 58, .14);
+  color-scheme: light;
+}
+
+/* ——— 基座 ——— */
+html.vue-app,
+html.vue-app body,
+html.vue-app #app { height: 100%; }
+
+html.vue-app body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+html.vue-app button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+html.vue-app a { color: inherit; text-decoration: none; }
+html.vue-app svg.icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+html.vue-app .muted { color: var(--muted); }
+html.vue-app .warn { color: #e6a6a2; font-size: 12.5px; }
+html.vue-app .bad { color: #e6a6a2; }
+
+/* 跳过导航链接：平时不占视觉，键盘聚焦时才出现 */
+html.vue-app .skip-link {
+  position: fixed;
+  left: 12px;
+  top: -48px;
+  z-index: 200;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+}
+html.vue-app .skip-link:focus { top: 12px; }
+
+/* 抽屉遮罩：只有拉开聊天时才接点击，平时不挡住页面 */
+html.vue-app .sheet-backdrop { display: none; }
+html.vue-app .sheet-backdrop.is-show {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  background: rgba(3, 8, 6, .55);
+  backdrop-filter: blur(2px);
+}
+
+/* ——— 外壳 ——— */
+html.vue-app .shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  background:
+    radial-gradient(1100px 620px at 62% -12%, rgba(243, 214, 160, .07), transparent 62%),
+    radial-gradient(900px 520px at 30% -6%, rgba(217, 248, 125, .055), transparent 60%),
+    var(--bg);
+}
+
+/* 左：门牌栏 */
+html.vue-app .rail {
+  position: relative;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 0 16px;
+  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .02), transparent 46%), var(--bg-soft);
+}
+html.vue-app .rail-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--lime);
+  margin-bottom: 10px;
+  filter: drop-shadow(0 0 12px rgba(217, 248, 125, .22));
+}
+html.vue-app .rail-mark .icon { width: 30px; height: 30px; stroke: none; fill: currentColor; }
+html.vue-app .rail-nav { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+html.vue-app .rail-btn {
+  width: 56px;
+  padding: 8px 0 7px;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: .04em;
+  transition: color .18s, background .18s;
+}
+html.vue-app .rail-btn .icon { width: 19px; height: 19px; }
+html.vue-app .rail-btn:hover { color: var(--text); background: rgba(255, 255, 255, .045); }
+html.vue-app .rail-btn.is-on {
+  color: var(--lime);
+  background: linear-gradient(180deg, rgba(217, 248, 125, .14), rgba(217, 248, 125, .03));
+}
+html.vue-app .rail-sep { width: 24px; height: 1px; background: var(--line); margin: 10px 0; }
+html.vue-app .rail-spacer { flex: 1; }
+html.vue-app .rail-parent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  color: var(--dim);
+  font-size: 10px;
+  padding: 6px 0;
+}
+html.vue-app .rail-parent .icon { width: 16px; height: 16px; }
+html.vue-app .rail-parent:hover { color: var(--muted); }
+html.vue-app .rail-me {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, #f1e3b6, #cbb87e);
+  color: #101c16;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22);
+}
+
+/* 中：舞台 */
+html.vue-app .stage { position: relative; min-width: 0; height: 100vh; overflow: hidden; }
+html.vue-app .stage-body { height: 100%; overflow-y: auto; overflow-x: hidden; padding-top: 92px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+
+html.vue-app .topbar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 30;
+  height: 84px;
+  margin: 0;
+  border: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 40px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 94%, transparent), color-mix(in srgb, var(--bg) 55%, transparent) 70%, transparent);
+  backdrop-filter: blur(8px);
+}
+html.vue-app .topbar .brand {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 9px;
+  color: var(--text);
+}
+html.vue-app .brand b { font-size: 21px; font-weight: 700; letter-spacing: .06em; }
+html.vue-app .brand span { font-family: var(--num); font-size: 9px; letter-spacing: .3em; color: var(--muted); }
+html.vue-app .topbar .room-pill {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  font-size: 12.5px;
+  background: rgba(255, 255, 255, .03);
+}
+html.vue-app .room-pill:hover { border-color: rgba(217, 248, 125, .45); }
+html.vue-app .room-pill-name { max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.vue-app .room-pill-arrow { color: var(--dim); font-size: 10px; }
+html.vue-app .presence { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+html.vue-app .presence b { color: var(--lime); font-family: var(--num); font-weight: 600; font-size: 13px; }
+html.vue-app .pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 0 3px rgba(217, 248, 125, .12);
+}
+html.vue-app .pulse.off { background: var(--lamp); box-shadow: 0 0 0 3px rgba(243, 214, 160, .12); }
+html.vue-app .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); flex: none; }
+html.vue-app .live-dot.off { background: var(--lamp); }
+html.vue-app .conn-chip {
+  font-size: 11px;
+  color: var(--lamp);
+  border: 1px solid rgba(243, 214, 160, .3);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+html.vue-app .top-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+html.vue-app .tool {
+  position: relative;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+html.vue-app .tool:hover { color: var(--text); border-color: var(--line-2); background: rgba(255, 255, 255, .03); }
+html.vue-app .tool .icon { width: 16px; height: 16px; }
+html.vue-app .tool.dock { border-color: var(--line-2); color: var(--text); background: rgba(255, 255, 255, .045); }
+html.vue-app .tool-badge {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  font-family: var(--num);
+  font-size: 9.5px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+/* 外观选单做成顶条上的小工具 */
+html.vue-app .theme-picker {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px 0 11px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+html.vue-app .theme-picker:hover { border-color: var(--line-2); background: rgba(255, 255, 255, .03); color: var(--text); }
+html.vue-app .theme-picker .icon { width: 16px; height: 16px; }
+html.vue-app .theme-picker select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0 14px 0 0;
+  min-height: 30px;
+  cursor: pointer;
+}
+html.vue-app .theme-picker option { background: var(--panel); color: var(--text); }
+html.vue-app .theme-picker::after {
+  content: "";
+  position: absolute;
+  margin-left: -10px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--dim);
+  border-bottom: 1.5px solid var(--dim);
+  transform: rotate(45deg) translateY(-1px);
+  pointer-events: none;
+}
+
+/* ——— 内容页通用 ——— */
+html.vue-app .stage-body > .view { padding: 0 40px 90px; }
+html.vue-app .shell.chat-open .stage-body > .view { padding-right: 396px; }
+html.vue-app .view { max-width: none; }
+html.vue-app .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--num);
+  font-size: 10.5px;
+  letter-spacing: .26em;
+  color: var(--lime);
+  font-weight: 600;
+}
+html.vue-app .eyebrow::before { content: ""; width: 28px; height: 1px; background: rgba(217, 248, 125, .55); }
+
+/* 按钮 */
+html.vue-app .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, .04);
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 16px;
+  height: 38px;
+  transition: background .18s, border-color .18s, color .18s;
+}
+html.vue-app .btn:hover:not(:disabled) { border-color: rgba(217, 248, 125, .45); background: rgba(255, 255, 255, .07); }
+html.vue-app .btn.small { height: 30px; padding: 0 12px; font-size: 12px; }
+html.vue-app .btn.primary {
+  background: var(--lime);
+  border-color: var(--lime);
+  color: var(--lime-ink);
+  font-weight: 700;
+}
+html.vue-app .btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
+html.vue-app .btn.ghost { background: transparent; }
+html.vue-app .btn:disabled { opacity: .45; cursor: not-allowed; }
+html.vue-app .link { color: var(--muted); font-size: 12.5px; }
+html.vue-app .link:hover { color: var(--lime); }
+
+/* ——— 大厅首屏 ——— */
+html.vue-app .view-hall { position: relative; }
+html.vue-app .hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 20px;
+  align-items: center;
+  min-height: 514px;
+  padding: 18px 0 0;
+  border-bottom: 1px solid var(--line);
+}
+html.vue-app .hero-copy { position: relative; z-index: 3; padding-bottom: 6px; }
+html.vue-app .hero h1 {
+  margin: 20px 0 0;
+  font-size: clamp(52px, 5.1vw, 78px);
+  line-height: 1.04;
+  letter-spacing: -.035em;
+  font-weight: 700;
+  color: var(--text);
+}
+html.vue-app .hero h1 .spark {
+  display: inline-block;
+  margin-left: 14px;
+  transform: translateY(-10px);
+  font-size: .38em;
+  color: var(--lime);
+  font-weight: 400;
+  text-shadow: 0 0 22px rgba(217, 248, 125, .5);
+  animation: night-twinkle 5.6s ease-in-out infinite;
+}
+html.vue-app .hero-sub {
+  margin: 16px 0 0;
+  max-width: 30em;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+html.vue-app .hero-actions { margin-top: 24px; display: flex; align-items: center; gap: 18px; }
+html.vue-app .cta {
+  height: 50px;
+  padding: 0 6px 0 20px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  box-shadow: 0 14px 36px rgba(217, 248, 125, .16);
+  transition: transform .18s, box-shadow .18s;
+}
+html.vue-app .cta:hover { transform: translateY(-1px); box-shadow: 0 18px 42px rgba(217, 248, 125, .24); }
+html.vue-app .cta-arrow {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(20, 33, 14, .14);
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 15px;
+}
+html.vue-app .ghost-link { font-size: 13px; color: var(--muted); padding: 4px 0; }
+html.vue-app .ghost-link:hover { color: var(--lime); }
+
+html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
+html.vue-app .hero-now-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--num);
+  font-size: 10.5px;
+  letter-spacing: .2em;
+  color: var(--dim);
+  white-space: nowrap;
+}
+html.vue-app .hero-now .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lamp); flex: none; }
+html.vue-app .hero-now-row { display: flex; align-items: flex-end; gap: 16px; margin-top: 8px; }
+html.vue-app .hero-now-main { min-width: 0; flex: 1; }
+html.vue-app .hero-now-main h2 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+html.vue-app .hero-now-main > p { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
+html.vue-app .hero-now-meta { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px !important; color: var(--dim) !important; }
+html.vue-app .hero-now-meta b { color: var(--text); font-family: var(--num); font-size: 13.5px; }
+html.vue-app .hero-carousel { display: flex; align-items: center; gap: 7px; flex: none; padding-bottom: 4px; }
+html.vue-app .car-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+}
+html.vue-app .car-btn:hover { color: var(--text); border-color: rgba(217, 248, 125, .5); }
+html.vue-app .car-count { font-family: var(--num); font-size: 10.5px; color: var(--dim); letter-spacing: .08em; }
+html.vue-app .car-dots { display: flex; align-items: center; gap: 5px; }
+html.vue-app .car-dot { width: 5px; height: 5px; border-radius: 99px; background: var(--line-2); padding: 0; }
+html.vue-app .car-dot.is-on { width: 15px; background: var(--lime); }
+html.vue-app .car-pause { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; color: var(--dim); border: 1px solid transparent; }
+html.vue-app .car-pause:hover { color: var(--muted); border-color: var(--line-2); }
+
+/* 首屏画面：灯下的一张绿绒桌 */
+html.vue-app .scene { position: relative; height: 430px; z-index: 2; }
+html.vue-app .scene-lamp {
+  position: absolute;
+  left: 56%;
+  top: -34px;
+  width: 2px;
+  height: 74px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(217, 248, 125, .06), rgba(217, 248, 125, .45));
+}
+html.vue-app .scene-lamp::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -12px;
+  transform: translateX(-50%);
+  width: 38px;
+  height: 17px;
+  border-radius: 4px 4px 9px 9px;
+  background: linear-gradient(180deg, #e9d3a5, #b79f74);
+  box-shadow: 0 6px 22px rgba(243, 214, 160, .45);
+}
+html.vue-app .scene-lamp::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 86px;
+  transform: translateX(-50%);
+  width: 430px;
+  height: 380px;
+  background: radial-gradient(ellipse at 50% 0%, rgba(243, 214, 160, .16), rgba(243, 214, 160, .04) 42%, transparent 68%);
+  pointer-events: none;
+}
+html.vue-app .scene-table {
+  position: absolute;
+  left: 50%;
+  bottom: -18px;
+  width: 400px;
+  height: 244px;
+  transform: translateX(-50%) rotate(-6deg);
+}
+html.vue-app .scene-felt {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 44% 26%, #427a5c 0%, #2f5b45 40%, #1e4233 74%, #153025 100%);
+  box-shadow:
+    0 34px 60px rgba(0, 0, 0, .5),
+    0 0 0 9px #24483a,
+    0 0 0 10px rgba(196, 228, 178, .14),
+    inset 0 6px 22px rgba(224, 242, 204, .10),
+    inset 0 -22px 44px rgba(0, 0, 0, .4);
+}
+html.vue-app .scene-felt::after {
+  content: "";
+  position: absolute;
+  inset: 18px 24px;
+  border-radius: 50%;
+  border: 1px dashed rgba(220, 243, 201, .2);
+}
+html.vue-app .scene-felt-mark {
+  position: absolute;
+  left: 50%;
+  top: 26px;
+  transform: translateX(-50%);
+  font-family: var(--num);
+  font-size: 8px;
+  letter-spacing: .34em;
+  color: rgba(222, 240, 205, .3);
+  white-space: nowrap;
+}
+html.vue-app .scene-seat { position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 1px dashed rgba(213, 240, 190, .26); }
+html.vue-app .scene-seat.seat-a { left: 5%; bottom: 108px; }
+html.vue-app .scene-seat.seat-b { right: 5%; bottom: 108px; }
+html.vue-app .scene-cards { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); display: flex; align-items: flex-end; }
+html.vue-app .scard {
+  width: 56px;
+  height: 78px;
+  border-radius: 7px;
+  flex: none;
+  background: linear-gradient(160deg, #fbf8ec, var(--paper));
+  color: var(--paper-ink);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, .42), inset 0 0 0 1px rgba(255, 255, 255, .6);
+  padding: 6px 7px;
+  font-family: var(--num);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+html.vue-app .scard span { display: block; margin-top: 3px; font-size: 12px; }
+html.vue-app .scard:nth-child(1) { transform: rotate(-12deg) translateX(15px) translateY(5px); z-index: 1; }
+html.vue-app .scard:nth-child(2) { transform: rotate(-1deg); z-index: 2; }
+html.vue-app .scard:nth-child(3) { transform: rotate(11deg) translateX(-15px) translateY(5px); z-index: 3; }
+html.vue-app .scard.red { color: var(--red); }
+html.vue-app .spark { position: absolute; color: var(--lime); opacity: .75; text-shadow: 0 0 16px rgba(217, 248, 125, .45); pointer-events: none; }
+html.vue-app .spark-a { left: 12%; top: 18%; font-size: 20px; }
+html.vue-app .spark-b { right: 16%; top: 8%; font-size: 12px; opacity: .5; }
+html.vue-app .spark-c { right: 6%; bottom: 30%; font-size: 22px; }
+html.vue-app .scene-caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  font-family: var(--num);
+  font-size: 8.5px;
+  letter-spacing: .3em;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* 首屏底部：今晚有人的客厅 */
+html.vue-app .hero-chips {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 12px;
+  padding: 18px 0 22px;
+}
+html.vue-app .hero-chips-label {
+  width: 100%;
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--num);
+  font-size: 10.5px;
+  letter-spacing: .22em;
+  color: var(--dim);
+}
+html.vue-app .hero-chips-label b { font-family: var(--font); font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: .02em; }
+html.vue-app .rchip {
+  width: 208px;
+  text-align: left;
+  padding: 12px 14px 13px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel-glass);
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  transition: transform .2s, border-color .2s, background .2s;
+}
+html.vue-app .rchip:hover { transform: translateY(-3px); border-color: rgba(217, 248, 125, .3); }
+html.vue-app .rchip-top { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: .08em; color: var(--dim); }
+html.vue-app .rchip-top .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); flex: none; }
+html.vue-app .rchip-top .dot.live { background: var(--lamp); }
+html.vue-app .rchip-name { font-size: 16.5px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
+html.vue-app .rchip-meta { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--dim); }
+html.vue-app .rchip-meta b { color: var(--text); font-family: var(--num); font-weight: 600; }
+html.vue-app .rchip.all { width: 176px; align-items: center; justify-content: center; border-style: dashed; color: var(--muted); font-size: 13px; }
+html.vue-app .rchip.all:hover { color: var(--lime); }
+
+/* ——— 客厅目录 ——— */
+html.vue-app .directory { padding-top: 34px; scroll-margin-top: 96px; }
+html.vue-app .directory-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+html.vue-app .directory-head h2 { margin: 0; font-size: 27px; font-weight: 700; letter-spacing: -.015em; }
+html.vue-app .directory-count { font-family: var(--num); font-size: 11.5px; color: var(--dim); letter-spacing: .12em; }
+html.vue-app .directory-tools { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+html.vue-app .search {
+  height: 36px;
+  width: 224px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .025);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0 14px;
+  outline: none;
+}
+html.vue-app .search::placeholder { color: var(--dim); }
+html.vue-app .search:focus { border-color: rgba(217, 248, 125, .4); }
+html.vue-app .filters { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; border: 1px solid var(--line); }
+html.vue-app .filter { height: 28px; padding: 0 13px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+html.vue-app .filter:hover { color: var(--text); }
+html.vue-app .filter.is-on { background: rgba(217, 248, 125, .14); color: var(--lime); }
+html.vue-app .refresh { font-size: 12px; color: var(--dim); padding: 4px 2px; }
+html.vue-app .refresh:hover { color: var(--lime); }
+
+html.vue-app .posters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
+html.vue-app .poster {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform .22s cubic-bezier(.2, .7, .2, 1), border-color .22s, box-shadow .22s;
+}
+html.vue-app .poster:hover { transform: translateY(-4px); border-color: rgba(217, 248, 125, .32); box-shadow: var(--shadow-md); }
+html.vue-app .poster-art { position: relative; height: 132px; overflow: hidden; }
+html.vue-app .poster-art.art-cards { background: radial-gradient(120% 130% at 70% 10%, #356a4f 0%, #24493a 52%, #162d25 100%); }
+html.vue-app .poster-art.art-moon { background: radial-gradient(120% 130% at 30% 6%, #40506e 0%, #28324a 46%, #151c2a 100%); }
+html.vue-app .poster-art.art-dice { background: radial-gradient(120% 130% at 66% 4%, #4b5b3c 0%, #2f3c2a 50%, #1a2419 100%); }
+html.vue-app .poster-art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 55%, rgba(9, 17, 14, .5)); }
+html.vue-app .poster-motif { position: absolute; inset: 0; display: block; }
+html.vue-app .poster-motif .die {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  background: linear-gradient(155deg, #f6f1df, #ded6bd);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, .4), inset 0 0 0 1px rgba(255, 255, 255, .55);
+}
+html.vue-app .poster-motif .die.one { left: 46%; top: 44%; transform: rotate(-16deg); }
+html.vue-app .poster-motif .die.two { left: 56%; top: 54%; transform: rotate(12deg); }
+html.vue-app .poster-motif .die::before,
+html.vue-app .poster-motif .die::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #26302a;
+}
+html.vue-app .poster-motif .die::before { left: 9px; top: 9px; box-shadow: 19px 0 0 #26302a, 0 19px 0 #26302a, 19px 19px 0 #26302a; }
+html.vue-app .poster-motif .die::after { right: 9px; bottom: 9px; }
+html.vue-app .poster-motif .moon-disc {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 36% 32%, #fdf6e2, #e8dbb8 62%, #c9b98f);
+  box-shadow: 0 0 32px rgba(244, 231, 196, .28);
+}
+html.vue-app .poster-motif .moon-disc::after {
+  content: "";
+  position: absolute;
+  left: -34%;
+  right: -34%;
+  bottom: -56%;
+  height: 78px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #1d2637, #101725);
+}
+html.vue-app .poster-motif i:not(.die) { position: absolute; display: block; width: 30px; height: 44px; border-radius: 4px;
+  background: linear-gradient(160deg, #fbf8ec, var(--paper)); color: var(--paper-ink);
+  font-style: normal; font-size: 11px; font-weight: 600; font-family: var(--num);
+  text-align: left; padding: 4px 5px; box-shadow: 0 8px 16px rgba(0, 0, 0, .35); }
+html.vue-app .poster-motif i:nth-child(1) { left: 46%; top: 40%; transform: rotate(-13deg); }
+html.vue-app .poster-motif i:nth-child(2) { left: 50%; top: 36%; transform: rotate(-1deg); z-index: 2; }
+html.vue-app .poster-motif i:nth-child(3) { left: 55%; top: 40%; transform: rotate(12deg); color: var(--red); z-index: 3; }
+html.vue-app .chip {
+  position: absolute;
+  left: 11px;
+  top: 11px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 23px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: .06em;
+  background: rgba(7, 13, 11, .5);
+  border: 1px solid rgba(255, 255, 255, .13);
+  color: #dfe9d9;
+}
+html.vue-app .chip.live { color: var(--lamp); border-color: rgba(243, 214, 160, .35); }
+html.vue-app .chip .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); }
+html.vue-app .chip .dot.live { background: var(--lamp); }
+html.vue-app .poster-fav {
+  position: absolute;
+  right: 9px;
+  top: 9px;
+  z-index: 3;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: rgba(238, 244, 232, .75);
+  background: rgba(7, 13, 11, .45);
+  border: 1px solid rgba(255, 255, 255, .12);
+}
+html.vue-app .poster-fav:hover { color: var(--lime); border-color: rgba(217, 248, 125, .4); }
+html.vue-app .poster-body { padding: 13px 16px 15px; }
+html.vue-app .poster-body h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
+html.vue-app .poster-body p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); min-height: 38px; }
+html.vue-app .poster-foot {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+html.vue-app .poster-foot b { color: var(--text); font-family: var(--num); font-weight: 600; }
+html.vue-app .poster-go { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+html.vue-app .poster:hover .poster-go { color: var(--lime); }
+
+html.vue-app .hall-note { margin: 14px 0 0; font-size: 11.5px; color: var(--dim); }
+html.vue-app .club-empty {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius);
+  padding: 34px 22px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+html.vue-app .club-empty .btn { margin-top: 12px; }
+
+/* 大厅里 + 开一间 */
+html.vue-app .people, html.vue-app .create {
+  margin-top: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 20px 22px 22px;
+}
+html.vue-app .people-head { display: flex; align-items: center; gap: 12px; }
+html.vue-app .people-head h2, html.vue-app .create h2 { margin: 0; font-size: 19px; font-weight: 700; }
+html.vue-app .member-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+html.vue-app .member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .025);
+  font-size: 12px;
+  color: var(--text);
+}
+html.vue-app .member-chip small { display: block; font-size: 10.5px; color: var(--dim); }
+html.vue-app .member-chip strong { font-weight: 600; }
+html.vue-app .avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #101c16;
+  background: linear-gradient(160deg, #cfe9a8, #93c48c);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
+}
+html.vue-app .avatar.avatar-xs { width: 26px; height: 26px; font-size: 11px; }
+html.vue-app .avatar.avatar-sm { width: 30px; height: 30px; }
+html.vue-app .tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--dim); }
+html.vue-app .tag-coo { color: rgba(217, 248, 125, .8); border-color: rgba(217, 248, 125, .25); }
+html.vue-app .hall-create-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+html.vue-app .hall-create-row input, html.vue-app .hall-create-row select {
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, .03);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 14px;
+  outline: none;
+}
+html.vue-app .hall-create-row input { min-width: 220px; }
+html.vue-app .hall-create-row input::placeholder { color: var(--dim); }
+html.vue-app .hall-create-row select { cursor: pointer; }
+html.vue-app .hall-create-row select option { background: var(--panel); color: var(--text); }
+
+/* ——— 浮起的「有话慢慢聊」 ——— */
+html.vue-app .right-rail {
+  position: fixed;
+  z-index: 40;
+  top: 88px;
+  right: 26px;
+  bottom: 22px;
+  width: 336px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+}
+html.vue-app .shell:not(.chat-open) .right-rail { display: none; }
+html.vue-app .chat-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 22px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-glass);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  padding: 0;
+}
+html.vue-app .chat-head { display: flex; align-items: flex-start; gap: 10px; padding: 17px 18px 0; }
+html.vue-app .chat-head .eyebrow { font-size: 9.5px; letter-spacing: .2em; }
+html.vue-app .chat-head h2 { margin: 5px 0 0; font-size: 18px; font-weight: 700; letter-spacing: .01em; }
+html.vue-app .chat-head-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+html.vue-app .chat-head-actions .btn { height: 26px; padding: 0 10px; font-size: 11.5px; }
+html.vue-app .sheet-grip, html.vue-app .sheet-close { display: none; }
+html.vue-app .chat-tabs { display: flex; gap: 22px; margin: 14px 18px 0; border-bottom: 1px solid var(--line); }
+html.vue-app .chat-tab {
+  padding: 0 0 9px;
+  font-size: 12.5px;
+  color: var(--muted);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+}
+html.vue-app .chat-tab.is-active { color: var(--text); }
+html.vue-app .chat-tab.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--lime);
+  border-radius: 2px;
+}
+html.vue-app .tab-count { font-family: var(--num); font-size: 9px; color: var(--lime); }
+html.vue-app .chat-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+html.vue-app .chat-log { flex: 1; overflow-y: auto; padding: 14px 18px 10px; display: flex; flex-direction: column; gap: 13px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+html.vue-app .chat-empty { font-size: 12px; color: var(--dim); text-align: center; padding: 20px 8px; }
+html.vue-app .system-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: .03em;
+  flex-wrap: wrap;
+}
+html.vue-app .system-line time { font-family: var(--num); font-size: 9px; opacity: .8; }
+html.vue-app .chat-log .msg { display: flex; gap: 9px; }
+html.vue-app .chat-log .msg .avatar { width: 28px; height: 28px; font-size: 11px; }
+html.vue-app .msg-body { min-width: 0; }
+html.vue-app .msg-meta { display: flex; align-items: baseline; gap: 6px; }
+html.vue-app .msg-name { font-size: 11.5px; font-weight: 600; color: var(--text); }
+html.vue-app .msg-meta time { font-family: var(--num); font-size: 9px; color: var(--dim); }
+html.vue-app .msg-meta .tag { display: none; }
+html.vue-app .chat-log .msg p {
+  margin: 4px 0 0;
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 11px;
+  border-radius: 3px 13px 13px 13px;
+  background: rgba(206, 232, 201, .055);
+  border: 1px solid rgba(206, 232, 201, .07);
+  color: #dfe8db;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+html.vue-app .composer { border-top: 1px solid var(--line); padding: 10px 16px 14px; }
+html.vue-app .composer-scope { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--dim); margin-bottom: 8px; }
+html.vue-app .scope-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); }
+html.vue-app .composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .03);
+  padding: 5px 5px 5px 14px;
+}
+html.vue-app .composer-row input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 12.5px; }
+html.vue-app .composer-row input::placeholder { color: var(--dim); }
+html.vue-app .send-btn { width: 32px; height: 32px; border-radius: 50%; flex: none; background: var(--lime); color: var(--lime-ink); display: grid; place-items: center; }
+html.vue-app .send-btn .icon { width: 15px; height: 15px; }
+html.vue-app .send-btn:disabled { opacity: .4; }
+html.vue-app .composer .warn { margin: 8px 0 0; }
+
+/* 信箱 */
+html.vue-app .mail-list { flex: 1; overflow-y: auto; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; }
+html.vue-app .mail-item {
+  position: relative;
+  display: flex;
+  gap: 9px;
+  padding: 11px 12px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .025);
+  cursor: pointer;
+  transition: border-color .16s, background .16s;
+}
+html.vue-app .mail-item:hover { border-color: rgba(217, 248, 125, .3); background: rgba(255, 255, 255, .045); }
+html.vue-app .mail-seal { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; background: var(--line-2); flex: none; }
+html.vue-app .mail-item.is-unread .mail-seal { background: var(--lime); box-shadow: 0 0 0 3px rgba(217, 248, 125, .12); }
+html.vue-app .mail-copy { min-width: 0; flex: 1; }
+html.vue-app .mail-meta { display: flex; align-items: baseline; gap: 7px; }
+html.vue-app .mail-meta strong { font-size: 12.5px; }
+html.vue-app .mail-handle { font-family: var(--num); font-size: 9.5px; color: var(--dim); }
+html.vue-app .mail-meta time { margin-left: auto; font-family: var(--num); font-size: 9px; color: var(--dim); }
+html.vue-app .mail-copy > p { margin: 5px 0 0; font-size: 12px; line-height: 1.55; color: #dfe8db; }
+html.vue-app .mail-sub { display: block; margin-top: 4px; font-size: 10px; color: var(--dim); }
+html.vue-app .mail-actions { margin-top: 8px; display: flex; gap: 6px; }
+html.vue-app .mail-go { margin-top: 6px; font-size: 11px; color: var(--lime); }
+html.vue-app .unread-dot { position: absolute; right: 10px; bottom: 10px; width: 6px; height: 6px; border-radius: 50%; background: var(--lime); }
+
+/* 聊天浮动按钮（收起时） */
+html.vue-app .chat-fab {
+  display: none;
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 45;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 14px 36px rgba(217, 248, 125, .22);
+}
+
+/* ——— 加入页 ——— */
+html.vue-app .join {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 20px;
+  background:
+    radial-gradient(820px 480px at 50% -6%, rgba(243, 214, 160, .14), transparent 62%),
+    radial-gradient(700px 420px at 28% 8%, rgba(217, 248, 125, .07), transparent 58%),
+    var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+html.vue-app .join-scene { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+html.vue-app .join-lamp {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 92px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(217, 248, 125, .08), rgba(217, 248, 125, .42));
+}
+html.vue-app .join-lamp::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -13px;
+  transform: translateX(-50%);
+  width: 44px;
+  height: 19px;
+  border-radius: 4px 4px 10px 10px;
+  background: linear-gradient(180deg, #e9d3a5, #b79f74);
+  box-shadow: 0 6px 22px rgba(243, 214, 160, .45);
+}
+html.vue-app .join-lamp::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 102px;
+  transform: translateX(-50%);
+  width: 900px;
+  height: 620px;
+  background: radial-gradient(ellipse at 50% 0%, rgba(243, 214, 160, .15), rgba(243, 214, 160, .04) 44%, transparent 70%);
+}
+html.vue-app .join-felt {
+  position: absolute;
+  left: 50%;
+  bottom: -170px;
+  width: 940px;
+  height: 420px;
+  transform: translateX(-50%) rotate(-5deg);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 44% 24%, #427a5c 0%, #2f5b45 40%, #1e4233 74%, #153025 100%);
+  box-shadow:
+    0 -24px 60px rgba(0, 0, 0, .5),
+    0 0 0 11px #234638,
+    0 0 0 12px rgba(196, 228, 178, .13),
+    inset 0 8px 26px rgba(224, 242, 204, .10);
+}
+html.vue-app .join-felt::after {
+  content: "";
+  position: absolute;
+  inset: 24px 32px;
+  border-radius: 50%;
+  border: 1px dashed rgba(220, 243, 201, .18);
+}
+html.vue-app .join-felt-mark {
+  position: absolute;
+  left: 50%;
+  top: 30px;
+  transform: translateX(-50%);
+  font-family: var(--num);
+  font-size: 9px;
+  letter-spacing: .36em;
+  color: rgba(222, 240, 205, .3);
+  white-space: nowrap;
+}
+html.vue-app .join-cards {
+  position: absolute;
+  right: 12%;
+  bottom: 132px;
+  display: flex;
+  align-items: flex-end;
+  transform: rotate(-5deg);
+}
+html.vue-app .join-cards .scard {
+  width: 76px;
+  height: 106px;
+  border-radius: 8px;
+  flex: none;
+  background: linear-gradient(160deg, #fbf8ec, var(--paper));
+  color: var(--paper-ink);
+  box-shadow: 0 20px 34px rgba(0, 0, 0, .45), inset 0 0 0 1px rgba(255, 255, 255, .6);
+  padding: 8px 9px;
+  font-family: var(--num);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+}
+html.vue-app .join-cards .scard span { display: block; margin-top: 4px; font-size: 15px; }
+html.vue-app .join-cards .scard:nth-child(1) { transform: rotate(-12deg) translateX(20px) translateY(7px); z-index: 1; }
+html.vue-app .join-cards .scard:nth-child(2) { transform: rotate(-1deg); z-index: 2; }
+html.vue-app .join-cards .scard:nth-child(3) { transform: rotate(11deg) translateX(-20px) translateY(7px); z-index: 3; }
+html.vue-app .join-cards .scard.red { color: var(--red); }
+html.vue-app .join .spark-a { left: 24%; top: 30%; font-size: 20px; }
+html.vue-app .join .spark-b { right: 22%; top: 22%; font-size: 12px; opacity: .5; }
+html.vue-app .join .theme-picker {
+  position: absolute;
+  right: 22px;
+  top: 18px;
+  z-index: 3;
+  border: 1px solid var(--line-2);
+  background: var(--panel-glass);
+  backdrop-filter: blur(10px);
+}
+html.vue-app .join .panel {
+  position: relative;
+  z-index: 2;
+  width: min(452px, 100%);
+  padding: 34px 34px 30px;
+  border-radius: 24px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-glass);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-lg);
+}
+html.vue-app .join .brand { display: block; margin: 0 0 18px; color: var(--text); }
+html.vue-app .join .brand small {
+  margin-left: 8px;
+  font-family: var(--num);
+  font-size: 9px;
+  letter-spacing: .3em;
+  color: var(--muted);
+}
+html.vue-app .join h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -.02em; }
+html.vue-app .join .sub { margin: 12px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+html.vue-app .join .field { margin-top: 18px; }
+html.vue-app .join .field label { display: block; font-size: 11.5px; letter-spacing: .08em; color: var(--dim); margin-bottom: 7px; }
+html.vue-app .join .field input {
+  width: 100%;
+  height: 46px;
+  border-radius: 13px;
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, .035);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  padding: 0 15px;
+  outline: none;
+}
+html.vue-app .join .field input:focus { border-color: rgba(217, 248, 125, .55); }
+html.vue-app .join .field input::placeholder { color: var(--dim); }
+html.vue-app .join .btn.primary { width: 100%; height: 48px; margin-top: 20px; font-size: 14.5px; }
+html.vue-app .join .note { margin: 12px 0 0; font-size: 11px; line-height: 1.6; color: var(--dim); }
+html.vue-app .join .error { margin: 12px 0 0; font-size: 12px; color: #e6a6a2; }
+html.vue-app .join .parent-play { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+html.vue-app .join .parent-play .btn { width: 100%; margin-top: 10px; }
+html.vue-app .join .theme-picker { position: absolute; right: 18px; top: 16px; z-index: 3; }
+
+/* ——— 客厅页 ——— */
+html.vue-app .club-page-nav { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 6px 0 2px; }
+html.vue-app .club-page-nav .btn { height: 30px; padding: 0 12px; font-size: 12px; border-color: transparent; color: var(--muted); background: transparent; }
+html.vue-app .club-page-nav .btn:hover { color: var(--text); border-color: var(--line-2); background: rgba(255, 255, 255, .03); }
+html.vue-app .lobby-head { margin-top: 18px; }
+html.vue-app .lobby-head h1 { margin: 10px 0 0; font-size: 44px; font-weight: 700; letter-spacing: -.025em; }
+html.vue-app .lobby-head p { margin: 8px 0 0; font-size: 13.5px; color: var(--muted); }
+html.vue-app .club-welcome {
+  margin-top: 20px;
+  padding: 22px 24px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(120deg, rgba(47, 91, 69, .35), rgba(47, 91, 69, .08));
+}
+html.vue-app .club-welcome .eyebrow { margin-bottom: 10px; }
+html.vue-app .club-welcome h2 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+html.vue-app .club-welcome p { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+html.vue-app .members, html.vue-app .view-table .panel, html.vue-app .view-lobby > .panel {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 18px 20px 20px;
+}
+html.vue-app .panel-head { display: flex; align-items: center; gap: 12px; }
+html.vue-app .panel-head h2 { margin: 0; font-size: 18px; font-weight: 700; }
+html.vue-app .panel-head .muted { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+html.vue-app .club-section-head { display: flex; align-items: baseline; gap: 12px; margin: 26px 0 0; }
+html.vue-app .club-section-head h2 { margin: 0; font-size: 22px; font-weight: 700; }
+html.vue-app .club-section-head .muted { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+html.vue-app .club-table-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+html.vue-app .club-table-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  transition: transform .2s, border-color .2s, box-shadow .2s;
+}
+html.vue-app .club-table-card:hover { transform: translateY(-3px); border-color: rgba(217, 248, 125, .3); box-shadow: var(--shadow-md); }
+html.vue-app .club-table-card > .club-section-head { margin: 0; padding: 13px 16px 0; display: flex; }
+html.vue-app .club-table-card > .club-section-head span { font-size: 12px; color: var(--muted); }
+html.vue-app .club-scene {
+  position: relative;
+  margin: 12px 16px 0;
+  height: 118px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: radial-gradient(120% 130% at 70% 10%, #356a4f 0%, #24493a 52%, #162d25 100%);
+}
+html.vue-app .club-table-card.is-night .club-scene { background: radial-gradient(120% 130% at 30% 6%, #40506e 0%, #28324a 46%, #151c2a 100%); }
+html.vue-app .club-felt { position: absolute; left: 50%; top: 58%; width: 150px; height: 74px; transform: translate(-50%, -50%) rotate(-6deg); border-radius: 50%;
+  background: radial-gradient(ellipse at 40% 28%, #4a8563, #2b5744 60%, #1b3b2d);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, .4), 0 0 0 4px #2c5a44, 0 0 0 5px rgba(200, 230, 185, .2); }
+html.vue-app .club-playing-card { position: absolute; display: block; width: 26px; height: 38px; border-radius: 4px;
+  background: linear-gradient(160deg, #fbf8ec, var(--paper)); color: var(--paper-ink);
+  font-family: var(--num); font-size: 10px; font-weight: 600; text-align: center; line-height: 38px;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, .35); }
+html.vue-app .club-felt .club-playing-card:nth-child(1) { left: 46%; top: 26%; transform: rotate(-13deg); }
+html.vue-app .club-felt .club-playing-card:nth-child(2) { left: 50%; top: 22%; transform: rotate(-1deg); z-index: 2; }
+html.vue-app .club-felt .club-playing-card:nth-child(3) { left: 54%; top: 26%; transform: rotate(12deg); color: var(--red); z-index: 3; }
+html.vue-app .club-orbit { position: absolute; left: 12px; top: 10px; color: var(--lime); opacity: .65; font-size: 13px; }
+html.vue-app .club-scene-label { position: absolute; right: 12px; bottom: 8px; font-family: var(--num); font-size: 7.5px; letter-spacing: .26em; color: rgba(222, 240, 205, .4); }
+html.vue-app .club-table-avatars { position: absolute; left: 12px; bottom: 10px; display: flex; gap: 4px; }
+html.vue-app .club-table-avatars .avatar { width: 22px; height: 22px; font-size: 9.5px; }
+html.vue-app .club-table-copy { padding: 12px 16px 16px; }
+html.vue-app .club-table-copy h3 { margin: 0; font-size: 17px; font-weight: 700; }
+html.vue-app .club-table-copy small { display: block; margin-top: 3px; font-family: var(--num); font-size: 10px; color: var(--dim); }
+html.vue-app .club-table-copy p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+html.vue-app .club-room-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+html.vue-app .club-room-foot .btn.primary { height: 34px; font-size: 12.5px; }
+html.vue-app .game-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 26px; }
+html.vue-app .game-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 20px 22px;
+}
+html.vue-app .game-card .eyebrow { font-size: 9.5px; }
+html.vue-app .game-card h2 { margin: 10px 0 0; font-size: 22px; font-weight: 700; }
+html.vue-app .game-card p { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); }
+html.vue-app .game-card-foot { margin-top: 14px; display: flex; align-items: center; gap: 10px; }
+html.vue-app .game-card-foot .muted { font-size: 11.5px; color: var(--dim); }
+html.vue-app .game-card-foot .btn { margin-left: auto; }
+html.vue-app .club-stay { margin-top: 26px; padding: 18px 22px; border: 1px dashed var(--line-2); border-radius: var(--radius); }
+html.vue-app .club-stay strong { font-size: 13.5px; color: var(--lime); font-weight: 600; }
+html.vue-app .club-stay p { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); }
+
+/* ——— 牌桌页 ——— */
+html.vue-app .table-head { display: flex; align-items: center; gap: 18px; margin-top: 14px; }
+html.vue-app .game-id { display: flex; align-items: center; gap: 14px; }
+html.vue-app .game-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, .04);
+  display: grid;
+  place-items: center;
+  color: var(--lime);
+}
+html.vue-app .game-icon .icon { width: 22px; height: 22px; }
+html.vue-app .table-head h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+html.vue-app .table-head .game-id p { margin: 4px 0 0; font-size: 11.5px; color: var(--dim); }
+html.vue-app .turn-box { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+html.vue-app .turn-copy { text-align: right; }
+html.vue-app .turn-kicker { display: block; font-size: 10px; letter-spacing: .16em; color: var(--lime); font-family: var(--num); }
+html.vue-app .turn-name { display: block; margin-top: 3px; font-size: 14px; font-weight: 600; }
+html.vue-app .timer {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--num);
+  font-size: 11px;
+  color: var(--text);
+  background: conic-gradient(var(--lime) calc(var(--p, 100) * 1%), rgba(206, 232, 201, .12) 0);
+}
+html.vue-app .timer::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg); }
+html.vue-app .timer span { position: relative; z-index: 1; }
+html.vue-app .timer.is-off { background: conic-gradient(var(--line-2) 100%, transparent 0); color: var(--dim); }
+html.vue-app .table-head-host { margin-top: 14px; }
+html.vue-app .ticker { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+html.vue-app .ticker p { margin: 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
+html.vue-app .ticker time { font-family: var(--num); color: var(--muted); margin-right: 6px; }
+html.vue-app .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+html.vue-app .view-table .panel h2 { font-size: 18px; margin: 0 0 10px; }
+
+/* ——— 弹窗、私聊、公告、提示 ——— */
+html.vue-app .rooms-dialog, html.vue-app .access-dialog {
+  border: 1px solid var(--line-2);
+  border-radius: 22px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0;
+  width: min(520px, calc(100vw - 32px));
+  box-shadow: var(--shadow-lg);
+}
+html.vue-app .rooms-dialog::backdrop, html.vue-app .access-dialog::backdrop { background: rgba(3, 8, 6, .62); backdrop-filter: blur(4px); }
+html.vue-app .rooms-box, html.vue-app .access-box { padding: 22px 24px 24px; }
+html.vue-app .rooms-head { display: flex; align-items: center; gap: 12px; }
+html.vue-app .rooms-head h2 { margin: 0; font-size: 20px; font-weight: 700; }
+html.vue-app .rooms-head .btn { margin-left: auto; }
+html.vue-app .rooms-status { margin: 12px 0 0; font-size: 12.5px; color: var(--muted); }
+html.vue-app .access-body { margin-top: 14px; }
+html.vue-app .access-owner { margin: 0 0 12px; font-size: 12px; color: var(--dim); }
+html.vue-app .access-section h3 { margin: 10px 0 8px; font-size: 12px; letter-spacing: .1em; color: var(--dim); font-weight: 600; }
+html.vue-app .access-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .025);
+  margin-bottom: 7px;
+}
+html.vue-app .access-who { min-width: 0; flex: 1; }
+html.vue-app .access-who strong { display: block; font-size: 13.5px; }
+html.vue-app .access-who small { display: block; margin-top: 2px; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.vue-app .access-member { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 13px; margin-bottom: 7px; }
+
+html.vue-app .announce-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(217, 248, 125, .22);
+  background: rgba(217, 248, 125, .07);
+  color: var(--text);
+  font-size: 12.5px;
+}
+html.vue-app .announce-mark { color: var(--lime); display: grid; place-items: center; }
+html.vue-app .announce-text { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.vue-app .announce-link { color: var(--lime); font-size: 12px; }
+html.vue-app .announce-dismiss { height: 26px; padding: 0 10px; font-size: 11.5px; }
+
+html.vue-app .dm {
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  overflow: hidden;
+}
+html.vue-app .dm-head { background: var(--panel-2); border-bottom: 1px solid var(--line); }
+html.vue-app .dm-search { background: rgba(255, 255, 255, .03); border: 1px solid var(--line); color: var(--text); border-radius: 999px; }
+html.vue-app .dm-person.is-active { background: rgba(217, 248, 125, .1); }
+html.vue-app .dm-msg p { background: rgba(206, 232, 201, .06); color: #dfe8db; border-radius: 3px 12px 12px 12px; }
+html.vue-app .dm-msg.is-me p { background: rgba(217, 248, 125, .13); color: #eef6dd; }
+html.vue-app .dm-compose { border-top: 1px solid var(--line); }
+html.vue-app .dm-compose input { background: rgba(255, 255, 255, .03); border: 1px solid var(--line); color: var(--text); border-radius: 999px; }
+
+html.vue-app .toast {
+  border-radius: 999px;
+  border: 1px solid rgba(217, 248, 125, .3);
+  background: rgba(15, 26, 23, .92);
+  color: var(--text);
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+}
+html.vue-app .toast.bad { border-color: rgba(230, 166, 162, .4); color: #f3cfcb; }
+
+/* ——— 浅色「白天模式」的局部修正 ——— */
+html.vue-app[data-theme="light"] .scene-felt,
+html.vue-app[data-theme="light"] .join-felt {
+  box-shadow: 0 30px 60px rgba(45, 70, 55, .25), 0 0 0 9px #2f5c47, 0 0 0 10px rgba(60, 90, 70, .18), inset 0 6px 20px rgba(230, 245, 220, .18);
+}
+html.vue-app[data-theme="light"] .topbar { background: linear-gradient(180deg, rgba(241, 243, 232, .96), rgba(241, 243, 232, .6) 70%, transparent); }
+html.vue-app[data-theme="light"] .scene-lamp::after { background: radial-gradient(ellipse at 50% 0%, rgba(201, 138, 46, .18), rgba(201, 138, 46, .05) 42%, transparent 68%); }
+html.vue-app[data-theme="light"] .chat-log .msg p { background: rgba(38, 53, 44, .05); border-color: rgba(38, 53, 44, .08); color: #2e4035; }
+html.vue-app[data-theme="light"] .mail-copy > p { color: #2e4035; }
+html.vue-app[data-theme="light"] .poster-art::after { background: linear-gradient(180deg, transparent 60%, rgba(241, 243, 232, .25)); }
+html.vue-app[data-theme="light"] .poster-fav { background: rgba(255, 255, 255, .6); color: #3b4d41; border-color: rgba(38, 53, 44, .18); }
+html.vue-app[data-theme="light"] .chip { background: rgba(255, 255, 255, .72); border-color: rgba(38, 53, 44, .16); color: #2e4035; }
+html.vue-app[data-theme="light"] .club-page-nav .btn:hover { background: rgba(38, 53, 44, .05); }
+html.vue-app[data-theme="light"] .btn { background: rgba(38, 53, 44, .05); }
+html.vue-app[data-theme="light"] .btn:hover:not(:disabled) { background: rgba(38, 53, 44, .09); }
+
+/* ——— 响应式 ——— */
+@media (max-width: 1320px) {
+  html.vue-app .hero { grid-template-columns: minmax(0, 1fr); min-height: 0; padding-top: 26px; }
+  html.vue-app .hero h1 { font-size: clamp(48px, 6.4vw, 72px); }
+  html.vue-app .scene { height: 300px; margin-top: 4px; }
+  html.vue-app .scene-table { width: 340px; height: 208px; bottom: -10px; }
+  html.vue-app .scene-lamp { left: 50%; }
+  html.vue-app .scene-lamp::after { width: 380px; height: 320px; }
+  html.vue-app .shell.chat-open .stage-body > .view { padding-right: 372px; }
+  html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 1100px) {
+  html.vue-app .join-cards { display: none; }
+  html.vue-app .join-felt { width: 760px; height: 340px; bottom: -150px; }
+  html.vue-app .shell { grid-template-columns: minmax(0, 1fr); }
+  html.vue-app .rail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    height: 62px;
+    flex-direction: row;
+    justify-content: center;
+    gap: 18px;
+    padding: 0 16px;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg-soft) 92%, transparent);
+    backdrop-filter: blur(14px);
+    z-index: 50;
+  }
+  html.vue-app .rail-mark, html.vue-app .rail-sep, html.vue-app .rail-parent { display: none; }
+  html.vue-app .rail-nav { flex-direction: row; gap: 10px; }
+  html.vue-app .rail-btn { width: 62px; padding: 6px 0 5px; }
+  html.vue-app .rail-me { width: 30px; height: 30px; font-size: 11px; }
+  html.vue-app .stage { height: 100vh; }
+  html.vue-app .stage-body { padding-top: 84px; padding-bottom: 74px; }
+  html.vue-app .stage-body > .view { padding: 0 20px 40px; }
+  html.vue-app .shell.chat-open .stage-body > .view { padding-right: 20px; }
+  html.vue-app .topbar { height: 76px; padding: 0 20px; gap: 10px; }
+  html.vue-app .topbar .presence { display: none; }
+  html.vue-app .top-right .tool { padding: 0 9px; }
+  html.vue-app .top-right .tool.dock { display: none; }
+  html.vue-app .top-right .theme-picker { padding: 0 8px; }
+  html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  html.vue-app .directory-tools { width: 100%; margin-left: 0; flex-wrap: wrap; }
+  html.vue-app .search { flex: 1; width: auto; min-width: 160px; }
+  html.vue-app .right-rail {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: min(76vh, 620px);
+    z-index: 70;
+    padding: 0 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  html.vue-app .shell.chat-open .right-rail { display: flex; }
+  html.vue-app .chat-panel { border-radius: 22px 22px 16px 16px; }
+  html.vue-app .sheet-grip {
+    display: block;
+    width: 42px;
+    height: 4px;
+    border-radius: 99px;
+    background: var(--line-2);
+    margin: 10px auto 0;
+  }
+  html.vue-app .sheet-close { display: inline-flex; }
+  html.vue-app .chat-head { padding-top: 12px; }
+  html.vue-app .chat-fab { display: inline-flex; bottom: calc(78px + env(safe-area-inset-bottom)); }
+  html.vue-app .join .panel { padding: 26px 22px 24px; }
+  html.vue-app .club-table-grid, html.vue-app .game-grid { grid-template-columns: minmax(0, 1fr); }
+  html.vue-app .lobby-head h1 { font-size: 34px; }
+  html.vue-app .turn-box { gap: 8px; }
+  html.vue-app .table-head { flex-wrap: wrap; }
+}
+
+@media (max-width: 640px) {
+  html.vue-app .hero h1 { font-size: clamp(40px, 11vw, 54px); }
+  html.vue-app .hero-sub { font-size: 13px; }
+  html.vue-app .hero-actions { flex-wrap: wrap; gap: 12px; }
+  html.vue-app .cta { height: 46px; font-size: 13.5px; }
+  html.vue-app .scene { height: 260px; }
+  html.vue-app .scene-table { width: 300px; height: 186px; }
+  html.vue-app .scard { width: 48px; height: 68px; font-size: 12px; }
+  html.vue-app .posters { grid-template-columns: minmax(0, 1fr); }
+  html.vue-app .rchip, html.vue-app .rchip.all { width: calc(50% - 6px); }
+  html.vue-app .topbar { gap: 6px; padding: 0 14px; }
+  html.vue-app .brand span { display: none; }
+  html.vue-app .brand b { font-size: 18px; }
+  html.vue-app .room-pill { padding: 0 9px; }
+  html.vue-app .room-pill-arrow { display: none; }
+  html.vue-app .top-right { gap: 2px; }
+  html.vue-app .top-right .tool { padding: 0 7px; }
+  html.vue-app .top-right .tool-label { display: none; }
+  html.vue-app .top-right .tool .icon { width: 18px; height: 18px; }
+  html.vue-app .tool-badge { top: -1px; right: 1px; }
+  html.vue-app .theme-picker { padding: 0 6px; }
+  html.vue-app .theme-picker select { display: none; }
+  html.vue-app .theme-picker::after { display: none; }
+  html.vue-app .directory-head h2 { font-size: 23px; }
+  html.vue-app .hall-create-row input { min-width: 100%; }
+  html.vue-app .join h1 { font-size: 25px; }
+  html.vue-app .join .panel { padding: 22px 18px 20px; }
+  html.vue-app .join .theme-picker { right: 10px; top: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.vue-app *, html.vue-app *::before, html.vue-app *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes night-twinkle {
+  0%, 100% { opacity: .95; transform: translateY(-10px) scale(1); }
+  50% { opacity: .55; transform: translateY(-10px) scale(.92); }
+}
