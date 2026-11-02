@@ -133,7 +133,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
           <span class="turn-name">{{ myTurn ? meName : (botTurn ? turnName + ' · 脚本' : turnName) }}</span>
         </div>
         <div
-          class="timer"
+          class="turn-timer"
           :class="{ 'is-off': !deadline || left <= 0 || botTurn }"
           :style="{ '--p': String(botTurn ? 100 : timerProgress) }"
         >

@@ -724,7 +724,7 @@ html.vue-app .poster-motif i:not(.die) { position: absolute; display: block; wid
 html.vue-app .poster-motif i:nth-child(1) { left: 46%; top: 40%; transform: rotate(-13deg); }
 html.vue-app .poster-motif i:nth-child(2) { left: 50%; top: 36%; transform: rotate(-1deg); z-index: 2; }
 html.vue-app .poster-motif i:nth-child(3) { left: 55%; top: 40%; transform: rotate(12deg); color: var(--red); z-index: 3; }
-html.vue-app .chip {
+html.vue-app .poster-chip {
   position: absolute;
   left: 11px;
   top: 11px;
@@ -741,9 +741,9 @@ html.vue-app .chip {
   border: 1px solid rgba(255, 255, 255, .13);
   color: #dfe9d9;
 }
-html.vue-app .chip.live { color: var(--lamp); border-color: rgba(243, 214, 160, .35); }
-html.vue-app .chip .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); }
-html.vue-app .chip .dot.live { background: var(--lamp); }
+html.vue-app .poster-chip.live { color: var(--lamp); border-color: rgba(243, 214, 160, .35); }
+html.vue-app .poster-chip .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); }
+html.vue-app .poster-chip .dot.live { background: var(--lamp); }
 html.vue-app .poster-fav {
   position: absolute;
   right: 9px;
@@ -771,7 +771,7 @@ html.vue-app .poster-foot {
   align-items: baseline;
   gap: 7px;
   font-size: 11.5px;
-  color: var(--dim);
+  color: var(--muted);
 }
 html.vue-app .poster-foot b { color: var(--text); font-family: var(--num); font-weight: 600; }
 html.vue-app .poster-go { margin-left: auto; color: var(--muted); font-size: 11.5px; }
@@ -788,6 +788,153 @@ html.vue-app .club-empty {
   font-size: 13px;
 }
 html.vue-app .club-empty .btn { margin-top: 12px; }
+
+/* ——— 我的客厅 / 收藏：与「发现」分开的第一眼 ——— */
+html.vue-app .section-head {
+  position: relative;
+  padding: 34px 0 26px;
+  border-bottom: 1px solid var(--line);
+}
+html.vue-app .section-head h1 {
+  margin: 18px 0 0;
+  font-size: clamp(38px, 4vw, 56px);
+  line-height: 1.08;
+  letter-spacing: -.03em;
+  font-weight: 700;
+}
+html.vue-app .section-sub { margin: 12px 0 0; max-width: 34em; font-size: 14px; line-height: 1.75; color: var(--muted); }
+html.vue-app .section-tools { margin-top: 22px; display: flex; align-items: center; gap: 10px; }
+
+/* 我的客厅：大卡 + 一个「开一间」的空位 */
+html.vue-app .mine-grid { margin-top: 26px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+html.vue-app .mine-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  text-align: left;
+  transition: transform .2s cubic-bezier(.2, .7, .2, 1), border-color .2s, box-shadow .2s;
+}
+html.vue-app .mine-card:hover { transform: translateY(-3px); border-color: rgba(217, 248, 125, .32); box-shadow: var(--shadow-md); }
+html.vue-app .mine-card .poster-art { height: 168px; }
+html.vue-app .mine-copy { padding: 15px 18px 17px; }
+html.vue-app .mine-title { display: flex; align-items: baseline; gap: 10px; }
+html.vue-app .mine-title h3 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+html.vue-app .mine-tag {
+  font-size: 10px; letter-spacing: .08em; color: var(--muted);
+  border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 8px;
+}
+html.vue-app .mine-copy > p { margin: 7px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+html.vue-app .mine-meta { margin-top: 9px; display: flex; align-items: baseline; gap: 7px; font-size: 11.5px; color: var(--muted); }
+html.vue-app .mine-meta b { color: var(--text); font-family: var(--num); font-weight: 600; }
+html.vue-app .mine-actions { margin-top: 13px; display: flex; align-items: center; gap: 14px; }
+html.vue-app .mine-card.add {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 296px;
+  border-style: dashed;
+  border-width: 1.5px;
+  background: rgba(255, 255, 255, .012);
+  color: var(--muted);
+}
+html.vue-app .mine-card.add .add-plus {
+  width: 46px; height: 46px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 22px; font-weight: 300;
+  border: 1px dashed rgba(217, 248, 125, .4);
+  color: var(--lime);
+  margin-bottom: 8px;
+}
+html.vue-app .mine-card.add .add-title { font-size: 16px; font-weight: 600; color: var(--text); }
+html.vue-app .mine-card.add .add-sub { font-size: 11.5px; color: var(--dim); }
+
+/* 收藏：书签清单 */
+html.vue-app .fav-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; max-width: 1040px; }
+html.vue-app .fav-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  transition: border-color .2s, transform .2s, background .2s;
+}
+html.vue-app .fav-row:hover { border-color: rgba(217, 248, 125, .3); transform: translateX(2px); }
+html.vue-app .fav-thumb {
+  position: relative;
+  width: 132px;
+  height: 84px;
+  border-radius: 12px;
+  flex: none;
+  overflow: hidden;
+}
+html.vue-app .fav-thumb.art-cards { background: radial-gradient(120% 130% at 70% 10%, #356a4f 0%, #24493a 52%, #162d25 100%); }
+html.vue-app .fav-thumb.art-moon { background: radial-gradient(120% 130% at 30% 6%, #40506e 0%, #28324a 46%, #151c2a 100%); }
+html.vue-app .fav-thumb.art-dice { background: radial-gradient(120% 130% at 66% 4%, #4b5b3c 0%, #2f3c2a 50%, #1a2419 100%); }
+html.vue-app .fav-thumb .poster-motif i:not(.die) { width: 22px; height: 32px; font-size: 8px; padding: 3px 3px; border-radius: 3px; }
+html.vue-app .fav-thumb .poster-motif i:nth-child(1) { left: 44%; top: 38%; }
+html.vue-app .fav-thumb .poster-motif i:nth-child(2) { left: 49%; top: 34%; }
+html.vue-app .fav-thumb .poster-motif i:nth-child(3) { left: 54%; top: 38%; }
+html.vue-app .fav-thumb .poster-motif .moon-disc { width: 34px; height: 34px; }
+html.vue-app .fav-thumb .poster-motif .die { width: 28px; height: 28px; border-radius: 6px; }
+html.vue-app .fav-thumb .poster-motif .die::before { width: 4px; height: 4px; left: 5px; top: 5px; box-shadow: 11px 0 0 #26302a, 0 11px 0 #26302a, 11px 11px 0 #26302a; }
+html.vue-app .fav-thumb .poster-motif .die::after { right: 5px; bottom: 5px; width: 4px; height: 4px; }
+html.vue-app .fav-copy { flex: 1; min-width: 0; }
+html.vue-app .fav-copy h3 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+html.vue-app .fav-copy p {
+  margin: 4px 0 0; font-size: 12.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+html.vue-app .fav-meta { margin-top: 7px; display: flex; align-items: baseline; gap: 7px; font-size: 11px; color: var(--muted); }
+html.vue-app .fav-meta b { color: var(--text); font-family: var(--num); font-weight: 600; }
+html.vue-app .fav-star {
+  width: 34px; height: 34px; border-radius: 50%; flex: none;
+  display: grid; place-items: center;
+  border: 1px solid rgba(217, 248, 125, .28);
+  background: rgba(217, 248, 125, .08);
+  color: var(--lime);
+  font-size: 15px;
+}
+html.vue-app .fav-star:hover { border-color: rgba(217, 248, 125, .55); background: rgba(217, 248, 125, .14); }
+html.vue-app .fav-row > .btn { flex: none; }
+
+/* 空状态（我的 / 收藏各自一张小画） */
+html.vue-app .empty-stage {
+  margin-top: 26px;
+  padding: 44px 24px 40px;
+  border: 1px dashed var(--line-2);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, .014);
+  text-align: center;
+}
+html.vue-app .empty-art { position: relative; height: 116px; display: grid; place-items: center; }
+html.vue-app .empty-orbit { position: absolute; top: 2px; left: calc(50% + 52px); color: var(--lime); font-size: 17px; opacity: .8; }
+html.vue-app .empty-chair {
+  width: 62px; height: 76px;
+  border: 2px dashed rgba(217, 248, 125, .36);
+  border-radius: 30px 30px 9px 9px;
+}
+html.vue-app .empty-dash {
+  position: absolute; bottom: 4px;
+  width: 172px; height: 22px;
+  border-radius: 50%;
+  border: 1px dashed var(--line-2);
+}
+html.vue-app .empty-frame {
+  width: 88px; height: 64px;
+  border: 2px dashed rgba(217, 248, 125, .36);
+  border-radius: 10px;
+  display: grid; place-items: center;
+  font-size: 22px; color: var(--lime);
+  opacity: .9;
+}
+html.vue-app .empty-stage h2 { margin: 16px 0 0; font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+html.vue-app .empty-stage > p { margin: 9px auto 0; max-width: 32em; font-size: 13px; line-height: 1.7; color: var(--muted); }
+html.vue-app .empty-actions { margin-top: 20px; display: flex; align-items: center; justify-content: center; gap: 10px; }
 
 /* 大厅里 + 开一间 */
 html.vue-app .people, html.vue-app .create {
@@ -1270,7 +1417,7 @@ html.vue-app .turn-box { margin-left: auto; display: flex; align-items: center; 
 html.vue-app .turn-copy { text-align: right; }
 html.vue-app .turn-kicker { display: block; font-size: 10px; letter-spacing: .16em; color: var(--lime); font-family: var(--num); }
 html.vue-app .turn-name { display: block; margin-top: 3px; font-size: 14px; font-weight: 600; }
-html.vue-app .timer {
+html.vue-app .turn-timer {
   position: relative;
   width: 48px;
   height: 48px;
@@ -1282,9 +1429,9 @@ html.vue-app .timer {
   color: var(--text);
   background: conic-gradient(var(--lime) calc(var(--p, 100) * 1%), rgba(206, 232, 201, .12) 0);
 }
-html.vue-app .timer::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg); }
-html.vue-app .timer span { position: relative; z-index: 1; }
-html.vue-app .timer.is-off { background: conic-gradient(var(--line-2) 100%, transparent 0); color: var(--dim); }
+html.vue-app .turn-timer::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg); }
+html.vue-app .turn-timer span { position: relative; z-index: 1; }
+html.vue-app .turn-timer.is-off { background: conic-gradient(var(--line-2) 100%, transparent 0); color: var(--dim); }
 html.vue-app .table-head-host { margin-top: 14px; }
 html.vue-app .ticker { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 html.vue-app .ticker p { margin: 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
@@ -1380,7 +1527,7 @@ html.vue-app[data-theme="light"] .chat-log .msg p { background: rgba(38, 53, 44,
 html.vue-app[data-theme="light"] .mail-copy > p { color: #2e4035; }
 html.vue-app[data-theme="light"] .poster-art::after { background: linear-gradient(180deg, transparent 60%, rgba(241, 243, 232, .25)); }
 html.vue-app[data-theme="light"] .poster-fav { background: rgba(255, 255, 255, .6); color: #3b4d41; border-color: rgba(38, 53, 44, .18); }
-html.vue-app[data-theme="light"] .chip { background: rgba(255, 255, 255, .72); border-color: rgba(38, 53, 44, .16); color: #2e4035; }
+html.vue-app[data-theme="light"] .poster-chip { background: rgba(255, 255, 255, .72); border-color: rgba(38, 53, 44, .16); color: #2e4035; }
 html.vue-app[data-theme="light"] .club-page-nav .btn:hover { background: rgba(38, 53, 44, .05); }
 html.vue-app[data-theme="light"] .btn { background: rgba(38, 53, 44, .05); }
 html.vue-app[data-theme="light"] .btn:hover:not(:disabled) { background: rgba(38, 53, 44, .09); }
@@ -1395,6 +1542,7 @@ html.vue-app[data-theme="light"] .btn:hover:not(:disabled) { background: rgba(38
   html.vue-app .scene-lamp::after { width: 380px; height: 320px; }
   html.vue-app .shell.chat-open .stage-body > .view { padding-right: 372px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html.vue-app .section-head h1 { font-size: clamp(36px, 5vw, 48px); }
 }
 
 @media (max-width: 1100px) {
@@ -1432,6 +1580,9 @@ html.vue-app[data-theme="light"] .btn:hover:not(:disabled) { background: rgba(38
   html.vue-app .top-right .tool.dock { display: none; }
   html.vue-app .top-right .theme-picker { padding: 0 8px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  html.vue-app .mine-grid { grid-template-columns: minmax(0, 1fr); }
+  html.vue-app .fav-thumb { width: 104px; height: 68px; }
+  html.vue-app .section-head h1 { font-size: clamp(32px, 5.6vw, 44px); }
   html.vue-app .directory-tools { width: 100%; margin-left: 0; flex-wrap: wrap; }
   html.vue-app .search { flex: 1; width: auto; min-width: 160px; }
   html.vue-app .right-rail {
@@ -1492,6 +1643,16 @@ html.vue-app[data-theme="light"] .btn:hover:not(:disabled) { background: rgba(38
   html.vue-app .join h1 { font-size: 25px; }
   html.vue-app .join .panel { padding: 22px 18px 20px; }
   html.vue-app .join .theme-picker { right: 10px; top: 10px; }
+  html.vue-app .section-head { padding: 24px 0 20px; }
+  html.vue-app .section-tools { flex-wrap: wrap; }
+  html.vue-app .section-tools .search { flex: 1; width: auto; min-width: 160px; }
+  html.vue-app .mine-card .poster-art { height: 140px; }
+  html.vue-app .mine-card.add { min-height: 180px; }
+  html.vue-app .fav-row { gap: 10px; padding: 10px; }
+  html.vue-app .fav-thumb { width: 84px; height: 60px; }
+  html.vue-app .fav-copy p { display: none; }
+  html.vue-app .fav-row > .btn { display: none; }
+  html.vue-app .empty-stage { padding: 32px 16px 30px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
