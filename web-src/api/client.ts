@@ -119,7 +119,7 @@ export async function joinPlayer(name: string, invite: string, room = ''): Promi
 }
 
 /** 统一身份：跳去身份服务，回来时带 #identity=…&state=…。 */
-export function beginGlobalEntry(authority: string, input: { invite?: string; name?: string; room?: string }): void {
+export function beginGlobalEntry(authority: string, input: { invite?: string; name?: string; room?: string; parent?: boolean }): void {
   const target = new URL(authority);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname);
   if (target.protocol !== 'https:' && !(target.protocol === 'http:' && local)) throw new Error('身份服务需要 HTTPS');
@@ -152,4 +152,47 @@ export async function finishGlobalEntry(ticket: string, state: string): Promise<
     cooId: body.identity.cooId,
     cooSecret: body.identity.cooSecret,
   });
+}
+
+/** 从 #key=… 取一次性钥匙；取到就从地址栏抹掉（不进历史，也不会被复制外发）。 */
+export function takeKeyFromHash(): string {
+  const raw = location.hash.replace(/^#/, '');
+  if (!raw) return '';
+  const key = (new URLSearchParams(raw).get('key') || '').trim();
+  if (key) history.replaceState(null, '', location.pathname + location.search);
+  return key;
+}
+
+export interface ParentPlayResult {
+  globalEntry?: string;
+  room?: string;
+  seat?: { id: string; name: string };
+  token?: string;
+  identity?: { cooId: string; cooSecret: string };
+}
+
+/**
+ * 家长下场：带钥匙时一次做完「换会话 + 领席位」；不带钥匙就用这台浏览器已有的家长会话。
+ * 需要统一身份时回 globalEntry，由调用方跳转。
+ */
+export async function parentPlay(key = '', room = ''): Promise<ParentPlayResult> {
+  const response = await fetch('/v1/parent/play', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...(key ? { key } : {}), ...(room ? { room } : {}) }),
+    signal: timeoutSignal(),
+  });
+  const body = await response.json().catch(() => ({})) as ParentPlayResult & { error?: string };
+  if (!response.ok) throw new Error(body.error || (key ? '这个家长链接不对，或已经失效了' : '现在下不了场'));
+  if (body.globalEntry) return body;
+  if (!body.seat || !body.token || !body.identity || !body.room) throw new Error('家长下场没有换到席位');
+  saveSeat({
+    room: body.room,
+    seatId: body.seat.id,
+    name: body.seat.name,
+    token: body.token,
+    cooId: body.identity.cooId,
+    cooSecret: body.identity.cooSecret,
+  });
+  return body;
 }

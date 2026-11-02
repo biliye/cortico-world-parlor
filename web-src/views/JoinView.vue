@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /** 加入页：名字 + 邀请码。统一身份在时跳去身份服务，回来再换席位。 */
 import { onMounted, ref } from 'vue';
-import { beginGlobalEntry, fetchHealth, joinPlayer } from '../api/client.ts';
-import { saveSeat } from '../stores/session.ts';
-import type { Health, JoinResult } from '../api/types.ts';
+import { beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay } from '../api/client.ts';
+import type { Health } from '../api/types.ts';
 
 const emit = defineEmits<{ entered: [] }>();
+const props = defineProps<{ initialError?: string }>();
 
 const name = ref('');
 const invite = ref('');
@@ -67,22 +67,11 @@ async function parentPlay(): Promise<void> {
   error.value = '';
   busy.value = true;
   try {
-    const response = await fetch('/v1/parent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || '现在下不了场');
+    const body = await requestParentPlay();
     if (body.globalEntry) {
       beginGlobalEntry(body.globalEntry, { room: body.room, parent: true });
       return;
     }
-    const joined = body as JoinResult;
-    saveSeat({
-      room: joined.room,
-      seatId: joined.seat.id,
-      name: joined.seat.name,
-      token: joined.token,
-      cooId: joined.identity.cooId,
-      cooSecret: joined.identity.cooSecret,
-    });
     emit('entered');
   } catch (playError) {
     error.value = (playError as Error).message || '现在下不了场';
@@ -110,7 +99,7 @@ async function parentPlay(): Promise<void> {
           <label for="join-invite">邀请码</label>
           <input id="join-invite" v-model="invite" type="password" autocomplete="off" placeholder="部署里 PARLOR_INVITE_CODE 那一行">
         </div>
-        <p class="warn error">{{ error }}</p>
+        <p class="warn error">{{ error || props.initialError }}</p>
         <button class="btn primary" type="button" :disabled="busy" @click="submit">加入客厅</button>
         <p class="note">邀请码只用来进这个房间，不会存进网址；席位令牌存在这台浏览器里。</p>
       </template>

@@ -33,7 +33,7 @@ async function enter(): Promise<void> {
 }
 
 onMounted(() => {
-  if (seat.value || location.hash.includes('identity')) void enter();
+  if (seat.value || location.hash.includes('identity') || location.hash.includes('key')) void enter();
   window.addEventListener('popstate', () => readView());
 });
 
@@ -44,7 +44,7 @@ watch(seat, (next) => {
 </script>
 
 <template>
-  <JoinView v-if="!seat" @entered="enter" />
+  <JoinView v-if="!seat" :initial-error="failed" @entered="enter" />
   <AppShell v-else-if="ready">
     <LobbyView v-if="snapshot && snapshot.id === 'hall'" />
     <TableView v-else-if="view === 'table'" />

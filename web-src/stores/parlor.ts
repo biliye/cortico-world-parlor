@@ -4,7 +4,7 @@
  * 牌桌与聊天的增量逻辑留在旧 play.js，等第 3 刀再搬。
  */
 import { computed, ref } from 'vue';
-import { api, finishGlobalEntry, scopedPath } from '../api/client.ts';
+import { api, beginGlobalEntry, finishGlobalEntry, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
 import { noteChatEvent } from './chat.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
 import { showToast } from './ui.ts';
@@ -372,12 +372,27 @@ export async function leaveRoomTable(): Promise<boolean> {
   return done;
 }
 
-/** 首次进入：换统一身份票据 → 取第一份快照 → 连 SSE。没有席位时返回 false。 */
+/** 首次进入：钥匙/统一身份票据 → 取第一份快照 → 连 SSE。没有席位时返回 false。 */
 export async function boot(): Promise<boolean> {
   const identityArgs = new URLSearchParams(location.hash.slice(1));
   if (identityArgs.has('identity')) {
     history.replaceState(null, '', location.pathname + location.search);
     await finishGlobalEntry(identityArgs.get('identity') || '', identityArgs.get('state') || '');
+  }
+  // 面板给的 #key= 链接：一次请求换会话 + 领席位，用完从地址栏抹掉。
+  // 换不到但旧席位还在时，沿用旧席位继续（与旧版一致），只在没有旧席位时把错误抛给加入页。
+  const key = takeKeyFromHash();
+  if (key) {
+    try {
+      const played = await parentPlay(key);
+      if (played.globalEntry) {
+        beginGlobalEntry(played.globalEntry, { room: played.room || 'hall', parent: true });
+        return false;
+      }
+    } catch (error) {
+      if (!seat.value) throw error;
+      showToast((error as Error).message || '这个家长链接没换成席位', 'bad');
+    }
   }
   if (!seat.value) return false;
   await refreshSnapshot();
