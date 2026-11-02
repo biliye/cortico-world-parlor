@@ -46,6 +46,26 @@ export interface Snapshot {
   seats?: HallSeat[];
   maxSeats?: number;
   online?: string[];
+  tables?: TableSummary[];
+  table?: TableSummary;
+  tablePrivate?: { tableId?: string; id?: string } | null;
+}
+
+export interface TableSeat {
+  id: string;
+  name: string;
+  bot?: boolean;
+}
+
+export interface TableSummary {
+  tableId?: string;
+  id?: string;
+  game: string;
+  status: string;
+  label?: string;
+  text?: string;
+  host?: string;
+  seats?: TableSeat[];
 }
 
 export interface Directory {

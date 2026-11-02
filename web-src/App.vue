@@ -1,15 +1,17 @@
 <script setup lang="ts">
 /**
- * 迁移期的根组件：有席位就进大厅，没有就显示加入页。
- * 旧的 play.js 仍在同一页面运行；带 ?vue=1 时它照常起步，这一支只是叠在上面的新实现。
+ * 迁移期的根组件：没有席位显示加入页；有席位按「大厅 / 客厅 / 牌桌」三层渲染。
+ * 带 ?vue=1 时才由 vue-loader 载入；正常访问仍走旧的 play.js。
  */
 import { onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';
 import { boot, snapshot } from './stores/parlor.ts';
 import { seat } from './stores/session.ts';
+import { readView, view } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
 import LobbyView from './views/LobbyView.vue';
-import RoomPlaceholder from './views/RoomPlaceholder.vue';
+import RoomView from './views/RoomView.vue';
+import TableView from './views/TableView.vue';
 
 const ready = ref(false);
 const failed = ref('');
@@ -21,6 +23,7 @@ async function enter(): Promise<void> {
   failed.value = '';
   try {
     ready.value = await boot();
+    if (ready.value) readView();
   } catch (error) {
     failed.value = (error as Error).message || String(error);
     ready.value = false;
@@ -31,6 +34,7 @@ async function enter(): Promise<void> {
 
 onMounted(() => {
   if (seat.value || location.hash.includes('identity')) void enter();
+  window.addEventListener('popstate', () => readView());
 });
 
 // 加入页拿到席位后自己会被卸载，靠事件回来可能太晚；盯住席位本身更稳。
@@ -43,7 +47,8 @@ watch(seat, (next) => {
   <JoinView v-if="!seat" @entered="enter" />
   <AppShell v-else-if="ready">
     <LobbyView v-if="snapshot && snapshot.id === 'hall'" />
-    <RoomPlaceholder v-else />
+    <TableView v-else-if="view === 'table'" />
+    <RoomView v-else />
   </AppShell>
   <div v-else class="join">
     <section class="panel">

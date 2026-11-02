@@ -20,13 +20,11 @@ document.addEventListener('securitypolicyviolation', (event) => {
 });
 
 const params = new URLSearchParams(location.search);
-// 两个入口都带版本串：静态资源有 5 分钟缓存，改完不换串会吃到旧文件。
-// 旧版沿用 play.html 原来的串；Vue 包每次构建后递增。
-const LEGACY_VERSION = 'parent-link-20261102';
-const VUE_VERSION = 'vue-slice2b-20261102';
-const entry = params.has('vue')
-  ? './vue/main.js?v=' + VUE_VERSION
-  : './play.js?v=' + LEGACY_VERSION;
+// 版本串只改 play.html 里这一处：loader 自己带什么版本，两个入口就跟着带什么。
+// 静态资源有 5 分钟缓存，改了包却不换串，页面会继续跑旧文件。
+const version = new URL(import.meta.url).searchParams.get('v') || '';
+const withVersion = (path) => (version ? path + '?v=' + version : path);
+const entry = withVersion(params.has('vue') ? './vue/main.js' : './play.js');
 import(entry).catch((error) => {
   console.error('[parlor] 客户端载入失败', error);
 });

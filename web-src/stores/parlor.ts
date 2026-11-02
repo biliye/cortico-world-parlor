@@ -3,11 +3,12 @@
  * 并发闸门照旧：同一时刻只允许一次快照刷新、一次目录请求；SSE 断了 3 秒后重连。
  * 牌桌与聊天的增量逻辑留在旧 play.js，等第 3 刀再搬。
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { api, finishGlobalEntry, scopedPath } from '../api/client.ts';
 import { noteChatEvent } from './chat.ts';
 import { saveSeat, seat } from './session.ts';
-import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot } from '../api/types.ts';
+import { backToRoom, enterTable, watchTableId } from './view.ts';
+import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot, TableSummary } from '../api/types.ts';
 
 export const snapshot = ref<Snapshot | null>(null);
 export const offset = ref(0);
@@ -56,6 +57,37 @@ export async function seedLog(): Promise<void> {
 export function serverNow(): number {
   return Date.now() + offset.value;
 }
+
+export function tableIdOf(table?: TableSummary | null): string {
+  if (!table) return '';
+  if (typeof table.tableId === 'string' && table.tableId) return table.tableId;
+  if (typeof table.id === 'string' && table.id) return table.id;
+  return '';
+}
+
+/** 快照里的桌列表；老服务器没有 tables 时退回单桌快照。 */
+export function tableList(): TableSummary[] {
+  const snap = snapshot.value;
+  if (!snap) return [];
+  if (Array.isArray(snap.tables) && snap.tables.length) return snap.tables;
+  return snap.table ? [snap.table] : [];
+}
+
+/** 正在看的那张桌；没指定就看服务器给的「我的桌 / 唯一那张」。 */
+export const watchedTable = computed<TableSummary | null>(() => {
+  if (!watchTableId.value) return null;
+  return tableList().find((table) => tableIdOf(table) === watchTableId.value) || null;
+});
+
+export const activeTable = computed<TableSummary | null>(() => watchedTable.value || snapshot.value?.table || null);
+
+export const myTable = computed<TableSummary | null>(() => {
+  const priv = snapshot.value?.tablePrivate;
+  if (!priv) return null;
+  const id = typeof priv.tableId === 'string' ? priv.tableId : (typeof priv.id === 'string' ? priv.id : '');
+  const found = id ? tableList().find((table) => tableIdOf(table) === id) : null;
+  return found || snapshot.value?.table || null;
+});
 
 export async function refreshSnapshot(): Promise<void> {
   if (!seat.value || refreshing) return;
@@ -188,6 +220,84 @@ export async function goRoom(id: string): Promise<boolean> {
   } finally {
     switching = false;
   }
+}
+
+let acting = false;
+
+/** 需要幂等键的动作；与旧 play.js 的 IDEMPOTENT_ACTIONS 一致。 */
+const IDEMPOTENT = new Set([
+  'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
+]);
+
+function newRequestId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  } catch {
+    /* 有些环境 randomUUID 不可调用 */
+  }
+  const bytes = new Uint8Array(16);
+  try {
+    crypto.getRandomValues(bytes);
+  } catch {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** 通用动作。回执里可能带桌与私视图，这一刀先统一「动作后拉一份快照」，保证状态一致。 */
+export async function act(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  if (acting) return null;
+  acting = true;
+  try {
+    const payload: Record<string, unknown> = { ...body };
+    const retryable = typeof payload.type === 'string' && IDEMPOTENT.has(payload.type);
+    if (retryable) payload.requestId = newRequestId();
+    const send = () => api<Record<string, unknown>>('/v1/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    let receipt: Record<string, unknown>;
+    try {
+      receipt = await send();
+    } catch (error) {
+      // 只重发「可能没到服务器」的那一次；同一个 requestId，服务器会去重。
+      if (!retryable || !(error instanceof TypeError)) throw error;
+      receipt = await send();
+    }
+    if (typeof receipt.seq === 'number') latest.value = Math.max(latest.value, receipt.seq);
+    await refreshSnapshot();
+    return receipt;
+  } finally {
+    acting = false;
+  }
+}
+
+export async function openRoomTable(game: string): Promise<boolean> {
+  const receipt = await act({ type: 'table_open', game });
+  if (!receipt) return false;
+  enterTable(typeof receipt.tableId === 'string' ? receipt.tableId : '');
+  return true;
+}
+
+export async function joinRoomTable(id: string): Promise<boolean> {
+  const receipt = await act({ type: 'table_join', ...(id ? { table: id } : {}) });
+  if (!receipt) return false;
+  enterTable(id);
+  return true;
+}
+
+export async function startRoomTable(): Promise<boolean> {
+  return (await act({ type: 'table_start' })) !== null;
+}
+
+export async function leaveRoomTable(): Promise<boolean> {
+  const done = (await act({ type: 'table_leave' })) !== null;
+  if (done) backToRoom();
+  return done;
 }
 
 /** 首次进入：换统一身份票据 → 取第一份快照 → 连 SSE。没有席位时返回 false。 */
