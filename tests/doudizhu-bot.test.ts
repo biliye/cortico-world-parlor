@@ -55,6 +55,15 @@ describe('斗地主脚本出牌', () => {
       .toEqual(asSorted(['3', '3', '3', '3']));
   });
 
+  it('小炸弹压不过大炸弹，即使能走完也要过；有王炸才用王炸', () => {
+    const context = { role: 'farmer', lastPlayBy: 'landlord', minOpponentLeft: 1 } as const;
+    const highBomb = target(['A', 'A', 'A', 'A']);
+    expect(chooseFollow(['3', '3', '3', '3'], highBomb, context)).toBeNull();
+    expect(chooseFollow(['3', '3', '3', '3', 'SJ', 'BJ'], highBomb, context)).toEqual(['SJ', 'BJ']);
+    expect(chooseFollow(['A', 'A', 'A', 'A'], target(['3', '3', '3', '3']), context))
+      .toEqual(['A', 'A', 'A', 'A']);
+  });
+
   it('跟顺子时能找到同长的顺子', () => {
     expect(asSorted(chooseFollow(['4', '5', '6', '7', '8', 'K'], target(['3', '4', '5', '6', '7']), {
       role: 'landlord', lastPlayBy: 'farmer', minOpponentLeft: 10,

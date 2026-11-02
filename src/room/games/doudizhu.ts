@@ -393,7 +393,7 @@ export function suggestMove(hand: readonly string[], target: Move | null): Card[
       break;
   }
 
-  const bomb = groups.find((group) => group.count === 4);
+  const bomb = groups.find((group) => group.count === 4 && (target.type !== 'bomb' || group.rank > target.rank));
   if (bomb) return take(bomb.card, 4);
   if ((groups.find((group) => group.card === 'SJ')?.count ?? 0) > 0
     && (groups.find((group) => group.card === 'BJ')?.count ?? 0) > 0) {
