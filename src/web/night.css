@@ -1598,7 +1598,7 @@ html.vue-app[data-theme="light"] :is(.tag-coo, .tag-table) {
     z-index: 50;
   }
   html.vue-app .rail-mark, html.vue-app .rail-sep, html.vue-app .rail-parent { display: none; }
-  html.vue-app .rail-nav { flex-direction: row; gap: 10px; }
+  html.vue-app .rail-nav { flex-direction: row; gap: 10px; min-width: 0; }
   html.vue-app .rail-btn { width: 62px; padding: 6px 0 5px; }
   html.vue-app .rail-me { width: 30px; height: 30px; font-size: 11px; }
   html.vue-app .stage { height: 100vh; }

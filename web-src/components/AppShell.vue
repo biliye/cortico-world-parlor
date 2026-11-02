@@ -81,6 +81,10 @@ onMounted(() => {
           <Icon :name="item.icon" />
           <span>{{ item.label }}</span>
         </button>
+        <a class="rail-btn rail-support" href="/support" target="_blank" rel="noopener" title="反馈与公告" aria-label="反馈与公告">
+          <Icon name="chat" />
+          <span>反馈</span>
+        </a>
       </nav>
       <span class="rail-sep" />
       <span class="rail-spacer" />
