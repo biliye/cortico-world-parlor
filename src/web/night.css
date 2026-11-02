@@ -384,17 +384,44 @@ html.vue-app .link:hover { color: var(--lime); }
 
 /* ——— 大厅首屏 ——— */
 html.vue-app .view-hall { position: relative; }
+/* 左栏说「走进哪间客厅」，右栏是灯下的空桌 + 挂在旁边的「找一桌」告示牌。
+   两栏同高：左栏文案 + 今晚有人的客厅席位条，右栏画面 + 快速匹配/招募面板。 */
 html.vue-app .hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
-  gap: 20px;
-  align-items: center;
-  min-height: 514px;
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr);
+  grid-template-areas:
+    "copy side"
+    "shelf side";
+  column-gap: 40px;
+  row-gap: 6px;
+  align-items: stretch;
+  min-height: 540px;
   padding: 18px 0 0;
   border-bottom: 1px solid var(--line);
 }
-html.vue-app .hero-copy { position: relative; z-index: 3; padding-bottom: 6px; }
+html.vue-app .hero-copy {
+  grid-area: copy;
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-bottom: 6px;
+}
+html.vue-app .hero-side {
+  grid-area: side;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 30px;
+}
+/* 画面在下、告示牌在上：面板压住桌沿一点点，读作同一张桌子。 */
+html.vue-app .hero-side .scene { flex: 1 1 auto; height: auto; min-height: 300px; z-index: 1; }
+html.vue-app .hero-side > .recruit-board { flex: none; }
 html.vue-app .hero h1 {
   margin: 20px 0 0;
   font-size: clamp(52px, 5.1vw, 78px);
@@ -465,8 +492,8 @@ html.vue-app .hero-now-kicker {
   white-space: nowrap;
 }
 html.vue-app .hero-now .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lamp); flex: none; }
-html.vue-app .hero-now-row { display: flex; align-items: flex-end; gap: 16px; margin-top: 8px; }
-html.vue-app .hero-now-main { min-width: 0; flex: 1; }
+html.vue-app .hero-now-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 24px; margin-top: 8px; }
+html.vue-app .hero-now-main { min-width: 0; flex: 0 1 auto; }
 html.vue-app .hero-now-main h2 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
 html.vue-app .hero-now-main > p { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
 html.vue-app .hero-now-meta { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px !important; color: var(--dim) !important; }
@@ -528,8 +555,8 @@ html.vue-app .scene-table {
   position: absolute;
   left: 50%;
   bottom: -18px;
-  width: 400px;
-  height: 244px;
+  width: 440px;
+  height: 268px;
   transform: translateX(-50%) rotate(-6deg);
 }
 html.vue-app .scene-felt {
@@ -591,8 +618,8 @@ html.vue-app .spark-b { right: 16%; top: 8%; font-size: 12px; opacity: .5; }
 html.vue-app .spark-c { right: 6%; bottom: 30%; font-size: 22px; }
 html.vue-app .scene-caption {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  right: 2px;
+  top: 4px;
   font-family: var(--num);
   font-size: 8.5px;
   letter-spacing: .3em;
@@ -600,14 +627,15 @@ html.vue-app .scene-caption {
   white-space: nowrap;
 }
 
-/* 首屏底部：今晚有人的客厅 */
+/* 首屏左下：今晚有人的客厅席位条（拉满左栏宽度，和右栏的告示牌同高收底） */
 html.vue-app .hero-chips {
-  grid-column: 1 / -1;
+  grid-area: shelf;
+  align-self: end;
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
-  gap: 12px;
-  padding: 18px 0 22px;
+  gap: 10px;
+  padding: 8px 0 24px;
 }
 html.vue-app .hero-chips-label {
   width: 100%;
@@ -620,9 +648,22 @@ html.vue-app .hero-chips-label {
   letter-spacing: .22em;
   color: var(--dim);
 }
+html.vue-app .hero-chips-label > span { display: inline-flex; align-items: baseline; gap: 8px; }
 html.vue-app .hero-chips-label b { font-family: var(--font); font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: .02em; }
+html.vue-app .shelf-all {
+  margin-left: auto;
+  font-family: var(--font);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--dim);
+  padding: 2px 0;
+}
+html.vue-app .shelf-all:hover { color: var(--lime); }
 html.vue-app .rchip {
-  width: 208px;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 172px;
+  max-width: 420px;
   text-align: left;
   padding: 12px 14px 13px;
   border-radius: 16px;
@@ -641,8 +682,6 @@ html.vue-app .rchip-top .dot.live { background: var(--lamp); }
 html.vue-app .rchip-name { font-size: 16.5px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
 html.vue-app .rchip-meta { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--dim); }
 html.vue-app .rchip-meta b { color: var(--text); font-family: var(--num); font-weight: 600; }
-html.vue-app .rchip.all { width: 176px; align-items: center; justify-content: center; border-style: dashed; color: var(--muted); font-size: 13px; }
-html.vue-app .rchip.all:hover { color: var(--lime); }
 
 /* ——— 客厅目录 ——— */
 html.vue-app .directory { padding-top: 34px; scroll-margin-top: 96px; }
@@ -1583,13 +1622,47 @@ html.vue-app[data-theme="light"] :is(.warn, .bad) { color: #a64347; }
 html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 
 /* ——— 响应式 ——— */
+/* 宽屏（2560 一档的桌面）：字号、桌面画与告示牌一起放大，避免 1440 的尺寸被拉成一条细线。 */
+@media (min-width: 1600px) {
+  html.vue-app .hero { column-gap: 52px; min-height: 620px; }
+  html.vue-app .hero h1 { font-size: clamp(78px, 4.3vw, 96px); }
+  html.vue-app .hero-sub { max-width: 34em; font-size: 15px; }
+  html.vue-app .hero-now-main h2 { font-size: 34px; }
+  html.vue-app .hero-now-main > p { font-size: 14px; }
+  html.vue-app .hero-now-meta { font-size: 13px !important; }
+  html.vue-app .hero-now-meta b { font-size: 14.5px; }
+  html.vue-app .cta { height: 54px; font-size: 15.5px; }
+  html.vue-app .hero-side { padding-top: 40px; }
+  html.vue-app .scene-table { width: 500px; height: 305px; }
+  html.vue-app .scene-lamp { top: -46px; height: 96px; }
+  html.vue-app .scene-lamp::after { width: 560px; height: 470px; }
+  html.vue-app .scene-seat { width: 38px; height: 38px; }
+  html.vue-app .scene-seat.seat-a, html.vue-app .scene-seat.seat-b { bottom: 128px; }
+  html.vue-app .scard { width: 64px; height: 90px; }
+  html.vue-app .scene-caption { font-size: 9.5px; }
+  /* 宽屏时告示牌铺满右栏、贴齐内容右缘，画面与面板同一条中轴。 */
+  html.vue-app .hero-side > .recruit-board { width: 100%; max-width: none; }
+  html.vue-app .rchip-name { font-size: 18px; }
+  html.vue-app .rchip { padding: 14px 16px 15px; }
+}
+
 @media (max-width: 1320px) {
-  html.vue-app .hero { grid-template-columns: minmax(0, 1fr); min-height: 0; padding-top: 26px; }
+  html.vue-app .hero {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "copy" "board" "scene" "shelf";
+    row-gap: 14px;
+    min-height: 0;
+    padding-top: 26px;
+  }
   html.vue-app .hero h1 { font-size: clamp(48px, 6.4vw, 72px); }
-  html.vue-app .scene { height: 300px; margin-top: 4px; }
+  /* 单列时把两栏拆开：先给「找一桌」的动作，再留灯下那张桌的画面。 */
+  html.vue-app .hero-side { display: contents; }
+  html.vue-app .hero-side > .recruit-board { grid-area: board; width: 100%; max-width: 560px; margin-inline: auto; }
+  html.vue-app .hero-side .scene { grid-area: scene; flex: none; height: 300px; margin-top: 4px; }
   html.vue-app .scene-table { width: 340px; height: 208px; bottom: -10px; }
   html.vue-app .scene-lamp { left: 50%; }
   html.vue-app .scene-lamp::after { width: 380px; height: 320px; }
+  html.vue-app .hero-chips { padding-bottom: 20px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   html.vue-app .section-head h1 { font-size: clamp(36px, 5vw, 48px); }
 }
@@ -1669,11 +1742,15 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .hero-sub { font-size: 13px; }
   html.vue-app .hero-actions { flex-wrap: wrap; gap: 12px; }
   html.vue-app .cta { height: 46px; font-size: 13.5px; }
-  html.vue-app .scene { height: 260px; }
+  /* 手机窄栏里把「人数/桌数」和轮播拆成两行，统计不再被挤断。 */
+  html.vue-app .hero-now-main { flex: 1 1 100%; }
+  html.vue-app .hero-carousel { justify-content: flex-start; padding-bottom: 0; }
+  html.vue-app .hero-side .scene { height: 260px; }
   html.vue-app .scene-table { width: 300px; height: 186px; }
   html.vue-app .scard { width: 48px; height: 68px; font-size: 12px; }
   html.vue-app .posters { grid-template-columns: minmax(0, 1fr); }
-  html.vue-app .rchip, html.vue-app .rchip.all { width: calc(50% - 6px); }
+  html.vue-app .rchip { flex: 1 1 calc(50% - 5px); width: auto; min-width: 0; max-width: none; }
+  html.vue-app .rchip-name { font-size: 15.5px; }
   html.vue-app .topbar { gap: 6px; padding: 0 14px; }
   html.vue-app .brand span { display: none; }
   html.vue-app .brand b { font-size: 18px; }

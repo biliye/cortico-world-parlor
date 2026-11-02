@@ -238,29 +238,37 @@ async function createRoom(): Promise<void> {
             </button>
             <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
           </div>
+        </div>
+
+        <!-- 右栏：灯下的空桌 + 挂在门边的「找一桌」告示牌。
+             快速匹配原本塞在左栏文案底下，把首屏拉成一条长左栏、右半边全空；
+             挪到这张桌上之后，左边说「走进哪间」，右边直接「坐下哪一桌」。 -->
+        <div class="hero-side">
+          <div class="scene" aria-hidden="true">
+            <span class="scene-lamp" />
+            <span class="spark spark-a">✳</span>
+            <span class="spark spark-b">✳</span>
+            <span class="spark spark-c">✳</span>
+            <div class="scene-table">
+              <div class="scene-felt"><span class="scene-felt-mark">GOOD COMPANY · GREAT HANDS</span></div>
+              <div class="scene-seat seat-a" />
+              <div class="scene-seat seat-b" />
+              <div class="scene-cards">
+                <span class="scard black">A<span>♠</span></span>
+                <span class="scard red">K<span>♥</span></span>
+                <span class="scard black">Q<span>♣</span></span>
+              </div>
+            </div>
+            <span class="scene-caption">THE PARLOR SESSIONS · VOL. 03</span>
+          </div>
           <LobbyMatching />
         </div>
 
-        <div class="scene" aria-hidden="true">
-          <span class="scene-lamp" />
-          <span class="spark spark-a">✳</span>
-          <span class="spark spark-b">✳</span>
-          <span class="spark spark-c">✳</span>
-          <div class="scene-table">
-            <div class="scene-felt"><span class="scene-felt-mark">GOOD COMPANY · GREAT HANDS</span></div>
-            <div class="scene-seat seat-a" />
-            <div class="scene-seat seat-b" />
-            <div class="scene-cards">
-              <span class="scard black">A<span>♠</span></span>
-              <span class="scard red">K<span>♥</span></span>
-              <span class="scard black">Q<span>♣</span></span>
-            </div>
-          </div>
-          <span class="scene-caption">THE PARLOR SESSIONS · VOL. 03</span>
-        </div>
-
-        <div class="hero-chips">
-          <p class="hero-chips-label">今晚有人的客厅 <b>{{ topRooms.length }}</b> 间</p>
+        <div class="hero-chips hero-shelf">
+          <p class="hero-chips-label">
+            <span>今晚有人的客厅 <b>{{ topRooms.length }}</b> 间</span>
+            <button class="shelf-all" type="button" @click="scrollToRooms">全部客厅 ↓</button>
+          </p>
           <button v-for="room in topRooms" :key="room.id" class="rchip" type="button" @click="enter(room)">
             <span class="rchip-top">
               <i class="dot" :class="{ live: isLive(room) }" />{{ isLive(room) ? '正在对局' : '等你入座' }}
@@ -272,11 +280,10 @@ async function createRoom(): Promise<void> {
               <b>{{ room.tableCount ?? '—' }}</b> 张桌
             </span>
           </button>
-          <button class="rchip all" type="button" @click="scrollToRooms">全部客厅 ↓</button>
         </div>
       </section>
 
-      <section ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅">
+      <section id="hall-rooms" ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅">
         <header class="directory-head">
           <h2>全部客厅</h2>
           <span class="directory-count">{{ filteredRooms.length }} 间</span>
