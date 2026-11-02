@@ -287,45 +287,32 @@ html.vue-app .tool-badge {
   place-items: center;
 }
 
-/* 外观选单做成顶条上的小工具 */
+/* 外观按钮做成顶条上的小工具：整颗可点，点一下就换深色 / 浅色。
+   旧页 ?legacy=1 的下拉选单样式在 appearance.css，不在这里。 */
 html.vue-app .theme-picker {
   position: static;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 34px;
-  padding: 0 8px 0 11px;
+  padding: 0 11px;
   border-radius: 999px;
   border: 1px solid transparent;
+  background: none;
   color: var(--muted);
-}
-html.vue-app .theme-picker:hover { border-color: var(--line-2); background: rgba(255, 255, 255, .03); color: var(--text); }
-html.vue-app .theme-picker .icon { width: 16px; height: 16px; }
-html.vue-app .theme-picker select {
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  border: 0;
-  outline: none;
-  color: inherit;
   font: inherit;
   font-size: 12.5px;
-  padding: 0 14px 0 0;
-  min-height: 30px;
+  line-height: 1;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
-html.vue-app .theme-picker option { background: var(--panel); color: var(--text); }
-html.vue-app .theme-picker::after {
-  content: "";
-  position: absolute;
-  margin-left: -10px;
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid var(--dim);
-  border-bottom: 1.5px solid var(--dim);
-  transform: rotate(45deg) translateY(-1px);
-  pointer-events: none;
-}
+html.vue-app .theme-picker:hover { border-color: var(--line-2); background: rgba(255, 255, 255, .03); color: var(--text); }
+html.vue-app .theme-picker:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+html.vue-app .theme-picker .icon { width: 16px; height: 16px; }
+html.vue-app .theme-picker-label { white-space: nowrap; }
+/* appearance.css 给旧页的下拉画了个箭头；新页是按钮，去掉它。 */
+html.vue-app .theme-picker::after { content: none; }
 
 /* ——— 内容页通用 ——— */
 html.vue-app .stage-body > .view { padding: 0 40px 90px; }
@@ -1667,8 +1654,7 @@ html.vue-app[data-theme="light"] :is(.tag-coo, .tag-table) {
   html.vue-app .top-right .tool .icon { width: 18px; height: 18px; }
   html.vue-app .tool-badge { top: -1px; right: 1px; }
   html.vue-app .theme-picker { padding: 0 6px; }
-  html.vue-app .theme-picker select { display: none; }
-  html.vue-app .theme-picker::after { display: none; }
+  html.vue-app .theme-picker .theme-picker-label { display: none; }
   html.vue-app .directory-head h2 { font-size: 23px; }
   html.vue-app .hall-create-row input { min-width: 100%; }
   html.vue-app .join h1 { font-size: 25px; }
