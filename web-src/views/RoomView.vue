@@ -2,6 +2,7 @@
 /** 客厅：成员、多张桌、开一桌 / 入座 / 围观。牌桌本身在 TableView。 */
 import { computed, ref } from 'vue';
 import AccessDialog from '../components/AccessDialog.vue';
+import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import { ENABLED_GAMES, KIND_LABELS, STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
 import { initialOf } from '../lib/text.ts';
 import {
@@ -83,6 +84,7 @@ async function invite(): Promise<void> {
 
 <template>
   <div class="view view-lobby">
+    <AnnouncementBanner />
     <div class="club-page-nav">
       <button class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
       <button class="btn ghost small" type="button" @click="invite">邀请来客厅</button>

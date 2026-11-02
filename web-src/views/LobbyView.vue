@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 大厅：谁在、有哪些客厅、开一间。数据来自 /v1/hall 与 /v1/rooms?all=1，SSE 进出会触发刷新。 */
 import { computed, onMounted, ref } from 'vue';
+import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import { api } from '../api/client.ts';
 import { isFavorite, toggleFavorite } from '../stores/club.ts';
 import { hallSection } from '../stores/hall.ts';
@@ -96,6 +97,7 @@ async function createRoom(): Promise<void> {
 
 <template>
   <div class="view view-hall">
+    <AnnouncementBanner />
     <div class="hall-head">
       <span class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</span>
       <h1>今晚，来一局。</h1>

@@ -5,6 +5,7 @@
  */
 import { onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';
+import { startAnnouncementWatch } from './stores/announcements.ts';
 import { boot, snapshot } from './stores/parlor.ts';
 import { seat } from './stores/session.ts';
 import { readView, view } from './stores/view.ts';
@@ -23,7 +24,10 @@ async function enter(): Promise<void> {
   failed.value = '';
   try {
     ready.value = await boot();
-    if (ready.value) readView();
+    if (ready.value) {
+      readView();
+      startAnnouncementWatch();
+    }
   } catch (error) {
     failed.value = (error as Error).message || String(error);
     ready.value = false;
