@@ -32,8 +32,8 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
   console.error('端口不对');
   process.exit(2);
 }
-if (!Number.isInteger(maxSeats) || maxSeats < 2 || maxSeats > 12) {
-  console.error('席位上限要在 2–12 之间');
+if (!Number.isInteger(maxSeats) || maxSeats < 2 || maxSeats > 30) {
+  console.error('席位上限要在 2–30 之间');
   process.exit(2);
 }
 

@@ -25,6 +25,7 @@ afterEach(async () => { await world?.stop(); world = undefined; vi.restoreAllMoc
 const start = async (off = false) => {
   const ctx = fakeWorldContext(PARLOR, { scratchDir: dir });
   ctx.cfg.serverUrl = 'http://127.0.0.1:8790'; ctx.cfg.room = 'hall'; if (off) ctx.cfg.wakeTier = 'off';
+  ctx.cfg.seatName = '阿岚';
   ctx.secret = name => name === 'PARLOR_SEAT_TOKEN' ? 'seat' : 'inv';
   world = PARLOR.create(ctx); const host = new FakeHost(); await world.start(host); await vi.advanceTimersByTimeAsync(0); return host;
 };

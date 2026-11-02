@@ -109,9 +109,9 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
       'worlds.parlor.maxSeats': {
         type: 'integer',
         title: '席位上限',
-        description: '只有自己开客厅时有用；会说话的席位上限，观看者不计入。',
+        description: '只有自己开客厅时有用；会说话的席位上限为 2–30，观看者不计入。',
         minimum: 2,
-        maximum: 12,
+        maximum: 30,
         'x-hot': false,
       },
       'worlds.parlor.wakeTier': {

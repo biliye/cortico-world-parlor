@@ -17,6 +17,7 @@ afterEach(async () => {
 const start = async (host = new FakeHost()) => {
   const ctx = fakeWorldContext(PARLOR, { scratchDir: dir });
   ctx.cfg.serverUrl = 'http://127.0.0.1:8790'; ctx.cfg.room = 'lobby';
+  ctx.cfg.seatName = '阿岚';
   ctx.secret = name => name === 'PARLOR_SEAT_TOKEN' ? 'seat' : 'inv';
   vi.spyOn(ParlorClient.prototype, 'initializeIdentity').mockResolvedValue(true);
   vi.spyOn(ParlorClient.prototype, 'support').mockResolvedValue({ announcements: [] });

@@ -34,6 +34,7 @@ const start = async (tier: WakeTier = 'full'): Promise<void> => {
   const ctx = fakeWorldContext(PARLOR, { scratchDir });
   ctx.cfg.serverUrl = 'http://127.0.0.1:8790';
   ctx.cfg.room = 'lobby';
+  ctx.cfg.seatName = '小满';
   ctx.cfg.wakeTier = tier;
   ctx.secret = (name) => name === 'PARLOR_SEAT_TOKEN' ? 'test-seat-token' : 'inv';
   snapshot = {

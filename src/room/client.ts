@@ -115,6 +115,17 @@ export class ParlorClient {
     return this.parse<RoomSnapshot>(response);
   }
 
+  /** 只改当前令牌所属席位的名字，不重新入座。 */
+  async rename(token: string, name: string): Promise<{ name: string }> {
+    const response = await fetch(this.url('/v1/me/rename'), {
+      method: 'POST',
+      headers: await this.headers({ authorization: `Bearer ${token}`, 'content-type': 'application/json' }),
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
   async history(
     token: string,
     since: number,

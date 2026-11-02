@@ -4,7 +4,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { nowIso } from 'cortico/core/util.ts';
@@ -697,7 +697,7 @@ export class ParlorWorld implements World {
   /** 入座用的名字：配置的席位名，留空用 bot 显示名。撞名加序号由服务器做。 */
   private baseSeatName(): string {
     const cfg = this.ctx.cfg;
-    return cfg.seatName.trim() || this.ctx.botName;
+    return (cfg.seatName.trim() || this.ctx.botName).trim().replace(/\s+/g, ' ').slice(0, 24);
   }
 
   private async connect(): Promise<void> {
@@ -742,24 +742,35 @@ export class ParlorWorld implements World {
     this.identity = loadOrCreateIdentity(this.identityFile);
     const client = new ParlorClient(baseUrl, this.identity);
     this.client = client;
-    this.multiRoom = !this.server && await client.initializeIdentity(
-      cfg.identityUrl || DEFAULT_SERVER_URL, DEFAULT_INVITE_CODE, this.baseSeatName(),
-    );
+    try {
+      this.multiRoom = !this.server && await client.initializeIdentity(
+        cfg.identityUrl || DEFAULT_SERVER_URL, DEFAULT_INVITE_CODE, this.baseSeatName(),
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === '已有身份属于另一统一身份服务，请保持原身份服务地址') {
+        throw new Error(`已有身份属于另一统一身份服务（${this.identity.authority}）。要换到 ${cfg.identityUrl || DEFAULT_SERVER_URL}，请先停用客厅，删除本机身份文件 ${resolve(this.identityFile)}，再启用。删除后会生成新身份，不能自动取回原身份的席位、账本和私聊；原数据仍保留在原服务器。请先备份该文件，需要沿用原身份时保持原身份服务地址。`);
+      }
+      throw error;
+    }
     this.loadCursors();
 
     const stored = this.ctx.secret(SEAT_SECRET).trim();
     if (stored) {
+      let snapshot;
       try {
-        const snapshot = await client.snapshot(stored, 0, 1, this.roomArg());
+        snapshot = await client.snapshot(stored, 0, 1, this.roomArg());
+      } catch (error) {
+        // 令牌失效或那个客厅已经不在了：重新入场（当前客厅仍然有效时优先回它）。
+        if (!(error instanceof ParlorHttpError) || (error.status !== 401 && error.status !== 404)) throw error;
+      }
+      if (snapshot) {
         this.token = stored;
         this.ownerToken = this.ctx.secret(OWNER_SECRET).trim();
         this.seat = snapshot.seat;
         this.lastSeq = this.resumeFrom(snapshot.latest);
         this.applySnapshot(snapshot);
+        await this.syncSeatName(client);
         return;
-      } catch (error) {
-        // 令牌失效或那个客厅已经不在了：重新入场（当前客厅仍然有效时优先回它）。
-        if (!(error instanceof ParlorHttpError) || (error.status !== 401 && error.status !== 404)) throw error;
       }
     }
 
@@ -776,14 +787,20 @@ export class ParlorWorld implements World {
     try {
       joined = await client.join(this.inviteCode, request, this.roomArg());
     } catch (error) {
-      // 删除客厅后保留身份和账本，回大厅重新入座。
-      if (!this.multiRoom || !(error instanceof ParlorHttpError)
-        || error.status !== 403 || !error.message.includes('已经归档')) throw error;
-      joined = await client.join(this.inviteCode, request, 'hall');
-      this.currentRoom = 'hall';
+      if (!this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
+      const archived = error.status === 403 && error.message.includes('已经归档');
+      const defaultRoom = this.ctx.cfg.room || DEFAULT_ROOM_ID;
+      // 旧网关的准入检查把「不存在」也回成 403，兼容它但不吞权限/邀请码错误。
+      const missing = (error.status === 404 || (error.status === 403 && error.message === '目标客厅不存在'))
+        && this.currentRoom !== defaultRoom;
+      if (!archived && !missing) throw error;
+      const target = archived ? DEFAULT_ROOM_ID : defaultRoom;
+      joined = await client.join(this.inviteCode, request, target);
+      this.currentRoom = target;
       this.clearPendingMessages();
       this.focused = false;
-      await this.reportLink('原客厅已被房主删除，已回到大厅。', true);
+      await this.reportLink(archived ? '原客厅已被房主删除，已回到大厅。'
+        : `原客厅不存在，已回到${target === DEFAULT_ROOM_ID ? '大厅' : target}。`, true);
     }
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
@@ -800,6 +817,19 @@ export class ParlorWorld implements World {
     if (this.identity?.authority) saveIdentity(this.identityFile, this.identity);
     this.lastSeq = this.resumeFrom(snapshot.latest);
     this.applySnapshot(snapshot);
+    await this.syncSeatName(client);
+  }
+
+  /** 续用席位或重新领令牌时，配置里的名字也要生效；不换席位。 */
+  private async syncSeatName(client: ParlorClient): Promise<void> {
+    if (!this.seat || this.seat.name === this.baseSeatName()) return;
+    try {
+      const renamed = await client.rename(this.token, this.baseSeatName());
+      this.seat = { ...this.seat, name: renamed.name };
+    } catch (error) {
+      if (!(error instanceof ParlorHttpError) || ![404, 405].includes(error.status)) throw error;
+      await this.reportLink('服务器尚不支持同步席位名；请升级服务器，或释放原席位后重新入座让新名字生效。', true);
+    }
   }
 
   /**

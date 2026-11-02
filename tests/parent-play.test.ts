@@ -207,8 +207,11 @@ describe('家长下场', () => {
     expect(denied.status).toBe(403);
     const allowed = await post(app.url, '/v1/rooms/lobby/join', { name: '路人' }, { ...stranger, 'x-parlor-invite': 'inv' });
     expect(allowed.status).toBe(200);
-    // 已经有身份的人再进不带码也认（这里撞上「已经在客厅里」，说明邀请码这关过了）。
+    // 已认证身份再次加入续用同一个席位，换令牌而不重建席位。
     const again = await post(app.url, '/v1/rooms/lobby/join', { name: '路人' }, stranger);
-    expect(again.status).toBe(409);
+    expect(again.status).toBe(200);
+    expect((again.body.seat as { id: string }).id).toBe((allowed.body.seat as { id: string }).id);
+    expect(again.body.token).not.toBe(allowed.body.token);
+    expect((await getWith(app.url, '/v1/rooms/lobby/room', { authorization: `Bearer ${allowed.body.token}` })).status).toBe(401);
   });
 });

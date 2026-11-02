@@ -905,6 +905,22 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/v1/me/rename') {
+      const token = bearer(req);
+      const seat = token ? await seatByTokenHash(this.db, hashSeatToken(token)) : undefined;
+      if (!seat || seat.releasedAt !== null) throw new HttpError(401, '席位令牌无效或已经离开');
+      const body = await readJson(req);
+      const name = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
+      if (!name) throw new HttpError(400, '名字不能为空');
+      if (name.length > 24) throw new HttpError(400, '名字最多 24 个字');
+      await withTransaction(this.db, async () => {
+        await renameSeat(this.db, seat.roomId, seat.id, name);
+        await this.coo.renameCooDisplay(seat.cooId, name);
+      });
+      json(res, 200, { name });
+      return;
+    }
+
     if (method === 'POST' && url.pathname === '/v1/me/owner-key/rotate') {
       const cooId = await this.cooAuth(req, '', false);
       let account = await this.coo.byCooId(cooId);
@@ -1747,7 +1763,8 @@ export class WorldServer {
       const cooId = await this.cooAuth(req, name);
       await this.assertRoomEntry(roomId, cooId);
       const host = await this.host(roomId);
-      const joined = await host.join(cooId, {
+      // 同一身份丢了令牌时续用原席位；身份认证与房间准入已在上面核过。
+      const joined = await host.seatOf(cooId) ? await host.reissueSeatToken(cooId) : await host.join(cooId, {
         name,
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),

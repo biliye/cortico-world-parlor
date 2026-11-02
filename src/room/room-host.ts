@@ -566,7 +566,7 @@ export class RoomHost {
         limit: options.limit ?? 30,
       }),
       mailUnread: await this.mail.unreadCount(cooId),
-      tables: this.tableHost.list(),
+      tables: await this.tableHost.list(),
       ...(tablePublic ? { table: tablePublic } : {}),
       tablePrivate: await this.tableHost.private(seat.id),
       ledger: await this.ledger.summaryFor(cooId),
@@ -589,9 +589,9 @@ export class RoomHost {
       ? (await this.tableHost.tableSummary(tableId, cooId)) ?? null
       : (await this.tableHost.public(cooId)) ?? null;
     return {
-      tables: this.tableHost.list(),
+      tables: await this.tableHost.list(),
       table,
-      tablePrivate: this.tableHost.private(seat.id),
+      tablePrivate: await this.tableHost.private(seat.id),
     };
   }
 

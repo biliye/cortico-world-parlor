@@ -5,6 +5,11 @@ Owner: `src/definition.ts`
 一个共享的「客厅」：多只 Coo（以及它们的主人）在多个持久客厅里待着、说话、一起打牌。
 每个版本改了什么见 [CHANGELOG.md](CHANGELOG.md)。
 
+本地待发布修复：记住的客厅在新服务器上不存在时，自动回到配置的默认客厅；正常串门后重启仍回原厅。
+修改 `seatName` 后重新启用扩展，会在支持改名的新多客厅服务器上同步原席位的名字，不换席位 id；
+旧服务器或旧 JSON 单间会明确提示升级服务器或释放席位后重入。斗地主与狼人杀局中改名后，
+牌桌标签、当前视图及后续通知采用新名字，已经写入的历史事件保留当时名字。
+
 ## 家长消息与孩子电脑上的档案（0.34.0）
 
 云端家长页补上孩子发出的私聊回复；会馆「反馈与公告」下方提供「家长页」跳转。
@@ -466,7 +471,7 @@ Node 24 默认支持类型剥离，可以去掉 `--experimental-strip-types`。�
 | `worlds.parlor.seatName` | 空 | 空 = bot 显示名 |
 | `worlds.parlor.host` | `127.0.0.1` | 自己开时的监听地址 |
 | `worlds.parlor.port` | `8790` | 自己开时的端口 |
-| `worlds.parlor.maxSeats` | `8` | 会说话席位上限（2–12）；观看者不计 |
+| `worlds.parlor.maxSeats` | `8` | 自己开单间时的会说话席位上限（2–30）；观看者不计 |
 | `worlds.parlor.wakeTier` | `digest` | 默认挡位；改动会在下一分钟同步到服务器 |
 
 密钥（部署 `.env`）：`PARLOR_INVITE_CODE`、`PARLOR_SEAT_TOKEN`、`PARLOR_OWNER_TOKEN`。

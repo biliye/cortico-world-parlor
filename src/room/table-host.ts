@@ -350,13 +350,13 @@ export class TableHost {
   }
 
   /** 给快照的桌列表：未结束的 + 最近结束的几张。 */
-  list(): TableSummary[] {
+  async list(): Promise<TableSummary[]> {
     const live = this.liveTables();
     const ended = [...this.tables.values()]
       .filter((table) => table.engine.status === 'ended')
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, KEEP_ENDED);
-    return [...live, ...ended].map((table) => this.summaryOf(table));
+    return Promise.all([...live, ...ended].map((table) => this.summaryOf(table)));
   }
 
   /** 我的桌；不传 cooId 时退回「只有一张未结束的桌」。 */
@@ -375,19 +375,21 @@ export class TableHost {
     return ended ? this.summaryOf(ended) : undefined;
   }
 
-  private(seatId: string): TablePrivateSummary | null {
+  async private(seatId: string): Promise<TablePrivateSummary | null> {
     for (const table of this.tables.values()) {
       // 结束的桌不再给私视图：否则「我还在桌上」、旧桌还会盖住新桌的手牌。
       if (!isLive(table.engine.status)) continue;
       if (!table.engine.has(seatId)) continue;
-      const text = table.engine.privateText(seatId, this.now());
+      const revision = table.revision;
+      const engine = await this.withCurrentNames(table.engine);
+      const text = engine.privateText(seatId, this.now());
       if (!text) continue;
       return {
-        ...(table.engine.view(seatId) as Record<string, unknown>),
+        ...(engine.view(seatId) as Record<string, unknown>),
         game: table.engine.game,
         seat: seatId,
         tableId: table.id,
-        revision: table.revision,
+        revision,
         text,
       } as TablePrivateSummary;
     }
@@ -711,7 +713,7 @@ export class TableHost {
     });
     if (duplicateStart) return duplicateStart;
     this.publishState(table, draft, revision, stateJson, now);
-    return { ...receipt, seats: this.rosterOf(draft) };
+    return { ...receipt, seats: await this.rosterOf(draft) };
     } finally {
       releaseTable();
     }
@@ -1445,26 +1447,44 @@ export class TableHost {
       throw new Error(`存档格式是 ${row.state_version}，这一版只认 ${engine.stateVersion}`);
     }
     engine.restoreState(jsonValue(row.state_json, null));
-    return engine;
+    return this.withCurrentNames(engine);
   }
 
   // —— 小工具 ——
 
-  private summaryOf(table: LiveTable): TableSummary {
+  /** 只在牌局副本中采用当前席名；不改手牌、角色、版本或已写入的历史事件。 */
+  private async withCurrentNames(engine: TableEngine): Promise<TableEngine> {
+    if (engine.stateVersion === 0 || !['ddz', 'werewolf'].includes(engine.game)) return engine;
+    const names = new Map((await this.seats.seats()).map(seat => [seat.id, seat.name]));
+    const state = engine.exportState() as { seats: Array<{ id: string; name: string }> };
+    if (!state.seats.some(seat => names.has(seat.id) && names.get(seat.id) !== seat.name)) return engine;
+    const copy = gameById(engine.game)!.create({
+      host: { id: engine.host, name: names.get(engine.host) ?? '' },
+      now: this.now(),
+      ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
+    });
+    copy.restoreState({ ...state, seats: state.seats.map(seat => ({ ...seat, name: names.get(seat.id) ?? seat.name })) });
+    return copy;
+  }
+
+  private async summaryOf(table: LiveTable): Promise<TableSummary> {
+    // 查席名期间牌局可能提交下一手，版本必须与这份引擎快照一起取。
+    const revision = table.revision;
+    const engine = await this.withCurrentNames(table.engine);
     return {
-      ...(table.engine.public() as Record<string, unknown>),
+      ...(engine.public() as Record<string, unknown>),
       id: table.id,
       tableId: table.id,
-      game: table.engine.game,
-      label: table.engine.label,
-      status: table.engine.status,
-      host: table.engine.host,
-      revision: table.revision,
+      game: engine.game,
+      label: engine.label,
+      status: engine.status,
+      host: engine.host,
+      revision,
       ...(table.frozen ? { frozen: true } : {}),
       ...(table.stake > 0 ? { stake: table.stake } : {}),
       text: table.frozen
         ? `${table.engine.label}桌恢复失败，已经隔离；等运营者处理。`
-        : table.engine.publicText(),
+        : engine.publicText(),
     } as TableSummary;
   }
 
@@ -1547,14 +1567,14 @@ export class TableHost {
       players.push({
         seatId: row.seat_id,
         cooId: row.coo_id,
-        name: names.get(row.seat_id) ?? (await this.seatById(row.seat_id))?.name ?? '席位',
+        name: (await this.seatById(row.seat_id))?.name ?? names.get(row.seat_id) ?? '席位',
       });
     }
     return players;
   }
 
-  private rosterOf(engine: TableEngine): string[] {
-    const view = engine.public() as { seats?: Array<{ name?: unknown; bot?: unknown }> };
+  private async rosterOf(engine: TableEngine): Promise<string[]> {
+    const view = (await this.withCurrentNames(engine)).public() as { seats?: Array<{ name?: unknown; bot?: unknown }> };
     return (view.seats ?? []).map((seat) => (
       typeof seat.name === 'string' ? (seat.bot === true ? `${seat.name}（脚本）` : seat.name) : '？'
     ));
@@ -1573,7 +1593,7 @@ export class TableHost {
   private async finishReceipt(receipt: TableReceipt, engine: TableEngine): Promise<void> {
     const deadline = this.deadlineOf(engine);
     const turnId = this.turnOf(engine);
-    const publicView = engine.public() as { seats?: Array<{ id?: unknown; name?: unknown }> };
+    const publicView = (await this.withCurrentNames(engine)).public() as { seats?: Array<{ id?: unknown; name?: unknown }> };
     const turnName = turnId ? publicView.seats?.find((seat) => seat.id === turnId)?.name : undefined;
     const seq = await this.events.latest(this.roomId);
     receipt.seq = seq;

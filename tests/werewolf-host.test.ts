@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
-import { createRoom, getRoom } from '../src/room/room-seat-db.ts';
+import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
@@ -194,6 +194,28 @@ const pump = async (fixture: Fixture, onEvent?: (type: string, text: string) => 
 };
 
 describe('狼人杀 · 宿主层', () => {
+  it('九人局中改名后所有牌桌视图立即跟随，角色与行动窗口保持，牌局能结束', async () => {
+    const fixture = await setup();
+    try {
+      const seatIds = await enterAll(fixture);
+      const tableId = await openWerewolf(fixture);
+      await startTable(fixture, tableId);
+      const before = await fixture.host.snapshot(COOS[0]);
+      await renameSeat(fixture.db, 'lobby', seatIds[0], '改名后的家长');
+      const after = await fixture.host.snapshot(COOS[0]);
+      const named = (view: unknown) => (view as { seats: Array<{ id: string; name: string }> }).seats.find(s => s.id === seatIds[0])?.name;
+      expect(named(after.table)).toBe('改名后的家长');
+      expect(named(after.tables![0])).toBe('改名后的家长');
+      expect(named(after.tablePrivate)).toBe('改名后的家长');
+      expect(named((await fixture.host.tableSlice(COOS[1], tableId)).table)).toBe('改名后的家长');
+      expect(after.tablePrivate?.role).toBe(before.tablePrivate?.role);
+      expect(after.tablePrivate?.windowId).toBe(before.tablePrivate?.windowId);
+      expect(after.table?.revision).toBe(before.table?.revision);
+      await pump(fixture);
+      expect((await fixture.host.tablePublic(tableId))?.status).toBe('ended');
+    } finally { await fixture.close(); }
+  });
+
   it('能力闸：旧版 Coo 入座后开不了局，报错点名；带版本即可', async () => {
     const fixture = await setup();
     await enterAll(fixture);

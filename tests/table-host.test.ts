@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
-import { createRoom, getRoom } from '../src/room/room-seat-db.ts';
+import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
 import { START_CHIPS } from '../src/room/ledger.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
@@ -76,6 +76,39 @@ const fileDb = (): string => {
 };
 
 describe('客厅牌桌（骰子）', () => {
+  it('斗地主局中改名同步公开/私有/桌列表/增量视图，手牌版本不变并正常结算', async () => {
+    fixture = await setup();
+    const { host, db, clock } = fixture;
+    const a = await enter(host, A, '阿岚');
+    await enter(host, B, '小满'); await enter(host, C, '小柚');
+    const { tableId } = await host.openTable(A, { game: 'ddz' });
+    await host.joinTable(B); await host.joinTable(C); await host.startTable(A);
+    await act(host, A, { move: 'bid', call: true }, 'rename-bid');
+    const before = await host.snapshot(A);
+    const saved = await db.prepare('SELECT state_json FROM tables WHERE id = ?').get(tableId);
+    await renameSeat(db, 'lobby', a.seat.id, '新阿岚');
+    const after = await host.snapshot(A);
+    const named = (view: unknown) => (view as { seats: Array<{ id: string; name: string }> }).seats.find(s => s.id === a.seat.id)?.name;
+    expect(named(after.table)).toBe('新阿岚');
+    expect(named(after.tables![0])).toBe('新阿岚');
+    expect(after.tablePrivate?.name).toBe('新阿岚');
+    expect(named((await host.tableSlice(B, tableId)).table)).toBe('新阿岚');
+    expect(after.table?.text).toContain('地主 新阿岚');
+    expect(after.tablePrivate?.hand).toEqual(before.tablePrivate?.hand);
+    expect(after.table?.revision).toBe(before.table?.revision);
+    expect(await db.prepare('SELECT state_json FROM tables WHERE id = ?').get(tableId)).toEqual(saved);
+    expect(after.events).toEqual(before.events);
+    for (let i = 0; i < 400 && (await host.tablePublic(tableId))?.status !== 'ended'; i++) {
+      clock.now += 61_000;
+      await host.tickClock(clock.now);
+    }
+    expect((await host.tablePublic(tableId))?.status).toBe('ended');
+    const end = (await host.history(A, { since: 0, limit: 200 })).find(e => e.type === 'parlor.table.end');
+    expect(end?.text).toContain('新阿岚');
+    expect(end?.text).not.toContain('地主 阿岚');
+    expect((await new LedgerDb(db).publicInRoom('lobby', 5))[0].text).toContain('新阿岚');
+  });
+
   it('斗地主两家过牌后，重新领出通知携带该手的已提交版本，可直接出牌', async () => {
     fixture = await setup();
     const { host } = fixture;
@@ -87,7 +120,7 @@ describe('客厅牌桌（骰子）', () => {
     await host.joinTable(C);
     await host.startTable(A);
     await act(host, A, { move: 'bid', call: true }, 'ddz-bid');
-    const hand = host.tablePrivate(a.seat.id)!.hand as string[];
+    const hand = (await host.tablePrivate(a.seat.id))!.hand as string[];
     await act(host, A, { move: 'play', cards: [hand[0]] }, 'ddz-play');
     await act(host, B, { move: 'pass' }, 'ddz-pass-b');
     const passed = await act(host, C, { move: 'pass' }, 'ddz-pass-c');
@@ -96,7 +129,7 @@ describe('客厅牌桌（骰子）', () => {
     const notified = latest.data!.table as Record<string, unknown>;
     expect(latest.text).toContain('这一轮你先出');
     expect(notified).toMatchObject({ tableId: latest.data!.tableId, revision: passed.revision });
-    const remaining = host.tablePrivate(a.seat.id)!.hand as string[];
+    const remaining = (await host.tablePrivate(a.seat.id))!.hand as string[];
     await expect(host.tableAction(A, { move: 'play', cards: [remaining[0]] }, {
       revision: notified.revision as number, requestId: 'ddz-lead-again',
     })).resolves.toMatchObject({ revision: passed.revision + 1 });
@@ -140,7 +173,7 @@ describe('客厅牌桌（骰子）', () => {
     expect(all.some((event) => event.type === 'parlor.table.end')).toBe(true);
     expect((await host.tablePublic())?.status).toBe('ended');
     // 结束就是下桌：不再有私视图；结果仍留在公开摘要与事件里。
-    expect(host.tablePrivate(a.seat.id)).toBeNull();
+    expect(await host.tablePrivate(a.seat.id)).toBeNull();
     expect((await host.tablePublic())?.text).toContain('结束');
   });
 
