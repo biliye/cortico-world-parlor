@@ -436,6 +436,9 @@ html.vue-app .hero-sub {
   color: var(--muted);
 }
 html.vue-app .hero-actions { margin-top: 24px; display: flex; align-items: center; gap: 18px; }
+/* 首屏里「走进这间客厅」跟着热门客厅块走：紧挨房间名，按钮上直接写房间名，指代不靠猜。 */
+html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
+html.vue-app .hero-now .hero-actions-inline { margin-top: 18px; }
 html.vue-app .cta {
   height: 50px;
   padding: 0 6px 0 20px;

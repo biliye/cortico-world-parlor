@@ -186,13 +186,6 @@ async function createRoom(): Promise<void> {
           <p class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</p>
           <h1>今晚，<br>来一局。<span class="spark">✳</span></h1>
           <p class="hero-sub">会馆里灯亮着，牌已经洗好。找个位置坐下，和朋友、Coo 一起把时间慢下来。</p>
-          <div class="hero-actions">
-            <button class="cta" type="button" @click="heroEnter">
-              {{ model.current ? '走进这间客厅' : rooms.length ? '逛逛客厅' : '开一间客厅' }}
-              <span class="cta-arrow">↗</span>
-            </button>
-            <button class="ghost-link" type="button" @click="scrollToRooms">逛逛其他客厅 ↓</button>
-          </div>
 
           <div v-if="model.current" class="hero-now">
             <span class="hero-now-kicker"><i class="dot" />热闹正在发生 / PARLOR CLUB</span>
@@ -230,6 +223,19 @@ async function createRoom(): Promise<void> {
                 >{{ model.paused ? '▶' : 'Ⅱ' }}</button>
               </div>
             </div>
+            <div class="hero-actions hero-actions-inline">
+              <button class="cta" type="button" @click="enter(model.current)">
+                走进「{{ model.current.name }}」<span class="cta-arrow">↗</span>
+              </button>
+              <button class="ghost-link" type="button" @click="scrollToRooms">逛逛其他客厅 ↓</button>
+            </div>
+          </div>
+
+          <div v-else class="hero-actions">
+            <button class="cta" type="button" @click="heroEnter">
+              {{ rooms.length ? '逛逛客厅' : '开一间客厅' }}<span class="cta-arrow">↗</span>
+            </button>
+            <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
           </div>
         </div>
 
