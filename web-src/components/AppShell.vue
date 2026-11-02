@@ -46,21 +46,27 @@ onMounted(() => {
 <template>
   <header class="topbar">
     <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
-    <span class="conn" :class="connection">
-      <span class="dot" />
-      <span class="conn-text">{{ connection === 'on' ? '已连接' : connection === 'off' ? '重连中…' : '连接中…' }}</span>
-    </span>
-    <span class="muted top-me-text">{{ name }} · {{ roomLabel }}</span>
-    <ThemePicker />
-    <button class="ghost-btn mail-btn" type="button" @click="openMail">
-      信箱<span v-if="mailUnread" class="badge">{{ mailUnread }}</span>
-    </button>
-    <button class="ghost-btn dm-btn dm-toggle" type="button" @click="toggleDm">
-      私聊<span v-if="dmUnread" class="badge">{{ dmUnread }}</span>
-    </button>
-    <button class="btn ghost small" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
-      {{ chatExpanded() ? '收起聊天' : '打开聊天' }}
-    </button>
+    <div class="top-right">
+      <span class="conn" :class="connection">
+        <span class="dot" />
+        <span class="conn-text">{{ connection === 'on' ? '已连接' : connection === 'off' ? '重连中…' : '连接中…' }}</span>
+      </span>
+      <button class="ghost-btn mail-btn" type="button" @click="openMail">
+        <Icon name="mail" />信箱<span v-if="mailUnread" class="badge">{{ mailUnread }}</span>
+      </button>
+      <button class="ghost-btn dm-btn dm-toggle" type="button" @click="toggleDm">
+        <Icon name="chat" />私聊<span v-if="dmUnread" class="badge">{{ dmUnread }}</span>
+      </button>
+      <span class="top-me">
+        <span class="top-me-text">
+          <span class="top-me-name">{{ name }} · {{ roomLabel }}</span>
+        </span>
+      </span>
+      <ThemePicker />
+      <button class="btn ghost small chat-toggle" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
+        {{ chatExpanded() ? '收起聊天' : '打开聊天' }}
+      </button>
+    </div>
   </header>
 
   <DmWindow />
