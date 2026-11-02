@@ -330,6 +330,9 @@ html.vue-app .theme-picker::after {
 /* ——— 内容页通用 ——— */
 html.vue-app .stage-body > .view { padding: 0 40px 90px; }
 html.vue-app .shell.chat-open .stage-body > .view { padding-right: 396px; }
+/* 牌桌页例外：聊天浮在牌桌上面，不挤占牌桌宽度（用户 2026-11-02 指定）。 */
+html.vue-app .shell.chat-open .stage-body > .view-table,
+html.vue-app .stage-body > .view-table { padding-right: 40px; }
 html.vue-app .view { max-width: none; }
 html.vue-app .eyebrow {
   display: flex;
