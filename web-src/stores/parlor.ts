@@ -5,6 +5,7 @@
  */
 import { computed, ref } from 'vue';
 import { api, beginGlobalEntry, finishGlobalEntry, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
+import { decideExpiredSeat } from '../lib/seat-errors.ts';
 import { noteChatEvent } from './chat.ts';
 import { noteWhisper } from './dm.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
@@ -127,13 +128,16 @@ export async function refreshSnapshot(): Promise<void> {
  * 与旧 play.js 的 handleExpiredSeat 同一套判断。
  */
 async function handleExpiredSeat(token: string): Promise<void> {
-  const stored = readStoredSeat();
-  if (stored && token && stored.token !== token) {
-    if (seat.value && seat.value.token === stored.token) return;
+  const decision = decideExpiredSeat(
+    token,
+    readStoredSeat()?.token ?? null,
+    seat.value?.token ?? null,
+  );
+  if (decision === 'ignore') return;
+  if (decision === 'reload') {
     location.reload();
     return;
   }
-  if (!stored && !seat.value) return;
   disconnect();
   clearSeat();
 }

@@ -1,5 +1,6 @@
 /** 网络层：与旧 play.js 同一套请求形状、同一套令牌与错误字段。 */
 import { currentRoom, saveSeat, seat } from '../stores/session.ts';
+import { seatTokenFrom } from '../lib/seat-errors.ts';
 import type { Health, JoinResult } from './types.ts';
 
 export class ApiError extends Error {
@@ -82,7 +83,7 @@ async function read<T>(response: Response, headers: Headers): Promise<T> {
     const message = (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string')
       ? body.error
       : '请求失败（' + response.status + '）';
-    throw new ApiError(message, response.status, (headers.get('authorization') || '').replace(/^Bearer /, ''));
+    throw new ApiError(message, response.status, seatTokenFrom(headers));
   }
   return body as T;
 }
