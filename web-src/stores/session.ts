@@ -14,6 +14,11 @@ function read(): SeatConfig | null {
   }
 }
 
+/** 只读存储里的席位，不动内存里的那一份；迟到 401 要用它判断「是不是别的标签页已经换了席位」。 */
+export function readStoredSeat(): SeatConfig | null {
+  return read();
+}
+
 export const seat = ref<SeatConfig | null>(read());
 
 export function saveSeat(next: SeatConfig): void {

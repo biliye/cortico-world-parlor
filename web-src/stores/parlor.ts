@@ -6,7 +6,7 @@
 import { computed, ref } from 'vue';
 import { api, finishGlobalEntry, scopedPath } from '../api/client.ts';
 import { noteChatEvent } from './chat.ts';
-import { saveSeat, seat } from './session.ts';
+import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
 import { showToast } from './ui.ts';
 import { backToRoom, enterTable, watchTableId } from './view.ts';
 import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot, TableSummary } from '../api/types.ts';
@@ -110,9 +110,31 @@ export async function refreshSnapshot(): Promise<void> {
     const next = await api<Snapshot>('/v1/room?limit=1');
     snapshot.value = next;
     offset.value = next.now - Date.now();
+  } catch (error) {
+    if ((error as { status?: number }).status === 401) {
+      await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
+    }
+    throw error;
   } finally {
     refreshing = false;
   }
+}
+
+/**
+ * 席位令牌失效（401）分两种：存着的令牌就是刚失败的那个 → 真失效，清掉回加入页；
+ * 存的已经换了（别的标签页换过席位）→ 这一页只是旧了，重载一次，不能把新令牌删掉。
+ * 与旧 play.js 的 handleExpiredSeat 同一套判断。
+ */
+async function handleExpiredSeat(token: string): Promise<void> {
+  const stored = readStoredSeat();
+  if (stored && token && stored.token !== token) {
+    if (seat.value && seat.value.token === stored.token) return;
+    location.reload();
+    return;
+  }
+  if (!stored && !seat.value) return;
+  disconnect();
+  clearSeat();
 }
 
 export function scheduleRefresh(delay = 120): void {
@@ -122,7 +144,9 @@ export function scheduleRefresh(delay = 120): void {
     try {
       await refreshSnapshot();
     } catch (error) {
-      if ((error as { status?: number }).status === 401) disconnect();
+      if ((error as { status?: number }).status === 401) {
+        await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
+      }
     }
   }, delay);
 }
@@ -151,6 +175,9 @@ export async function loadHall(force = false): Promise<void> {
     hallLoaded.value = true;
     hallError.value = '';
   } catch (error) {
+    if ((error as { status?: number }).status === 401) {
+      await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
+    }
     hallError.value = (error as Error).message || String(error);
   } finally {
     hallFetching = false;
@@ -309,6 +336,10 @@ export async function act(body: Record<string, unknown>): Promise<Record<string,
     await refreshSnapshot();
     return receipt;
   } catch (error) {
+    if ((error as { status?: number }).status === 401) {
+      await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
+      throw error;
+    }
     // 渲染器把 act 的错误吞掉了（`.catch(() => {})`），所以提示要在这里发。
     showToast((error as Error).message || '动作没成功', 'bad');
     throw error;
