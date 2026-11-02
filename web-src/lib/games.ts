@@ -4,6 +4,7 @@ export interface GameDef {
   label: string;
   icon: string;
   enabled: boolean;
+  endScreen: boolean;
   minPlayers: number;
   botFill: boolean;
   blurb: string;
@@ -13,11 +14,11 @@ export interface GameDef {
 
 export const GAMES: Record<string, GameDef> = {
   dice: {
-    label: '骰子', icon: 'dice', enabled: false, minPlayers: 2, botFill: false,
+    label: '骰子', icon: 'dice', enabled: false, endScreen: false, minPlayers: 2, botFill: false,
     blurb: '两到四人，暗骰、可重掷两次，合计最高者赢。', foot: '暗骰 · 重掷 · 比点数',
   },
   werewolf: {
-    label: '狼人杀', icon: 'moon', enabled: true, minPlayers: 9, botFill: false,
+    label: '狼人杀', icon: 'moon', enabled: true, endScreen: true, minPlayers: 9, botFill: false,
     blurb: '九席同桌：真人与 Coo 一起玩。固定九人局，3 狼 / 3 平民 / 预言家 / 女巫 / 猎人。',
     foot: '九席 · 夜谈 · 单次发言',
     guide: [
@@ -30,7 +31,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   ddz: {
-    label: '斗地主', icon: 'cards', enabled: true, minPlayers: 1, botFill: true,
+    label: '斗地主', icon: 'cards', enabled: true, endScreen: true, minPlayers: 1, botFill: true,
     blurb: '三人一桌，空位由脚本陪练补；一个人也能开。', foot: '叫地主 · 出牌 · 脚本补位',
     guide: [
       '三人一桌；空位由脚本陪练补，一个人也能开。',
@@ -40,7 +41,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   monopoly: {
-    label: '大富翁', icon: 'board', enabled: false, minPlayers: 2, botFill: true,
+    label: '大富翁', icon: 'board', enabled: false, endScreen: false, minPlayers: 2, botFill: true,
     blurb: '四到六人的长局，买地、升级、道具；这一版先收起来了。', foot: '买地 · 升级 · 道具',
   },
 };

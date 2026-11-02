@@ -7,6 +7,7 @@ import { computed, ref } from 'vue';
 import { api, finishGlobalEntry, scopedPath } from '../api/client.ts';
 import { noteChatEvent } from './chat.ts';
 import { saveSeat, seat } from './session.ts';
+import { showToast } from './ui.ts';
 import { backToRoom, enterTable, watchTableId } from './view.ts';
 import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot, TableSummary } from '../api/types.ts';
 
@@ -88,6 +89,19 @@ export const myTable = computed<TableSummary | null>(() => {
   const found = id ? tableList().find((table) => tableIdOf(table) === id) : null;
   return found || snapshot.value?.table || null;
 });
+
+/** 只有看着自己那张桌时才带私视图；看别人的桌子就当旁观者。 */
+export function activePrivate(): Record<string, unknown> | null {
+  const priv = snapshot.value?.tablePrivate;
+  if (!priv) return null;
+  const table = activeTable.value;
+  if (!table) return null;
+  const privId = typeof priv.tableId === 'string' ? priv.tableId : (typeof priv.id === 'string' ? priv.id : '');
+  const mine = privId
+    ? tableIdOf(table) === privId
+    : tableIdOf(table) === tableIdOf(snapshot.value?.table);
+  return mine ? (priv as Record<string, unknown>) : null;
+}
 
 export async function refreshSnapshot(): Promise<void> {
   if (!seat.value || refreshing) return;
@@ -247,12 +261,35 @@ function newRequestId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** 牌桌动作只写「做什么」；「对哪张桌、基于哪一版」在这里补。与旧版 withTableFields 一致。 */
+function withTableFields(body: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...body };
+  const type = typeof out.type === 'string' ? out.type : '';
+  if (!type || type === 'table_open') return out;
+  if (type === 'table_join') {
+    if (!out.table) {
+      const target = activeTable.value;
+      if (target) out.table = tableIdOf(target);
+    }
+    return out;
+  }
+  if (!type.startsWith('table_') && type !== 'ddz_action' && type !== 'werewolf_action') return out;
+  const mine = tableIdOf(myTable.value);
+  if (mine && !out.table) out.table = mine;
+  if (type === 'table_action' || type === 'ddz_action') {
+    const priv = snapshot.value?.tablePrivate as Record<string, unknown> | null | undefined;
+    const revision = priv?.revision;
+    if (typeof revision === 'number' && out.revision === undefined) out.revision = revision;
+  }
+  return out;
+}
+
 /** 通用动作。回执里可能带桌与私视图，这一刀先统一「动作后拉一份快照」，保证状态一致。 */
 export async function act(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   if (acting) return null;
   acting = true;
   try {
-    const payload: Record<string, unknown> = { ...body };
+    const payload = withTableFields(body);
     const retryable = typeof payload.type === 'string' && IDEMPOTENT.has(payload.type);
     if (retryable) payload.requestId = newRequestId();
     const send = () => api<Record<string, unknown>>('/v1/action', {
@@ -271,6 +308,10 @@ export async function act(body: Record<string, unknown>): Promise<Record<string,
     if (typeof receipt.seq === 'number') latest.value = Math.max(latest.value, receipt.seq);
     await refreshSnapshot();
     return receipt;
+  } catch (error) {
+    // 渲染器把 act 的错误吞掉了（`.catch(() => {})`），所以提示要在这里发。
+    showToast((error as Error).message || '动作没成功', 'bad');
+    throw error;
   } finally {
     acting = false;
   }

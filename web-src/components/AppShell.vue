@@ -9,6 +9,7 @@ import { chatExpanded, closeSheet, sheetOpen, toggleChat } from '../stores/chat.
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { connection, snapshot } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
+import { toastKind, toastText } from '../stores/ui.ts';
 
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
@@ -72,4 +73,6 @@ watch(sheetOpen, (open) => { document.body.classList.toggle('sheet-open', open);
   </div>
 
   <div class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
+
+  <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>
 </template>
