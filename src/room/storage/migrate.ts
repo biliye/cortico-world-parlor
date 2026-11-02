@@ -13,9 +13,10 @@ import type { SqliteDb } from './sqlite.ts';
 import type { PgDb } from './postgres.ts';
 import { PG_MIGRATIONS, PG_SCHEMA_VERSION } from './pg-schema.ts';
 import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 /** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
-export const SQLITE_SCHEMA_VERSION = 7;
+export const SQLITE_SCHEMA_VERSION = 8;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -145,6 +146,7 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   handle.exec(SCHEMA_SQL);
   handle.exec(IDENTITY_SCHEMA_SQL);
   handle.exec(SUPPORT_SCHEMA_SQL);
+  handle.exec(TABLE_DISCOVERY_SCHEMA_SQL);
   const global = handle.prepare("SELECT 1 FROM meta WHERE key='global_identity' AND value='1'").get();
   if (global) handle.exec('DROP INDEX IF EXISTS ux_active_seat_name');
   else handle.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name ON room_seats(room_id,name COLLATE NOCASE) WHERE released_at IS NULL');

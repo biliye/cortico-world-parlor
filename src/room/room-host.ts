@@ -18,7 +18,7 @@ import { registeredHandle } from './global-identity.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { mentionsInText } from './mentions.ts';
-import { lockCooRows } from './storage/locks.ts';
+import { lockCooRows, lockRoomRow } from './storage/locks.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, getRoom, hashSeatToken, joinSeat, releaseSeat,
   seatByTokenHash, updateSeatToken, type RoomRow, type SeatRow,
@@ -382,7 +382,7 @@ export class RoomHost {
   }
 
   /** 原子换房：源客厅写离开事件并释放席位，目标客厅拿新席位并写入加入事件。 */
-  async switchTo(cooId: string, targetRoomId: string, input: { name?: string } = {}): Promise<SwitchResult> {
+  async switchTo(cooId: string, targetRoomId: string, input: { name?: string; token?: string } = {}): Promise<SwitchResult> {
     if (targetRoomId === this.roomId) throw new HostError('invalid', '已经在这个客厅里');
     const source = await this.requireRoom();
     const target = await getRoom(this.db, targetRoomId);
@@ -392,11 +392,16 @@ export class RoomHost {
     if (!seat) throw new HostError('not_found', '你不在当前客厅里');
     await this.assertNotLocked(cooId, '换客厅');
     const name = cleanName(input.name ?? seat.name);
-    const token = this.makeToken();
+    const token = input.token ?? this.makeToken();
     const now = this.now();
     const targetFrom = await this.events.latest(targetRoomId);
 
     return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId]);
+      for (const roomId of [this.roomId, targetRoomId].sort()) await lockRoomRow(this.db, roomId);
+      const current = await this.seatOf(cooId);
+      if (!current || current.id !== seat.id) throw new HostError('conflict', '席位已经变化，请刷新后重试');
+      await this.assertNotLocked(cooId, '换客厅');
       const leaveEvent = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
@@ -553,6 +558,7 @@ export class RoomHost {
       id: this.roomId,
       name: room.name,
       topic: room.topic,
+      visibility: room.visibility,
       seat: await seatOfRow(this.db, seat),
       seats,
       maxSeats: room.capacity,
@@ -637,15 +643,23 @@ export class RoomHost {
     return this.tableHost.lockOf(cooId);
   }
 
-  async openTable(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string } = {}, requestId?: string): Promise<TableOpenResult> {
+  async openTable(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
     if ((await this.requireRoom()).kind === 'hall') {
       throw new HostError('conflict', '大厅是进场和选房的地方，不能开桌；先走进一个客厅');
     }
+    if (input.matchOpen && (await this.requireRoom()).visibility !== 'public') {
+      throw new HostError('forbidden', '只有公开客厅里的牌桌可以开放快速匹配');
+    }
+    if (input.matchOpen && Number(input.stake) > 0) throw new HostError('invalid', '快速匹配只支持无押注牌桌，押注桌可以分享到大厅招募');
     return this.tableHost.open(cooId, input, requestId);
   }
 
-  joinTable(cooId: string, tableId?: string, requestId?: string, clientVersion?: string) {
-    return this.tableHost.join(cooId, tableId, requestId, clientVersion);
+  joinTable(cooId: string, tableId?: string, requestId?: string, clientVersion?: string, transition?: Parameters<TableHost['join']>[4]) {
+    return this.tableHost.join(cooId, tableId, requestId, clientVersion, transition);
+  }
+
+  tableDiscovery(cooId: string, tableId: string, input: { matchOpen?: boolean; text?: string; withdraw?: boolean }, requestId: string) {
+    return this.tableHost.discovery(cooId, tableId, input, requestId);
   }
 
   leaveTable(cooId: string, tableId?: string, requestId?: string): Promise<TableLeaveResult> {

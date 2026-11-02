@@ -36,6 +36,7 @@ import {
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 import { sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
+import { TableDiscovery } from './table-discovery.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -219,6 +220,7 @@ export class WorldServer {
   private readonly verifiedPeople = new WeakMap<IncomingMessage, GlobalPerson>();
   private readonly identityRates = new Map<string, { until: number; count: number }>();
   private readonly coo: CooAccountDb;
+  private readonly tableDiscovery: TableDiscovery;
   private readonly now: () => number;
   private readonly defaultRoomId: string;
   private readonly inviteCode: string;
@@ -266,6 +268,7 @@ export class WorldServer {
     this.db = db;
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
+    this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.coo = new CooAccountDb(this.db, { now: this.now });
     this.identityAuthority = options.identityAuthority === 'self' ? 'self'
       : options.identityAuthority ? identityOrigin(options.identityAuthority) : undefined;
@@ -1015,6 +1018,19 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/v1/table-entry') {
+      const body = await readJson(req);
+      const result = await this.tableDiscovery.enter(bearer(req), {
+        requestId: typeof body.requestId === 'string' ? body.requestId : '',
+        ...(typeof body.game === 'string' ? { game: body.game } : {}),
+        ...(typeof body.room === 'string' ? { room: body.room } : {}),
+        ...(typeof body.table === 'string' ? { table: body.table } : {}),
+      }, headerValue(req, 'x-parlor-client').trim() || undefined);
+      this.pokeClock();
+      json(res, 200, result);
+      return;
+    }
+
     if (method === 'GET' && url.pathname === '/v1/hall') {
       const cooId = await this.cooOrSeat(req);
       const hall = await this.ensureHall();
@@ -1039,6 +1055,7 @@ export class WorldServer {
           ? { room: meSeat.roomId, id: meSeat.id, name: meSeat.name, handle: await registeredHandle(this.db, meSeat.cooId) }
           : null,
         rooms: await Promise.all(visible.map((room) => roomSummary(this.db, room))),
+        recruitments: await this.tableDiscovery.recruits(),
       });
       return;
     }
@@ -1339,6 +1356,9 @@ export class WorldServer {
         let kicked: string[] = [];
         await withTransaction(this.db, async () => {
           await this.db.prepare('UPDATE rooms SET visibility = ? WHERE id = ?').run(visibility, roomId);
+          if (visibility !== 'public') await this.db.prepare(
+            "UPDATE table_discovery SET match_open=0, recruit_text='' WHERE table_id IN (SELECT id FROM tables WHERE room_id=?)",
+          ).run(roomId);
           if (visibility === 'private') {
             // 改成私密时不自动授权「来过的人」；只认房主确认保留的名单。
             const keepSet = new Set(keep);
@@ -1848,7 +1868,7 @@ export class WorldServer {
       // 牌桌修改一律要幂等键：旧客户端在这里拿到明确的升级提示，不会开出一张打不了的桌。
       const tableMutation = type === 'table_open' || type === 'table_join' || type === 'table_leave'
         || type === 'table_start' || type === 'table_action' || type === 'ddz_action'
-        || type === 'werewolf_action';
+        || type === 'werewolf_action' || type === 'table_discovery';
       if (tableMutation && !requestId) {
         throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
       }
@@ -1912,10 +1932,12 @@ export class WorldServer {
         const result = await host.respond(seat.cooId, typeof body.id === 'string' ? body.id : '', actionName);
         delivered = result.delivered;
       } else if (type === 'table_open') {
+        if (body.matchOpen !== undefined && typeof body.matchOpen !== 'boolean') throw new HttpError(400, 'matchOpen 必须是 true 或 false');
         const opened = await host.openTable(seat.cooId, {
           game: typeof body.game === 'string' ? body.game : undefined,
           stake: body.stake,
           clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
+          ...(typeof body.matchOpen === 'boolean' ? { matchOpen: body.matchOpen } : {}),
         }, requestId);
         tableId = opened.tableId;
         revision = opened.receipt.revision;
@@ -1923,6 +1945,23 @@ export class WorldServer {
         deadline = opened.receipt.deadline;
         turn = opened.receipt.turn;
         touchedTable = opened.tableId;
+        tablesChanged = true;
+      } else if (type === 'table_discovery') {
+        if (!tableArg) throw new HttpError(400, '需要指定桌号');
+        if ((body.matchOpen !== undefined && typeof body.matchOpen !== 'boolean')
+          || (body.text !== undefined && typeof body.text !== 'string')
+          || (body.withdraw !== undefined && typeof body.withdraw !== 'boolean')
+          || (body.matchOpen === undefined && body.text === undefined && body.withdraw !== true)
+          || (body.text !== undefined && body.withdraw === true)) throw new HttpError(400, '请设置开放匹配、填写招募内容或撤回招募');
+        const receipt = await host.tableDiscovery(seat.cooId, tableArg, {
+          ...(typeof body.matchOpen === 'boolean' ? { matchOpen: body.matchOpen } : {}),
+          ...(typeof body.text === 'string' ? { text: body.text } : {}),
+          ...(body.withdraw === true ? { withdraw: true } : {}),
+        }, requestId);
+        tableId = receipt.tableId;
+        revision = receipt.revision;
+        receiptSeq = receipt.seq;
+        touchedTable = tableArg;
         tablesChanged = true;
       } else if (type === 'table_join') {
         // 客户端自报协议能力版本（狼人杀开局前用它校验每只 Coo）；旧版不带 = 旧版。

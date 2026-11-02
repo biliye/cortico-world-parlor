@@ -9,7 +9,7 @@
  *    而不是只丢一句「不一致」。
  */
 import { createHash } from 'node:crypto';
-import { MIGRATION_TABLES, ROW_FILTERS, targetColumns } from './schema-map.ts';
+import { ADDED_TABLE_VERSIONS, MIGRATION_TABLES, ROW_FILTERS, targetColumns } from './schema-map.ts';
 import type { SourceAudit, SqliteHandle } from './source.ts';
 import type { PgClient } from './copy.ts';
 import { toPgPlaceholders } from '../storage/translate.ts';
@@ -285,8 +285,8 @@ export const verifyAll = async (
   for (const table of MIGRATION_TABLES) {
     const left = await digestSource(source, audit, table.name, options.limit, extra);
     const right = await digestTarget(target, table.name, options.limit, extra);
-    // schema 6 的备份没有支持通道表；目标必须仍为空才算迁移一致。
-    if (!left && table.name.startsWith('support_') && right?.rows === 0) continue;
+    // 来源早于建表版本时可缺少新增表；目标必须仍为空才算迁移一致。
+    if (!left && ADDED_TABLE_VERSIONS[table.name] > audit.schemaVersion && right?.rows === 0) continue;
     if (!left && !right) continue;
     if (!left || !right) {
       mismatched.push({

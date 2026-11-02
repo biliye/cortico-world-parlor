@@ -12,12 +12,14 @@ import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
 import { showToast } from './ui.ts';
 import { backToRoom, enterTable, watchTableId } from './view.ts';
 import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot, TableSummary } from '../api/types.ts';
+import type { TableEntryResponse, TableRecruitment } from '../../src/room/table-discovery-db.ts';
 
 export const snapshot = ref<Snapshot | null>(null);
 export const offset = ref(0);
 export const latest = ref(0);
 export const connection = ref<'idle' | 'connecting' | 'on' | 'off'>('idle');
 export const hallSeats = ref<HallSeat[]>([]);
+export const recruitments = ref<TableRecruitment[]>([]);
 export const rooms = ref<RoomCard[]>([]);
 export const hallLoaded = ref(false);
 export const hallError = ref('');
@@ -82,7 +84,7 @@ export const watchedTable = computed<TableSummary | null>(() => {
   return tableList().find((table) => tableIdOf(table) === watchTableId.value) || null;
 });
 
-export const activeTable = computed<TableSummary | null>(() => watchedTable.value || snapshot.value?.table || null);
+export const activeTable = computed<TableSummary | null>(() => watchTableId.value ? watchedTable.value : (snapshot.value?.table || null));
 
 export const myTable = computed<TableSummary | null>(() => {
   const priv = snapshot.value?.tablePrivate;
@@ -128,6 +130,7 @@ export async function refreshSnapshot(): Promise<void> {
  * 与旧 play.js 的 handleExpiredSeat 同一套判断。
  */
 async function handleExpiredSeat(token: string): Promise<void> {
+  if (readPendingEntry()) return;
   const decision = decideExpiredSeat(
     token,
     readStoredSeat()?.token ?? null,
@@ -175,6 +178,7 @@ export async function loadHall(force = false): Promise<void> {
       api<Directory>('/v1/rooms?all=1'),
     ]);
     hallSeats.value = payload.hall?.seats || [];
+    recruitments.value = payload.recruitments || [];
     rooms.value = (directory.rooms || []).filter((room) => !room.archived);
     hallAt = Date.now();
     hallLoaded.value = true;
@@ -252,7 +256,7 @@ export function disconnect(): void {
 let switching = false;
 
 /** 换客厅：服务器换一张令牌，然后整页跳到新客厅（与旧版同一做法）。 */
-export async function goRoom(id: string): Promise<boolean> {
+export async function goRoom(id: string, targetTable = ''): Promise<boolean> {
   const cfg = seat.value;
   // 启动时快照还没到，用席位里记着的客厅当出发地。
   const from = cfg?.room || snapshot.value?.id || '';
@@ -269,6 +273,10 @@ export async function goRoom(id: string): Promise<boolean> {
     params.set('room', moved.room);
     params.delete('view');
     params.delete('table');
+    if (targetTable) {
+      params.set('view', 'table');
+      params.set('table', targetTable);
+    }
     location.assign('/play?' + params.toString());
     return true;
   } catch (error) {
@@ -284,7 +292,7 @@ export async function goRoom(id: string): Promise<boolean> {
 export async function syncRouteRoom(): Promise<boolean> {
   const wanted = new URLSearchParams(location.search).get('room') || '';
   if (!seat.value || !wanted || wanted === seat.value.room) return false;
-  return goRoom(wanted);
+  return goRoom(wanted, new URLSearchParams(location.search).get('table') || '');
 }
 
 let acting = false;
@@ -292,6 +300,7 @@ let acting = false;
 /** 需要幂等键的动作；与旧 play.js 的 IDEMPOTENT_ACTIONS 一致。 */
 const IDEMPOTENT = new Set([
   'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
+  'table_discovery',
 ]);
 
 function newRequestId(): string {
@@ -310,6 +319,70 @@ function newRequestId(): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** 大厅匹配/定向入桌共用服务端事务，失败时不会只换了厅却没坐下。 */
+type EntryTarget = { game: string } | { room: string; table: string };
+const ENTRY_PENDING_KEY = 'parlor-table-entry-pending';
+let pendingEntry: { sourceSeatId: string; requestId: string; target: EntryTarget } | null = null;
+function readPendingEntry(): typeof pendingEntry {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ENTRY_PENDING_KEY) || 'null');
+    if (saved?.sourceSeatId === seat.value?.seatId && typeof saved.requestId === 'string' && saved.target
+      && (typeof saved.target.game === 'string' || (typeof saved.target.room === 'string' && typeof saved.target.table === 'string'))) return saved;
+  } catch { /* 不支持会话存储时用内存保留重试编号。 */ }
+  return pendingEntry?.sourceSeatId === seat.value?.seatId ? pendingEntry : null;
+}
+function savePendingEntry(value: typeof pendingEntry): void {
+  pendingEntry = value;
+  try { if (value) sessionStorage.setItem(ENTRY_PENDING_KEY, JSON.stringify(value)); else sessionStorage.removeItem(ENTRY_PENDING_KEY); } catch { /* 私密浏览 */ }
+}
+
+export async function enterDiscoveredTable(target: { game: string } | { room: string; table: string }): Promise<boolean> {
+  if (switching || acting || !seat.value) return false;
+  switching = true;
+  const cfg = seat.value;
+  const previous = readPendingEntry();
+  const entry = previous || { sourceSeatId: cfg.seatId, requestId: newRequestId(), target };
+  if (previous) showToast('正在确认上一次加入的结果…');
+  savePendingEntry(entry);
+  let unresolved = true;
+  let navigating = false;
+  disconnect();
+  try {
+    const send = () => api<TableEntryResponse>('/v1/table-entry', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...entry.target, requestId: entry.requestId }),
+    });
+    let result: TableEntryResponse;
+    try { result = await send(); } catch (error) {
+      if (!(error instanceof TypeError) && (error as Error).name !== 'TimeoutError') throw error;
+      result = await send();
+    }
+    unresolved = false;
+    savePendingEntry(null);
+    if (!result.matched) {
+      showToast('暂时没有合适的开放牌桌，你仍在原来的客厅。');
+      return false;
+    }
+    saveSeat({ ...cfg, room: result.room, token: result.token, seatId: result.seat.id, name: result.seat.name });
+    navigating = true;
+    location.assign('/play?' + new URLSearchParams({ room: result.room, view: 'table', table: result.tableId }));
+    return true;
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    if (status && status < 500) { unresolved = false; savePendingEntry(null); }
+    if (unresolved) {
+      const message = '加入结果尚未确认，请重试或刷新页面，系统会确认同一次请求。';
+      showToast(message, 'bad');
+      throw new Error(message);
+    }
+    showToast((error as { status?: number }).status === 404 ? '服务器尚未支持匹配，或这张桌已经关闭，请刷新后重试。' : ((error as Error).message || '加入牌桌失败'), 'bad');
+    throw error;
+  } finally {
+    switching = false;
+    // 结果不确定时保留原凭证与编号；不能让旧 SSE 的 401 把恢复入口清掉。
+    if (!unresolved && !navigating && seat.value?.token === cfg.token) connect();
+  }
 }
 
 /** 牌桌动作只写「做什么」；「对哪张桌、基于哪一版」在这里补。与旧版 withTableFields 一致。 */
@@ -419,10 +492,12 @@ export async function boot(): Promise<boolean> {
     }
   }
   if (!seat.value) return false;
+  const unfinishedEntry = readPendingEntry();
+  if (unfinishedEntry && await enterDiscoveredTable(unfinishedEntry.target)) return false;
   // 分享/邀请链接带着 ?room=：席位在别的客厅时先换过去（旧版在启动时做同一件事）。
   const wanted = new URLSearchParams(location.search).get('room') || '';
   if (wanted && wanted !== seat.value.room) {
-    const moved = await goRoom(wanted);
+    const moved = await goRoom(wanted, new URLSearchParams(location.search).get('table') || '');
     if (moved) return false;
     throw new Error(hallError.value || '换不到这个客厅');
   }

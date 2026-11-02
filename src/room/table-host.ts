@@ -11,7 +11,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
-import { lockCooRows, lockTableRow } from './storage/locks.ts';
+import { lockCooRows, lockRoomRow, lockTableRow } from './storage/locks.ts';
 import { EventDb } from './event-db.ts';
 import { HostError } from './host-error.ts';
 import { LedgerDb } from './ledger-db.ts';
@@ -33,6 +33,7 @@ import {
 } from './table-engine.ts';
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
+import { tableCapacity } from './table-discovery-db.ts';
 
 const OPEN_MS = 30 * 60_000;
 /** 托管席位（Coo 掉线/被移出）由脚本代打的节拍：一秒一拍，与旧的每秒 tick 一致。 */
@@ -398,7 +399,7 @@ export class TableHost {
 
   // —— 开桌 / 坐下 / 开始 / 动作 / 收桌 ——
 
-  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string } = {}, requestId?: string): Promise<TableOpenResult> {
+  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
     // 开桌还没有 tableId，用房间级键；开桌与「数桌上限」要串行。
     const releaseOpen = await this.lockTable('#room');
     try {
@@ -421,7 +422,8 @@ export class TableHost {
         throw new HostError('invalid', `你只有 ${balance} 枚筹码，押不起 ${stake} 枚`);
       }
     }
-    const replay = await this.replayReceipt(cooId, requestId, { type: 'table_open', game: id, stake });
+    const openKey = { type: 'table_open', game: id, stake, ...(input.matchOpen ? { matchOpen: true } : {}) };
+    const replay = await this.replayReceipt(cooId, requestId, openKey);
     if (replay) {
       const at = this.now();
       return {
@@ -467,6 +469,9 @@ export class TableHost {
     const receipt: TableReceipt = { tableId: table.id, revision: table.revision };
     const event = await withTransaction(this.db, async () => {
       await this.insertTableRow(table, 'open', now, stateJson);
+      if (input.matchOpen) await this.db.prepare(
+        'INSERT INTO table_discovery(table_id, match_open, updated_at) VALUES (?, 1, ?)',
+      ).run(table.id, now);
       await this.insertTableSeat(table.id, seat.id, cooId, 0, false, now);
       await this.insertActivePlayer(cooId, table.id, now);
       const appended = await this.events.append(this.roomId, {
@@ -478,7 +483,7 @@ export class TableHost {
         data: { game: def.id, stake, tableId: table.id },
       });
       await this.finishReceipt(receipt, engine);
-      await this.storeReceipt(cooId, requestId, table.id, { type: 'table_open', game: id, stake }, receipt, now);
+      await this.storeReceipt(cooId, requestId, table.id, openKey, receipt, now);
       // 开桌这一刻就是「数据库还能写」的证据；刚开桌就崩，也不会把停机时长算错。
       await this.markHealthy(now);
       return appended;
@@ -493,16 +498,32 @@ export class TableHost {
     }
   }
 
-  async join(cooId: string, tableId?: string, requestId?: string, clientVersion?: string): Promise<TableJoinResult> {
+  async join(cooId: string, tableId?: string, requestId?: string, clientVersion?: string, transition?: {
+    before: () => Promise<void>;
+    after: (result: TableJoinResult) => Promise<void>;
+  }): Promise<TableJoinResult> {
+    const table = this.resolveOpenTable(tableId);
+    const release = await this.lockTable(table.id);
+    try {
+      // 持有桌队列直到最外层事务提交，不能在 SAVEPOINT 后提前让下一位读旧引擎。
+      return await withTransaction(this.db, async () => {
+        await transition?.before();
+        const joined = await this.joinLocked(cooId, table, requestId, clientVersion);
+        await transition?.after(joined);
+        return joined;
+      });
+    } finally { release(); }
+  }
+
+  private async joinLocked(cooId: string, table: LiveTable, requestId?: string, clientVersion?: string): Promise<TableJoinResult> {
+    await lockCooRows(this.db, [cooId]);
+    await lockRoomRow(this.db, this.roomId);
     const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能上桌');
     const mine = await this.tableOf(cooId);
     if (mine && isLive(mine.engine.status)) {
       throw new HostError('conflict', `你已经在一张${mine.engine.label}桌上了；一人同时只参与一张`);
     }
-    const table = this.resolveOpenTable(tableId);
-    const releaseTable = await this.lockTable(table.id);
-    try {
     const replay = await this.replayReceipt(cooId, requestId, { type: 'table_join', tableId: table.id });
     if (replay) {
       return {
@@ -520,6 +541,12 @@ export class TableHost {
       };
     }
     if (table.frozen) throw new HostError('conflict', '这张桌子恢复失败，已经被隔离开了');
+    if (table.engine.status !== 'open' || this.now() >= table.openDeadlineAt) {
+      throw new HostError('conflict', '这张桌子已经开始、关闭或过期了');
+    }
+    if (await lockTableRow(this.db, table.id) !== table.revision) {
+      throw new HostError('conflict', '这张桌子已经变化，请刷新后重试');
+    }
     if (table.stake > 0) {
       const balance = await this.ledger.balanceOf(cooId);
       if (balance < table.stake) {
@@ -554,9 +581,60 @@ export class TableHost {
     });
     this.publishState(table, draft, revision, stateJson);
     return { event: appended, tableId: table.id, receipt };
-    } finally {
-      releaseTable();
-    }
+  }
+
+  /** 只有桌主能切匹配；同桌成员可写招募，作者或桌主可撤回。 */
+  async discovery(cooId: string, tableId: string, input: { matchOpen?: boolean; text?: string; withdraw?: boolean }, requestId: string): Promise<TableReceipt> {
+    const table = this.tables.get(tableId);
+    if (!table) throw new HostError('not_found', '这张桌子不存在');
+    const release = await this.lockTable(table.id);
+    try {
+      return await withTransaction(this.db, async () => {
+        const seat = await this.requireSeat(cooId);
+        const key = { type: 'table_discovery', tableId, ...input };
+        const replay = await this.replayReceipt(cooId, requestId, key);
+        if (replay) return replay;
+        await lockCooRows(this.db, [cooId]);
+        await lockRoomRow(this.db, this.roomId);
+        if (table.frozen || table.engine.status !== 'open' || this.now() >= table.openDeadlineAt) {
+          throw new HostError('conflict', '只能为未开局且未过期的牌桌设置匹配或招募');
+        }
+        const room = await this.db.prepare('SELECT visibility, archived_at FROM rooms WHERE id = ?').get(this.roomId) as { visibility: string; archived_at: number | null };
+        if (room.archived_at !== null) throw new HostError('conflict', '客厅已经归档');
+        if ((input.matchOpen === true || input.text !== undefined) && room.visibility !== 'public') {
+          throw new HostError('forbidden', '只有公开客厅里的牌桌可以开放快速匹配或分享到大厅');
+        }
+        const current = await this.db.prepare('SELECT * FROM table_discovery WHERE table_id = ?').get(table.id) as { match_open: number; recruit_text: string; author_coo_id: string | null; updated_at: number } | undefined;
+        const isHost = seat.id === table.hostSeatId;
+        if (input.matchOpen !== undefined && !isHost) throw new HostError('forbidden', '只有开桌的人或 Coo 可以切换开放匹配');
+        if (input.matchOpen === true && table.stake > 0) throw new HostError('invalid', '快速匹配只支持无押注牌桌，押注桌可以分享到大厅招募');
+        if (input.text !== undefined && !table.engine.has(seat.id)) throw new HostError('forbidden', '坐在这张桌上才可以发布招募');
+        if (input.text !== undefined && current?.recruit_text && current.author_coo_id !== cooId && !isHost) {
+          throw new HostError('forbidden', '这张桌已有招募，请由作者或桌主修改');
+        }
+        if (input.withdraw && current?.author_coo_id !== cooId && !isHost) throw new HostError('forbidden', '只有招募作者或桌主可以撤回');
+        const text = input.text?.trim();
+        if (text !== undefined && (!text || text.length > 200)) throw new HostError('invalid', '招募内容需要 1–200 字');
+        const now = this.now();
+        if (text !== undefined && current?.author_coo_id && now - Number(current.updated_at) < 60_000) {
+          throw new HostError('conflict', '同一张桌的招募每分钟最多更新一次');
+        }
+        await this.db.prepare(
+          `INSERT INTO table_discovery(table_id, match_open, recruit_text, author_coo_id, updated_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(table_id) DO UPDATE SET match_open=excluded.match_open, recruit_text=excluded.recruit_text,
+             author_coo_id=excluded.author_coo_id, updated_at=excluded.updated_at`,
+        ).run(table.id, input.matchOpen === undefined ? (current?.match_open ?? 0) : Number(input.matchOpen),
+          input.withdraw ? '' : (text ?? current?.recruit_text ?? ''), text !== undefined ? cooId : (current?.author_coo_id ?? null),
+          text !== undefined || input.withdraw ? now : Number(current?.updated_at ?? now));
+        const event = await this.events.append(this.roomId, {
+          type: 'parlor.table.discovery', ts: now, from: 'system', scope: { kind: 'room' },
+          text: `${seat.name} 更新了牌桌的匹配或招募设置。`, data: { tableId: table.id, game: table.game },
+        });
+        const receipt = { tableId: table.id, revision: table.revision, seq: event.seq };
+        await this.storeReceipt(cooId, requestId, table.id, key, receipt, now);
+        return receipt;
+      });
+    } finally { release(); }
   }
 
   /** 未开局时离桌；开桌的人离桌等于收掉整张桌子。 */
@@ -1471,6 +1549,7 @@ export class TableHost {
     // 查席名期间牌局可能提交下一手，版本必须与这份引擎快照一起取。
     const revision = table.revision;
     const engine = await this.withCurrentNames(table.engine);
+    const discovery = await this.db.prepare('SELECT match_open, recruit_text, author_coo_id FROM table_discovery WHERE table_id = ?').get(table.id) as { match_open: number; recruit_text: string; author_coo_id: string | null } | undefined;
     return {
       ...(engine.public() as Record<string, unknown>),
       id: table.id,
@@ -1480,6 +1559,11 @@ export class TableHost {
       status: engine.status,
       host: engine.host,
       revision,
+      capacity: tableCapacity(table.game),
+      matchOpen: discovery?.match_open === 1,
+      recruitText: discovery?.recruit_text ?? '',
+      recruitAuthor: discovery?.author_coo_id ?? '',
+      ...(engine.status === 'open' ? { openDeadline: table.openDeadlineAt } : {}),
       ...(table.frozen ? { frozen: true } : {}),
       ...(table.stake > 0 ? { stake: table.stake } : {}),
       text: table.frozen

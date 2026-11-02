@@ -7,7 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { MIGRATION_TABLES, targetColumns } from './schema-map.ts';
+import { ADDED_TABLE_VERSIONS, MIGRATION_TABLES, targetColumns } from './schema-map.ts';
 
 // Vite 5 的 builtin 列表还不认识 node:sqlite，走 getBuiltinModule 绕过打包器解析。
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
@@ -76,7 +76,7 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
   const expected = new Map(MIGRATION_TABLES.map((table) => [table.name, targetColumns().get(table.name) ?? []]));
 
   for (const table of MIGRATION_TABLES) {
-    if (!present.has(table.name) && !table.name.startsWith('support_')) issues.push({ code: 'missing_table', table: table.name, detail: '来源库没有这张表' });
+    if (!present.has(table.name) && !ADDED_TABLE_VERSIONS[table.name]) issues.push({ code: 'missing_table', table: table.name, detail: '来源库没有这张表' });
   }
   for (const name of present) {
     if (!expected.has(name)) issues.push({ code: 'unknown_table', table: name, detail: '来源库多出一张迁移工具不认识的表' });
@@ -100,11 +100,11 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
     schemaVersion = Number(row?.value ?? 0) || 0;
   }
   if (schemaVersion < 1) issues.push({ code: 'unknown_schema_version', detail: 'meta.schema_version 缺失或不是正整数' });
-  for (const name of ['support_feedback', 'support_announcements']) {
-    if (schemaVersion >= 7 && !present.has(name)) issues.push({ code: 'missing_table', table: name, detail: '来源库没有这张表' });
+  for (const [name, addedIn] of Object.entries(ADDED_TABLE_VERSIONS)) {
+    if (schemaVersion >= addedIn && !present.has(name)) issues.push({ code: 'missing_table', table: name, detail: '来源库没有这张表' });
   }
-  if (schemaVersion > 7) {
-    issues.push({ code: 'newer_schema_version', detail: `来源 schema_version=${schemaVersion}，比这一版认识的 7 更新` });
+  if (schemaVersion > 8) {
+    issues.push({ code: 'newer_schema_version', detail: `来源 schema_version=${schemaVersion}，比这一版认识的 8 更新` });
   }
 
   // —— 外键完整性 ——

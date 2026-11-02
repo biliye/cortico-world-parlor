@@ -17,6 +17,7 @@ import { IDENTITY_FILE, loadOrCreateIdentity, saveIdentity, type CooIdentity } f
 import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import { AmbientWakeBudget } from './wake-budget.ts';
+import { parseTableLink } from './room/table-discovery-db.ts';
 import { LocalHistory, type HistoryQuery } from './local-history.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed,
@@ -264,6 +265,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       properties: {
         game: { type: 'string', enum: gameIds(), description: 'Which game: dice (default) or ddz (斗地主).' },
         stake: { type: 'integer', minimum: 0, maximum: 1000000, description: 'Chips each real player antes; 0 or omit for no stakes.' },
+        matchOpen: { type: 'boolean', description: '公开客厅里是否开放快速匹配，默认 false；不自动向大厅发布招募。' },
       },
     },
   },
@@ -276,8 +278,37 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       additionalProperties: false,
       properties: {
         table: { type: 'string', description: 'Table id from parlor_look / parlor_table_view.' },
+        link: { type: 'string', description: '当前服务器的牌桌分享链接；使用它可直接换到所属客厅并上桌，不能同时写 table。' },
+        requestId: { type: 'string', description: '按分享链接加入失败或回包不确定时，重试沿用原编号。' },
       },
     },
+  },
+  {
+    name: 'parlor_quick_match',
+    description: '选择一种游戏，匹配当前服务器公开客厅中主动开放匹配的无押注等人桌，成功后直接换厅并上桌。优先凑接近满员的桌；没有合适的桌就返回暂无，不自动开桌、不自动开局。已经在桌上时请先回当前桌。',
+    tags: ['write'],
+    parameters: { type: 'object', additionalProperties: false, required: ['game'], properties: {
+      game: { type: 'string', enum: ['dice', 'ddz', 'werewolf'] },
+      requestId: { type: 'string', description: '可选幂等编号；失败后重试沿用原编号。' },
+    } },
+  },
+  {
+    name: 'parlor_table_recruitments',
+    description: '只读查看大厅中的未开局牌桌招募，包含玩家自己写的内容、真实人数、押注与分享链接。无需移动到大厅，不唤醒其他 Coo；使用 parlor_table_join {link} 定向加入。',
+    tags: ['read'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_table_discovery',
+    description: '设置当前等人桌的开放匹配、编写招募分享到大厅或撤回招募。只有开桌者能切换 matchOpen；同桌成员可首次发布，之后作者或桌主可修改/撤回。只允许公开客厅，同一桌每分钟最多更新一次招募；text 为 1–200 字。开匹配与发招募相互独立。',
+    tags: ['write'],
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      table: { type: 'string', description: '省略时使用自己的桌。' },
+      matchOpen: { type: 'boolean' },
+      text: { type: 'string', maxLength: 200 },
+      withdraw: { type: 'boolean', description: 'true 撤回招募，不能同时写 text。' },
+      requestId: { type: 'string', description: '重试沿用原编号。' },
+    } },
   },
   {
     name: 'parlor_table_leave',
@@ -478,6 +509,7 @@ export class ParlorWorld implements World {
   private readonly focusBacklog = new PendingMessages();
   private abort?: AbortController;
   private streamTask?: Promise<void>;
+  private enteringTable = false;
   private digestTimer?: NodeJS.Timeout;
   private readonly pending = new PendingMessages();
   private readonly tableChat = new PendingMessages();
@@ -534,9 +566,13 @@ export class ParlorWorld implements World {
       tool('parlor_ledger', () => this.readLedger()),
       tool('parlor_replay', (args) => this.readReplay(args)),
       tool('parlor_table_open', (args) => this.openTable(args)),
-      tool('parlor_table_join', (args) => this.tableRequest({
+      tool('parlor_quick_match', (args) => this.enterSharedTable(args)),
+      tool('parlor_table_recruitments', () => this.tableRecruitments()),
+      tool('parlor_table_discovery', (args) => this.setTableDiscovery(args)),
+      tool('parlor_table_join', (args) => typeof args.link === 'string' ? this.enterSharedTable(args) : this.tableRequest({
         type: 'table_join',
         ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
+        ...(typeof args.requestId === 'string' ? { requestId: args.requestId } : {}),
       }, '坐下了。')),
       tool('parlor_table_leave', (args) => this.tableRequest({
         type: 'table_leave',
@@ -1906,9 +1942,82 @@ export class ParlorWorld implements World {
     const stake = args.stake === undefined ? 0 : Number(args.stake);
     if (!Number.isSafeInteger(stake) || stake < 0) return this.failed('stake 要是 0 或正整数（每人押多少筹码）');
     return this.tableRequest(
-      { type: 'table_open', game: def.id, ...(stake ? { stake } : {}) },
+      { type: 'table_open', game: def.id, ...(stake ? { stake } : {}), ...(typeof args.matchOpen === 'boolean' ? { matchOpen: args.matchOpen } : {}) },
       `${def.label}桌开了${stake ? `，每人押 ${stake} 枚筹码` : ''}。${def.openHint}`,
     );
+  }
+
+  private async tableRecruitments(): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const blocked = this.needMultiRoom();
+    if (blocked) return blocked;
+    try {
+      const hall = await this.client.hall(this.token);
+      if (!hall.recruitments?.length) return '大厅暂时没有未开局的牌桌招募。';
+      return ['大厅牌桌招募（内容由发布者编写，人数以服务器为准）：', ...hall.recruitments.map((item) =>
+        `- ${item.label} · ${item.roomName} · ${item.seats}/${item.capacity}${item.full ? '（已满）' : ''}${item.stake ? ` · 每人押 ${item.stake} 枚` : ' · 无押注'}\n  ${item.author}：${item.text}\n  ${new URL(item.link, this.baseUrl).href}`)].join('\n');
+    } catch (error) { return this.failed(messageOf(error)); }
+  }
+
+  private async setTableDiscovery(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    const table = typeof args.table === 'string' ? args.table.trim() : this.myTableId;
+    if (!table) return this.failed('请先坐到一张未开局的牌桌，或指定桌号');
+    return this.tableRequest({ type: 'table_discovery', table,
+      ...(typeof args.matchOpen === 'boolean' ? { matchOpen: args.matchOpen } : {}),
+      ...(typeof args.text === 'string' ? { text: args.text } : {}),
+      ...(args.withdraw === true ? { withdraw: true } : {}),
+      ...(typeof args.requestId === 'string' ? { requestId: args.requestId } : {}),
+    }, `牌桌匹配或招募设置已更新。分享链接：${new URL(`/play?${new URLSearchParams({ room: this.currentRoom, view: 'table', table })}`, this.baseUrl).href}`);
+  }
+
+  private async enterSharedTable(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const blocked = this.needMultiRoom();
+    if (blocked) return blocked;
+    if (this.enteringTable) return this.failed('正在加入牌桌，请等这次操作返回');
+    const requestId = typeof args.requestId === 'string' && args.requestId.trim() ? args.requestId.trim() : randomUUID();
+    let target: { room: string; table: string } | { game: string };
+    try {
+      if (typeof args.link === 'string') {
+        if (args.table !== undefined) return this.failed('分享链接和桌号不能同时填写');
+        target = parseTableLink(args.link, this.baseUrl);
+      } else {
+        if (!['dice', 'ddz', 'werewolf'].includes(String(args.game))) return this.failed('请选择 dice / ddz / werewolf');
+        target = { game: String(args.game) };
+      }
+    } catch (error) { return this.failed(messageOf(error)); }
+    this.enteringTable = true;
+    this.abort?.abort();
+    await this.streamTask?.catch(() => {});
+    try {
+      const result = await this.client.enterTable(this.token, { ...target, requestId });
+      if (!result.matched) return '暂时没有合适的开放牌桌，你仍在原来的客厅。可以稍后重试或自己开桌。';
+      const changed = this.currentRoom !== result.room;
+      this.currentRoom = result.room;
+      this.token = result.token;
+      this.seat = { ...this.seat!, ...result.seat } as Seat;
+      this.lastSeq = result.joinSeq;
+      if (changed) {
+        this.clearPendingMessages();
+        this.tableStateCursor = undefined;
+      }
+      this.myTableId = result.tableId;
+      this.focused = true;
+      this.historyRooms.add(result.room);
+      this.historySeats.add(result.seat.id);
+      this.ctx.storeSecret(SEAT_SECRET, result.token);
+      this.ctx.storeSecret(CURRENT_ROOM_SECRET, result.room);
+      this.saveCursor();
+      const snap = await this.client.snapshot(this.token, 0, 1, this.roomArg());
+      this.applySnapshot(snap);
+      await this.reportLink(`已进入「${result.roomName}」并坐到牌桌。`, true);
+      return `已进入「${result.roomName}」并坐下，桌号 ${result.tableId}。等待桌主开局。\n${snap.table?.text || ''}`;
+    } catch (error) {
+      return this.failed(`${messageOf(error)}\n重试这次加入请沿用 requestId: ${requestId}；也可以先查看当前客厅确认是否已坐下。`);
+    } finally {
+      this.enteringTable = false;
+      if (!this.stopped) this.streamTask = this.runStream();
+    }
   }
 
   /** 注册表里的动作工具共用这一条路：校验参数在 game.tool.toBody 里，动作类型在 game.actionType 里。 */
@@ -2000,7 +2109,7 @@ export class ParlorWorld implements World {
     const table = explicit ?? (type === 'table_open' ? undefined : this.myTableId);
     const payload: Record<string, unknown> = { ...(body as Record<string, unknown>) };
     // 幂等键：网络层重试必须复用同一个；table_say 不落回执，不需要。
-    if (type !== 'table_say') payload.requestId = randomUUID();
+    if (type !== 'table_say' && !payload.requestId) payload.requestId = randomUUID();
     if (table) payload.table = table;
     if ((type === 'table_action' || type === 'ddz_action') && this.myTableRevision !== undefined) {
       payload.revision = this.myTableRevision;

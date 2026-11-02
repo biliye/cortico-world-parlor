@@ -13,8 +13,9 @@
  */
 
 import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 2;
+export const PG_SCHEMA_VERSION = 3;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -421,4 +422,5 @@ export interface PgMigration {
 export const PG_MIGRATIONS: PgMigration[] = [
   { version: 1, name: 'initial', sql: PG_SCHEMA_SQL },
   { version: 2, name: 'feedback-and-announcements', sql: SUPPORT_SCHEMA_SQL },
+  { version: 3, name: 'table-matching-and-recruitment', sql: TABLE_DISCOVERY_SCHEMA_SQL },
 ];

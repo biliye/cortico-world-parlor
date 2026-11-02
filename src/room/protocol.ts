@@ -1,6 +1,7 @@
 /** 客厅线协议：席位、可见性 scope、事件与唤醒判定。线协议与服务器、World 共用。 */
 import type { LedgerEntryView, LedgerSummary } from './ledger.ts';
 import type { TableGame, TablePrivateSummary, TableSummary } from './table-engine.ts';
+import type { TableRecruitment } from './table-discovery-db.ts';
 
 export type SeatKind = 'pet' | 'human' | 'observer';
 export type WakeTier = 'full' | 'digest' | 'quiet' | 'off';
@@ -117,7 +118,8 @@ export type ActionRequest =
   | { type: 'gift'; to: string; text: string; chips?: number }
   | { type: 'promise'; to: string; text: string; due?: number | string; chips?: number }
   | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
-  | { type: 'table_open'; game?: TableGame; stake?: number; requestId?: string; table?: string }
+  | { type: 'table_open'; game?: TableGame; stake?: number; matchOpen?: boolean; requestId?: string; table?: string }
+  | { type: 'table_discovery'; table: string; requestId?: string; matchOpen?: boolean; text?: string; withdraw?: boolean }
   | { type: 'table_join'; requestId?: string; table?: string }
   | { type: 'table_leave'; requestId?: string; table?: string }
   | { type: 'table_start'; requestId?: string; table?: string }
@@ -196,6 +198,8 @@ export interface DeliveryReceipt {
 
 export interface ActionResponse {
   ok: true;
+  tableId?: string;
+  revision?: number;
   /** 发言本身，供本地记录按实际消息游标去重；不含其他人的私密事件。 */
   event?: RoomEvent;
   /** 服务器处理完这次动作后的房间游标。 */
@@ -223,6 +227,7 @@ export interface RoomSnapshot {
   /** 给人看的客厅名；旧数据没有时回落到 id。 */
   name?: string;
   topic?: string;
+  visibility?: 'public' | 'unlisted' | 'private';
   /** 调用者自己的席位。 */
   seat: Seat;
   seats: Seat[];
@@ -287,6 +292,7 @@ export interface MeView {
 
 /** 大厅：谁在大厅、公开目录、我在哪。 */
 export interface HallView {
+  recruitments?: TableRecruitment[];
   hall: {
     id: string;
     name: string;

@@ -2,6 +2,7 @@
 /** 牌桌壳：等人时是座位与开局操作；开局后把桌面交给 GameHost（旧渲染器原样挂载）。 */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GameHost from '../components/GameHost.vue';
+import TableDiscovery from '../components/TableDiscovery.vue';
 import Icon from '../components/Icon.vue';
 import { STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
 import { clockText, initialOf, readable } from '../lib/text.ts';
@@ -22,7 +23,8 @@ const meName = computed(() => snapshot.value?.seat?.name || '你');
 const seats = computed(() => table.value?.seats || []);
 const seated = computed(() => seats.value.some((person) => person.id === meId.value));
 const host = computed(() => table.value?.host === meId.value);
-const canJoin = computed(() => table.value?.status === 'open' && !seated.value && !myTable.value);
+const canJoin = computed(() => table.value?.status === 'open' && !seated.value && !myTable.value
+  && seats.value.length < (table.value.capacity || Infinity));
 const canStart = computed(() => table.value?.status === 'open' && seated.value && host.value
   && !!table.value && enoughPlayers(table.value));
 const activeStage = computed(() => table.value?.status === 'bidding' || table.value?.status === 'playing');
@@ -185,7 +187,9 @@ async function run(task: () => Promise<unknown>): Promise<void> {
           <button class="btn ghost" type="button" @click="backToRoom">回到客厅</button>
         </div>
         <p v-if="seated && !canStart && host" class="muted">人数不够，还不能开局。</p>
+        <p v-if="!seated && table.capacity && seats.length >= table.capacity" class="muted">这张桌已满，可以等待空位或去看看别的桌。</p>
       </section>
+      <TableDiscovery v-if="seated" :table="table" />
     </template>
 
     <template v-else>

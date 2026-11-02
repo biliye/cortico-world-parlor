@@ -97,6 +97,52 @@ const pushedText = (host: FakeHost): string => host.events
   .filter((event) => event.type === 'parlor.message' || event.type === 'parlor.digest')
   .map((event) => event.text).join('\n');
 
+describe('Coo 快速匹配与牌桌分享', () => {
+  it('工具快速匹配后持久化新厅和令牌，重连到本桌，能继续接收桌聊', async () => {
+    const { friend, friendToken, secrets, host } = await startWorld({ room: 'hall' });
+    const room = (await friend.createRoom({ name: '公开匹配厅', visibility: 'public' }, friendToken)).room;
+    const moved = await friend.switchTo(friendToken, 'hall', room.id);
+    await friend.action(moved.token, { type: 'table_open', game: 'ddz', matchOpen: true, requestId: 'coo-match-open' }, room.id);
+    const result = await call('parlor_quick_match', { game: 'ddz', requestId: 'coo-match-join' });
+    expect(result).toContain('并坐下');
+    expect(secrets.PARLOR_CURRENT_ROOM).toBe(room.id);
+    const snap = await friend.snapshot(secrets.PARLOR_SEAT_TOKEN, 0, 1, room.id);
+    expect(snap.tablePrivate?.tableId).toBe(snap.table?.id);
+    await friend.action(moved.token, { type: 'table_say', text: '匹配后同桌消息' }, room.id);
+    await until(() => pushedText(host).includes('匹配后同桌消息'), 8000);
+    expect(await call('parlor_quick_match', { game: 'ddz' })).toContain('已经在牌桌');
+  });
+
+  it('查看招募不移动，使用同一分享链接直接进入关闭匹配的桌', async () => {
+    const { friend, friendToken, secrets } = await startWorld({ room: 'hall' });
+    const room = (await friend.createRoom({ name: '分享直达厅', visibility: 'public' }, friendToken)).room;
+    const moved = await friend.switchTo(friendToken, 'hall', room.id);
+    const opened = await friend.action(moved.token, { type: 'table_open', game: 'ddz', requestId: 'coo-share-open' }, room.id);
+    await friend.action(moved.token, { type: 'table_discovery', table: opened.tableId!, text: '来这张桌坐坐', requestId: 'coo-share-text' }, room.id);
+    expect(await call('parlor_table_recruitments')).toContain('来这张桌坐坐');
+    expect(secrets.PARLOR_CURRENT_ROOM).toBe('hall');
+    const link = server!.url + '/play?' + new URLSearchParams({ room: room.id, view: 'table', table: opened.tableId! });
+    expect(await call('parlor_table_join', { link, requestId: 'coo-share-join' })).toContain('并坐下');
+    expect(secrets.PARLOR_CURRENT_ROOM).toBe(room.id);
+    expect(await call('parlor_table_join', { link: 'https://other.example/play?room=x&view=table&table=t-abc' })).toContain('当前客厅服务器');
+  });
+
+  it('Coo 桌主能开放、编写与撤回招募，另一名 Coo 可匹配进入', async () => {
+    const { friend, friendToken, secrets } = await startWorld({ room: 'hall' });
+    await call('parlor_room_create', { name: 'Coo 招募厅', visibility: 'public' });
+    const rooms = await friend.rooms(true, friendToken);
+    const target = rooms.rooms.find(item => item.name === 'Coo 招募厅')!;
+    await call('parlor_room_visit', { room: target.id });
+    expect(await call('parlor_table_open', { game: 'ddz', matchOpen: true })).toContain('桌开了');
+    expect(await call('parlor_table_discovery', { text: '我来叫大家打牌', requestId: 'my-recruit' })).toContain('分享链接');
+    expect((await friend.hall(friendToken)).recruitments?.[0].text).toBe('我来叫大家打牌');
+    const entered = await friend.enterTable(friendToken, { game: 'ddz', requestId: 'friend-quick' });
+    expect(entered.matched).toBe(true);
+    expect(await call('parlor_table_discovery', { withdraw: true })).toContain('已更新');
+    expect((await friend.hall(secrets.PARLOR_SEAT_TOKEN)).recruitments).toHaveLength(0);
+  });
+});
+
 /** 真正打完另一桌，覆盖开桌、入座、开局、行动和结算的公开广播。 */
 const playOtherTable = async (friend: ParlorClient, token: string): Promise<string[]> => {
   const other = new ParlorClient(server!.url, {

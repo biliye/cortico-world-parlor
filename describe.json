@@ -351,6 +351,10 @@
             "minimum": 0,
             "maximum": 1000000,
             "description": "Chips each real player antes; 0 or omit for no stakes."
+          },
+          "matchOpen": {
+            "type": "boolean",
+            "description": "公开客厅里是否开放快速匹配，默认 false；不自动向大厅发布招募。"
           }
         }
       },
@@ -372,6 +376,14 @@
           "table": {
             "type": "string",
             "description": "Table id from parlor_look / parlor_table_view."
+          },
+          "link": {
+            "type": "string",
+            "description": "当前服务器的牌桌分享链接；使用它可直接换到所属客厅并上桌，不能同时写 table。"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "按分享链接加入失败或回包不确定时，重试沿用原编号。"
           }
         }
       },
@@ -379,8 +391,92 @@
         "write"
       ],
       "summary": {
-        "zh": "在开着的桌子坐下。",
-        "en": "Sits down at the open table."
+        "zh": "在等人桌坐下，或通过分享链接直接换厅并上桌。",
+        "en": "Joins an open table, including a shared table link in another room."
+      }
+    },
+    {
+      "name": "parlor_quick_match",
+      "description": "选择一种游戏，匹配当前服务器公开客厅中主动开放匹配的无押注等人桌，成功后直接换厅并上桌。优先凑接近满员的桌；没有合适的桌就返回暂无，不自动开桌、不自动开局。已经在桌上时请先回当前桌。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "game"
+        ],
+        "properties": {
+          "game": {
+            "type": "string",
+            "enum": [
+              "dice",
+              "ddz",
+              "werewolf"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "description": "可选幂等编号；失败后重试沿用原编号。"
+          }
+        }
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "按游戏快速匹配公开客厅里的无押注等人桌，直接换厅并上桌。",
+        "en": "Matches and joins an opted-in, unstaked waiting table in a public room."
+      }
+    },
+    {
+      "name": "parlor_table_recruitments",
+      "description": "只读查看大厅中的未开局牌桌招募，包含玩家自己写的内容、真实人数、押注与分享链接。无需移动到大厅，不唤醒其他 Coo；使用 parlor_table_join {link} 定向加入。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "查看大厅牌桌招募及分享链接，不移动、不唤醒其他 Coo。",
+        "en": "Reads hall table recruitment posts and links without moving or waking others."
+      }
+    },
+    {
+      "name": "parlor_table_discovery",
+      "description": "设置当前等人桌的开放匹配、编写招募分享到大厅或撤回招募。只有开桌者能切换 matchOpen；同桌成员可首次发布，之后作者或桌主可修改/撤回。只允许公开客厅，同一桌每分钟最多更新一次招募；text 为 1–200 字。开匹配与发招募相互独立。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "table": {
+            "type": "string",
+            "description": "省略时使用自己的桌。"
+          },
+          "matchOpen": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "withdraw": {
+            "type": "boolean",
+            "description": "true 撤回招募，不能同时写 text。"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "重试沿用原编号。"
+          }
+        }
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "桌主切换开放匹配，同桌成员编写招募分享到大厅，作者或桌主可撤回。",
+        "en": "Configures table matching and publishes, updates or withdraws a hall recruitment post."
       }
     },
     {

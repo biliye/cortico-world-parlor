@@ -24,6 +24,12 @@ const params = new URLSearchParams(location.search);
 const version = new URL(import.meta.url).searchParams.get('v') || '';
 const withVersion = (path) => (version ? path + '?v=' + version : path);
 const entry = withVersion(params.has('legacy') ? './play.js' : './vue/main.js');
+if (!params.has('legacy')) {
+  const style = document.createElement('link');
+  style.rel = 'stylesheet';
+  style.href = new URL(withVersion('./vue/vue-style.css'), import.meta.url).href;
+  document.head.append(style);
+}
 import(entry).catch((error) => {
   console.error('[parlor] 客户端载入失败', error);
 });

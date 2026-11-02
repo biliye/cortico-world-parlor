@@ -6,6 +6,7 @@ import type { MailPage } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type { Announcement, Feedback } from './support-db.ts';
 import type { ParentMailView } from './mail-db.ts';
+import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
 import type {
   ActionRequest, ActionResponse, HallView, InviteResponse, JoinRequest, JoinResponse, MeView,
   RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
@@ -284,6 +285,22 @@ export class ParlorClient {
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<HallView>(response);
+  }
+
+  async enterTable(token: string, input: TableEntryInput): Promise<TableEntryResponse> {
+    const send = async () => {
+      const response = await fetch(this.url('/v1/table-entry'), {
+        method: 'POST',
+        headers: await this.headers({ 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-parlor-client': PARLOR_CLIENT_VERSION }),
+        body: JSON.stringify(input), signal: AbortSignal.timeout(15_000),
+      });
+      return this.parse<TableEntryResponse>(response);
+    };
+    try { return await send(); } catch (error) {
+      if (error instanceof ParlorHttpError) throw error;
+      // 回包丢失时只重放这一笔幂等请求，不能重新抽一张桌。
+      return send();
+    }
   }
 
   async rooms(all = true, token?: string): Promise<{ rooms: RoomSummary[] }> {

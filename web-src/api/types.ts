@@ -40,6 +40,7 @@ export interface Snapshot {
   id: string;
   name?: string;
   topic?: string;
+  visibility?: string;
   now: number;
   latest: number;
   seat?: { id: string; name: string };
@@ -58,6 +59,10 @@ export interface TableSeat {
 }
 
 export interface TableSummary {
+  capacity?: number;
+  matchOpen?: boolean;
+  recruitText?: string;
+  recruitAuthor?: string;
   tableId?: string;
   id?: string;
   game: string;
@@ -81,6 +86,7 @@ export interface Directory {
 
 export interface HallPayload {
   hall?: { seats?: HallSeat[] };
+  recruitments?: import('../../src/room/table-discovery-db.ts').TableRecruitment[];
 }
 
 export interface JoinResult {

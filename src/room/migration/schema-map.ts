@@ -7,6 +7,7 @@
  */
 import { PG_SCHEMA_SQL } from '../storage/pg-schema.ts';
 import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 export interface TableMap {
   name: string;
@@ -17,6 +18,12 @@ export interface TableMap {
   /** SQLite 里是 TEXT、PG 里是 JSONB 的列。 */
   json?: string[];
 }
+
+/** 旧来源库可缺少升级后才新增的表；对应版本之后缺表则是损坏。 */
+export const ADDED_TABLE_VERSIONS: Readonly<Record<string, number>> = {
+  support_feedback: 7, support_announcements: 7,
+  table_discovery: 8, table_entry_receipts: 8,
+};
 
 /**
  * 搬运顺序：外键依赖从前到后。`ledger_entries` 的自引用（settle 指向 promise）
@@ -62,12 +69,14 @@ export const MIGRATION_TABLES: TableMap[] = [
   { name: 'identity_tickets', key: ['token_hash'] },
   { name: 'support_feedback', key: ['id'] },
   { name: 'support_announcements', key: ['id'] },
+  { name: 'table_discovery', key: ['table_id'] },
+  { name: 'table_entry_receipts', key: ['coo_id', 'request_id'] },
 ];
 
 /** 从 PG 的 DDL 里解析出每张表的列名，供「来源库列 === 目标库列」的比对用。 */
 export const targetColumns = (): Map<string, string[]> => {
   const out = new Map<string, string[]>();
-  const blocks = (PG_SCHEMA_SQL + SUPPORT_SCHEMA_SQL).split(/CREATE TABLE IF NOT EXISTS /).slice(1);
+  const blocks = (PG_SCHEMA_SQL + SUPPORT_SCHEMA_SQL + TABLE_DISCOVERY_SCHEMA_SQL).split(/CREATE TABLE IF NOT EXISTS /).slice(1);
   for (const block of blocks) {
     const name = /^([a-z_][a-z0-9_]*)/.exec(block)?.[1];
     if (!name) continue;

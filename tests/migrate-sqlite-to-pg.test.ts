@@ -81,6 +81,32 @@ const targetUrl = async (): Promise<string> => {
 };
 
 describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
+  it('schema 8 匹配、招募与入桌回执逐行保留；schema 7 缺新表仍能迁移', async () => {
+    for (const legacy of [false, true]) {
+      const file = join(dir!, `discovery-${legacy}.db`);
+      const { db, tableId } = await seedSource(file);
+      if (legacy) {
+        await db.exec('DROP TABLE table_discovery; DROP TABLE table_entry_receipts;');
+        await db.prepare("UPDATE meta SET value='7' WHERE key='schema_version'").run();
+      } else {
+        await db.prepare('INSERT INTO table_discovery(table_id, match_open, recruit_text, author_coo_id, updated_at) VALUES (?, 1, ?, ?, ?)')
+          .run(tableId, '迁库后继续招募', A, 1_770_000_000_000);
+        await db.prepare('INSERT INTO table_entry_receipts(coo_id, request_id, source_token_hash, result_token_hash, body_key, receipt_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(A, 'entry-1', 'source-hash', 'result-hash', '{"game":"dice"}', '{"tableId":"retained"}', 1_770_000_000_000);
+      }
+      await db.close();
+      const url = await targetUrl();
+      const result = await runMigration({ source: file, targetUrl: url });
+      expect(result.ok, JSON.stringify({ legacy, error: result.error, mismatched: result.verify?.mismatched })).toBe(true);
+      const target = await openStorage({ storage: 'postgres', url });
+      try {
+        const row = await target.prepare('SELECT * FROM table_discovery WHERE table_id=?').get(tableId);
+        expect(row).toEqual(legacy ? undefined : { table_id: tableId, match_open: 1, recruit_text: '迁库后继续招募', author_coo_id: A, updated_at: 1_770_000_000_000 });
+        const receipt = await target.prepare('SELECT receipt_json, source_token_hash FROM table_entry_receipts WHERE request_id=?').get('entry-1');
+        expect(receipt).toEqual(legacy ? undefined : { receipt_json: '{"tableId":"retained"}', source_token_hash: 'source-hash' });
+      } finally { await target.close(); }
+    }
+  });
   it('schema 7 的反馈、回复和公告逐行搬运；schema 6 缺少新表仍能迁移', async () => {
     for (const legacy of [false, true]) {
       const file = join(dir!, `support-${legacy}.db`);

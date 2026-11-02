@@ -2,6 +2,7 @@
 /** 大厅：发现是「舞台 + 海报墙」；我的客厅是个人席位墙；收藏是书签清单。数据仍来自 /v1/hall 与 /v1/rooms。 */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
+import LobbyMatching from '../components/LobbyMatching.vue';
 import { api } from '../api/client.ts';
 import { createRoomCarousel, type CarouselModel } from '../lib/room-carousel.ts';
 import { ROOM_CAPACITY, createRoomBody } from '../lib/rooms.ts';
@@ -171,6 +172,7 @@ async function createRoom(): Promise<void> {
 <template>
   <div class="view view-hall" :class="'section-' + section">
     <AnnouncementBanner />
+    <LobbyMatching v-if="section === 'all'" />
 
     <!-- ═════════ 发现：舞台 ═════════ -->
     <template v-if="section === 'all'">
