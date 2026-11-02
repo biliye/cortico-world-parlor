@@ -1490,9 +1490,6 @@ html.vue-app .turn-timer::before { content: ""; position: absolute; inset: 3px; 
 html.vue-app .turn-timer span { position: relative; z-index: 1; }
 html.vue-app .turn-timer.is-off { background: conic-gradient(var(--line-2) 100%, transparent 0); color: var(--dim); }
 html.vue-app .table-head-host { margin-top: 14px; }
-html.vue-app .ticker { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
-html.vue-app .ticker p { margin: 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
-html.vue-app .ticker time { font-family: var(--num); color: var(--muted); margin-right: 6px; }
 html.vue-app .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 html.vue-app .view-table .panel h2 { font-size: 18px; margin: 0 0 10px; }
 

@@ -5,9 +5,9 @@ import GameHost from '../components/GameHost.vue';
 import TableDiscovery from '../components/TableDiscovery.vue';
 import Icon from '../components/Icon.vue';
 import { STATUS_LABELS, canStartTable, gameLabel, gameOf, tableSeatLabel, tableStartBlockers } from '../lib/games.ts';
-import { clockText, initialOf, readable } from '../lib/text.ts';
+import { initialOf } from '../lib/text.ts';
 import {
-  activePrivate, activeTable, joinRoomTable, leaveRoomTable, log, myTable, serverNow, snapshot,
+  activePrivate, activeTable, joinRoomTable, leaveRoomTable, myTable, serverNow, snapshot,
   startRoomTable, tableIdOf,
 } from '../stores/parlor.ts';
 import { backToRoom } from '../stores/view.ts';
@@ -87,19 +87,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearInterval(pulse);
-});
-
-const ticker = computed(() => {
-  const id = table.value ? tableIdOf(table.value) : '';
-  return log.value
-    .filter((event) => {
-      const type = event.type || '';
-      if (!type.startsWith('parlor.table.') && !type.startsWith('parlor.monopoly.')) return false;
-      const eventId = (event.data as Record<string, unknown> | undefined)?.tableId;
-      return !id || typeof eventId !== 'string' || !eventId || eventId === id;
-    })
-    .slice(-4)
-    .map((event) => ({ key: event.seq ?? Math.random(), time: clockText(event.ts), text: readable(event.text) }));
 });
 
 async function run(task: () => Promise<unknown>): Promise<void> {
@@ -199,9 +186,6 @@ async function run(task: () => Promise<unknown>): Promise<void> {
 
     <template v-else>
       <GameHost />
-      <div v-if="ticker.length" class="ticker">
-        <p v-for="line in ticker" :key="line.key"><time>{{ line.time }}</time> {{ line.text }}</p>
-      </div>
     </template>
   </div>
 </template>
