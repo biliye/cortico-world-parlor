@@ -222,11 +222,15 @@ describe('WorldServer 大厅、邀请与网页', () => {
     expect(page.status).toBe(200);
     expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
     const html = await page.text();
-    const scriptPath = html.match(/<script type="module" src="(\/play\/assets\/play\.js(?:\?[^"]+)?)">/)?.[1];
+    const scriptPath = html.match(/<script type="module" src="(\/play\/assets\/vue-loader\.js(?:\?[^"]+)?)">/)?.[1];
     expect(scriptPath).toBeTruthy();
     const script = await fetch(`${app.url}${scriptPath}`);
     expect(script.status).toBe(200);
     expect(script.headers.get('content-type')).toContain('text/javascript');
+    // 入口按参数分派：不带 ?vue 时仍是旧的 play.js，两支都要能取到。
+    const loader = await script.text();
+    expect(loader).toContain('./play.js');
+    expect((await fetch(`${app.url}/play/assets/play.js`)).status).toBe(200);
   });
 });
 

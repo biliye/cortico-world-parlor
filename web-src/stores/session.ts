@@ -1,0 +1,32 @@
+/** 这台浏览器记着的席位。键名与旧版 play.js 完全一致，切过去时不用重新加入。 */
+import { ref } from 'vue';
+import type { SeatConfig } from '../api/types.ts';
+
+const STORE_KEY = 'parlor-play-v1';
+
+function read(): SeatConfig | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (!raw || !raw.token || !raw.seatId || !raw.cooId || !raw.cooSecret) return null;
+    return raw as SeatConfig;
+  } catch {
+    return null;
+  }
+}
+
+export const seat = ref<SeatConfig | null>(read());
+
+export function saveSeat(next: SeatConfig): void {
+  seat.value = next;
+  localStorage.setItem(STORE_KEY, JSON.stringify(next));
+}
+
+export function clearSeat(): void {
+  seat.value = null;
+  localStorage.removeItem(STORE_KEY);
+}
+
+/** 当前客厅；没有席位时为空串，接口就走默认客厅的 /v1/... 别名。 */
+export function currentRoom(): string {
+  return seat.value?.room || '';
+}
