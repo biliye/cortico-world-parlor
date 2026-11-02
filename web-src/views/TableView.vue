@@ -1,25 +1,90 @@
 <script setup lang="ts">
 /** 牌桌壳：等人时是座位与开局操作；开局后把桌面交给 GameHost（旧渲染器原样挂载）。 */
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GameHost from '../components/GameHost.vue';
-import { STATUS_LABELS, enoughPlayers, gameLabel } from '../lib/games.ts';
+import Icon from '../components/Icon.vue';
+import { STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
 import { clockText, initialOf, readable } from '../lib/text.ts';
 import {
-  activeTable, joinRoomTable, leaveRoomTable, log, myTable, snapshot, startRoomTable, tableIdOf,
+  activePrivate, activeTable, joinRoomTable, leaveRoomTable, log, myTable, serverNow, snapshot,
+  startRoomTable, tableIdOf,
 } from '../stores/parlor.ts';
 import { backToRoom } from '../stores/view.ts';
 
 const table = activeTable;
 const notice = ref('');
 const busy = ref(false);
+const now = ref(serverNow());
+let pulse: number | undefined;
 
 const meId = computed(() => snapshot.value?.seat?.id || '');
+const meName = computed(() => snapshot.value?.seat?.name || '你');
 const seats = computed(() => table.value?.seats || []);
 const seated = computed(() => seats.value.some((person) => person.id === meId.value));
 const host = computed(() => table.value?.host === meId.value);
 const canJoin = computed(() => table.value?.status === 'open' && !seated.value && !myTable.value);
 const canStart = computed(() => table.value?.status === 'open' && seated.value && host.value
   && !!table.value && enoughPlayers(table.value));
+const activeStage = computed(() => table.value?.status === 'bidding' || table.value?.status === 'playing');
+
+const names = computed(() => {
+  const map = new Map<string, string>();
+  for (const person of snapshot.value?.seats || []) map.set(person.id, person.name);
+  for (const person of table.value?.seats || []) if (!map.has(person.id)) map.set(person.id, person.name);
+  return map;
+});
+const myTurn = computed(() => activePrivate()?.yourTurn === true);
+const turnSeat = computed(() => seats.value.find((person) => person.id === table.value?.turn));
+const turnName = computed(() => {
+  const id = table.value?.turn;
+  if (!id) return '—';
+  return names.value.get(id) || '？';
+});
+const botTurn = computed(() => !!turnSeat.value?.bot && !myTurn.value);
+const deadline = computed(() => Number(table.value?.deadline || (activePrivate()?.deadline as number) || 0));
+const timerTotal = ref(0);
+let timerKey = '';
+
+watch(deadline, (next) => {
+  if (!next) {
+    timerTotal.value = 0;
+    timerKey = '';
+    return;
+  }
+  const key = tableIdOf(table.value) + ':' + (table.value?.game || '') + ':' + next;
+  if (key !== timerKey) {
+    timerKey = key;
+    timerTotal.value = Math.max(10, Math.ceil((next - serverNow()) / 1000));
+  }
+}, { immediate: true });
+
+const left = computed(() => (deadline.value ? Math.max(0, Math.ceil((deadline.value - now.value) / 1000)) : 0));
+const timerText = computed(() => {
+  const value = left.value;
+  return String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
+});
+const timerProgress = computed(() => (timerTotal.value
+  ? Math.max(0, Math.min(100, (left.value / timerTotal.value) * 100))
+  : 0));
+
+const metaParts = computed(() => {
+  const current = table.value;
+  if (!current) return [];
+  const parts: string[] = [STATUS_LABELS[current.status] || current.status];
+  if (seats.value.length) parts.push(seats.value.length + ' 人');
+  if (current.stake) parts.push('每局 ' + current.stake);
+  if (current.game === 'ddz' && current.multiplier) parts.push('倍数 ×' + current.multiplier);
+  if (current.game === 'monopoly' && current.round) parts.push('第 ' + current.round + '/' + (current.rounds || 12) + ' 轮');
+  return parts;
+});
+
+onMounted(() => {
+  pulse = window.setInterval(() => { now.value = serverNow(); }, 1000);
+});
+
+onBeforeUnmount(() => {
+  window.clearInterval(pulse);
+});
 
 const ticker = computed(() => {
   const id = table.value ? tableIdOf(table.value) : '';
@@ -54,7 +119,29 @@ async function run(task: () => Promise<unknown>): Promise<void> {
       <button class="btn ghost small" type="button" @click="backToRoom">← 返回客厅</button>
     </div>
 
-    <div class="table-head-host">
+    <div v-if="table && activeStage" class="table-head">
+      <div class="game-id">
+        <span class="game-icon"><Icon :name="gameOf(table.game)?.icon || 'cards'" /></span>
+        <div>
+          <h1>{{ table.label || gameLabel(table.game) }}</h1>
+          <p>{{ metaParts.join(' · ') }}</p>
+        </div>
+      </div>
+      <div class="turn-box">
+        <div class="turn-copy">
+          <span class="turn-kicker">{{ myTurn ? '轮到你' : '轮到' }}</span>
+          <span class="turn-name">{{ myTurn ? meName : (botTurn ? turnName + ' · 脚本' : turnName) }}</span>
+        </div>
+        <div
+          class="timer"
+          :class="{ 'is-off': !deadline || left <= 0 || botTurn }"
+          :style="{ '--p': String(botTurn ? 100 : timerProgress) }"
+        >
+          <span>{{ botTurn ? '脚本' : (deadline ? timerText : '—') }}</span>
+        </div>
+      </div>
+    </div>
+    <div v-else class="table-head-host">
       <div class="lobby-head">
         <div>
           <span class="eyebrow">{{ gameLabel(table?.game || '') }} · {{ STATUS_LABELS[table?.status || ''] || table?.status }}</span>

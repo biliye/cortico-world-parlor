@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /** 页面骨架：顶栏 + 左栏 + 中间内容 + 右栏聊天。内容由 App 通过默认插槽放进来。 */
-import { computed, onMounted, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import ChatPanel from './ChatPanel.vue';
 import DmWindow from './DmWindow.vue';
 import Icon from './Icon.vue';
+import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
 import { initialOf } from '../lib/text.ts';
 import { club } from '../stores/club.ts';
@@ -18,6 +19,7 @@ import { toastKind, toastText } from '../stores/ui.ts';
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
+const switcherOpen = ref(false);
 
 const sections = [
   { id: 'all', label: '发现客厅', icon: 'lamp' },
@@ -46,6 +48,10 @@ onMounted(() => {
 <template>
   <header class="topbar">
     <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
+    <button class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
+      <span class="live-dot" />
+      <span class="room-pill-main">{{ roomLabel }}</span>
+    </button>
     <div class="top-right">
       <span class="conn" :class="connection">
         <span class="dot" />
@@ -64,12 +70,13 @@ onMounted(() => {
       </span>
       <ThemePicker />
       <button class="btn ghost small chat-toggle" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
-        {{ chatExpanded() ? '收起聊天' : '打开聊天' }}
+        <Icon name="chat" /><span class="chat-toggle-label">{{ chatExpanded() ? '收起聊天' : '打开聊天' }}</span>
       </button>
     </div>
   </header>
 
   <DmWindow />
+  <RoomSwitcher v-model:open="switcherOpen" />
 
   <div class="layout" :class="{ 'chat-collapsed': !club.chatOpen }">
     <aside class="left-rail">

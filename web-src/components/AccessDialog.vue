@@ -170,7 +170,7 @@ async function removeRoom(): Promise<void> {
     await api('/v1/rooms/' + encodeURIComponent(room.id) + '/delete', { method: 'POST' });
     showToast('客厅已删除');
     close();
-    clearSeat();
+    clearSeat('这个客厅已经删除，请重新加入大厅。');
     location.assign('/play');
   } catch (error) {
     showToast((error as Error).message || '删除失败', 'bad');

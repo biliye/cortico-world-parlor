@@ -66,6 +66,13 @@ export interface TableSummary {
   text?: string;
   host?: string;
   seats?: TableSeat[];
+  turn?: string;
+  deadline?: number;
+  stake?: number;
+  multiplier?: number;
+  round?: number;
+  rounds?: number;
+  revision?: number;
 }
 
 export interface Directory {
