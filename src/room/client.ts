@@ -5,6 +5,7 @@ import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } f
 import type { MailPage } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type { Announcement, Feedback } from './support-db.ts';
+import type { ParentMailView } from './mail-db.ts';
 import type {
   ActionRequest, ActionResponse, HallView, InviteResponse, JoinRequest, JoinResponse, MeView,
   RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
@@ -157,6 +158,15 @@ export class ParlorClient {
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailPage>(response);
+  }
+
+  /** 只读补档：包括已读信，按游标向前，不动信箱。 */
+  async messageHistory(token: string, after = 0): Promise<{ items: ParentMailView[]; seats: { id: string; room: string }[] }> {
+    const response = await fetch(this.url(`/v1/me/message-history?after=${after}`), {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
   }
 
   /** 身份级账本摘要。 */

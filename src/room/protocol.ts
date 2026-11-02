@@ -196,6 +196,8 @@ export interface DeliveryReceipt {
 
 export interface ActionResponse {
   ok: true;
+  /** 发言本身，供本地记录按实际消息游标去重；不含其他人的私密事件。 */
+  event?: RoomEvent;
   /** 服务器处理完这次动作后的房间游标。 */
   seq: number;
   ts: number;

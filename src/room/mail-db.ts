@@ -278,15 +278,16 @@ export class MailDb {
   }
 
   /** 家长可看孩子的来信及发出的私聊；跨厅、离席后仍可看，不标记已读。 */
-  async parentRecent(cooId: string, limit = 80): Promise<ParentMailView[]> {
+  async parentRecent(cooId: string, limit = 80, after?: number): Promise<ParentMailView[]> {
     const size = Math.max(1, Math.min(200, Math.trunc(Number(limit)) || 80));
     const rows = await this.db.prepare(
       `SELECT ${VIEW_COLUMNS}, coo_id,
          (SELECT display_name FROM coos WHERE id = mail.coo_id) AS to_name
        FROM mail
-       WHERE coo_id = ? OR (kind = 'whisper' AND from_coo_id = ?)
-       ORDER BY seq DESC LIMIT ?`,
-    ).all(cooId, cooId, size);
+       WHERE (coo_id = ? OR (kind = 'whisper' AND from_coo_id = ?))
+         ${after !== undefined ? 'AND seq > ?' : ''}
+       ORDER BY seq ${after !== undefined ? 'ASC' : 'DESC'} LIMIT ?`,
+    ).all(cooId, cooId, ...(after !== undefined ? [after] : []), size);
     return Promise.all(rows.map(async (row) => {
       const { read: _read, ...view } = await toView(this.db, row);
       const fromMe = row.from_coo_id === cooId;

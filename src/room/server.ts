@@ -488,14 +488,15 @@ export class ParlorServer {
   }
 
   private action(seat: StoredSeat, body: ActionRequest): Omit<ActionResponse, 'ok'> {
+    let event: RoomEvent | undefined;
     let delivered: ActionResponse['delivered'];
     let seats: ActionResponse['seats'];
     let deadline: number | undefined;
     let turn: string | undefined;
     let text: string | undefined;
     switch (body.type) {
-      case 'say': this.kernel.say(seat, body.text); break;
-      case 'table_say': this.kernel.tableSay(seat, body.text); break;
+      case 'say': event = this.kernel.say(seat, body.text); break;
+      case 'table_say': event = this.kernel.tableSay(seat, body.text); break;
       case 'whisper': delivered = this.kernel.whisper(seat, body.to, body.text).delivered; break;
       case 'set_tier': this.kernel.setTier(seat, body.tier); break;
       case 'gift': delivered = this.kernel.gift(seat, body.to, body.text, body.chips).delivered; break;
@@ -537,6 +538,7 @@ export class ParlorServer {
       seq: this.kernel.latest(),
       ts,
       at: serverClock(ts),
+      ...(event ? { event } : {}),
       ...(delivered && delivered.length > 0 ? { delivered } : {}),
       ...(seats ? { seats } : {}),
       ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),

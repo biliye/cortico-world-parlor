@@ -944,6 +944,18 @@ export class WorldServer {
     }
 
     // 身份级读取：被移出客厅、大厅满员时，自己的信箱/账本/历史还看得到。
+    if (method === 'GET' && url.pathname === '/v1/me/message-history') {
+      const cooId = await this.cooOrSeat(req);
+      const after = Number(url.searchParams.get('after') ?? 0);
+      if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '历史游标须为非负整数');
+      // 包括已读来信与本人发出的私聊，补档不改变任意一方的已读状态。
+      json(res, 200, {
+        items: await new MailDb(this.db).parentRecent(cooId, 200, after),
+        seats: await this.db.prepare('SELECT id,room_id AS room FROM room_seats WHERE coo_id=?').all(cooId),
+      });
+      return;
+    }
+
     if (method === 'GET' && url.pathname === '/v1/me/mail') {
       const cooId = await this.cooOrSeat(req);
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
@@ -1652,7 +1664,7 @@ export class WorldServer {
       try {
         await (await this.host(target.roomId)).whisperNotice(cooId, seat.name, {
           cooId: target.cooId, id: target.id, name: target.name,
-        }, text);
+        }, text, { seq: letter.seq, ts: letter.ts, room: seat.roomId });
       } catch { /* 推事件失败不影响信 */ }
     }
     return {
@@ -1834,6 +1846,7 @@ export class WorldServer {
       let tableId: string | undefined;
       let revision: number | undefined;
       let receiptSeq: number | undefined;
+      let saidEvent: RoomEvent | undefined;
       let closed: boolean | undefined;
       /** 这次动作碰到的桌（离桌也要：动之前先记下）。回执按它附桌视图。 */
       let touchedTable: string | undefined;
@@ -1841,9 +1854,9 @@ export class WorldServer {
       let tablesChanged = false;
 
       if (type === 'say') {
-        await host.say(seat.cooId, typeof body.text === 'string' ? body.text : '');
+        saidEvent = (await host.say(seat.cooId, typeof body.text === 'string' ? body.text : '')).event;
       } else if (type === 'table_say') {
-        await host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '', tableArg);
+        saidEvent = await host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '', tableArg);
       } else if (type === 'whisper') {
         // 私聊走全局那条：对方在别的客厅或不在线也照样投信箱（Coo 也能跨厅回）。
         const result = await this.sendDm(seat.cooId, body);
@@ -1974,6 +1987,7 @@ export class WorldServer {
         seq: receiptSeq ?? await host.latest(),
         ts,
         at: serverClock(ts),
+        ...(saidEvent ? { event: saidEvent } : {}),
         ...(requestId ? { requestId } : {}),
         ...(tableId ? { tableId } : {}),
         ...(revision !== undefined ? { revision } : {}),

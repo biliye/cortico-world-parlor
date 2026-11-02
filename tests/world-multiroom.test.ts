@@ -274,9 +274,10 @@ describe('World 多客厅', () => {
     expect(session.status).toBe(200);
     const link = (world!.webUi?.().links ?? []).find((entry) => entry.href.includes('/parent#key='));
     expect(link?.href).toContain(encodeURIComponent(key));
-    // 面板三条链接：公开的网页牌桌、带钥匙的我下场玩、带钥匙的家长页。
+    // 原三条链接加本机消息档案，不把本机地址放到公共会馆服务器下。
     const links = world!.webUi?.().links ?? [];
-    expect(links).toHaveLength(3);
+    expect(links).toHaveLength(4);
+    expect(links.some(entry => entry.href === '/api/webui/providers/world%3Aparlor/panels/history/page')).toBe(true);
     expect(links.some((entry) => entry.href === server!.url + '/play')).toBe(true);
     const playLink = links.find((entry) => entry.href.includes('/play#key='));
     expect(playLink?.href).toContain(encodeURIComponent(key));

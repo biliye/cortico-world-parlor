@@ -696,7 +696,8 @@ export class WerewolfTable implements TableEngine {
       type: 'parlor.table.werewolf.speech',
       scope: { kind: 'room' },
       text: body,
-      data: { game: this.game, day: this.day, kind, seatNo: entry.seatNo, text: entry.text, passed: entry.passed },
+      data: { game: this.game, day: this.day, kind, seatNo: entry.seatNo, text: entry.text, passed: entry.passed,
+        actorSeatId: this.seatByNo(entry.seatNo)!.id, actorName: this.seatByNo(entry.seatNo)!.name },
     };
     this.lastAction = { seatNo: entry.seatNo, kind: entry.passed ? 'pass_speech' : 'speak' };
     phase.stage = 'read';

@@ -457,6 +457,7 @@ describe('网页玩家', () => {
     const files = [
       'src/web/play.js',
       'src/web/common.js',
+        'src/web/local-history.js',
       'src/web/games/dice.js',
       'src/web/games/ddz.js',
       'src/web/games/monopoly.js',

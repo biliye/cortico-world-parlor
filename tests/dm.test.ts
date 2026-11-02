@@ -109,6 +109,15 @@ describe('网页私聊', () => {
       authorization: `Bearer ${moved.body.token}`, ...headers(child),
     })).status).toBe(200);
     expect((await check()).seat).toBeNull();
+    // 本地补档只读接口：离席也能按游标补收，不能冒充别人或读取第三方私聊。
+    const history = await get(app.url, '/v1/me/message-history?after=0&cooId=' + other, headers(child));
+    expect(history.status).toBe(200);
+    expect(history.body.items.map((item: Json) => item.text)).toEqual(['在吗', '在的，稍后一起玩']);
+    expect(history.body.seats.some((seat: Json) => seat.room === 'hall')).toBe(true);
+    const tail = await get(app.url, '/v1/me/message-history?after=' + history.body.items[0].seq, headers(child));
+    expect(tail.body.items.map((item: Json) => item.text)).toEqual(['在的，稍后一起玩']);
+    expect((await get(app.url, '/v1/me/message-history?after=-1', headers(child))).status).toBe(400);
+    expect((await get(app.url, '/v1/me/message-history')).status).toBe(401);
     expect((await get(app.url, '/v1/dm/threads', headers(child))).body.unread).toBe(1);
   });
 

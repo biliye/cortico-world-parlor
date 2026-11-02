@@ -297,7 +297,8 @@ export class RoomHost {
    * 私聊信已经落进信箱了，这里只往对方所在的客厅推一条事件，让在线的人立刻看到；
    * 不再写第二封信（否则信箱里会出现两条）。
    */
-  async whisperNotice(fromCooId: string, fromName: string, target: { cooId: string; id: string; name: string }, text: string): Promise<RoomEvent> {
+  async whisperNotice(fromCooId: string, fromName: string, target: { cooId: string; id: string; name: string }, text: string,
+    mail?: { seq: number; ts: number; room: string }): Promise<RoomEvent> {
     const now = this.now();
     const senderSeat = await activeSeatForCoo(this.db, fromCooId);
     return this.events.append(this.roomId, {
@@ -306,7 +307,7 @@ export class RoomHost {
       from: senderSeat?.id ?? 'system',
       scope: { kind: 'seat', seatId: target.id },
       text,
-      data: { name: fromName, to: target.name, dm: true },
+      data: { name: fromName, to: target.name, dm: true, ...(mail ? { mail } : {}) },
       audience: [{ cooId: target.cooId, seatId: target.id }],
     });
   }

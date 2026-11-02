@@ -3,7 +3,7 @@
  * 它不判断谁能看见什么；服务器只发这个席位能看见的事件。
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
@@ -17,6 +17,7 @@ import { IDENTITY_FILE, loadOrCreateIdentity, saveIdentity, type CooIdentity } f
 import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import { AmbientWakeBudget } from './wake-budget.ts';
+import { LocalHistory, type HistoryQuery } from './local-history.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed,
   type ActionRequest, type ActionResponse, type HallView, type MeView,
@@ -488,6 +489,12 @@ export class ParlorWorld implements World {
   private supportTimer?: NodeJS.Timeout;
   private supportBusy = false;
   private seenAnnouncements: string[] = [];
+  private history?: LocalHistory;
+  private historyTimer?: NodeJS.Timeout;
+  private historyTask?: Promise<void>;
+  private historyError = '';
+  private readonly historySeats = new Set<string>();
+  private readonly historyRooms = new Set<string>();
   /** 访客入口由运营者在部署 .env 里控制；默认关。 */
   private readonly allowGuestJoin: boolean;
 
@@ -591,12 +598,30 @@ export class ParlorWorld implements World {
           }]
           : []),
       ]
-      : undefined;
+      : [];
+    links.push({ label: '客厅 · 本地消息档案（按时间查看）',
+      href: '/api/webui/providers/world%3Aparlor/panels/history/page', inheritTheme: false });
     const storage: StoragePart[] = [];
     if (!this.ctx.cfg.serverUrl.trim()) storage.push(this.roomStorage());
     storage.push(this.cursorStorage(), this.identityStorage());
     return {
       config: [PARLOR_CONFIG_GROUP],
+      panels: [{ id: 'history', title: '本地消息档案', getMethods: ['page', 'script', 'query', 'info'],
+        description: '孩子电脑上的持久消息记录，按时间查询；无需打开网页也会持续记录。' }],
+      invoke: async (panel, method, args) => {
+        if (panel !== 'history') throw new Error('没有这个面板');
+        if (method === 'page' || method === 'script') {
+          const file = method === 'page' ? 'local-history.html' : 'local-history.js';
+          return { $binary: { mime: method === 'page' ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+            base64: readFileSync(new URL(`./web/${file}`, import.meta.url)).toString('base64') } };
+        }
+        const history = this.historyStore();
+        const privateHidden = this.focused || !this.seat || this.stopped;
+        if (method === 'info') return { ...history.info(), error: this.historyError,
+          syncing: !!this.historyTask, privateHidden, server: this.baseUrl, name: this.seat?.name };
+        if (method === 'query') return history.query((args[0] ?? {}) as HistoryQuery, privateHidden);
+        throw new Error('没有这个查询方法');
+      },
       links,
       storage,
       promptDocs: [
@@ -619,8 +644,19 @@ export class ParlorWorld implements World {
   }
 
   async start(host: WorldHost): Promise<void> {
+    this.stopped = false;
     this.host = host;
+    this.history?.close(); this.history = undefined;
+    this.historySeats.clear(); this.historyRooms.clear(); this.historyError = '';
     await this.connect();
+    // connect 可能修复/重建身份；写入必须使用连接后实际的孩子身份。
+    this.history = new LocalHistory(this.ctx.dataDir,
+      this.ctx.cfg.serverUrl.trim().replace(/\/+$/, '') || 'self', this.identity!.cooId);
+    if (this.seat) this.historySeats.add(this.seat.id);
+    this.historyRooms.add(this.currentRoom);
+    this.scheduleHistorySync();
+    this.historyTimer = setInterval(() => this.scheduleHistorySync(), 60_000);
+    this.historyTimer.unref?.();
     this.digestTimer = setInterval(() => { void this.flushDigest(); }, DIGEST_MS);
     this.digestTimer.unref?.();
     this.streamTask = this.runStream();
@@ -642,6 +678,8 @@ export class ParlorWorld implements World {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.historyTimer) clearInterval(this.historyTimer);
+    this.historyTimer = undefined;
     if (this.supportTimer) clearInterval(this.supportTimer);
     this.supportTimer = undefined;
     this.clearPendingMessages();
@@ -650,6 +688,8 @@ export class ParlorWorld implements World {
     this.digestTimer = undefined;
     await this.streamTask?.catch(() => {});
     this.streamTask = undefined;
+    await this.historyTask;
+    this.history?.close();
     await this.server?.close();
     this.server = undefined;
   }
@@ -810,6 +850,7 @@ export class ParlorWorld implements World {
   /** 专注 B：坐在未结束的牌桌上时，客厅普通聊只攒不叫。 */
   private applySnapshot(snapshot: RoomSnapshot): void {
     if (snapshot.seat.id !== this.seat?.id) return;
+    for (const event of snapshot.events) this.recordHistoryEvent(event, snapshot.id);
     const priv = snapshot.tablePrivate;
     if (priv?.tableId === this.myTableId && typeof priv?.revision === 'number'
       && this.myTableRevision !== undefined && priv.revision < this.myTableRevision) return;
@@ -891,6 +932,9 @@ export class ParlorWorld implements World {
           // 拖到下一次掉线。下一次真的断了，从 1 秒重试开始。
           () => {
             backoff = 1000;
+            this.historySeats.add(this.seat!.id);
+            this.historyRooms.add(this.currentRoom);
+            this.scheduleHistorySync();
             if (disconnected) {
               disconnected = false;
               if (Date.now() - lastUpAt >= LINK_GAP_MS) {
@@ -945,8 +989,108 @@ export class ParlorWorld implements World {
     }, { trigger: 'debounce' }); } catch { /* 通知写入失败不能终止网络恢复循环。 */ }
   }
 
+  private historyStore(): LocalHistory {
+    if (this.history) return this.history;
+    if (!existsSync(this.identityFile)) throw new Error('请先启用客厅，让孩子连接一次后再查看本地档案');
+    const identity = JSON.parse(readFileSync(this.identityFile, 'utf8')) as { cooId?: unknown };
+    if (typeof identity.cooId !== 'string' || !identity.cooId) throw new Error('孩子身份文件无效，无法定位本地档案');
+    this.history = new LocalHistory(this.ctx.dataDir,
+      this.ctx.cfg.serverUrl.trim().replace(/\/+$/, '') || 'self', identity.cooId);
+    return this.history;
+  }
+
+  private historyWrite(write: () => void): void {
+    if (this.stopped) return;
+    try { write(); } catch (error) { this.historyFailure(`本地消息写入失败：${messageOf(error)}`); }
+  }
+
+  private historyFailure(error: string): void {
+    if (error !== this.historyError) this.host?.log.error(error);
+    this.historyError = error;
+  }
+
+  private recordHistoryEvent(event: Pick<RoomEvent, 'seq' | 'ts' | 'type' | 'from' | 'text' | 'data'>, room: string, strict = false): void {
+    if (!this.history || this.stopped) return;
+    // 多客厅私聊以全局信件号归档，避免跨厅通知与信箱补收记成两封。
+    const mail = event.data?.mail as { seq: number; ts: number; room: string } | undefined;
+    if (this.multiRoom && event.type === 'parlor.whisper' && !mail) return;
+    const actor = typeof event.data?.actorSeatId === 'string' ? event.data.actorSeatId : event.from;
+    const mine = actor === this.seat?.id || this.historySeats.has(actor);
+    const write = () => this.history!.append({
+      id: mail ? `mail:${mail.seq}` : `event:${room}:${event.seq}`,
+      ts: mail?.ts ?? event.ts, room: mail?.room ?? room, type: event.type,
+      direction: mine ? 'sent' : 'received',
+      sender: String(event.data?.actorName || event.data?.name || (mine ? this.seat?.name || '孩子' : event.from === 'system' ? '系统' : event.from)),
+      recipient: String(event.data?.to || (event.type === 'parlor.say' ? '客厅' : event.type === 'parlor.table.say' ? '同桌' : '孩子')),
+      text: event.text,
+      private: event.type === 'parlor.table.turn',
+    });
+    if (strict) write(); else this.historyWrite(write);
+  }
+
+  private scheduleHistorySync(): void {
+    if (!this.history || this.stopped || this.historyTask) return;
+    this.historyTask = this.syncHistory().catch(error => {
+      this.historyFailure(`本地消息补收失败：${messageOf(error)}`);
+    }).finally(() => { this.historyTask = undefined; });
+  }
+
+  private async syncHistory(): Promise<void> {
+    const history = this.history!;
+    const client = this.client!;
+    let unsupported = false;
+    // 信箱按全局游标补收，包含已读信，不把查看行为写回服务器。
+    if (this.multiRoom) {
+      let after = history.progress('mail');
+      for (;;) {
+        if (this.stopped) return;
+        let page;
+        try { page = await client.messageHistory(this.token, after); }
+        catch (error) {
+          if (!(error instanceof ParlorHttpError) || error.status !== 404) throw error;
+          this.historyFailure('客厅服务器尚不支持完整信箱补档；需更新服务器。实时客厅事件仍会保存。');
+          unsupported = true;
+          break;
+        }
+        for (const seat of page.seats) { this.historySeats.add(seat.id); this.historyRooms.add(seat.room); }
+        for (const item of page.items) {
+          history.append({ id: `mail:${item.seq}`, ts: item.ts, room: item.room,
+            type: item.kind === 'whisper' ? 'parlor.whisper' : `mail.${item.kind}`,
+            direction: item.fromMe ? 'sent' : 'received', sender: item.fromName,
+            recipient: item.fromMe ? `${item.toName || '对方'}${item.toHandle ? ` #${item.toHandle}` : ''}` : this.seat?.name || '孩子',
+            text: item.text, private: item.action === 'mail-turn' });
+          after = item.seq;
+        }
+        // 只有整页成功落盘后推进；崩溃重拉同一页也不会重复。
+        history.advance('mail', after);
+        if (page.items.length < 200) break;
+      }
+    }
+    for (const room of [...this.historyRooms]) {
+      if (this.stopped) return;
+      const previous = history.progress(`room:${room}`);
+      let high = previous;
+      let before: number | undefined;
+      for (;;) {
+        if (this.stopped) return;
+        const page = this.multiRoom
+          ? await client.replayAsIdentity(room, 200, before)
+          : await client.replay(this.token, 200, before);
+        for (const event of page.events) {
+          this.recordHistoryEvent(event, room, true);
+          high = Math.max(high, event.seq);
+        }
+        if (!page.events.length || !page.older || page.events.some(event => event.seq <= previous)) break;
+        before = page.events[0].seq;
+      }
+      history.advance(`room:${room}`, high);
+    }
+    if (!unsupported) this.historyError = '';
+  }
+
   private onRoomEvent(event: RoomEvent): void {
     if (!this.seat || event.seq <= this.lastSeq) return;
+    this.recordHistoryEvent(event, this.currentRoom);
     this.lastSeq = event.seq;
     this.saveCursor();
     if (event.from === this.seat.id) return;
@@ -1439,6 +1583,7 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
       const result = await this.client.action(this.token, { type: 'say', text: String(args.text ?? '') }, this.roomArg());
+      if (result.event) this.recordHistoryEvent(result.event, this.currentRoom);
       return this.receipt(result, '已经说给全房间。');
     } catch (error) {
       return this.failed(messageOf(error));
@@ -1457,6 +1602,7 @@ export class ParlorWorld implements World {
         text: String(args.text ?? ''),
         ...(table ? { table } : {}),
       }, this.roomArg());
+      if (result.event) this.recordHistoryEvent(result.event, this.currentRoom);
       return this.receipt(result, '已发到本桌。');
     } catch (error) {
       return this.failed(messageOf(error));
@@ -1471,6 +1617,13 @@ export class ParlorWorld implements World {
         to: String(args.to ?? ''),
         text: String(args.text ?? ''),
       }, this.roomArg());
+      this.historyWrite(() => {
+        for (const delivery of result.delivered ?? []) this.history?.append({
+          id: `mail:${delivery.mailSeq}`, ts: delivery.ts, room: this.currentRoom,
+          type: 'parlor.whisper', direction: 'sent', sender: this.seat?.name ?? '孩子',
+          recipient: delivery.to, text: String(args.text ?? '').trim(),
+        });
+      });
       return this.receipt(result, '私聊已经交给服务器。');
     } catch (error) {
       return this.failed(messageOf(error));
@@ -1549,6 +1702,14 @@ export class ParlorWorld implements World {
         page = await this.client.mailAsIdentity(Math.min(50, limit), peek);
       }
       const lines = [`【信箱】未读 ${page.unread} 封${peek ? '（只看，没标已读）' : ''}。`];
+      this.historyWrite(() => {
+        for (const item of page.items) this.history?.append({
+          id: `mail:${item.seq}`, ts: item.ts, room: item.room,
+          type: item.kind === 'whisper' ? 'parlor.whisper' : `mail.${item.kind}`,
+          direction: 'received', sender: item.fromName, recipient: this.seat?.name ?? '孩子', text: item.text,
+          private: item.action === 'mail-turn',
+        });
+      });
       if (!peek && page.items.length > 0) lines.push(`这次取走 ${page.items.length} 封。`);
       if (page.remaining > 0) lines.push(`还有 ${page.remaining} 封没取，再调用一次。`);
       if (page.items.length === 0) lines.push('信箱是空的。');
@@ -1826,6 +1987,11 @@ export class ParlorWorld implements World {
         result = await send();
       }
       const snapshot = await this.refreshFocus();
+      if (payload.move === 'wolf_chat' && typeof payload.text === 'string') this.historyWrite(() => this.history?.append({
+        id: `action:${String(payload.requestId)}`, ts: result.ts, room: this.currentRoom,
+        type: 'parlor.table.werewolf.wolf_chat', direction: 'sent', sender: this.seat?.name || '孩子',
+        recipient: '狼队', text: payload.text as string, private: true,
+      }));
       let doneText = typeof done === 'function' ? done(result) : done;
       const priv = attachPrivate ? snapshot?.tablePrivate : undefined;
       if (priv && (priv.canAct === true || priv.freshResult === true) && typeof priv.text === 'string' && priv.text) {
