@@ -8,7 +8,14 @@ import { clockText, initialOf, readable } from '../lib/text.ts';
 import {
   chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, tab, toggleChat, unread,
 } from '../stores/chat.ts';
-import { act, activeTable, log, myTable, snapshot, tableIdOf } from '../stores/parlor.ts';
+import { openThread as openDmThread, openWindow as openDmWindow } from '../stores/dm.ts';
+import {
+  acceptInvite, declineInvite, error as mailError, inviteErrorText, items as mailItems,
+  loadMail, loading as mailLoading, markAllRead, unread as mailUnread,
+} from '../stores/mail.ts';
+import { act, activeTable, goRoom, log, myTable, snapshot, tableIdOf } from '../stores/parlor.ts';
+import { seat } from '../stores/session.ts';
+import { showToast } from '../stores/ui.ts';
 
 interface Line {
   key: number;
@@ -93,7 +100,57 @@ watch(() => lines.value.length, () => {
   void nextTick(() => { if (stick) toBottom(); });
 });
 
-watch(tab, () => { void nextTick(toBottom); });
+watch(tab, (next) => {
+  void nextTick(toBottom);
+  if (next === 'mail') void loadMail(true);
+}, { immediate: true });
+
+async function readAll(): Promise<void> {
+  try {
+    await markAllRead();
+    showToast('信箱标成已读了');
+  } catch (caught) {
+    showToast((caught as Error).message || '标不上已读', 'bad');
+  }
+}
+
+function onMail(item: { kind?: string; fromCooId?: string; fromName?: string; fromHandle?: string }): void {
+  if (item.kind !== 'whisper' || !item.fromCooId) return;
+  openDmWindow();
+  void openDmThread(item.fromCooId, item.fromName, item.fromHandle);
+}
+
+async function accept(item: Parameters<typeof acceptInvite>[0]): Promise<void> {
+  try {
+    const room = await acceptInvite(item);
+    if (!room) {
+      showToast('这封邀请没有目的地', 'bad');
+      return;
+    }
+    if (room === seat.value?.room) {
+      showToast('你现在就在这个客厅里。');
+      return;
+    }
+    showToast('接受了，正在进这个客厅…');
+    await goRoom(room);
+  } catch (caught) {
+    showToast(inviteErrorText(caught), 'bad');
+    await loadMail(true);
+  }
+}
+
+async function decline(item: Parameters<typeof declineInvite>[0]): Promise<void> {
+  try {
+    await declineInvite(item);
+    showToast('已经拒绝这个邀请');
+  } catch (caught) {
+    showToast(inviteErrorText(caught), 'bad');
+  }
+}
+
+function enterRoom(room?: string): void {
+  if (room) void goRoom(room);
+}
 
 const input = ref('');
 const notice = ref('');
@@ -172,6 +229,7 @@ function closeDrawer(): void {
           <h2>有话慢慢聊</h2>
         </div>
         <div class="chat-head-actions">
+          <button v-if="tab === 'mail' && mailUnread" class="btn ghost small" type="button" @click="readAll">都看过了</button>
           <button class="btn ghost small" type="button" aria-label="收起聊天" @click="collapse">收起</button>
           <button class="btn ghost small sheet-close" type="button" aria-label="关闭聊天" @click="closeDrawer">✕</button>
         </div>
@@ -189,7 +247,10 @@ function closeDrawer(): void {
           <span v-if="unread.table" class="tab-count">{{ unread.table }}</span>
         </button>
         <button class="chat-tab" :class="{ 'is-active': tab === 'mail' }" type="button" role="tab"
-          :aria-selected="tab === 'mail'" @click="chooseTab('mail')">信箱</button>
+          :aria-selected="tab === 'mail'" @click="chooseTab('mail')">
+          信箱
+          <span v-if="mailUnread" class="tab-count">{{ mailUnread }}</span>
+        </button>
       </div>
 
       <div class="chat-body">
@@ -220,7 +281,43 @@ function closeDrawer(): void {
           </template>
         </div>
         <div v-else class="mail-list">
-          <p class="chat-empty">信箱还在迁移中（第 3 刀接）。</p>
+          <p v-if="mailLoading && !mailItems.length" class="chat-empty">正在取信箱…</p>
+          <p v-else-if="mailError" class="chat-empty bad">{{ mailError }}</p>
+          <p v-else-if="!mailItems.length" class="chat-empty">信箱是空的。</p>
+          <article
+            v-for="(item, index) in mailItems"
+            :key="index"
+            class="mail-item"
+            :class="{
+              'is-unread': index < mailUnread,
+              'is-invite': item.kind === 'invite',
+              'is-dm': item.kind === 'whisper',
+            }"
+            @click="onMail(item)"
+          >
+            <span class="mail-seal" :class="{ 'is-system': item.fromName === '系统' }" />
+            <div class="mail-copy">
+              <div class="mail-meta">
+                <strong>{{ item.fromName || '系统' }}</strong>
+                <span v-if="item.fromHandle" class="mail-handle">#{{ item.fromHandle }}</span>
+                <time>{{ clockText(item.ts) }}</time>
+              </div>
+              <p>{{ readable(item.text) }}</p>
+              <span class="mail-sub">只有你能看</span>
+              <div v-if="item.kind === 'invite' && item.action === 'room_invite' && item.invitationId" class="mail-actions">
+                <button class="btn primary small" type="button" @click.stop="accept(item)">接受并进去</button>
+                <button class="btn ghost small" type="button" @click.stop="decline(item)">拒绝</button>
+              </div>
+              <template v-else-if="item.kind === 'invite' && item.room">
+                <span v-if="item.room === seat?.room" class="mail-sub">你现在就在这儿</span>
+                <button v-else class="ghost-btn mail-go" type="button" @click.stop="enterRoom(item.room)">进去</button>
+              </template>
+            </div>
+            <span v-if="index < mailUnread" class="unread-dot" />
+          </article>
+          <p v-if="mailUnread > mailItems.length" class="chat-empty">
+            还有 {{ mailUnread - mailItems.length }} 封未读。
+          </p>
         </div>
       </div>
 
