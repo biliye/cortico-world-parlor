@@ -37,6 +37,13 @@ export interface DmThreadMessage {
   unread: boolean;
 }
 
+/** 家长只读信箱：不提供对方的已读状态。 */
+export type ParentMailView = Omit<MailView, 'read'> & {
+  fromMe: boolean;
+  toName?: string;
+  toHandle?: string;
+};
+
 export interface MailDbOptions {
   now?: () => number;
 }
@@ -268,6 +275,30 @@ export class MailDb {
         `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? ORDER BY seq DESC LIMIT ?`,
       ).all(cooId, room, size);
     return await Promise.all(rows.map((row) => toView(this.db, row)));
+  }
+
+  /** 家长可看孩子的来信及发出的私聊；跨厅、离席后仍可看，不标记已读。 */
+  async parentRecent(cooId: string, limit = 80): Promise<ParentMailView[]> {
+    const size = Math.max(1, Math.min(200, Math.trunc(Number(limit)) || 80));
+    const rows = await this.db.prepare(
+      `SELECT ${VIEW_COLUMNS}, coo_id,
+         (SELECT display_name FROM coos WHERE id = mail.coo_id) AS to_name
+       FROM mail
+       WHERE coo_id = ? OR (kind = 'whisper' AND from_coo_id = ?)
+       ORDER BY seq DESC LIMIT ?`,
+    ).all(cooId, cooId, size);
+    return Promise.all(rows.map(async (row) => {
+      const { read: _read, ...view } = await toView(this.db, row);
+      const fromMe = row.from_coo_id === cooId;
+      return {
+        ...view,
+        fromMe,
+        ...(fromMe ? {
+          toName: String(row.to_name || '对方'),
+          toHandle: await registeredHandle(this.db, String(row.coo_id)),
+        } : {}),
+      };
+    }));
   }
 
   /** 私聊会话摘要：每个对方一条，按最后一条排序。只算带 from_coo_id 的信。 */

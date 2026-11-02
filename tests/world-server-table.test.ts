@@ -400,7 +400,7 @@ describe('家长门户', () => {
     expect(page.status).toBe(200);
     expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
     expect(page.headers.get('referrer-policy')).toBe('no-referrer');
-    expect(await page.text()).toContain('<script type="module" src="/parent/assets/parent.js">');
+    expect(await page.text()).toMatch(/<script type="module" src="\/parent\/assets\/parent\.js(?:\?[^"\s]+)?">/);
     const script = await fetch(`${app.url}/parent/assets/parent.js`);
     expect(script.status).toBe(200);
   });

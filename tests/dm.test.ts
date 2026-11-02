@@ -61,6 +61,57 @@ const joinRoom = async (app: WorldServer, cooId: string, name: string) => {
 };
 
 describe('网页私聊', () => {
+  it('家长信箱包含孩子跨厅回复、离席后保留；隔离旁人私聊且不标记已读', async () => {
+    const app = await start();
+    const child = 'coo-parentdm001';
+    const peer = 'coo-parentdm002';
+    const other = 'coo-parentdm003';
+    const stranger = 'coo-parentdm004';
+    const joined = await post(app.url, '/v1/join', { name: '小满' }, headers(child));
+    await joinRoom(app, peer, '阿岚');
+    await joinRoom(app, other, '小柚');
+    await joinRoom(app, stranger, '路人');
+    const session = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: joined.body.ownerKey }),
+    });
+    expect(session.status).toBe(200);
+    const cookie = session.headers.get('set-cookie')!.split(';')[0];
+    const moved = await post(app.url, '/v1/rooms/lobby/switch', { to: 'hall' }, {
+      authorization: `Bearer ${joined.body.token}`, ...headers(child),
+    });
+    expect(moved.status).toBe(200);
+    expect((await post(app.url, '/v1/dm', { to: child, text: '在吗' }, headers(peer))).status).toBe(200);
+    const reply = await post(app.url, '/v1/rooms/hall/action', { type: 'whisper', to: peer, text: '在的，稍后一起玩' }, {
+      authorization: `Bearer ${moved.body.token}`, ...headers(child),
+    });
+    expect(reply.status).toBe(200);
+    expect((await post(app.url, '/v1/dm', { to: stranger, text: '旁人的秘密' }, headers(other))).status).toBe(200);
+    // 对方已读也不能通过家长只读接口泄露其阅读状态。
+    expect((await post(app.url, '/v1/dm/read', { peer: child }, headers(peer))).status).toBe(200);
+    const check = async () => {
+      const view = await get(app.url, '/v1/parent/view?limit=80', { cookie });
+      expect(view.status).toBe(200);
+      expect(view.body.mail.map((item: Json) => item.text)).toEqual(['在的，稍后一起玩', '在吗']);
+      expect(view.body.mail[0]).toMatchObject({ fromMe: true, toName: '阿岚', toHandle: expect.any(String) });
+      expect(view.body.mail[0]).not.toHaveProperty('read');
+      expect(view.body.mail[1]).toMatchObject({ fromMe: false, fromName: '阿岚' });
+      expect(view.body.mailUnread).toBe(1);
+      return view.body;
+    };
+    await check();
+    expect((await get(app.url, '/v1/dm/threads', headers(child))).body.unread).toBe(1);
+    const limited = await get(app.url, '/v1/parent/view?limit=1', { cookie });
+    expect(limited.body.mail).toHaveLength(1);
+    expect(limited.body.mail[0].text).toBe('在的，稍后一起玩');
+    expect((await get(app.url, '/v1/parent/view')).status).toBe(401);
+    expect((await post(app.url, '/v1/rooms/hall/leave', {}, {
+      authorization: `Bearer ${moved.body.token}`, ...headers(child),
+    })).status).toBe(200);
+    expect((await check()).seat).toBeNull();
+    expect((await get(app.url, '/v1/dm/threads', headers(child))).body.unread).toBe(1);
+  });
+
   it('互发、离线投递、会话摘要与未读', async () => {
     const app = await start();
     const a = 'coo-dmtest00001';

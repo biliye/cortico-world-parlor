@@ -1172,6 +1172,11 @@ function buildShell() {
   seatCard.append(seatTop, stats, progress);
   leftRail.append(seatCard);
   leftRail.append(supportLink(() => state.cfg?.token));
+  const parentLink = el('a', 'ghost-btn', '家长页');
+  parentLink.href = '/parent';
+  parentLink.target = '_blank';
+  parentLink.rel = 'noopener';
+  leftRail.append(parentLink);
 
   const ledgerCard = el('section', 'panel ledger-card');
   const ledgerHead = el('div', 'panel-head');

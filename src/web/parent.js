@@ -297,7 +297,10 @@ function renderMail(view) {
   for (const item of items) {
     const row = el('li');
     row.append(el('span', 'when', clock(item.ts)));
-    row.append(el('span', 'from', item.fromName || '系统'));
+    const from = item.fromMe
+      ? `孩子 → ${item.toName || '对方'}${item.toHandle ? ` #${item.toHandle}` : ''}`
+      : `${item.fromName || '系统'}${item.fromHandle ? ` #${item.fromHandle}` : ''}${item.kind === 'whisper' ? ' → 孩子' : ''}`;
+    row.append(el('span', 'from', from));
     row.append(el('span', 'text', item.text));
     ui.mail.append(row);
   }

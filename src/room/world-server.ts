@@ -2306,7 +2306,7 @@ export class WorldServer {
         at: serverClock(now),
         events: [],
         tablePrivate: null,
-        mail: [],
+        mail: await mail.parentRecent(cooId, limit),
         mailUnread: await mail.unreadCount(cooId),
       };
     }
@@ -2339,7 +2339,7 @@ export class WorldServer {
       ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
       ledgerRoom: snapshot.ledgerRoom ?? [],
       mailUnread: snapshot.mailUnread ?? 0,
-      mail: await mail.recent(cooId, undefined, 5),
+      mail: await mail.parentRecent(cooId, limit),
       ownerPrivateHidden,
     };
   }
