@@ -4,6 +4,7 @@
  * 旧的 play.js 仍在同一页面运行；带 ?vue=1 时它照常起步，这一支只是叠在上面的新实现。
  */
 import { onMounted, ref, watch } from 'vue';
+import AppShell from './components/AppShell.vue';
 import { boot, snapshot } from './stores/parlor.ts';
 import { seat } from './stores/session.ts';
 import JoinView from './views/JoinView.vue';
@@ -40,10 +41,10 @@ watch(seat, (next) => {
 
 <template>
   <JoinView v-if="!seat" @entered="enter" />
-  <template v-else-if="ready">
+  <AppShell v-else-if="ready">
     <LobbyView v-if="snapshot && snapshot.id === 'hall'" />
     <RoomPlaceholder v-else />
-  </template>
+  </AppShell>
   <div v-else class="join">
     <section class="panel">
       <h1>连不上客厅</h1>

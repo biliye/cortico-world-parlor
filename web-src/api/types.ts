@@ -62,3 +62,13 @@ export interface JoinResult {
   token: string;
   identity: { cooId: string; cooSecret: string };
 }
+
+/** 聊天栏要用的那几格；其余字段原样保留，不影响判断。 */
+export interface ChatEvent {
+  seq?: number;
+  ts?: number;
+  type?: string;
+  from?: string;
+  text?: string;
+  data?: { name?: string; tableId?: string };
+}

@@ -9,11 +9,8 @@ async function backToHall(): Promise<void> {
 
 <template>
   <div class="view view-lobby">
-    <header class="topbar">
-      <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
-      <button class="btn ghost small" type="button" @click="backToHall">回大厅</button>
-    </header>
     <section class="panel">
+      <button class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
       <span class="eyebrow">PARLOR</span>
       <h1>{{ snapshot?.name || snapshot?.id }}</h1>
       <p class="sub">这间客厅的成员、聊天和牌桌还在迁移中：聊天外壳在第 2 刀后半，牌桌在第 3 刀。</p>

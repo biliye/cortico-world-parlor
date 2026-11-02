@@ -5,8 +5,9 @@
  */
 import { ref } from 'vue';
 import { api, finishGlobalEntry, scopedPath } from '../api/client.ts';
+import { noteChatEvent } from './chat.ts';
 import { saveSeat, seat } from './session.ts';
-import type { Directory, HallPayload, HallSeat, RoomCard, Snapshot } from '../api/types.ts';
+import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot } from '../api/types.ts';
 
 export const snapshot = ref<Snapshot | null>(null);
 export const offset = ref(0);
@@ -17,6 +18,7 @@ export const rooms = ref<RoomCard[]>([]);
 export const hallLoaded = ref(false);
 export const hallError = ref('');
 export const bootError = ref('');
+export const log = ref<ChatEvent[]>([]);
 
 let stream: EventSource | null = null;
 let reconnectTimer: number | undefined;
@@ -25,6 +27,31 @@ let hallTimer: number | undefined;
 let refreshing = false;
 let hallFetching = false;
 let hallAt = 0;
+const seen = new Set<number>();
+
+/** 去重后追加；上限 300 条，和旧版一样只留最近的。 */
+function pushLog(event: ChatEvent): void {
+  if (typeof event.seq === 'number') {
+    if (seen.has(event.seq)) return;
+    seen.add(event.seq);
+    if (seen.size > 4000) {
+      const keep = [...seen].sort((a, b) => b - a).slice(0, 2000);
+      seen.clear();
+      keep.forEach((seq) => seen.add(seq));
+    }
+  }
+  log.value = [...log.value, event].slice(-300);
+}
+
+/** 首屏补历史；拿不到不影响开局。 */
+export async function seedLog(): Promise<void> {
+  try {
+    const page = await api<{ events?: ChatEvent[] }>('/v1/replay?limit=80');
+    for (const event of page.events || []) pushLog(event);
+  } catch {
+    /* 回放失败就等 SSE */
+  }
+}
 
 export function serverNow(): number {
   return Date.now() + offset.value;
@@ -84,9 +111,11 @@ export async function loadHall(force = false): Promise<void> {
   }
 }
 
-function handleEvent(event: { seq?: number; type?: string }): void {
+function handleEvent(event: ChatEvent): void {
   if (typeof event.seq !== 'number') return;
   latest.value = Math.max(latest.value, event.seq);
+  pushLog(event);
+  noteChatEvent(event);
   const type = event.type || '';
   if (type === 'parlor.say' || type === 'parlor.table.say') return;
   if (type === 'parlor.joined' || type === 'parlor.left') {
@@ -171,6 +200,7 @@ export async function boot(): Promise<boolean> {
   if (!seat.value) return false;
   await refreshSnapshot();
   latest.value = snapshot.value?.latest || 0;
+  await seedLog();
   connect();
   return true;
 }

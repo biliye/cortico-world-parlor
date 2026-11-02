@@ -3,12 +3,13 @@
 import { computed, onMounted, ref } from 'vue';
 import { api } from '../api/client.ts';
 import { isFavorite, toggleFavorite } from '../stores/club.ts';
+import { hallSection } from '../stores/hall.ts';
 import {
-  connection, goRoom, hallError, hallLoaded, hallSeats, loadHall, rooms, snapshot,
+  goRoom, hallError, hallLoaded, hallSeats, loadHall, rooms, snapshot,
 } from '../stores/parlor.ts';
 import type { RoomCard } from '../api/types.ts';
 
-const section = ref<'all' | 'mine' | 'favorites'>('all');
+const section = hallSection;
 const filter = ref<'all' | 'ddz' | 'werewolf'>('all');
 const query = ref('');
 const createName = ref('');
@@ -61,8 +62,11 @@ function emptyText(): string {
   return '还没有客厅，开一间等朋友吧。';
 }
 
-async function enter(room: RoomCard): Promise<void> {
-  notice.value = '';
+function showDiscover(): void {
+  hallSection.value = 'all';
+}
+
+async function enter(room: RoomCard): Promise<void> {  notice.value = '';
   const moved = await goRoom(room.id);
   if (!moved && hallError.value) notice.value = hallError.value;
 }
@@ -92,33 +96,13 @@ async function createRoom(): Promise<void> {
 
 <template>
   <div class="view view-hall">
-    <header class="topbar">
-      <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
-      <span class="conn" :class="connection">
-        <span class="dot" />
-        <span class="conn-text">{{ connection === 'on' ? '已连接' : connection === 'off' ? '重连中…' : '连接中…' }}</span>
-      </span>
-      <span v-if="snapshot?.seat" class="muted">{{ snapshot.seat.name }}</span>
-    </header>
-
     <div class="hall-head">
       <span class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</span>
       <h1>今晚，来一局。</h1>
       <p class="muted">找个舒服的位置，和朋友、Coo 一起把时间慢下来。</p>
     </div>
 
-    <nav class="club-nav" aria-label="客厅范围">
-      <button
-        v-for="item in [{ id: 'all', label: '发现' }, { id: 'mine', label: '我的客厅' }, { id: 'favorites', label: '收藏的地方' }] as const"
-        :key="item.id"
-        type="button"
-        :class="{ 'is-active': section === item.id }"
-        :aria-current="section === item.id ? 'page' : undefined"
-        @click="section = item.id"
-      >{{ item.label }}</button>
-    </nav>
-
-    <section v-if="featured && section === 'all'" class="club-hero" aria-label="热门客厅推荐">
+    <section v-if="featured && hallSection === 'all'" class="club-hero" aria-label="热门客厅推荐">
       <div class="club-hero-copy">
         <span class="eyebrow">热闹正在发生 / PARLOR CLUB</span>
         <h2>{{ featured.name }}</h2>
@@ -153,7 +137,7 @@ async function createRoom(): Promise<void> {
       <div v-else class="rooms-list hall-rooms-list">
         <div v-if="!filteredRooms.length" class="club-empty">
           <p>{{ emptyText() }}</p>
-          <button v-if="section !== 'all'" class="btn ghost small" type="button" @click="section = 'all'">去发现客厅 ↗</button>
+          <button v-if="section !== 'all'" class="btn ghost small" type="button" @click="showDiscover">去发现客厅 ↗</button>
         </div>
         <article v-for="room in filteredRooms" :key="room.id" class="club-room-card">
           <div class="club-scene" :class="{ 'is-night': (room.games || []).includes('werewolf') }" aria-hidden="true">

@@ -20,7 +20,13 @@ document.addEventListener('securitypolicyviolation', (event) => {
 });
 
 const params = new URLSearchParams(location.search);
-const entry = params.has('vue') ? './vue/main.js' : './play.js';
+// 两个入口都带版本串：静态资源有 5 分钟缓存，改完不换串会吃到旧文件。
+// 旧版沿用 play.html 原来的串；Vue 包每次构建后递增。
+const LEGACY_VERSION = 'parent-link-20261102';
+const VUE_VERSION = 'vue-slice2b-20261102';
+const entry = params.has('vue')
+  ? './vue/main.js?v=' + VUE_VERSION
+  : './play.js?v=' + LEGACY_VERSION;
 import(entry).catch((error) => {
   console.error('[parlor] 客户端载入失败', error);
 });
