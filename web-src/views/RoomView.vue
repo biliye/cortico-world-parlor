@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 客厅：成员、多张桌、开一桌 / 入座 / 围观。牌桌本身在 TableView。 */
 import { computed, ref } from 'vue';
+import AccessDialog from '../components/AccessDialog.vue';
 import { ENABLED_GAMES, KIND_LABELS, STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
 import { initialOf } from '../lib/text.ts';
 import {
@@ -13,6 +14,7 @@ import type { TableSummary } from '../api/types.ts';
 
 const notice = ref('');
 const busy = ref(false);
+const accessOpen = ref(false);
 
 const seats = computed(() => snapshot.value?.seats || []);
 const seatedCount = computed(() => seats.value.filter((person) => person.kind !== 'observer').length);
@@ -84,7 +86,10 @@ async function invite(): Promise<void> {
     <div class="club-page-nav">
       <button class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
       <button class="btn ghost small" type="button" @click="invite">邀请来客厅</button>
+      <button class="btn ghost small" type="button" @click="accessOpen = true">成员管理</button>
     </div>
+
+    <AccessDialog v-model:open="accessOpen" />
 
     <div class="lobby-head">
       <div>

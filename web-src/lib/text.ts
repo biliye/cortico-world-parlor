@@ -18,6 +18,12 @@ export function clockText(ts?: number): string {
   return new Date(ts + 8 * 3600 * 1000).toISOString().slice(11, 16);
 }
 
+/** 服务器时刻（UTC+8）的 MM-DD HH:MM；邀请到期这类跨天时间用它。 */
+export function dateTimeText(ts?: number): string {
+  if (!ts) return '';
+  return new Date(ts + 8 * 3600 * 1000).toISOString().slice(5, 16).replace('T', ' ');
+}
+
 export function initialOf(name: unknown): string {
   const chars = Array.from(String(name || '？').trim());
   return chars[0] || '？';
