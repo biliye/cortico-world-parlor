@@ -10,10 +10,11 @@ import {
   type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep,
 } from '../table-engine.ts';
 import {
-  canBeat, deal, formatCards, isCard, moveLabel, parseMove, scoreRound, sortCards, sortPhys,
+  canBeat, DECK, deal, formatCards, isCard, moveLabel, parseMove, scoreRound, sortCards, sortPhys,
   type Card, type Move, type PhysCard,
 } from './doudizhu.ts';
 import { chooseBid, chooseMove, type BotContext } from './doudizhu-bot.ts';
+import { buildAssist, formatCounts, subtractCards, type DoudizhuAssist } from './doudizhu-assist.ts';
 
 export interface DoudizhuTableOptions {
   host: TableSeat;
@@ -225,6 +226,7 @@ export class DoudizhuTable implements TableEngine {
       multiplier: 2 ** this.bombs,
       /** 网页按钮的「提示」：复用脚本的最少合法牌，规则仍只在服务端算。 */
       hint: this.hintFor(seat),
+      assist: this.status === 'playing' && this.turnId === seat.id ? this.assistFor(seat) : undefined,
       /** 有上一手才能过；自己领出时必须出牌。 */
       canPass: this.status === 'playing' && this.turnId === seat.id && !!this.lastPlay,
     };
@@ -303,6 +305,19 @@ export class DoudizhuTable implements TableEngine {
       lines.push(`这一轮你先出，什么牌型都行。截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"play", cards:[…]}。`);
     } else {
       lines.push('等上一手结算。');
+    }
+    if (yourTurn) {
+      const played = this.playedCards();
+      const assist = this.assistFor(seat);
+      const next = this.seats[(this.seats.indexOf(seat) + 1) % SEAT_COUNT];
+      const previous = this.seats[(this.seats.indexOf(seat) + SEAT_COUNT - 1) % SEAT_COUNT];
+      const label = (entry: Seat): string => `${entry.name}（${entry.role === 'landlord' ? '地主' : '农民'}，剩 ${entry.hand.length} 张）`;
+      lines.push(`座次：下家 ${label(next)}；上家 ${label(previous)}。`);
+      lines.push(`本局累计已出：${formatCounts(played)}。`);
+      lines.push(`其他两家合计未出：${formatCounts(subtractCards(DECK, [...played, ...seat.hand]))}。未列点数为 0；两家合计不代表个人手牌，农民的两家中包含队友。`);
+      lines.push('合法建议（规则排序，第一项为建议；不是全部出法，也不是胜率）：');
+      assist.suggestions.forEach((suggestion, index) => lines.push(`${index + 1}. ${suggestion.label}：${suggestion.reason}。parlor_ddz_action ${JSON.stringify(suggestion.action)}`));
+      lines.push('可直接采用建议，也可另选合法出法；无需重新统计记牌。');
     }
     return lines.join('\n');
   }
@@ -690,6 +705,15 @@ export class DoudizhuTable implements TableEngine {
       lastPlayBy: last?.role ?? undefined,
       minOpponentLeft: Math.min(...opponents.map((entry) => entry.hand.length)),
     };
+  }
+
+  /** 54 张牌扣除三家当前余牌，恰好是已经公开打出的牌；兼容现有存档，无新增秘密。 */
+  private playedCards(): Card[] {
+    return subtractCards(DECK, this.seats.flatMap((seat) => seat.hand));
+  }
+
+  private assistFor(seat: Seat): DoudizhuAssist {
+    return buildAssist(seat.hand, this.playedCards(), this.lastPlay?.move ?? null, this.botContext(seat));
   }
 
   /** 轮到自己时给网页一个可点的建议；不轮到时没有。 */
