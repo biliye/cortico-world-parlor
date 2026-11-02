@@ -713,7 +713,13 @@ export class DoudizhuTable implements TableEngine {
   }
 
   private assistFor(seat: Seat): DoudizhuAssist {
-    return buildAssist(seat.hand, this.playedCards(), this.lastPlay?.move ?? null, this.botContext(seat));
+    const next = this.seats[(this.seats.indexOf(seat) + 1) % SEAT_COUNT];
+    return buildAssist(seat.hand, this.playedCards(), this.lastPlay?.move ?? null, {
+      ...this.botContext(seat),
+      opponentCardsLeft: this.seats.filter((other) => other.role !== seat.role).map((other) => other.hand.length),
+      nextRole: next.role ?? undefined,
+      nextCardsLeft: next.hand.length,
+    });
   }
 
   /** 轮到自己时给网页一个可点的建议；不轮到时没有。 */
