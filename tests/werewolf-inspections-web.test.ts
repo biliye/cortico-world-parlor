@@ -55,6 +55,13 @@ const panelText = (root: TestNode): string => {
 };
 
 describe('预言家网页查验记录', () => {
+  it('旧网页对未开局桌显示等人，兼容旧服务端仍返回 reveal 阶段', () => {
+    const { root, game } = mount();
+    game.update(state('reveal', { canAct: false }, 0, 'open'));
+    expect(root.textContent).toContain('等待入座');
+    expect(root.textContent).toContain('尚未分配角色');
+    expect(root.textContent).not.toContain('马上入夜');
+  });
   it('验完立即显示，等待、白天发言/阅读、投票与第二夜验人前后均保留', () => {
     const { root, game } = mount();
     game.update(state('night', seer({ canAct: true, myMove: 'inspect', inspections: [] })));

@@ -27,7 +27,7 @@ export interface ReplayResponse {
  * 能不能玩需要新能力的游戏（狼人杀要 ≥ 0.29.0）。
  * 它跟 npm 包版本解耦——发新版时在这里抬一格即可（有测试盯着别忘）。
  */
-export const PARLOR_CLIENT_VERSION = '0.35.4';
+export const PARLOR_CLIENT_VERSION = '0.35.5';
 
 export class ParlorHttpError extends Error {
   readonly status: number;
@@ -418,6 +418,8 @@ export class ParlorClient {
   }
 
   private async headers(extra: Record<string, string>): Promise<Record<string, string>> {
+    // 快照与 SSE 续连也携带能力，升级后无需退桌重入。
+    extra = { 'x-parlor-client': PARLOR_CLIENT_VERSION, ...extra };
     if (!this.identity) return extra;
     if (this.global) {
       if (extra.authorization) return extra;

@@ -116,9 +116,9 @@ const wingsOf = (groups: readonly Group[], window: readonly Group[]): Group[] =>
     .filter((group) => group.count > 0);
 };
 
-const move = (type: MoveType, groups: readonly Group[], length = 0): Move => {
+const move = (type: MoveType, groups: readonly Group[], length = 0, rank = groups[0].rank): Move => {
   const cards = groups.flatMap((group) => Array.from({ length: group.count }, () => group.card));
-  return { type, rank: groups[0].rank, length, cards: sortCards(cards) };
+  return { type, rank, length, cards: sortCards(cards) };
 };
 
 /** 认得就返回牌型，不认得返回 null。 */
@@ -138,21 +138,21 @@ export function parseMove(input: readonly string[]): Move | null {
   if (size === 3 && groups.length === 1) return move('triple', groups);
   if (size === 4) {
     const triple = groups.find((group) => group.count === 3);
-    if (triple) return move('triple-single', groups);
+    if (triple) return move('triple-single', groups, 0, triple.rank);
   }
   if (size === 5) {
     const triple = groups.find((group) => group.count === 3);
     const pair = groups.find((group) => group.count === 2);
-    if (triple && pair && groups.length === 2) return move('triple-pair', groups);
+    if (triple && pair && groups.length === 2) return move('triple-pair', groups, 0, triple.rank);
   }
   if (size === 6) {
     const four = groups.find((group) => group.count === 4);
-    if (four) return move('four-two', groups);
+    if (four) return move('four-two', groups, 0, four.rank);
   }
   if (size === 8) {
     const four = groups.find((group) => group.count === 4);
     const pairs = groups.filter((group) => group.count === 2);
-    if (four && pairs.length === 2) return move('four-two-pair', groups);
+    if (four && pairs.length === 2) return move('four-two-pair', groups, 0, four.rank);
   }
 
   const top = groups[groups.length - 1].rank;
@@ -171,7 +171,7 @@ export function parseMove(input: readonly string[]): Move | null {
       const wings = wingsOf(groups, window);
       const wingCount = wings.reduce((sum, group) => sum + group.count, 0);
       if (wingCount === need && wings.every((group) => group.count <= 2)) {
-        return move('airplane-single', groups, need);
+        return move('airplane-single', groups, need, window[0].rank);
       }
     }
   }
@@ -180,7 +180,7 @@ export function parseMove(input: readonly string[]): Move | null {
     for (const window of tripleWindows(groups, need)) {
       const wings = wingsOf(groups, window);
       if (wings.length === need && wings.every((group) => group.count === 2)) {
-        return move('airplane-pair', groups, need);
+        return move('airplane-pair', groups, need, window[0].rank);
       }
     }
   }

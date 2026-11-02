@@ -5,12 +5,12 @@ import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
   isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
-import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=seer-history-20261101';
+import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=0.35.5';
 import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
 import { createRoomCarousel } from './room-carousel.js';
-import { supportLink } from './support-link.js?v=club-20261103c';
-import { mountAnnouncementBanner } from './announcement-banner.js?v=club-20261103c';
-import { startAnnouncementWatch } from './announcements.js?v=club-20261103c';
+import { supportLink } from './support-link.js?v=0.35.5';
+import { mountAnnouncementBanner } from './announcement-banner.js?v=0.35.5';
+import { startAnnouncementWatch } from './announcements.js?v=0.35.5';
 
 const club = createClubState({
   getItem: key => sessionStorage.getItem(key),

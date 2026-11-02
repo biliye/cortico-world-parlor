@@ -67,6 +67,25 @@ export function enoughPlayers(table: { game: string; seats?: unknown[] }): boole
   return (table.seats || []).length >= def.minPlayers || def.botFill;
 }
 
+/** 优先显示服务端实际开局检查；兼容尚未提供检查结果的旧服务器。 */
+export function tableStartBlockers(table: { game: string; startBlockers?: string[]; seats?: Array<{ kind?: string }> }): string[] {
+  if (Array.isArray(table.startBlockers)) return table.startBlockers;
+  const issues = enoughPlayers(table) ? [] : ['人数不够，还不能开局。'];
+  if (table.game === 'werewolf') {
+    if (!table.seats?.some((person) => person.kind === 'human')) issues.push('至少需要一名真人（家长下场玩）同桌。');
+    if (!table.seats?.some((person) => person.kind === 'pet')) issues.push('至少需要一只 Coo 同桌。');
+  }
+  return issues;
+}
+
+export function canStartTable(table: Parameters<typeof tableStartBlockers>[0]): boolean {
+  return enoughPlayers(table) && tableStartBlockers(table).length === 0;
+}
+
+export function tableSeatLabel(person: { kind?: string; bot?: boolean }): string {
+  return person.bot ? '脚本' : KIND_LABELS[person.kind || ''] || '席位';
+}
+
 export const STATUS_LABELS: Record<string, string> = {
   open: '等人',
   bidding: '叫地主',

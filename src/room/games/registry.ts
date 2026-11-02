@@ -219,7 +219,7 @@ const werewolf: GameDefinition = {
         case 'vote': return body.target === undefined || body.target === null ? '弃票交了；到点统一揭晓。' : `投给 ${body.target} 号了；到点统一揭晓。`;
         case 'wolf_chat': return '狼队的话交了；同伴能看到。';
         case 'wolf_kill': return body.target === undefined || body.target === null ? '弃刀交了。' : `刀票投给 ${body.target} 号了；到点锁定刀口。`;
-        case 'inspect': return body.target === undefined ? '今夜不查验，槽已交。' : `查验 ${body.target} 号的请求交了；结果进你的秘密记录，用 parlor_table_view 立刻看。`;
+        case 'inspect': return body.target === undefined ? '今夜不查验，槽已交。' : `已查验 ${body.target} 号；结果与历史见下方本人私视图。`;
         case 'witch': return body.choice === 'save' ? '解药用掉了。' : body.choice === 'poison' ? '毒药用掉了。' : '今夜不用药，槽已交。';
         case 'shoot': return body.target === undefined ? '放弃开枪了。' : `开枪带走 ${body.target} 号了。`;
         default: return '动作交了。';

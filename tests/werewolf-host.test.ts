@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Db } from '../src/room/db.ts';
+import { withTransaction, type Db } from '../src/room/db.ts';
+import { jsonValue } from '../src/room/storage/json.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
@@ -17,6 +18,53 @@ const COOS = [
 const NAMES = ['家长', '阿岚', '小满', '小柚', '石头', '阿妹', '七七', '泡泡', '九九'];
 
 const CLIENT_OK = '0.29.0';
+
+describe('等人桌能力续连', () => {
+  it('仅刷新本人并持久化，重复/缺头不写，不续期；事务回滚和已开局均不改状态', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'parlor-capabilities-'));
+    const file = join(dir, 'state.db');
+    let fixture = await setup(file);
+    try {
+      await enterAll(fixture);
+      const tableId = await openWerewolf(fixture);
+      const row = async () => await fixture.db.prepare('SELECT state_json, revision, deadline_at FROM tables WHERE id = ?').get(tableId) as { state_json: unknown; revision: number; deadline_at: number };
+      const original = await row();
+      const originalLatest = (await fixture.host.snapshot(COOS[0])).latest;
+      fixture.clock.now += 1000;
+      await expect(withTransaction(fixture.db, async () => {
+        expect(await fixture.host.refreshClientVersion(COOS[1], '0.35.4')).toBe(true);
+        throw new Error('模拟提交回滚');
+      })).rejects.toThrow('模拟提交回滚');
+      expect(await row()).toEqual(original);
+      expect((await fixture.host.snapshot(COOS[0])).latest).toBe(originalLatest);
+      expect(await fixture.host.refreshClientVersion(COOS[1], '0.35.4')).toBe(true);
+      const notifications = await fixture.host.history(COOS[0], { since: originalLatest, limit: 20 });
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toMatchObject({ type: 'parlor.table.turn', scope: { kind: 'seat' }, data: { decision: false } });
+      expect(notifications[0].text).toContain('尚未分配角色');
+      const changed = await row();
+      expect(changed.deadline_at).toBe(original.deadline_at);
+      expect(changed.revision).toBe(original.revision + 1);
+      const beforeSeats = jsonValue<{ seats: Array<Record<string, unknown>> }>(original.state_json, { seats: [] }).seats;
+      const afterSeats = jsonValue<{ seats: Array<Record<string, unknown>> }>(changed.state_json, { seats: [] }).seats;
+      expect(afterSeats[1]).toEqual({ ...beforeSeats[1], clientVersion: '0.35.4' });
+      expect(afterSeats.filter((_, index) => index !== 1)).toEqual(beforeSeats.filter((_, index) => index !== 1));
+      for (const version of [undefined, '', 'invalid', '0.35.4']) {
+        expect(await fixture.host.refreshClientVersion(COOS[1], version)).toBe(false);
+      }
+      expect(await fixture.host.refreshClientVersion(COOS[0], '0.35.4')).toBe(false);
+      expect(await row()).toEqual(changed);
+      await fixture.close();
+      fixture = await setup(file);
+      expect((await row()).state_json).toEqual(changed.state_json);
+      expect(await fixture.host.refreshClientVersion(COOS[1], '0.35.4')).toBe(false);
+      await startTable(fixture, tableId);
+      const playing = await row();
+      expect(await fixture.host.refreshClientVersion(COOS[1], '0.28.0')).toBe(false);
+      expect(await row()).toEqual(playing);
+    } finally { await fixture.close(); }
+  });
+});
 
 interface Fixture {
   db: Db;

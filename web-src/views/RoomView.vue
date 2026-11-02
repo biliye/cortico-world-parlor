@@ -3,7 +3,7 @@
 import { computed, ref } from 'vue';
 import AccessDialog from '../components/AccessDialog.vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
-import { ENABLED_GAMES, STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
+import { ENABLED_GAMES, STATUS_LABELS, canStartTable, gameLabel, gameOf, tableStartBlockers } from '../lib/games.ts';
 import { initialOf } from '../lib/text.ts';
 import {
   goRoom, joinRoomTable, leaveRoomTable, myTable, openRoomTable, snapshot, startRoomTable, tableIdOf, tableList,
@@ -169,6 +169,9 @@ async function invite(): Promise<void> {
             {{ STATUS_LABELS[table.status] || table.status }} ·
             {{ (table.seats || []).map((person) => person.name).join('、') || '等待朋友入座' }}
           </p>
+          <p v-if="table.status === 'open' && table.game === 'werewolf'" class="muted">
+            {{ tableStartBlockers(table).join('；') || '开局条件已满足，由开桌者开始。' }}
+          </p>
           <div class="club-room-foot">
             <button
               v-if="table.status === 'open' && !seatedAt(table) && !mine"
@@ -181,8 +184,8 @@ async function invite(): Promise<void> {
               v-else-if="seatedAt(table) && table.status === 'open' && table.host === meId"
               class="btn primary small"
               type="button"
-              :disabled="busy || !enoughPlayers(table)"
-              :title="enoughPlayers(table) ? '' : '人数不够'"
+              :disabled="busy || !canStartTable(table)"
+              :title="tableStartBlockers(table).join('；')"
               @click="start"
             >开始</button>
             <button v-else-if="seatedAt(table)" class="btn ghost small" type="button" :disabled="busy" @click="leave">退桌</button>

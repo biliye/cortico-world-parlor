@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GameHost from '../components/GameHost.vue';
 import TableDiscovery from '../components/TableDiscovery.vue';
 import Icon from '../components/Icon.vue';
-import { STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
+import { STATUS_LABELS, canStartTable, gameLabel, gameOf, tableSeatLabel, tableStartBlockers } from '../lib/games.ts';
 import { clockText, initialOf, readable } from '../lib/text.ts';
 import {
   activePrivate, activeTable, joinRoomTable, leaveRoomTable, log, myTable, serverNow, snapshot,
@@ -26,7 +26,8 @@ const host = computed(() => table.value?.host === meId.value);
 const canJoin = computed(() => table.value?.status === 'open' && !seated.value && !myTable.value
   && seats.value.length < (table.value.capacity || Infinity));
 const canStart = computed(() => table.value?.status === 'open' && seated.value && host.value
-  && !!table.value && enoughPlayers(table.value));
+  && !!table.value && canStartTable(table.value));
+const startBlockers = computed(() => table.value ? tableStartBlockers(table.value) : []);
 const activeStage = computed(() => table.value?.status === 'bidding' || table.value?.status === 'playing');
 
 const names = computed(() => {
@@ -173,7 +174,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
             <span class="avatar avatar-xs">{{ initialOf(person.name) }}</span>
             <span>
               <strong>{{ person.name }}<template v-if="person.id === meId">（你）</template></strong>
-              <small>{{ person.bot ? '脚本' : '人' }}</small>
+              <small>{{ tableSeatLabel(person) }}</small>
             </span>
           </span>
         </div>
@@ -186,7 +187,11 @@ async function run(task: () => Promise<unknown>): Promise<void> {
           <button v-if="seated" class="btn ghost" type="button" :disabled="busy" @click="run(leaveRoomTable)">退桌</button>
           <button class="btn ghost" type="button" @click="backToRoom">回到客厅</button>
         </div>
-        <p v-if="seated && !canStart && host" class="muted">人数不够，还不能开局。</p>
+        <template v-if="table.game === 'werewolf'">
+          <p class="muted">等待入座 {{ seats.length }}/9，尚未分配角色。坐满九席且至少一名真人、一只 Coo，由开桌者开始。</p>
+          <p v-for="issue in startBlockers" :key="issue" class="muted">{{ issue }}</p>
+        </template>
+        <p v-else-if="seated && !canStart && host" class="muted">人数不够，还不能开局。</p>
         <p v-if="!seated && table.capacity && seats.length >= table.capacity" class="muted">这张桌已满，可以等待空位或去看看别的桌。</p>
       </section>
       <TableDiscovery v-if="seated" :table="table" />

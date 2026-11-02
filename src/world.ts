@@ -2133,7 +2133,7 @@ export class ParlorWorld implements World {
       }));
       let doneText = typeof done === 'function' ? done(result) : done;
       const priv = attachPrivate ? snapshot?.tablePrivate : undefined;
-      if (priv && (priv.canAct === true || priv.freshResult === true) && typeof priv.text === 'string' && priv.text) {
+      if (priv && (priv.canAct === true || priv.freshResult === true || (type === 'werewolf_action' && payload.move === 'inspect')) && typeof priv.text === 'string' && priv.text) {
         doneText += `\n\n【你的桌面（服务器现读）】\n${priv.text}`;
       }
       return this.receipt(result, doneText);

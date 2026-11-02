@@ -68,6 +68,8 @@ export interface TableEngine {
   autoPlay(seatId: string, now: number): TableStep | null;
   has(seatId: string): boolean;
   seatIds(): string[];
+  /** 认证客户端续连时刷新等人桌本席位的能力；不改游戏状态或等待期限。 */
+  updateClientVersion?(seatId: string, version: string): boolean;
   join(seat: TableSeat): TableEvent;
   /** 未开局时主动离桌；开局后不能离（调用方先判状态，引擎再兜一层）。 */
   leave(seatId: string): TableEvent;

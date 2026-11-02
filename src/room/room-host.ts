@@ -658,6 +658,10 @@ export class RoomHost {
     return this.tableHost.join(cooId, tableId, requestId, clientVersion, transition);
   }
 
+  refreshClientVersion(cooId: string, version?: string): Promise<boolean> {
+    return this.tableHost.refreshClientVersion(cooId, version);
+  }
+
   tableDiscovery(cooId: string, tableId: string, input: { matchOpen?: boolean; text?: string; withdraw?: boolean }, requestId: string) {
     return this.tableHost.discovery(cooId, tableId, input, requestId);
   }

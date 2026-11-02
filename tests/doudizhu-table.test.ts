@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RoomKernel } from '../src/room/kernel.ts';
 import { TableError } from '../src/room/table-engine.ts';
 import { DoudizhuTable } from '../src/room/games/doudizhu-table.ts';
-import { parseMove, suggestMove } from '../src/room/games/doudizhu.ts';
+import { PHYSICAL_DECK, parseMove, suggestMove } from '../src/room/games/doudizhu.ts';
 
 const seeded = (seed: number): (() => number) => () => {
   seed = (seed * 1_664_525 + 1_013_904_223) % 4_294_967_296;
@@ -41,7 +41,62 @@ const publicOf = (table: DoudizhuTable): DdzPublic => table.public() as DdzPubli
 const HOST = { id: 'a', name: '阿岚' };
 const GUEST = { id: 'b', name: '小满' };
 
+/** 完整 54 张物理牌重新分配：a 持 22244，b 持 66699，不省略持牌校验。 */
+const compoundTable = (): DoudizhuTable => {
+  const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(5) });
+  table.join(GUEST); table.join({ id: 'c', name: '第三位' });
+  table.start('a', 0); table.act('a', { move: 'bid', call: true }, 0);
+  const state = table.exportState() as Record<string, any>;
+  const pool = PHYSICAL_DECK.map(card => ({ ...card }));
+  const take = (ranks: string[]) => ranks.map(rank => {
+    const index = pool.findIndex(card => card.rank === rank);
+    if (index < 0) throw new Error('测试牌组缺牌');
+    return pool.splice(index, 1)[0];
+  });
+  const first = take(['2','2','2','4','4']), second = take(['6','6','6','9','9']);
+  first.push(...pool.splice(0, 20 - first.length));
+  second.push(...pool.splice(0, 17 - second.length));
+  const hands = [first, second, pool];
+  state.seats = state.seats.map((seat: Record<string, unknown>, index: number) => ({ ...seat, cards: hands[index], hand: hands[index].map(card => card.rank) }));
+  state.bottomCards = first.slice(0, 3); state.bottom = state.bottomCards.map((card: { rank: string }) => card.rank);
+  state.handCards = [first.slice(3), second, pool];
+  state.hands = state.handCards.map((cards: Array<{ rank: string }>) => cards.map(card => card.rank));
+  table.restoreState(state);
+  return table;
+};
+
 describe('斗地主桌', () => {
+  it('实际出牌拒绝 66699 压 22244，拒绝后不扣手牌、不换回合', () => {
+    const table = compoundTable();
+    table.act('a', { move: 'play', cards: ['2','2','2','4','4'] }, 0);
+    expect(table.public()).toMatchObject({ lastPlay: { label: '三带二 2' } });
+    const before = table.exportState();
+    expect(() => table.act('b', { move: 'play', cards: ['6','6','6','9','9'] }, 1)).toThrow('压不过上一手');
+    expect(table.exportState()).toEqual(before);
+    expect(viewOf(table, 'b').yourTurn).toBe(true);
+    expect(viewOf(table, 'b').hand).toHaveLength(17);
+  });
+
+  it('旧存档的上一手和本轮出牌按实际牌重算主牌，恢复原牌与回合并继续裁决', () => {
+    const table = compoundTable();
+    table.act('a', { move: 'play', cards: ['2','2','2','4','4'] }, 0);
+    const original = table.exportState();
+    const legacy = structuredClone(original) as Record<string, any>;
+    legacy.lastPlay.move.rank = 1; // 旧版把附件 4 存成主体。
+    for (const [, entry] of legacy.roundPlays) entry.move.rank = 1;
+    const restored = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(5) });
+    restored.restoreState(legacy);
+    expect(restored.exportState()).toEqual(original);
+    expect(() => restored.act('b', { move: 'play', cards: ['6','6','6','9','9'] }, 1)).toThrow('压不过上一手');
+    // 同一回合仍可以合法炸弹接牌。
+    const bomb = viewOf(restored, 'b').hand.filter(card => card === '8');
+    expect(bomb).toHaveLength(4);
+    expect(restored.act('b', { move: 'play', cards: bomb }, 1).events[0].text).toContain('炸弹 8');
+    const invalid = structuredClone(legacy);
+    invalid.lastPlay.move.cards = ['3','4'];
+    expect(() => new DoudizhuTable({ host: HOST, now: 0 }).restoreState(invalid)).toThrow('出牌牌型不合法');
+  });
+
   it('一个人也能开：空位补两个脚本陪练，起手 17 张', () => {
     const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(7) });
     const step = table.start('a', 0);

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gameById } from '../src/room/games/registry.ts';
 import { WEREWOLF_MIN_CLIENT } from '../src/room/games/werewolf-table.ts';
-import { PARLOR_CLIENT_VERSION } from '../src/room/client.ts';
+import { ParlorClient, PARLOR_CLIENT_VERSION } from '../src/room/client.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 
 const CHILD = 'coo-parenttest1';
@@ -124,13 +124,26 @@ describe('狼人杀 · 网关与注册表', () => {
     expect(String(refused.body.error)).toContain('九九');
     expect(String(refused.body.error)).toContain(WEREWOLF_MIN_CLIENT);
 
+    // 原令牌用新版客户端读快照即刷新本人能力；不用退桌、换桌或重领席位。
+    const client = new ParlorClient(app.url);
+    const upgraded = await client.snapshot(petTokens[7], 0, 1, 'lobby');
+    expect(upgraded.table).toMatchObject({ id: tableId, status: 'open', startBlockers: [] });
+    // 真正旧客户端仍会被门禁挡住，缺头的网页请求不会擦掉能力记录。
+    await act(app, petTokens[7], { type: 'table_say', table: tableId, text: '旧版客户端' }, '0.28.0');
+    expect((await act(app, playerToken, { type: 'table_start', requestId: 'still-old', table: tableId })).status).toBe(400);
+    // 只重新建立 SSE 也能恢复能力。查询本身不带能力头，检查服务端持久记录。
+    const abort = new AbortController();
+    await client.stream(petTokens[7], 0, () => {}, abort.signal, 'lobby', () => abort.abort())
+      .catch(error => { if (!abort.signal.aborted) throw error; });
+    expect((await get(app.url, '/v1/room', playerToken)).body.table).toMatchObject({ id: tableId, startBlockers: [] });
+
     // 缺 requestId 的狼人杀动作 → 400（幂等键白名单含 werewolf_action）。
     const noId = await post(app.url, '/v1/action', { type: 'werewolf_action', move: 'speak', windowId: 'w1' }, {
       authorization: `Bearer ${petTokens[0]}`,
     });
     expect(noId.status).toBe(400);
 
-    // 旧客户端没法原地升级（已在桌上）：先收掉第一张桌（开桌人退桌=收桌），再开一张全带版本的。
+    // 收掉第一张桌（开桌人退桌=收桌），再开一张全带版本的，继续验证开局与历史。
     const closed = await act(app, playerToken, { type: 'table_leave', requestId: 'l1', table: tableId });
     expect(closed.status).toBe(200);
     const opened2 = await act(app, playerToken, { type: 'table_open', requestId: 'o2', game: 'werewolf' });

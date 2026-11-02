@@ -150,7 +150,7 @@ export function mountWerewolf(root, ctx) {
     const mine = myMove();
     const pill = el('span', 'wf-pill' + (mine ? ' live' : ''));
     if (mine) pill.append(el('span', 'live-dot'));
-    let text = table.phaseLabel || '等待';
+    let text = table.status === 'open' ? '等待入座' : table.phaseLabel || '等待';
     if (mine === 'speak') text = '轮到你发言';
     else if (mine === 'vote') text = '轮到你投票';
     else if (mine === 'wolf_chat' || mine === 'wolf_kill') text = '狼人时间';
@@ -288,7 +288,9 @@ export function mountWerewolf(root, ctx) {
     panel.append(el('h3', 'wf-panel-title', '当前发言'));
     const speeches = table.speeches ?? [];
     const last = speeches[speeches.length - 1];
-    if (table.phase === 'reveal') {
+    if (table.status === 'open') {
+      panel.append(el('p', 'wf-hint', `等待入座 ${(table.seats || []).length}/9，尚未分配角色；坐满九席且至少一名真人、一只 Coo 后，由开桌者开始。`));
+    } else if (table.phase === 'reveal') {
       panel.append(el('p', 'wf-hint', '大家在看身份牌，马上入夜。'));
     } else if (table.phase === 'night') {
       panel.append(el('p', 'wf-hint', '夜晚：天亮会公布结果；你的私视图里有你自己的行动。'));

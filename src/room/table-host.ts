@@ -399,6 +399,39 @@ export class TableHost {
 
   // —— 开桌 / 坐下 / 开始 / 动作 / 收桌 ——
 
+  /** 只接受已认证席位的自报能力，串行提交副本；查看/重连不延长等人期限。 */
+  async refreshClientVersion(cooId: string, version?: string): Promise<boolean> {
+    if (!version || version.length > 64 || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) return false;
+    const table = await this.tableOf(cooId);
+    if (!table?.engine.updateClientVersion || table.frozen || table.engine.status !== 'open') return false;
+    const release = await this.lockTable(table.id);
+    try {
+      if (this.tables.get(table.id) !== table || table.frozen || table.engine.status !== 'open'
+        || this.now() >= table.openDeadlineAt) return false;
+      const seat = await this.seats.activeSeat(cooId);
+      if (!seat || seat.kind !== 'pet') return false;
+      return await withTransaction(this.db, async () => {
+        if (await lockTableRow(this.db, table.id) !== table.revision) {
+          throw new HostError('conflict', '这张桌子已经变化，请刷新后重试');
+        }
+        const draft = await this.draft(table);
+        if (!draft.updateClientVersion?.(seat.id, version)) return false;
+        const revision = table.revision + 1;
+        const stateJson = JSON.stringify(draft.exportState());
+        await this.db.prepare('UPDATE tables SET state_json = ?, revision = ?, turn_seq = ?, updated_at = ? WHERE id = ?')
+          .run(stateJson, revision, revision, this.now(), table.id);
+        // 复用非决策私视图刷新，让桌主的开始条件同步更新，不额外叫醒 Coo。
+        await this.recordStep(table, draft, { events: [], views: [], refreshViews: draft.seatIds() }, this.now());
+        this.db.afterCommit(() => {
+          table.engine = draft;
+          table.revision = revision;
+          table.stateJson = stateJson;
+        });
+        return true;
+      });
+    } finally { release(); }
+  }
+
   async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
     // 开桌还没有 tableId，用房间级键；开桌与「数桌上限」要串行。
     const releaseOpen = await this.lockTable('#room');

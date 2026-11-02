@@ -69,6 +69,19 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
   });
 
 describe('World 牌桌版本同步', () => {
+  it('查验动作回执直接附本人结论，即使已提交后 canAct/freshResult 不再存在', async () => {
+    const result = '查验历史（仅自己可见）：第1夜查 3号=狼人。';
+    snapshot = { ...snapshot,
+      table: { ...snapshot.table!, game: 'werewolf', label: '狼人杀' },
+      tablePrivate: { game: 'werewolf', seat: 'mine', tableId: 't1', canAct: false, text: result },
+    };
+    vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
+    const output = await world.tools().find(tool => tool.name === 'parlor_werewolf_action')!.handler(
+      { windowId: 'w1', move: 'inspect', target: 3 }, {} as ToolCallContext,
+    );
+    expect(typeof output === 'string' ? output : output.text).toContain(result);
+    expect(await call('parlor_table_view')).toContain(result);
+  });
   it('重新领出的通知到达后立即出牌，使用该通知的版本，不等待后台快照', async () => {
     const action = expectRevision(8);
     turn();

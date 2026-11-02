@@ -215,7 +215,11 @@ describe('其他桌的牌局不自动推给 Coo', () => {
     await call('parlor_table_open', { game: 'dice' });
     const mine = await call('parlor_table_view');
     const texts = await playOtherTable(friend, friendToken);
-    expect(await call('parlor_table_view')).toBe(mine);
+    const after = await call('parlor_table_view');
+    // 查看时刻正常前进；隔离断言比较的是桌面内容，不要求两次请求在同一秒。
+    const withoutClock = (text: string) => text.replace(/^服务器时刻：[^\n]*\n/u, '');
+    expect(after).toMatch(/^服务器时刻：/);
+    expect(withoutClock(after)).toBe(withoutClock(mine));
     for (const text of texts) expect(pushedText(host)).not.toContain(text);
     const snapshot = await friend.snapshot(friendToken, 0, 1, 'lobby');
     const myTable = snapshot.tables!.find((table) => table.status === 'open')!.id;

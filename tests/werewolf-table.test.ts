@@ -147,6 +147,59 @@ const advance = (rig: Rig, ms: number): void => {
 const eventType = (rig: Rig, type: string): TableEvent[] => rig.events.filter((event) => event.type === type);
 
 describe('狼人杀引擎', () => {
+  it('等人时不发假身份或倒计时，开局条件提前可见且仍由服务端阻挡', () => {
+    const rig = makeRig(7, 0);
+    expect(rig.table.public()).toMatchObject({ status: 'open', phase: 'waiting', phaseLabel: '等待入座' });
+    const waiting = rig.table.privateText('s1', rig.clock.now)!;
+    expect(waiting).toContain('尚未分配角色');
+    expect(waiting).toContain('开桌者退桌即收桌');
+    expect(waiting).not.toMatch(/undefined|秒后进入|第0天|看身份/);
+    expect((rig.table.public() as AnyView).startBlockers.join('；')).toContain('至少一名真人');
+    expect(() => rig.table.start('s1', rig.clock.now)).toThrow(/至少一名真人/);
+    expect(view(rig, 's1').role).toBeUndefined();
+    const one = new WerewolfTable({ host: { id: 'only', name: '独自开桌', kind: 'pet' }, now: rig.clock.now });
+    expect(one.privateText('only', rig.clock.now)).toContain('1/9');
+    expect(one.view('outsider')).toBeNull();
+    expect(one.privateText('outsider', rig.clock.now)).toBeNull();
+  });
+
+  it('本人查验提交后、白天、出局及恢复后持续可读，其他玩家和公开事件不泄漏', () => {
+    const rig = makeRig(7, 1);
+    startGame(rig);
+    const seer = idWithRole(rig, 'seer');
+    const wolf = idWithRole(rig, 'wolf');
+    const result = `第1夜查 ${seatNo(wolf)}号=狼人`;
+    collect(rig, act(rig, seer, { move: 'inspect', target: seatNo(wolf) }));
+    const check = () => {
+      expect(rig.table.privateText(seer, rig.clock.now)).toContain(result);
+      expect(rig.table.privateText(wolf, rig.clock.now)).not.toContain(result);
+      expect(JSON.stringify(rig.table.public())).not.toContain('inspections');
+      expect(rig.events.filter(event => event.scope.kind === 'room').map(event => event.text).join('\n')).not.toContain(result);
+    };
+    check();
+    runNightA(rig, { kill: null });
+    check();
+    runNightB(rig, { choice: 'none' });
+    check();
+    const restored = makeRig(7, 1).table;
+    restored.restoreState(rig.table.exportState());
+    expect(restored.privateText(seer, rig.clock.now)).toContain(result);
+    runSpeeches(rig, () => '');
+    check();
+    runVote(rig, {});
+    runNightA(rig, { kill: seatNo(seer) });
+    runNightB(rig, { choice: 'none' });
+    expect(view(rig, seer).alive).toBe(false);
+    check();
+    // 继续用真实时钟推进到终局，终局文字仍保留本人的查验历史。
+    for (let i = 0; rig.table.status !== 'ended' && i < 600; i++) {
+      rig.clock.now += T * 3;
+      collect(rig, rig.table.tick(rig.clock.now));
+    }
+    expect(rig.table.status).toBe('ended');
+    expect(rig.table.privateText(seer, rig.clock.now)).toContain(result);
+  });
+
   it('开局闸：九席、至少一名真人与一只 Coo、旧版 Coo 点名拒绝；发牌数量与座号固定', () => {
     // 少一人不能开。
     const ninth = makeRig(7, 1);

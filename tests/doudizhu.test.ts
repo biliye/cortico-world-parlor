@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DECK, PHYSICAL_DECK, canBeat, deal, formatCards, handStrength, moveLabel, parseMove, scoreRound,
+  DECK, PHYSICAL_DECK, RANKS, canBeat, deal, formatCards, handStrength, moveLabel, parseMove, scoreRound,
   sortCards, suggestMove,
 } from '../src/room/games/doudizhu.ts';
 
@@ -16,6 +16,44 @@ const move = (cards: string[]) => {
 };
 
 describe('斗地主规则', () => {
+  it('222 带 44 不能被 666 带 99 压过，牌型标签也采用三张的点数', () => {
+    const high = move(['2', '2', '2', '4', '4']);
+    const low = move(['6', '6', '6', '9', '9']);
+    expect(high).toMatchObject({ type: 'triple-pair', rank: 12 });
+    expect(moveLabel(high)).toBe('三带二 2');
+    expect(canBeat(low, high)).toBe(false);
+    expect(canBeat(high, low)).toBe(true);
+    expect(suggestMove(['6', '6', '6', '9', '9'], high)).toBeNull();
+  });
+
+  it.each([
+    { type: 'triple-single', high: ['A','A','A','3'], low: ['K','K','K','2'], rank: 11 },
+    { type: 'triple-pair', high: ['2','2','2','4','4'], low: ['6','6','6','9','9'], rank: 12 },
+    { type: 'four-two', high: ['2','2','2','2','3','4'], low: ['6','6','6','6','Q','K'], rank: 12 },
+    { type: 'four-two-pair', high: ['2','2','2','2','3','3','4','4'], low: ['6','6','6','6','Q','Q','K','K'], rank: 12 },
+    { type: 'airplane-single', high: ['K','K','K','A','A','A','3','4'], low: ['J','J','J','Q','Q','Q','2','2'], rank: 10 },
+    { type: 'airplane-pair', high: ['K','K','K','A','A','A','3','3','4','4'], low: ['J','J','J','Q','Q','Q','9','9','10','10'], rank: 10 },
+  ])('$type 只比主体，不把较小附件当主牌', ({ type, high, low, rank }) => {
+    const target = move(high), candidate = move(low);
+    expect(target).toMatchObject({ type, rank });
+    expect(candidate.type).toBe(type);
+    expect(canBeat(candidate, target)).toBe(false);
+    expect(canBeat(target, candidate)).toBe(true);
+    expect(move([...high].reverse())).toEqual(target);
+  });
+
+  it.each([1, 2])('三带 %i 的所有主体和附件组合都按主体比较', (wings) => {
+    const ranks = RANKS.slice(0, 13);
+    const cases = ranks.flatMap((body, rank) => ranks.filter(wing => wing !== body).map(wing => ({
+      rank, parsed: move([body, body, body, ...Array.from({ length: wings }, () => wing)]),
+    })));
+    for (const entry of cases) expect(entry.parsed.rank).toBe(entry.rank);
+    for (const candidate of cases) for (const target of cases) {
+      // 期望值来自所构造主体的点数顺序，与解析器的派生字段独立。
+      expect(canBeat(candidate.parsed, target.parsed)).toBe(candidate.rank > target.rank);
+    }
+  });
+
   it('一副牌 54 张：13 种点数各四张，大小王各一张', () => {
     expect(DECK).toHaveLength(54);
     expect(new Set(DECK).size).toBe(15);

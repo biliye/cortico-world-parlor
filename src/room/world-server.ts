@@ -1835,9 +1835,11 @@ export class WorldServer {
 
     if (action === 'room' && method === 'GET') {
       const seat = await this.seatAuth(req, roomId);
+      const host = await this.host(roomId);
+      await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      const snapshot: RoomSnapshot = await (await this.host(roomId)).snapshot(seat.cooId, { since, limit });
+      const snapshot: RoomSnapshot = await host.snapshot(seat.cooId, { since, limit });
       json(res, 200, { ...snapshot, online: this.onlineSeatIds(roomId) });
       return;
     }
@@ -1845,8 +1847,10 @@ export class WorldServer {
     if (action === 'table' && method === 'GET') {
       // 牌桌增量：只补当前桌需要的三块。整份快照（含席位、事件、账本、信箱）仍走 /room。
       const seat = await this.seatAuth(req, roomId);
+      const host = await this.host(roomId);
+      await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
       const tableId = url.searchParams.get('table')?.trim() || undefined;
-      const slice = await (await this.host(roomId)).tableSlice(seat.cooId, tableId);
+      const slice = await host.tableSlice(seat.cooId, tableId);
       json(res, 200, { ok: true, ...slice });
       return;
     }
@@ -1889,6 +1893,8 @@ export class WorldServer {
       let touchedTable: string | undefined;
       /** 上/下桌、开桌这种会改桌列表的动作：回执连 tables 一起带。 */
       let tablesChanged = false;
+
+      await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
 
       if (type === 'say') {
         saidEvent = (await host.say(seat.cooId, typeof body.text === 'string' ? body.text : '')).event;
@@ -2132,6 +2138,7 @@ export class WorldServer {
   private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {
     const host = await this.host(roomId);
     const seat = await host.seatByToken(token);
+    await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
     // PG 查询会让出事件循环。发出 200 之前先完成在线登记，否则客户端已
     // 看到 SSE 建连成功时，离线清理仍可能把它当成没有连接的旧席位释放。
     const initial = await host.eventsSince(seat.cooId, since, 200);

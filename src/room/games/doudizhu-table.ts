@@ -57,6 +57,14 @@ const DEFAULT_BOT_DELAY_MS = 1500;
 const BOT_NAMES = ['陪练甲', '陪练乙'];
 const MAX_REDEALS = 5;
 
+/** 主牌点数是从实际出牌派生的；旧存档可能把较小附件误存成主牌。 */
+const restoreMove = (value: unknown): Move => {
+  const cards = (value as { cards?: unknown } | null)?.cards;
+  const parsed = Array.isArray(cards) ? parseMove(cards) : null;
+  if (!parsed) throw new Error('斗地主存档的出牌牌型不合法');
+  return parsed;
+};
+
 export class DoudizhuTable implements TableEngine {
   readonly game = 'ddz';
   readonly label = '斗地主';
@@ -423,7 +431,7 @@ export class DoudizhuTable implements TableEngine {
       if (typeof id !== 'string' || !row || typeof row !== 'object') throw new Error('斗地主存档的轮次出牌形状不对');
       this.roundPlays.set(id, {
         seat: String(row.seat ?? id),
-        move: row.move as Move,
+        move: restoreMove(row.move),
         cards: Array.isArray(row.cards) ? row.cards as PhysCard[] : [],
       });
     }
@@ -435,7 +443,7 @@ export class DoudizhuTable implements TableEngine {
     this.lastPlay = last && typeof last === 'object'
       ? {
         seat: String(last.seat ?? ''),
-        move: last.move as Move,
+        move: restoreMove(last.move),
         cards: Array.isArray(last.cards) ? last.cards as PhysCard[] : [],
       }
       : undefined;

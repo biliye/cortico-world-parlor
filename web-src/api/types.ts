@@ -55,10 +55,12 @@ export interface Snapshot {
 export interface TableSeat {
   id: string;
   name: string;
+  kind?: string;
   bot?: boolean;
 }
 
 export interface TableSummary {
+  startBlockers?: string[];
   capacity?: number;
   matchOpen?: boolean;
   recruitText?: string;

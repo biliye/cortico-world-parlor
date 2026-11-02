@@ -309,7 +309,7 @@ html.vue-app .theme-picker {
 }
 html.vue-app .theme-picker:hover { border-color: var(--line-2); background: rgba(255, 255, 255, .03); color: var(--text); }
 html.vue-app .theme-picker:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
-html.vue-app .theme-picker .icon { width: 16px; height: 16px; }
+html.vue-app .theme-picker .icon { display: block; width: 16px; height: 16px; }
 html.vue-app .theme-picker-label { white-space: nowrap; }
 /* appearance.css 给旧页的下拉画了个箭头；新页是按钮，去掉它。 */
 html.vue-app .theme-picker::after { content: none; }
