@@ -722,27 +722,6 @@ html.vue-app .poster-motif .die::after {
 }
 html.vue-app .poster-motif .die::before { left: 9px; top: 9px; box-shadow: 19px 0 0 #26302a, 0 19px 0 #26302a, 19px 19px 0 #26302a; }
 html.vue-app .poster-motif .die::after { right: 9px; bottom: 9px; }
-html.vue-app .poster-motif .moon-disc {
-  position: absolute;
-  left: 50%;
-  top: 40%;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(circle at 36% 32%, #fdf6e2, #e8dbb8 62%, #c9b98f);
-  box-shadow: 0 0 32px rgba(244, 231, 196, .28);
-}
-html.vue-app .poster-motif .moon-disc::after {
-  content: "";
-  position: absolute;
-  left: -34%;
-  right: -34%;
-  bottom: -56%;
-  height: 78px;
-  border-radius: 50%;
-  background: linear-gradient(180deg, #1d2637, #101725);
-}
 html.vue-app .poster-motif i:not(.die) { position: absolute; display: block; width: 30px; height: 44px; border-radius: 4px;
   background: linear-gradient(160deg, #fbf8ec, var(--paper)); color: var(--paper-ink);
   font-style: normal; font-size: 11px; font-weight: 600; font-family: var(--num);
@@ -750,6 +729,27 @@ html.vue-app .poster-motif i:not(.die) { position: absolute; display: block; wid
 html.vue-app .poster-motif i:nth-child(1) { left: 46%; top: 40%; transform: rotate(-13deg); }
 html.vue-app .poster-motif i:nth-child(2) { left: 50%; top: 36%; transform: rotate(-1deg); z-index: 2; }
 html.vue-app .poster-motif i:nth-child(3) { left: 55%; top: 40%; transform: rotate(12deg); color: var(--red); z-index: 3; }
+/* 月亮要压过上面那条「牌面」规则：用 i.moon-disc 提高一格选择器重量，并放在它后面。 */
+html.vue-app .poster-motif i.moon-disc {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 36% 32%, #fdf6e2, #e8dbb8 62%, #c9b98f);
+  box-shadow: 0 0 32px rgba(244, 231, 196, .28);
+  padding: 0;
+}
+/* 弯月一点：用径向阴影吃掉右下，不画会盖住月亮的小山。 */
+html.vue-app .poster-motif i.moon-disc::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 118% 118%, rgba(21, 28, 42, .92) 0 34%, transparent 62%);
+}
 html.vue-app .poster-chip {
   position: absolute;
   left: 11px;
@@ -905,7 +905,7 @@ html.vue-app .fav-thumb .poster-motif i:not(.die) { width: 22px; height: 32px; f
 html.vue-app .fav-thumb .poster-motif i:nth-child(1) { left: 44%; top: 38%; }
 html.vue-app .fav-thumb .poster-motif i:nth-child(2) { left: 49%; top: 34%; }
 html.vue-app .fav-thumb .poster-motif i:nth-child(3) { left: 54%; top: 38%; }
-html.vue-app .fav-thumb .poster-motif .moon-disc { width: 34px; height: 34px; }
+html.vue-app .fav-thumb .poster-motif i.moon-disc { width: 34px; height: 34px; }
 html.vue-app .fav-thumb .poster-motif .die { width: 28px; height: 28px; border-radius: 6px; }
 html.vue-app .fav-thumb .poster-motif .die::before { width: 4px; height: 4px; left: 5px; top: 5px; box-shadow: 11px 0 0 #26302a, 0 11px 0 #26302a, 11px 11px 0 #26302a; }
 html.vue-app .fav-thumb .poster-motif .die::after { right: 5px; bottom: 5px; width: 4px; height: 4px; }
