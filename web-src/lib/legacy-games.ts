@@ -1,15 +1,11 @@
 /**
- * 旧版桌面渲染器的桥。四个游戏都是 `mountX(root, ctx) -> {update(view), destroy()}`，
- * 与 Vue 无关，可以原样挂进牌桌壳；等逐个迁到 Vue 时，把这里换成组件即可。
+ * 还没迁到 Vue 的桌面渲染器桥：骰子、大富翁仍是 `mountX(root, ctx) -> {update(view), destroy()}`，
+ * 与 Vue 无关，可以原样挂进牌桌壳；斗地主与狼人杀已经换成 web-src/components/games/ 下的组件。
  */
 import type { ChatEvent, HallSeat, TableSummary } from '../api/types.ts';
 
 // @ts-ignore 旧渲染器是 JS，没有类型声明；迁移完成后这段会删掉。
 import { mountDice } from '../../src/web/games/dice.js';
-// @ts-ignore
-import { mountDdz } from '../../src/web/games/ddz.js';
-// @ts-ignore
-import { mountWerewolf } from '../../src/web/games/werewolf.js';
 // @ts-ignore
 import { mountMonopoly } from '../../src/web/games/monopoly.js';
 
@@ -45,8 +41,6 @@ export type GameFactory = (root: HTMLElement, ctx: GameCtx) => GameInstance;
 
 const MOUNTS: Record<string, GameFactory> = {
   dice: mountDice,
-  ddz: mountDdz,
-  werewolf: mountWerewolf,
   monopoly: mountMonopoly,
 };
 

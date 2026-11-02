@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
- * 牌桌渲染器的宿主：把旧版的 `mountX(root, ctx)` 原样挂进来，状态到了就 update。
- * 换桌（桌号变了）会销毁重建，和旧版 play.js 的挂载 key 一样。
+ * 牌桌渲染器的宿主：斗地主、狼人杀已经是 Vue 组件；骰子、大富翁仍把旧版
+ * `mountX(root, ctx)` 原样挂进来，状态到了就 update。换桌（桌号变了）会销毁重建，
+ * 和旧版 play.js 的挂载 key 一样。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { ChatEvent, HallSeat } from '../api/types.ts';
 import { gameOf } from '../lib/games.ts';
+import { componentFor } from '../lib/game-components.ts';
 import { mountFor, type GameCtx, type GameInstance, type GameView } from '../lib/legacy-games.ts';
 import {
   activePrivate, activeTable, act, log, openRoomTable, serverNow, snapshot, tableIdOf, tableList,
@@ -22,6 +24,17 @@ const mountable = computed(() => {
   if (!current || !def.value) return false;
   return current.status === 'bidding' || current.status === 'playing'
     || (current.status === 'ended' && def.value.endScreen);
+});
+
+const componentGame = computed(() => {
+  const current = table.value;
+  if (!current || !mountable.value) return null;
+  return componentFor(current.game);
+});
+
+const mountKey = computed(() => {
+  const current = table.value;
+  return current ? current.game + ':' + tableIdOf(current) : '';
 });
 
 let instance: GameInstance | null = null;
@@ -70,16 +83,20 @@ function buildView(): GameView {
   };
 }
 
+const gameView = computed<GameView | null>(() => (table.value && mountable.value ? buildView() : null));
+
+const gameCtx = {
+  get me() { return (snapshot.value?.seat || { id: '', name: '' }) as { id: string; name: string }; },
+  act: (body: Record<string, unknown>) => act(body),
+  toast: (message: string, kind?: string) => showToast(message, kind),
+  serverNow,
+  showLobby: () => backToRoom(),
+  openDdz: () => { void openRoomTable('ddz'); },
+  openGame: (game: string) => { void openRoomTable(game); },
+} as GameCtx;
+
 function context(): GameCtx {
-  return {
-    me: (snapshot.value?.seat || { id: '', name: '' }) as { id: string; name: string },
-    act: (body) => act(body),
-    toast: (message, kind) => showToast(message, kind),
-    serverNow,
-    showLobby: () => backToRoom(),
-    openDdz: () => { void openRoomTable('ddz'); },
-    openGame: (game) => { void openRoomTable(game); },
-  };
+  return gameCtx;
 }
 
 function destroy(): void {
@@ -96,7 +113,7 @@ function destroy(): void {
 
 function sync(): void {
   const current = table.value;
-  if (!current || !mountable.value || !host.value) {
+  if (!current || !mountable.value || !host.value || componentGame.value) {
     destroy();
     return;
   }
@@ -113,9 +130,16 @@ function sync(): void {
 
 onMounted(sync);
 onBeforeUnmount(destroy);
-watch([table, snapshot, () => log.value.length], sync);
+watch([table, snapshot, () => log.value.length, componentGame], sync);
 </script>
 
 <template>
-  <div ref="host" class="game-root" />
+  <component
+    :is="componentGame"
+    v-if="componentGame && gameView"
+    :key="mountKey"
+    :view="gameView"
+    :ctx="gameCtx"
+  />
+  <div v-else ref="host" class="game-root" />
 </template>
