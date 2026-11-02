@@ -329,10 +329,8 @@ html.vue-app .theme-picker::after {
 
 /* ——— 内容页通用 ——— */
 html.vue-app .stage-body > .view { padding: 0 40px 90px; }
-html.vue-app .shell.chat-open .stage-body > .view { padding-right: 396px; }
-/* 牌桌页例外：聊天浮在牌桌上面，不挤占牌桌宽度（用户 2026-11-02 指定）。 */
-html.vue-app .shell.chat-open .stage-body > .view-table,
-html.vue-app .stage-body > .view-table { padding-right: 40px; }
+/* 聊天一律是浮层：打开它不改变任何一页的宽度，也不把内容挤窄（用户 2026-11-02 指定）。
+   桌面和手机同理；内容只按自己的宽度排，聊天盖在右边缘，收起后回到没有差别。 */
 html.vue-app .view { max-width: none; }
 html.vue-app .eyebrow {
   display: flex;
@@ -1574,7 +1572,6 @@ html.vue-app[data-theme="light"] :is(.tag-coo, .tag-table) {
   html.vue-app .scene-table { width: 340px; height: 208px; bottom: -10px; }
   html.vue-app .scene-lamp { left: 50%; }
   html.vue-app .scene-lamp::after { width: 380px; height: 320px; }
-  html.vue-app .shell.chat-open .stage-body > .view { padding-right: 372px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   html.vue-app .section-head h1 { font-size: clamp(36px, 5vw, 48px); }
 }
