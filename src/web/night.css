@@ -43,9 +43,9 @@ html.vue-app[data-theme="light"] {
   --line: rgba(38, 53, 44, .12);
   --line-2: rgba(38, 53, 44, .22);
   --text: #26352c;
-  --muted: #5d7365;
-  --dim: #7a8d80;
-  --lime: #5d7c2a;
+  --muted: #4f6459;
+  --dim: #5e7365;
+  --lime: #527029;
   --lime-ink: #f6fbe6;
   --lamp: #b9813a;
   --felt: #3f7a5e;
@@ -151,7 +151,7 @@ html.vue-app .rail-btn {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  color: var(--dim);
+  color: var(--muted);
   font-size: 10px;
   letter-spacing: .04em;
   transition: color .18s, background .18s;
@@ -169,7 +169,7 @@ html.vue-app .rail-parent {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  color: var(--dim);
+  color: var(--muted);
   font-size: 10px;
   padding: 6px 0;
 }
@@ -234,7 +234,7 @@ html.vue-app .topbar .room-pill {
 }
 html.vue-app .room-pill:hover { border-color: rgba(217, 248, 125, .45); }
 html.vue-app .room-pill-name { max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html.vue-app .room-pill-arrow { color: var(--dim); font-size: 10px; }
+html.vue-app .room-pill-arrow { color: var(--muted); font-size: 10px; }
 html.vue-app .presence { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 html.vue-app .presence b { color: var(--lime); font-family: var(--num); font-weight: 600; font-size: 13px; }
 html.vue-app .pulse {
@@ -971,7 +971,7 @@ html.vue-app .member-chip {
   font-size: 12px;
   color: var(--text);
 }
-html.vue-app .member-chip small { display: block; font-size: 10.5px; color: var(--dim); }
+html.vue-app .member-chip small { display: block; font-size: 10.5px; color: var(--muted); }
 html.vue-app .member-chip strong { font-weight: 600; }
 html.vue-app .avatar {
   width: 28px;
@@ -1064,7 +1064,12 @@ html.vue-app .chat-tab.is-active::after {
   background: var(--lime);
   border-radius: 2px;
 }
-html.vue-app .tab-count { font-family: var(--num); font-size: 9px; color: var(--lime); }
+html.vue-app .tab-count {
+  font-family: var(--num);
+  font-size: 9px;
+  color: var(--lime);
+  background: color-mix(in srgb, var(--lime) 16%, transparent);
+}
 html.vue-app .chat-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 html.vue-app .chat-log { flex: 1; overflow-y: auto; padding: 14px 18px 10px; display: flex; flex-direction: column; gap: 13px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 html.vue-app .chat-empty { font-size: 12px; color: var(--dim); text-align: center; padding: 20px 8px; }
@@ -1349,10 +1354,10 @@ html.vue-app .members, html.vue-app .view-table .panel, html.vue-app .view-lobby
 }
 html.vue-app .panel-head { display: flex; align-items: center; gap: 12px; }
 html.vue-app .panel-head h2 { margin: 0; font-size: 18px; font-weight: 700; }
-html.vue-app .panel-head .muted { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+html.vue-app .panel-head .muted { margin-left: auto; font-size: 11.5px; color: var(--muted); }
 html.vue-app .club-section-head { display: flex; align-items: baseline; gap: 12px; margin: 26px 0 0; }
 html.vue-app .club-section-head h2 { margin: 0; font-size: 22px; font-weight: 700; }
-html.vue-app .club-section-head .muted { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+html.vue-app .club-section-head .muted { margin-left: auto; font-size: 11.5px; color: var(--muted); }
 html.vue-app .club-table-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 html.vue-app .club-table-card {
   border: 1px solid var(--line);
@@ -1404,7 +1409,7 @@ html.vue-app .game-card .eyebrow { font-size: 9.5px; }
 html.vue-app .game-card h2 { margin: 10px 0 0; font-size: 22px; font-weight: 700; }
 html.vue-app .game-card p { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); }
 html.vue-app .game-card-foot { margin-top: 14px; display: flex; align-items: center; gap: 10px; }
-html.vue-app .game-card-foot .muted { font-size: 11.5px; color: var(--dim); }
+html.vue-app .game-card-foot .muted { font-size: 11.5px; color: var(--muted); }
 html.vue-app .game-card-foot .btn { margin-left: auto; }
 html.vue-app .club-stay { margin-top: 26px; padding: 18px 22px; border: 1px dashed var(--line-2); border-radius: var(--radius); }
 html.vue-app .club-stay strong { font-size: 13.5px; color: var(--lime); font-weight: 600; }
@@ -1483,7 +1488,7 @@ html.vue-app .access-row {
 }
 html.vue-app .access-who { min-width: 0; flex: 1; }
 html.vue-app .access-who strong { display: block; font-size: 13.5px; }
-html.vue-app .access-who small { display: block; margin-top: 2px; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.vue-app .access-who small { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.vue-app .access-member { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 13px; margin-bottom: 7px; }
 
 html.vue-app .announce-banner {
@@ -1503,6 +1508,8 @@ html.vue-app .announce-text { margin: 0; flex: 1; min-width: 0; overflow: hidden
 html.vue-app .announce-link { color: var(--lime); font-size: 12px; }
 html.vue-app .announce-dismiss { height: 26px; padding: 0 10px; font-size: 11.5px; }
 
+/* 私聊浮窗：气泡、输入框、会话列表全部走 token，深浅两套外观都跟着变。
+   旧 play.css 给 .dm-msg 留了浅色底（#fff）、.dm-input 留了白底，这里统一改掉。 */
 html.vue-app .dm {
   border: 1px solid var(--line-2);
   border-radius: 20px;
@@ -1512,22 +1519,42 @@ html.vue-app .dm {
   overflow: hidden;
 }
 html.vue-app .dm-head { background: var(--panel-2); border-bottom: 1px solid var(--line); }
-html.vue-app .dm-search { background: rgba(255, 255, 255, .03); border: 1px solid var(--line); color: var(--text); border-radius: 999px; }
-html.vue-app .dm-person.is-active { background: rgba(217, 248, 125, .1); }
-html.vue-app .dm-msg p { background: rgba(206, 232, 201, .06); color: #dfe8db; border-radius: 3px 12px 12px 12px; }
-html.vue-app .dm-msg.is-me p { background: rgba(217, 248, 125, .13); color: #eef6dd; }
-html.vue-app .dm-compose { border-top: 1px solid var(--line); }
-html.vue-app .dm-compose input { background: rgba(255, 255, 255, .03); border: 1px solid var(--line); color: var(--text); border-radius: 999px; }
+html.vue-app .dm-list { background: var(--panel-2); border-right: 1px solid var(--line); }
+html.vue-app .dm-search { background: color-mix(in srgb, var(--text) 5%, transparent); border: 1px solid var(--line); color: var(--text); border-radius: 999px; }
+html.vue-app .dm-search::placeholder,
+html.vue-app .dm-input::placeholder { color: var(--dim); }
+html.vue-app .dm-thread:hover { background: color-mix(in srgb, var(--lime) 8%, transparent); }
+html.vue-app .dm-thread.is-active { background: color-mix(in srgb, var(--lime) 14%, transparent); }
+html.vue-app .dm-person.is-active { background: color-mix(in srgb, var(--lime) 12%, transparent); }
+html.vue-app .dm-handle,
+html.vue-app .dm-time { color: var(--muted); }
+html.vue-app .dm-msg {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+html.vue-app .dm-msg .dm-text { color: var(--text); }
+html.vue-app .dm-msg.is-me {
+  background: color-mix(in srgb, var(--lime) 16%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--lime) 45%, transparent);
+}
+html.vue-app .dm-input {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 10px;
+}
 
 html.vue-app .toast {
   border-radius: 999px;
-  border: 1px solid rgba(217, 248, 125, .3);
-  background: rgba(15, 26, 23, .92);
+  border: 1px solid color-mix(in srgb, var(--lime) 40%, transparent);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
   color: var(--text);
   font-size: 12.5px;
   box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
 }
-html.vue-app .toast.bad { border-color: rgba(230, 166, 162, .4); color: #f3cfcb; }
+html.vue-app .toast.bad { border-color: color-mix(in srgb, var(--red) 45%, transparent); color: var(--red); }
 
 /* ——— 浅色「白天模式」的局部修正 ——— */
 html.vue-app[data-theme="light"] .scene-felt,
@@ -1550,6 +1577,10 @@ html.vue-app[data-theme="light"] :is(.tag-coo, .tag-table) {
   color: #4c6a30;
   border-color: rgba(76, 106, 48, .34);
 }
+/* 浅色下当前门牌项、错误字样这类小字也换成深一档的颜色。 */
+html.vue-app[data-theme="light"] .rail-btn.is-on { color: #3c5222; }
+html.vue-app[data-theme="light"] :is(.warn, .bad) { color: #a64347; }
+html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 
 /* ——— 响应式 ——— */
 @media (max-width: 1320px) {
