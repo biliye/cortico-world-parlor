@@ -1,0 +1,19 @@
+{
+  // 网页客户端单独一份：需要 DOM，不放 node 类型。
+  // 服务端那份（tsconfig.json）刻意不放 DOM，两种代码不能混在一个配置里。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["web-src/**/*.ts", "web-src/**/*.d.ts", "vite.config.ts"]
+}
