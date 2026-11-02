@@ -4,11 +4,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import { api } from '../api/client.ts';
 import { createRoomCarousel, type CarouselModel } from '../lib/room-carousel.ts';
+import { ROOM_CAPACITY, createRoomBody } from '../lib/rooms.ts';
 import { isFavorite, toggleFavorite } from '../stores/club.ts';
 import { sheetOpen } from '../stores/chat.ts';
 import { hallSection } from '../stores/hall.ts';
 import {
-  goRoom, hallError, hallLoaded, hallSeats, loadHall, rooms, snapshot,
+  goRoom, hallError, hallLoaded, hallSeats, loadHall, refreshSnapshot, rooms, snapshot,
 } from '../stores/parlor.ts';
 import type { RoomCard } from '../api/types.ts';
 
@@ -27,21 +28,31 @@ const carousel = createRoomCarousel((next) => { model.value = next; }, {
 });
 const heroHover = ref(false);
 const heroFocus = ref(false);
+let pulse: number | undefined;
 
 onMounted(() => {
   void loadHall(true);
   syncActive();
   document.addEventListener('visibilitychange', syncActive);
+  // 掉线不发事件：停在大厅时每 20 秒连快照一起刷，在线名单才不会停在旧值。
+  pulse = window.setInterval(() => {
+    if (document.hidden) return;
+    void loadHall(true);
+    void refreshSnapshot().catch(() => {});
+  }, 20_000);
 });
 
 onBeforeUnmount(() => {
   carousel.dispose();
+  window.clearInterval(pulse);
   document.removeEventListener('visibilitychange', syncActive);
 });
 
 watch(rooms, (list) => { carousel.setRooms(list); }, { immediate: true });
 watch([hallSection, sheetOpen], () => syncActive());
 watch([heroHover, heroFocus], () => carousel.setBlocked(heroHover.value || heroFocus.value));
+// 换了范围就把搜索和游戏筛选清掉，和旧版一样从整份目录重新看。
+watch(hallSection, () => { query.value = ''; filter.value = 'all'; });
 
 /** 只在大厅发现页、页面在前台、聊天抽屉没拉开时轮播。 */
 function syncActive(): void {
@@ -100,7 +111,8 @@ function showDiscover(): void {
   hallSection.value = 'all';
 }
 
-async function enter(room: RoomCard): Promise<void> {  notice.value = '';
+async function enter(room: RoomCard): Promise<void> {
+  notice.value = '';
   const moved = await goRoom(room.id);
   if (!moved && hallError.value) notice.value = hallError.value;
 }
@@ -116,7 +128,7 @@ async function createRoom(): Promise<void> {
     const created = await api<{ room: { id: string } }>('/v1/rooms', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, visibility: createVisibility.value, capacity: 30 }),
+      body: JSON.stringify(createRoomBody(name, createVisibility.value)),
     });
     createName.value = '';
     await enter({ id: created.room.id } as RoomCard);
@@ -133,8 +145,12 @@ async function createRoom(): Promise<void> {
     <AnnouncementBanner />
     <div class="hall-head">
       <span class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</span>
-      <h1>今晚，来一局。</h1>
-      <p class="muted">找个舒服的位置，和朋友、Coo 一起把时间慢下来。</p>
+      <h1>{{ section === 'all' ? '今晚，来一局。' : section === 'mine' ? '我的客厅。' : '收藏的地方。' }}</h1>
+      <p class="muted">
+        {{ section === 'all' ? '找个舒服的位置，和朋友、Coo 一起把时间慢下来。'
+          : section === 'mine' ? '你创建或加入的客厅都在这里。'
+            : '点过星标的客厅都在这里。' }}
+      </p>
     </div>
 
     <section
@@ -246,7 +262,7 @@ async function createRoom(): Promise<void> {
       <p class="muted hall-note">公开客厅谁都能进；不公开的要先被邀请。</p>
     </section>
 
-    <section class="panel hall-people">
+    <section v-if="section === 'all'" class="panel hall-people">
       <div class="panel-head">
         <h2>大厅里</h2>
         <span class="muted">{{ visibleSeats.length }} 人</span>
@@ -274,7 +290,7 @@ async function createRoom(): Promise<void> {
           <option value="unlisted">不公开</option>
           <option value="private">私密</option>
         </select>
-        <span class="muted">固定 30 人</span>
+        <span class="muted">固定 {{ ROOM_CAPACITY }} 人</span>
         <button class="btn primary small" type="button" :disabled="creating" @click="createRoom">开一间</button>
       </div>
       <p class="muted hall-note">公开的客厅会出现在别人的目录里；不公开的只有成员看得到。</p>

@@ -21,13 +21,18 @@ export function readStoredSeat(): SeatConfig | null {
 
 export const seat = ref<SeatConfig | null>(read());
 
+/** 席位被清掉时给加入页看的原因（例如令牌失效、被另一台设备顶掉）。 */
+export const entryNotice = ref('');
+
 export function saveSeat(next: SeatConfig): void {
   seat.value = next;
+  entryNotice.value = '';
   localStorage.setItem(STORE_KEY, JSON.stringify(next));
 }
 
-export function clearSeat(): void {
+export function clearSeat(notice = ''): void {
   seat.value = null;
+  entryNotice.value = notice;
   localStorage.removeItem(STORE_KEY);
 }
 

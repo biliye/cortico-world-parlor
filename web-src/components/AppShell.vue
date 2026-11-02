@@ -4,11 +4,13 @@ import { computed, onMounted, watch } from 'vue';
 import ChatPanel from './ChatPanel.vue';
 import DmWindow from './DmWindow.vue';
 import Icon from './Icon.vue';
+import ThemePicker from './ThemePicker.vue';
 import { initialOf } from '../lib/text.ts';
 import { club } from '../stores/club.ts';
-import { chatExpanded, closeSheet, sheetOpen, toggleChat } from '../stores/chat.ts';
+import { chatExpanded, chooseTab, closeSheet, sheetOpen, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
+import { loadMail, setUnread, unread as mailUnread } from '../stores/mail.ts';
 import { connection, snapshot } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
@@ -25,7 +27,20 @@ const sections = [
 
 watch(sheetOpen, (open) => { document.body.classList.toggle('sheet-open', open); }, { immediate: true });
 
-onMounted(() => { void loadThreads(); });
+// 快照里的未读是服务器算的总数；信箱列表本身按需刷新，角标始终跟快照走。
+watch(() => snapshot.value?.mailUnread, (count) => {
+  if (typeof count === 'number') setUnread(count);
+}, { immediate: true });
+
+function openMail(): void {
+  chooseTab('mail');
+  toggleChat(true);
+  void loadMail(true);
+}
+
+onMounted(() => {
+  void loadThreads();
+});
 </script>
 
 <template>
@@ -36,6 +51,10 @@ onMounted(() => { void loadThreads(); });
       <span class="conn-text">{{ connection === 'on' ? '已连接' : connection === 'off' ? '重连中…' : '连接中…' }}</span>
     </span>
     <span class="muted top-me-text">{{ name }} · {{ roomLabel }}</span>
+    <ThemePicker />
+    <button class="ghost-btn mail-btn" type="button" @click="openMail">
+      信箱<span v-if="mailUnread" class="badge">{{ mailUnread }}</span>
+    </button>
     <button class="ghost-btn dm-btn dm-toggle" type="button" @click="toggleDm">
       私聊<span v-if="dmUnread" class="badge">{{ dmUnread }}</span>
     </button>

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * 迁移期的根组件：没有席位显示加入页；有席位按「大厅 / 客厅 / 牌桌」三层渲染。
- * 带 ?vue=1 时才由 vue-loader 载入；正常访问仍走旧的 play.js。
+ * 根组件：没有席位显示加入页；有席位按「大厅 / 客厅 / 牌桌」三层渲染。
+ * 默认由 vue-loader 载入；?legacy=1 回退旧的 play.js（排障用）。
  */
-import { onMounted, ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
-import { boot, snapshot } from './stores/parlor.ts';
-import { seat } from './stores/session.ts';
+import { boot, snapshot, syncRouteRoom } from './stores/parlor.ts';
+import { entryNotice, seat } from './stores/session.ts';
 import { readView, view } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
 import LobbyView from './views/LobbyView.vue';
@@ -36,9 +36,26 @@ async function enter(): Promise<void> {
   }
 }
 
+/** 页面开着时又粘贴了 #key= 或身份回跳链接：重新走一次入场。 */
+function onHashChange(): void {
+  if (location.hash.includes('identity') || location.hash.includes('key')) void enter();
+}
+
+/** 前进/后退改了 ?room= 或 ?view=：视图先跟上；客厅不一样就整页换过去。 */
+function onPopState(): void {
+  readView();
+  void syncRouteRoom();
+}
+
 onMounted(() => {
   if (seat.value || location.hash.includes('identity') || location.hash.includes('key')) void enter();
-  window.addEventListener('popstate', () => readView());
+  window.addEventListener('hashchange', onHashChange);
+  window.addEventListener('popstate', onPopState);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', onHashChange);
+  window.removeEventListener('popstate', onPopState);
 });
 
 // 加入页拿到席位后自己会被卸载，靠事件回来可能太晚；盯住席位本身更稳。
@@ -48,7 +65,7 @@ watch(seat, (next) => {
 </script>
 
 <template>
-  <JoinView v-if="!seat" :initial-error="failed" @entered="enter" />
+  <JoinView v-if="!seat" :initial-error="failed || entryNotice" @entered="enter" />
   <AppShell v-else-if="ready">
     <LobbyView v-if="snapshot && snapshot.id === 'hall'" />
     <TableView v-else-if="view === 'table'" />

@@ -1,4 +1,4 @@
-/** 网页侧的游戏清单。与旧 games/registry.js 一致；渲染器仍在旧文件里，第 3 刀后半接。 */
+/** 网页侧的游戏清单。与旧 games/registry.js 一致；桌面渲染器仍挂在 src/web/games/ 下。 */
 
 export interface GameDef {
   label: string;

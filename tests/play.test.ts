@@ -13,6 +13,14 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { ParlorServer } from '../src/room/server.ts';
 import type { PlayerJoinResponse, RoomSnapshot } from '../src/room/protocol.ts';
+import { parentPlayBody, parseEntryKey } from '../web-src/lib/entry.ts';
+import { chatChannelAccepts, chatLineMatchesTable, chatLineVisible } from '../web-src/lib/chat-lines.ts';
+import { TABLE_ROOM_HINT, TABLE_TALK_PREFIX, TABLE_TALK_SCOPE, tableScopeText } from '../web-src/lib/chat-copy.ts';
+import { ENABLED_GAMES, GAMES } from '../web-src/lib/games.ts';
+import { GUEST_CLOSED_MESSAGE, SEAT_EXPIRED_MESSAGE, guestJoinEnabled } from '../web-src/lib/join.ts';
+import { ROOM_CAPACITY, createRoomBody } from '../web-src/lib/rooms.ts';
+import { decideExpiredSeat } from '../web-src/lib/seat-errors.ts';
+import { readable } from '../web-src/lib/text.ts';
 
 type Json = Record<string, any>;
 
@@ -120,7 +128,7 @@ describe('网页玩家', () => {
     const page = await call('/play');
     expect(page.status).toBe(200);
     expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
-    expect(page.text).toContain('/play/assets/play.js');
+    expect(page.text).toContain('/play/assets/vue-loader.js');
 
     const js = await call('/play/assets/play.js');
     expect(js.status).toBe(200);
@@ -306,73 +314,86 @@ describe('网页玩家', () => {
 
   it('鲸语会馆主题、筹码图同源，聊天三 tab 的边界写清楚', () => {
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const html = readFileSync(new URL('../src/web/play.html', import.meta.url), 'utf8');
     expect(css).toContain('assets/coo-chip.png');
     expect(html).toContain('content="#10191b"');
     expect(html).toContain('/play/assets/club.css');
-    for (const text of [css, js, html]) {
-      expect(text).not.toContain('底池');
-      expect(text).not.toContain('底注');
-      expect(text).not.toContain('净胜');
-    }
-    // 牌桌 tab 现在发的是桌内私聊；这句话是给玩家看的边界说明。
-    expect(js).toContain('只发到这一桌');
-    expect(js).toContain('客厅和不在桌上的人看不见');
-    expect(js).toContain('你不在这一桌');
-    expect(js).toContain("type: 'table_say'");
-    // 出牌/过牌这类牌桌动作不进聊天栏，只留人说的话。
-    expect(js).toContain("type.startsWith('parlor.table.') && type !== 'parlor.table.say'");
-    expect(js).toContain("type.startsWith('parlor.monopoly.')");
-    // 牌桌栏只放桌内私聊：客厅的公开发言（哪怕出自桌上席位）只在客厅栏。
-    expect(js).toContain("return (event.type || '') === 'parlor.table.say';");
-    expect(js).toContain('客厅的聊天在「客厅」那一栏');
+    expect(css).not.toContain('底池');
+    expect(css).not.toContain('底注');
+    expect(css).not.toContain('净胜');
+
+    // 旧文案只改显示，不改事件本身：三个词都在 readable() 里换掉。
+    expect(readable('底池 10，底注 2，今晚净胜 3')).toBe('彩头 10，每局 2，今晚的小收获 3');
+
+    // 聊天栏的过滤规则：私聊走浮窗，牌桌动作与大富翁过程不进聊天栏。
+    expect(chatLineVisible('parlor.whisper')).toBe(false);
+    expect(chatLineVisible('parlor.table.turn')).toBe(false);
+    expect(chatLineVisible('parlor.monopoly.roll')).toBe(false);
+    expect(chatLineVisible('parlor.table.say')).toBe(true);
+    expect(chatLineVisible('parlor.say')).toBe(true);
+
+    // 牌桌栏只放桌内私聊；客厅/大厅栏不收牌桌私聊。
+    expect(chatChannelAccepts('table', 'parlor.table.say')).toBe(true);
+    expect(chatChannelAccepts('table', 'parlor.say')).toBe(false);
+    expect(chatChannelAccepts('room', 'parlor.table.say')).toBe(false);
+    expect(chatChannelAccepts('room', 'parlor.say')).toBe(true);
+    expect(chatChannelAccepts('mail', 'parlor.say')).toBe(false);
+    expect(chatLineMatchesTable('t1', 't1')).toBe(true);
+    expect(chatLineMatchesTable('t2', 't1')).toBe(false);
+    expect(chatLineMatchesTable(undefined, 't1')).toBe(true);
+
+    // 牌桌私聊的边界说明：只发到这一桌，客厅和不在桌上的人看不见。
+    expect(tableScopeText({ tableOpen: true })).toBe(TABLE_TALK_SCOPE);
+    expect(TABLE_TALK_SCOPE).toContain('只发到这一桌');
+    expect(TABLE_TALK_SCOPE).toContain('客厅和不在桌上的人看不见');
+    expect(TABLE_TALK_PREFIX).toContain('只有同桌看得见');
+    expect(TABLE_ROOM_HINT).toContain('客厅的聊天在「客厅」那一栏');
+    expect(tableScopeText({ tableOpen: true, elsewhere: true })).toContain('你现在看的是另一桌');
+    expect(tableScopeText({ tableOpen: false, werewolfActive: true })).toContain('狼人杀进行中');
   });
 
   it('带钥匙的「我下场玩」链接直接下场；席位被顶掉时不自动重入', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    // 面板的 #key= 链接：一次请求就换会话 + 领席位（跨境链路上少一个来回），再进牌桌；
-    // 钥匙用完从地址栏抹掉。
-    expect(js).toContain('function takeKeyFromHash');
-    expect(js).toContain('history.replaceState(null, \'\', location.pathname + location.search)');
-    expect(js).toContain('function tryParentEntry');
-    expect(js).toContain("fetch('/v1/parent/play'");
-    expect(js).toContain('...(options.room ? { room: options.room } : {})');
-    // 换席位这一步也要有超时：服务器挂住时要走到「重试」，不能一直等。
-    expect(js).toContain('timeoutSignal()');
-    // 没有钥匙但浏览器已有家长会话：也直接下场（书签/刷新都能进）。
-    expect(js).toContain('function hasParentSession');
-    // 一个家长身份只有一个席位：401 时给「被另一台顶掉」的提示，不静默重入。
-    expect(js).toContain('可能被另一台设备顶掉了');
-    expect(js).toContain('点下面的「以家长身份下场」重新进来');
+    // 面板的 #key= 链接：从地址栏取一次钥匙，钥匙用完抹掉。
+    expect(parseEntryKey('#key=abc')).toBe('abc');
+    expect(parseEntryKey('#foo=1&key=%20k%20')).toBe('k');
+    expect(parseEntryKey('')).toBe('');
+    expect(parseEntryKey('#foo=1')).toBe('');
+
+    // 家长下场的请求体：空钥匙、空客厅都不带上去。
+    expect(parentPlayBody('', '')).toEqual({});
+    expect(parentPlayBody('key-1', '')).toEqual({ key: 'key-1' });
+    expect(parentPlayBody('', 'room-1')).toEqual({ room: 'room-1' });
+    expect(parentPlayBody('key-1', 'room-1')).toEqual({ key: 'key-1', room: 'room-1' });
+
+    // 一个家长身份只有一个席位：真失效时给「被顶掉」的说明，不静默重入。
+    expect(SEAT_EXPIRED_MESSAGE).toContain('可能被另一台设备顶掉了');
+    expect(SEAT_EXPIRED_MESSAGE).toContain('以家长身份下场');
   });
 
   it('大厅是一个真页面：在线的人、客厅目录、开一间、离开客厅', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
-    // 大厅是服务器上的位置，不是本地一张空页面：离开客厅要过 /switch。
-    for (const line of [
-      'view-hall', 'function loadHall', '离开客厅', "api('/v1/hall')", "api('/v1/rooms?all=1')",
-      "navButton('hall'", "viewButton('大厅', 'hall')", 'createHallRoom', '先在大厅挑一间客厅进去',
-    ]) {
-      expect(js).toContain(line);
-    }
-    // 「大厅里」只显示在线的：筛选用网页快照的 online（看大厅的人必在大厅里），
-    // 快照没到就不筛，免得闪空列表。
-    expect(js).toContain('const visible = online ? seats.filter');
-    expect(js).toContain('大厅里现在没有在线的人');
-    expect(js).toContain('离线的不显示');
-    // 掉线不广播事件：大厅页遇到进出事件与 20 秒自刷都要连快照一起刷，online 才不会停在旧名单。
-    expect(js).toContain("state.view === 'lobby' || state.view === 'hall'");
-    expect(js).toContain('掉线不广播事件');
     expect(css).toContain('.view-hall');
     expect(css).toContain('.hall-create');
+
+    // 大厅接口的真实行为由 world-server-table 的 HTTP 用例覆盖；这里验页面契约。
+    const lobby = readFileSync(new URL('../web-src/views/LobbyView.vue', import.meta.url), 'utf8');
+    for (const line of ['loadHall', 'createRoomBody', '大厅里', 'visibleSeats']) {
+      expect(lobby).toContain(line);
+    }
+    const room = readFileSync(new URL('../web-src/views/RoomView.vue', import.meta.url), 'utf8');
+    expect(room).toContain('goRoom');
+    expect(room).toContain('backToHall');
+
     // 旧标签页的 401 不能删掉别的标签页刚写进去的新令牌（否则像被登出）。
-    expect(js).toContain('function handleExpiredSeat');
-    expect(js).toContain('stored.token !== token');
+    expect(decideExpiredSeat('old-token', 'new-token', 'old-token')).toBe('reload');
+    expect(decideExpiredSeat('old-token', 'new-token', 'new-token')).toBe('ignore');
+    expect(decideExpiredSeat('same-token', 'same-token', 'same-token')).toBe('clear');
+    expect(decideExpiredSeat('', null, null)).toBe('ignore');
+
     // 家长页能下场；加入页在有家长会话时给「以家长身份下场」。
-    expect(js).toContain('offerParentPlay');
-    expect(js).toContain("'/v1/parent/play'");
+    const join = readFileSync(new URL('../web-src/views/JoinView.vue', import.meta.url), 'utf8');
+    expect(join).toContain('以家长身份下场');
+    expect(join).toContain('requestParentPlay');
     const parent = readFileSync(new URL('../src/web/parent.js', import.meta.url), 'utf8');
     expect(parent).toContain('playAsParent');
     expect(parent).toContain("localStorage.setItem('parlor-play-v1'");
@@ -383,72 +404,69 @@ describe('网页玩家', () => {
   });
 
   it('加入页不会被空刷新重画：窗口一获得焦点，正在填的名字就没了', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    // 加入页没有席位时，focus/visibilitychange 触发的刷新会 401；
-    // 旧代码把它当成「令牌失效」重画整块表单，名字被清空、还多一行红字，看上去就是进不去。
-    const schedule = js.match(/function scheduleRefresh\([^)]*\) \{[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(schedule).toContain('if (!state.cfg) return;');
-    const expired = js.match(/function handleExpiredSeat\(token\) \{[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(expired).toContain('if (!stored && !state.cfg) return;');
-    // 真的失效时仍要回加入页并说明原因。
-    expect(expired).toContain('renderJoin(');
-    expect(expired).toContain('这个席位的令牌已经失效');
+    // 加入页没有席位时的空刷新/401 一律忽略，不能把正在填的表单重画掉。
+    expect(decideExpiredSeat('x', null, null)).toBe('ignore');
+    expect(decideExpiredSeat('', null, null)).toBe('ignore');
+    // 真失效时回加入页并说明原因。
+    expect(SEAT_EXPIRED_MESSAGE).toContain('席位已经失效');
+    expect(SEAT_EXPIRED_MESSAGE).toContain('重新进来');
   });
 
   it('建房固定 30 人，移除人数选择并提供房主删除入口', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    expect(js).toContain('const ROOM_CAPACITY = 30');
-    expect(js).not.toContain('capacitySelect');
-    expect(js).toContain('async function deleteRoom(room, button)');
-    expect(js).toContain('固定 30 人');
-    expect(js).toContain('capacity: ROOM_CAPACITY');
+    expect(ROOM_CAPACITY).toBe(30);
+    expect(createRoomBody(' 测试厅 ', 'public')).toEqual({ name: '测试厅', visibility: 'public', capacity: 30 });
+    expect(createRoomBody('私密厅', 'private').capacity).toBe(ROOM_CAPACITY);
+    const lobby = readFileSync(new URL('../web-src/views/LobbyView.vue', import.meta.url), 'utf8');
+    expect(lobby).not.toContain('capacitySelect');
+    expect(lobby).toContain('固定 {{ ROOM_CAPACITY }} 人');
+    const access = readFileSync(new URL('../web-src/components/AccessDialog.vue', import.meta.url), 'utf8');
+    expect(access).toContain('/delete');
+    expect(access).toContain('删除后从目录移除');
   });
 
   it('访客入口关闭时不再显示加入表单', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    expect(js).toContain('guestJoin');
-    expect(js).toContain('这个入口已经关闭');
-    expect(js).toContain("fetch('/healthz')");
+    expect(guestJoinEnabled(null)).toBe(true);
+    expect(guestJoinEnabled({ guestJoin: true })).toBe(true);
+    expect(guestJoinEnabled({ guestJoin: false })).toBe(false);
+    expect(GUEST_CLOSED_MESSAGE).toContain('这个入口已经关闭');
+    const join = readFileSync(new URL('../web-src/views/JoinView.vue', import.meta.url), 'utf8');
+    expect(join).toContain('guestJoinEnabled');
+    expect(join).toContain('GUEST_CLOSED_MESSAGE');
   });
 
   it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
+    const dm = readFileSync(new URL('../web-src/stores/dm.ts', import.meta.url), 'utf8');
+    const win = readFileSync(new URL('../web-src/components/DmWindow.vue', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
-    for (const line of [
-      'function ensureDmWindow', 'function toggleDm', 'dm-btn', "api('/v1/dm/threads')",
-      "'/v1/dm?peer='", "'/v1/people?q='", 'parlor-dm-pos-v1', "event.key === 'Escape'",
-      "item.kind === 'whisper' && item.fromCooId",
-    ]) {
-      expect(js).toContain(line);
+    for (const line of ["api<{ threads?: DmThread[]; unread?: number }>('/v1/dm/threads')",
+      "'/v1/dm?peer='", "'/v1/people?q='", 'parlor-dm-pos-v1']) {
+      expect(dm).toContain(line);
+    }
+    for (const line of ['startDrag', 'savePos', 'outside', "event.key === 'Escape'", "'is-me': message.fromMe"]) {
+      expect(win).toContain(line);
     }
     // 私聊只进浮窗，不再混进大厅/客厅的聊天栏。
-    expect(js).toContain("if (type === 'parlor.whisper') return null;");
-    expect(js).not.toContain('is-whisper');
+    expect(chatLineVisible('parlor.whisper')).toBe(false);
     // 点浮窗外面关掉、手机上是全屏。
-    expect(js).toContain('win.contains(event.target)');
+    expect(win).toContain('win.value.contains(target)');
     expect(css).toContain('.dm {');
     expect(css).toContain('@media (max-width: 820px)');
     expect(css).toContain('.dm-msg.is-me');
   });
 
-  it('网页的游戏入口来自注册表：只露斗地主，骰子和大富翁收起', () => {
-    const js = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');
-    const reg = readFileSync(new URL('../src/web/games/registry.js', import.meta.url), 'utf8');
-    const ddz = readFileSync(new URL('../src/web/games/ddz.js', import.meta.url), 'utf8');
+  it('网页的游戏入口来自注册表：只露斗地主与狼人杀，骰子和大富翁收起', () => {
+    expect(GAMES.ddz.enabled).toBe(true);
+    expect(GAMES.werewolf.enabled).toBe(true);
+    expect(GAMES.dice.enabled).toBe(false);
+    expect(GAMES.monopoly.enabled).toBe(false);
+    expect(ENABLED_GAMES).toContain('ddz');
+    expect(ENABLED_GAMES).toContain('werewolf');
+    expect(ENABLED_GAMES).not.toContain('dice');
+    expect(ENABLED_GAMES).not.toContain('monopoly');
+    expect(GAMES.ddz.label).toBe('斗地主');
+    expect(GAMES.werewolf.guide?.length).toBeGreaterThan(0);
+    expect(GAMES.monopoly.blurb).toContain('先收起来了');
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
-    // 入口清单只在注册表里；play.js 不再写死游戏名单。
-    expect(js).toMatch(/from '\.\/games\/registry\.js(?:\?[^']+)?'/);
-    expect(js).not.toContain("const ENABLED_GAMES = ['ddz']");
-    for (const line of ["label: '斗地主'", "label: '骰子'", "label: '大富翁'", 'enabled: true', 'enabled: false', 'guide: [']) {
-      expect(reg).toContain(line);
-    }
-    expect(reg).toContain('先收起来了');
-    // 只启用了斗地主：大厅卡片、开桌按钮与玩法说明都从注册表取。
-    expect(reg).toMatch(/ddz: \{[\s\S]*enabled: true/);
-    expect(js).toContain('gameLabel(hero)');
-    expect(js).toContain('renderGuides');
-    expect(js).toContain('endEvent');
-    expect(ddz).toContain('ddz-end');
     expect(css).toContain('.ddz-end-seats');
     expect(css).toContain('.ddz-guide');
   });
@@ -457,10 +475,12 @@ describe('网页玩家', () => {
     const files = [
       'src/web/play.js',
       'src/web/common.js',
-        'src/web/local-history.js',
+      'src/web/local-history.js',
       'src/web/games/dice.js',
       'src/web/games/ddz.js',
       'src/web/games/monopoly.js',
+      'src/web/vue-loader.js',
+      'src/web/vue/main.js',
     ];
     for (const rel of files) {
       const file = fileURLToPath(new URL('../' + rel, import.meta.url));

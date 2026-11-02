@@ -216,6 +216,29 @@ describe('WorldServer 大厅、邀请与网页', () => {
     expect((await get(app.url, '/v1/rooms/hall/room', token)).status).toBe(401);
   });
 
+  it('房间信箱的 recent 只读不标已读，已读的仍留在最近列表', async () => {
+    const app = await start();
+    const a = await enter(app, A, '阿岚');
+    const b = await enter(app, B, '小满');
+    expect((await act(app, a, { type: 'whisper', to: '小满', text: '第一封' })).status).toBe(200);
+
+    const first = await get(app.url, '/v1/rooms/lobby/mail?recent=1&limit=12&all=1', b);
+    expect(first.body.marked).toBe(false);
+    expect(first.body.unread).toBe(1);
+    expect((first.body.items as unknown[]).length).toBe(1);
+    // 再看一次 recent：仍未读，说明首屏请求没有把信标掉。
+    const again = await get(app.url, '/v1/rooms/lobby/mail?recent=1&limit=12&all=1', b);
+    expect(again.body.unread).toBe(1);
+
+    // 正常读才标已读。
+    const read = await get(app.url, '/v1/rooms/lobby/mail?limit=12&all=1', b);
+    expect(read.body.marked).toBe(true);
+    // 标完已读，recent 仍然能看到这封（含已读）。
+    const after = await get(app.url, '/v1/rooms/lobby/mail?recent=1&limit=12&all=1', b);
+    expect(after.body.unread).toBe(0);
+    expect((after.body.items as unknown[]).length).toBe(1);
+  });
+
   it('网页 /play 与静态资源由这台服务器直接给', async () => {
     const app = await start();
     const page = await fetch(`${app.url}/play`);

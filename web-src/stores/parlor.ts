@@ -1,11 +1,11 @@
 /**
- * 迁移期的状态层：先只接大厅需要的部分（快照、在线名单、客厅目录、SSE）。
+ * 状态层：快照、在线名单、客厅目录、SSE、动作与日志。
  * 并发闸门照旧：同一时刻只允许一次快照刷新、一次目录请求；SSE 断了 3 秒后重连。
- * 牌桌与聊天的增量逻辑留在旧 play.js，等第 3 刀再搬。
  */
 import { computed, ref } from 'vue';
 import { api, beginGlobalEntry, finishGlobalEntry, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
 import { decideExpiredSeat } from '../lib/seat-errors.ts';
+import { SEAT_EXPIRED_MESSAGE } from '../lib/join.ts';
 import { noteChatEvent } from './chat.ts';
 import { noteWhisper } from './dm.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
@@ -139,7 +139,7 @@ async function handleExpiredSeat(token: string): Promise<void> {
     return;
   }
   disconnect();
-  clearSeat();
+  clearSeat(SEAT_EXPIRED_MESSAGE);
 }
 
 export function scheduleRefresh(delay = 120): void {
@@ -195,11 +195,19 @@ function handleEvent(event: ChatEvent): void {
   pushLog(event);
   noteChatEvent(event);
   const type = event.type || '';
-  if (type === 'parlor.whisper') noteWhisper();
-  if (type === 'parlor.say' || type === 'parlor.table.say') return;
+  if (type === 'parlor.whisper') {
+    noteWhisper();
+    // 私聊会改信箱未读；快照里带着 mailUnread，顶栏角标靠它更新。
+    scheduleRefresh(300);
+  }
   if (type === 'parlor.joined' || type === 'parlor.left') {
     scheduleRefresh(1000);
     scheduleHallRefresh();
+  }
+  // 别人出牌、开局、结算：旧版在牌桌事件后拉一次增量，Vue 版也必须刷快照，
+  // 否则渲染器只更新「日志」，桌面状态停在旧快照。
+  if (type === 'parlor.ledger' || (type.startsWith('parlor.table.') && type !== 'parlor.table.say')) {
+    scheduleRefresh(120);
   }
 }
 
@@ -246,7 +254,8 @@ let switching = false;
 /** 换客厅：服务器换一张令牌，然后整页跳到新客厅（与旧版同一做法）。 */
 export async function goRoom(id: string): Promise<boolean> {
   const cfg = seat.value;
-  const from = snapshot.value?.id || cfg?.room || '';
+  // 启动时快照还没到，用席位里记着的客厅当出发地。
+  const from = cfg?.room || snapshot.value?.id || '';
   if (!cfg || !from || switching) return false;
   if (id === from) return true;
   switching = true;
@@ -255,7 +264,8 @@ export async function goRoom(id: string): Promise<boolean> {
       `/v1/rooms/${encodeURIComponent(from)}/switch`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: id }) },
     );
-    saveSeat({ ...cfg, room: moved.room, token: moved.token, seatId: moved.seat.id, name: moved.seat.name });    const params = new URLSearchParams(location.search);
+    saveSeat({ ...cfg, room: moved.room, token: moved.token, seatId: moved.seat.id, name: moved.seat.name });
+    const params = new URLSearchParams(location.search);
     params.set('room', moved.room);
     params.delete('view');
     params.delete('table');
@@ -263,10 +273,18 @@ export async function goRoom(id: string): Promise<boolean> {
     return true;
   } catch (error) {
     hallError.value = (error as Error).message || '换不了客厅';
+    showToast(hallError.value, 'bad');
     return false;
   } finally {
     switching = false;
   }
+}
+
+/** 地址栏里的 ?room= 与当前席位不同就换过去；分享/邀请链接靠它生效。 */
+export async function syncRouteRoom(): Promise<boolean> {
+  const wanted = new URLSearchParams(location.search).get('room') || '';
+  if (!seat.value || !wanted || wanted === seat.value.room) return false;
+  return goRoom(wanted);
 }
 
 let acting = false;
@@ -401,6 +419,13 @@ export async function boot(): Promise<boolean> {
     }
   }
   if (!seat.value) return false;
+  // 分享/邀请链接带着 ?room=：席位在别的客厅时先换过去（旧版在启动时做同一件事）。
+  const wanted = new URLSearchParams(location.search).get('room') || '';
+  if (wanted && wanted !== seat.value.room) {
+    const moved = await goRoom(wanted);
+    if (moved) return false;
+    throw new Error(hallError.value || '换不到这个客厅');
+  }
   await refreshSnapshot();
   latest.value = snapshot.value?.latest || 0;
   await seedLog();

@@ -2,6 +2,8 @@
 /** 加入页：名字 + 邀请码。统一身份在时跳去身份服务，回来再换席位。 */
 import { onMounted, ref } from 'vue';
 import { beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay } from '../api/client.ts';
+import { GUEST_CLOSED_MESSAGE, guestJoinEnabled } from '../lib/join.ts';
+import ThemePicker from '../components/ThemePicker.vue';
 import type { Health } from '../api/types.ts';
 
 const emit = defineEmits<{ entered: [] }>();
@@ -19,7 +21,7 @@ const closedMessage = ref('');
 onMounted(async () => {
   const health = await fetchHealth();
   if (health) {
-    guestJoin.value = health.guestJoin !== false;
+    guestJoin.value = guestJoinEnabled(health);
     globalIdentity.value = health.globalIdentity || null;
   }
   try {
@@ -83,11 +85,12 @@ async function parentPlay(): Promise<void> {
 
 <template>
   <div class="join">
+    <ThemePicker />
     <section class="panel">
       <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
       <h1>{{ guestJoin ? '客厅 · 下场玩' : '客厅 · 入口已关闭' }}</h1>
       <p v-if="!guestJoin" class="sub">
-        {{ closedMessage || '这个入口已经关闭。请向房主要带钥匙的「下场玩」链接；有 Coo 的话也可以让 Coo 带你进客厅。' }}
+        {{ closedMessage || GUEST_CLOSED_MESSAGE }}
       </p>
       <template v-else>
         <p class="sub">用自己的席位和 Coo 同桌。你的战绩、筹码和信箱是单独的一份，不会记到她头上。</p>

@@ -2047,7 +2047,19 @@ export class WorldServer {
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
       const peek = url.searchParams.get('peek') === '1';
       const all = url.searchParams.get('all') === '1';
-      json(res, 200, await (await this.host(roomId)).readMail(seat.cooId, limit, !peek, all));
+      const host = await this.host(roomId);
+      // 信箱页首屏要「最近 12 封（含已读）」，这个分支绝不能标已读。
+      if (url.searchParams.get('recent') === '1') {
+        const unread = all ? await host.mailUnreadAll(seat.cooId) : await host.mailUnread(seat.cooId);
+        json(res, 200, {
+          unread,
+          remaining: unread,
+          items: await host.mailRecent(seat.cooId, limit, all),
+          marked: false,
+        });
+        return;
+      }
+      json(res, 200, await host.readMail(seat.cooId, limit, !peek, all));
       return;
     }
 

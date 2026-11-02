@@ -3,7 +3,7 @@
 import { computed, ref } from 'vue';
 import AccessDialog from '../components/AccessDialog.vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
-import { ENABLED_GAMES, KIND_LABELS, STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
+import { ENABLED_GAMES, STATUS_LABELS, enoughPlayers, gameLabel, gameOf } from '../lib/games.ts';
 import { initialOf } from '../lib/text.ts';
 import {
   goRoom, joinRoomTable, leaveRoomTable, myTable, openRoomTable, snapshot, startRoomTable, tableIdOf, tableList,
@@ -23,6 +23,14 @@ const tables = computed(() => tableList().filter((table) => table.status !== 'ab
 const mine = computed(() => myTable.value);
 const meId = computed(() => snapshot.value?.seat?.id || '');
 const roomName = computed(() => snapshot.value?.name || '客厅');
+const onlineIds = computed(() => new Set(snapshot.value?.online || []));
+const tableSeatIds = computed(() => {
+  const ids = new Set<string>();
+  for (const table of tableList()) {
+    for (const person of table.seats || []) ids.add(person.id);
+  }
+  return ids;
+});
 
 function seatedAt(table: TableSummary): boolean {
   return (table.seats || []).some((person) => person.id === meId.value);
@@ -47,6 +55,10 @@ async function run(task: () => Promise<unknown>): Promise<void> {
 
 function watch(table: TableSummary): void {
   enterTable(tableIdOf(table));
+}
+
+function backToMine(): void {
+  if (mine.value) watch(mine.value);
 }
 
 function open(game: string): void {
@@ -117,7 +129,10 @@ async function invite(): Promise<void> {
           <span class="avatar avatar-xs">{{ initialOf(person.name) }}</span>
           <span>
             <strong>{{ person.name }}<template v-if="person.id === meId">（你）</template></strong>
-            <small>{{ KIND_LABELS[person.kind] || person.kind }}<template v-if="person.handle"> · #{{ person.handle }}</template></small>
+            <small>
+              <span v-if="onlineIds.has(person.id)" class="live-dot" />
+              {{ onlineIds.has(person.id) ? '在线' : '离线' }}<template v-if="tableSeatIds.has(person.id)"> · 在牌桌</template><template v-if="person.kind === 'observer'"> · 观看</template><template v-if="person.handle"> · #{{ person.handle }}</template>
+            </small>
           </span>
           <span v-if="person.kind === 'pet'" class="tag tag-coo">Coo</span>
         </span>
@@ -188,12 +203,20 @@ async function invite(): Promise<void> {
           <div class="game-card-foot">
             <span class="muted">{{ gameOf(game)?.foot }}</span>
             <button
+              v-if="mine && mine.status !== 'ended' && mine.game === game"
+              class="btn primary small"
+              type="button"
+              :disabled="busy"
+              @click="backToMine"
+            >回到我的桌</button>
+            <button
+              v-else
               class="btn primary small"
               type="button"
               :disabled="busy || !!(mine && mine.status !== 'ended')"
               :title="mine && mine.status !== 'ended' ? '先结束或离开自己的牌桌' : ''"
               @click="open(game)"
-            >{{ mine && mine.game === game ? '回到我的桌' : '开一桌' }}</button>
+            >开一桌</button>
           </div>
         </div>
       </article>

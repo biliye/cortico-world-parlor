@@ -1,10 +1,15 @@
 <script setup lang="ts">
 /**
  * 聊天侧栏：客厅/牌桌/信箱三个频道。
- * 这一刀只接客厅（大厅）频道；牌桌与信箱是占位，第 3 刀接。
+ * 过滤与边界文案在 lib/chat-lines.ts、lib/chat-copy.ts，便于单测。
  */
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { clockText, initialOf, readable } from '../lib/text.ts';
+import { chatChannelAccepts, chatLineMatchesTable, chatLineVisible } from '../lib/chat-lines.ts';
+import {
+  TABLE_ROOM_HINT, TABLE_TALK_PREFIX,
+  roomPlaceholder, roomScopeText, tableEmptyText, tablePlaceholder, tableScopeText,
+} from '../lib/chat-copy.ts';
 import {
   chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, tab, toggleChat, unread,
 } from '../stores/chat.ts';
@@ -50,17 +55,9 @@ const lines = computed<Line[]>(() => {
   const channel = tab.value;
   for (const event of log.value) {
     const type = event.type || '';
-    if (type === 'parlor.whisper' || type === 'parlor.table.turn' || type === 'parlor.digest') continue;
-    if (type.startsWith('parlor.table.') && type !== 'parlor.table.say') continue;
-    if (type.startsWith('parlor.monopoly.')) continue;
-    if (channel === 'room' && type === 'parlor.table.say') continue;
-    if (channel === 'table') {
-      if (type !== 'parlor.table.say') continue;
-      // 只认自己这张桌的话；没有桌号的老事件按「是」处理。
-      const eventId = event.data && typeof event.data.tableId === 'string' ? event.data.tableId : '';
-      if (eventId && myTableId.value && eventId !== myTableId.value) continue;
-    }
-    if (channel === 'mail') continue;
+    if (!chatLineVisible(type)) continue;
+    if (!chatChannelAccepts(channel, type)) continue;
+    if (channel === 'table' && !chatLineMatchesTable((event.data as Record<string, unknown> | undefined)?.tableId, myTableId.value)) continue;
     const time = clockText(event.ts);
     if (event.from === 'system' || !event.from) {
       const tag = type.startsWith('parlor.table.') ? '牌桌' : type === 'parlor.ledger' ? '账本' : '';
@@ -74,7 +71,7 @@ const lines = computed<Line[]>(() => {
       kind: 'msg',
       time,
       name,
-      text: (tableTalk ? '（只有同桌看得见）' : '') + readable(event.text || ''),
+      text: (tableTalk ? TABLE_TALK_PREFIX : '') + readable(event.text || ''),
       tag: tableTalk ? '牌桌私聊' : roomLabel.value,
     });
   }
@@ -100,10 +97,18 @@ watch(() => lines.value.length, () => {
   void nextTick(() => { if (stick) toBottom(); });
 });
 
+// 进页面时先把已有回放落到底部（首次挂载时 log 已经补完，watcher 不会再触发）。
+onMounted(() => { void nextTick(toBottom); });
+
 watch(tab, (next) => {
   void nextTick(toBottom);
   if (next === 'mail') void loadMail(true);
 }, { immediate: true });
+
+// 快照里的未读变了（新私聊/新邀请）：正看着信箱就顺手刷新列表。
+watch(mailUnread, (next, prev) => {
+  if (tab.value === 'mail' && next !== prev) void loadMail(true);
+});
 
 async function readAll(): Promise<void> {
   try {
@@ -161,22 +166,20 @@ watch(scopeKey, (next) => { input.value = draftFor(next); }, { immediate: true }
 const scopeText = computed(() => {
   if (tab.value === 'mail') return '';
   if (tab.value === 'table') {
-    if (tableOpen.value) {
-      const watching = activeTable.value;
-      const mine = myTable.value;
-      const elsewhere = !!watching && !!mine && tableIdOf(watching) !== tableIdOf(mine);
-      return elsewhere ? '只发到我的桌 · 你现在看的是另一桌' : '只发到这一桌 · 客厅和不在桌上的人看不见';
-    }
-    return activeTable.value?.game === 'werewolf' && activeTable.value?.status !== 'open'
-      ? '狼人杀进行中 · 发言和狼聊请使用游戏内面板'
-      : '围观只读 · 聊天请切到「客厅」';
+    const watching = activeTable.value;
+    const mine = myTable.value;
+    return tableScopeText({
+      tableOpen: tableOpen.value,
+      elsewhere: !!watching && !!mine && tableIdOf(watching) !== tableIdOf(mine),
+      werewolfActive: watching?.game === 'werewolf' && watching?.status !== 'open',
+    });
   }
-  return inHall.value ? '发到大厅 · 大厅里的人都看得见' : '发到客厅 · 房间里的人都看得见';
+  return roomScopeText(inHall.value);
 });
 
 const placeholder = computed(() => {
-  if (tab.value === 'table') return tableOpen.value ? '对同桌说点什么…' : '当前桌聊不可用';
-  return inHall.value ? '在大厅说点什么…' : '在客厅说点什么…';
+  if (tab.value === 'table') return tablePlaceholder(tableOpen.value);
+  return roomPlaceholder(inHall.value);
 });
 
 const canSend = computed(() => tab.value === 'room' || (tab.value === 'table' && tableOpen.value));
@@ -200,7 +203,8 @@ async function submit(): Promise<void> {
   input.value = '';
   saveDraftFor(scopeKey.value, '');
   try {
-    await act(tab.value === 'table' ? { type: 'table_say', text } : { type: 'say', text });
+    const receipt = await act(tab.value === 'table' ? { type: 'table_say', text } : { type: 'say', text });
+    if (!receipt) throw new Error('上一个动作还没回话，稍等一下再发');
   } catch (error) {
     notice.value = (error as Error).message || '没发出去';
     if (!draftFor(scopeKey.value)) {
@@ -257,7 +261,8 @@ function closeDrawer(): void {
         <div v-if="tab !== 'mail'" ref="logBox" class="chat-log">
           <p v-if="!lines.length" class="chat-empty">
             <template v-if="tab === 'table'">
-              {{ tableOpen ? '同桌的话，留在这一桌。' : '围观不开放同桌聊天。' }}
+              {{ tableEmptyText(tableOpen) }}
+              <span v-if="tableOpen" class="muted"><br>{{ TABLE_ROOM_HINT }}</span>
             </template>
             <template v-else>这里还没人说话。</template>
           </p>

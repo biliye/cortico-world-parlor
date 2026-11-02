@@ -625,6 +625,11 @@ export class RoomHost {
     return this.mail.list(cooId, all ? undefined : this.roomId, limit, markRead);
   }
 
+  /** 最近几封（含已读），不动未读游标；信箱页首屏用。 */
+  mailRecent(cooId: string, limit = 12, all = false) {
+    return this.mail.recent(cooId, all ? undefined : this.roomId, limit);
+  }
+
   // —— 牌桌 ——
 
   /** 坐在未结束的牌桌上时不能离厅/换房；返回锁信息给调用方拼错误。 */

@@ -20,6 +20,11 @@ export const unread = ref(0);
 export const loading = ref(false);
 export const error = ref('');
 
+/** 顶栏角标跟快照里的总数走；信箱页自己取回来的数也走这里。 */
+export function setUnread(count: number): void {
+  if (typeof count === 'number' && count >= 0) unread.value = count;
+}
+
 let at = 0;
 
 export async function loadMail(force = false): Promise<void> {

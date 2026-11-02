@@ -1,7 +1,12 @@
 /** 网络层：与旧 play.js 同一套请求形状、同一套令牌与错误字段。 */
 import { currentRoom, saveSeat, seat } from '../stores/session.ts';
 import { seatTokenFrom } from '../lib/seat-errors.ts';
+import { parentPlayBody, parseEntryKey } from '../lib/entry.ts';
+import type { ParentPlayBody } from '../lib/entry.ts';
 import type { Health, JoinResult } from './types.ts';
+
+export { parentPlayBody, parseEntryKey };
+export type { ParentPlayBody };
 
 export class ApiError extends Error {
   status: number;
@@ -157,9 +162,7 @@ export async function finishGlobalEntry(ticket: string, state: string): Promise<
 
 /** 从 #key=… 取一次性钥匙；取到就从地址栏抹掉（不进历史，也不会被复制外发）。 */
 export function takeKeyFromHash(): string {
-  const raw = location.hash.replace(/^#/, '');
-  if (!raw) return '';
-  const key = (new URLSearchParams(raw).get('key') || '').trim();
+  const key = parseEntryKey(location.hash);
   if (key) history.replaceState(null, '', location.pathname + location.search);
   return key;
 }
@@ -180,7 +183,7 @@ export async function parentPlay(key = '', room = ''): Promise<ParentPlayResult>
   const response = await fetch('/v1/parent/play', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ ...(key ? { key } : {}), ...(room ? { room } : {}) }),
+    body: JSON.stringify(parentPlayBody(key, room)),
     signal: timeoutSignal(),
   });
   const body = await response.json().catch(() => ({})) as ParentPlayResult & { error?: string };
