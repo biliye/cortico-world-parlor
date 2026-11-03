@@ -14,7 +14,7 @@ Owner: `src/definition.ts`
 - 承诺功能停用：移除新建/回应工具与到期调度，旧客户端写请求返回 410。旧记录及已完成转账保留，个人账户不再列未结承诺。
 - 摘要 `recent` 保持最近五条任意类型流水及各条筹码变动（含礼物、补给、退款）；对局分页另提供合并底注的个人净盈亏。候选内部版本仍0.35.6，测试必须同时记录提交与包哈希；正式发布须统一升级包、客户端与网页资源版本，不能用同号覆盖已发布包。
 - `PARLOR_COO_IDLE_MINUTES` / `--coo-idle-minutes` 默认 60；`PARLOR_ROOM_ARCHIVE_HOURS` / `--room-archive-hours` 默认 48；0 关闭对应策略。独立的真人/Coo 离线回收仍默认 6 小时。
-- `pnpm test` 和 `pnpm test:pg` 默认真实 PG；不设连接串时启动隔离嵌入式 PG，临时文件在包内 `.task-tmp/pg-tests`。`prepack` 同时构建会馆和本机面板，避免发出旧前端。
+- 日常 `pnpm test` 跑无PG快测；`pnpm test:pg` 只跑3个核心PG文件，也可追加具体测试文件；`pnpm test:all` 才是完整回归。入口启动前固定工位内临时目录、检查空间与删除权限，默认单进程、每项回收已关闭的临时库，结束清PG与SSR缓存。命令和范围见 [TESTING.md](TESTING.md)。`prepack` 仍构建会馆和本机面板。
 
 下面历史版本中的 SQLite 服务端、旧单间和承诺说明只作为历史参考，不能用于当前网关部署。此轮尚未发布或部署。
 

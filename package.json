@@ -77,12 +77,15 @@
     "assets",
     "scripts",
     "README.md",
+    "TESTING.md",
     "CHANGELOG.md",
     "describe.json",
     "LICENSE"
   ],
   "scripts": {
-    "test": "vitest run",
+    "test": "node scripts/test.mjs unit",
+    "test:unit": "node scripts/test.mjs unit",
+    "test:all": "node scripts/test.mjs all",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.webui.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "build:web": "vite build",
@@ -93,7 +96,7 @@
     "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
     "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts",
     "migrate:pg": "node --experimental-transform-types scripts/migrate-sqlite-to-pg.ts",
-    "test:pg": "vitest run --config vitest.pg.config.ts"
+    "test:pg": "node scripts/test.mjs pg"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

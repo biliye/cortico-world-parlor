@@ -1,27 +1,15 @@
 /**
  * 测试用的 PostgreSQL 供给。
  *
- * 两种模式：
- * - `PARLOR_TEST_PG=1`：在本机起一个嵌入式 PostgreSQL（embedded-postgres，
- *   数据目录在系统临时目录，进程退出即删），每个测试文件一个独立库；
- * - `PARLOR_TEST_PG_URL=postgres://…`：连外部 PG。库仍然按测试文件隔离，
- *   测试结束不会删别人的库，只会删本进程用「内存库」语义创建的库。
+ * 受管入口一轮只启动一个工位内隔离PG；这里仅消费其连接串，
+ * 不在worker另起PG或连接外部业务库。库名含本轮ID，清理只认自己登记的库。
  *
  * 文件路径的测试（关了再开同一个库）在 PG 下按路径哈希映射成同名库：
  * 第一次打开重建，之后复用——与 SQLite 下「同一个文件」的语义对齐。
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { migrate, type Db } from '../../src/room/db.ts';
 import { PgDb } from '../../src/room/storage/postgres.ts';
-
-interface EmbeddedHandle {
-  initialise(): Promise<void>;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-}
 
 interface TestDbMeta {
   adminUrl: string;
@@ -31,48 +19,22 @@ interface TestDbMeta {
 
 const meta = new WeakMap<Db, TestDbMeta>();
 const created = new Set<string>();
+const ephemeralDbs = new Set<string>();
 
-let embedded: EmbeddedHandle | undefined;
 let adminUrl: string | undefined;
-let starting: Promise<string> | undefined;
 
 export const pgTestEnabled = (): boolean => (
   Boolean(process.env.PARLOR_TEST_PG_URL) || process.env.PARLOR_TEST_PG === '1'
 );
 
-const startEmbedded = async (): Promise<string> => {
-  const module = await import('embedded-postgres');
-  const EmbeddedPostgres = module.default;
-  const dir = mkdtempSync(join(tmpdir(), 'parlor-pg-'));
-  const port = Number(process.env.PARLOR_TEST_PG_PORT ?? 55433);
-  const pg = new EmbeddedPostgres({
-    databaseDir: dir,
-    user: 'postgres',
-    password: 'postgres',
-    port,
-    persistent: false,
-    initdbFlags: ['--locale=C', '--encoding=UTF8'],
-    // 全量并行跑时每个测试文件一个池，默认 100 条连接不够。
-    postgresFlags: ['-c', 'max_connections=200'],
-    onLog: () => {},
-    onError: () => {},
-  }) as unknown as EmbeddedHandle;
-  await pg.initialise();
-  await pg.start();
-  embedded = pg;
-  return `postgres://postgres:postgres@127.0.0.1:${port}/postgres`;
-};
-
 const ensureAdmin = async (): Promise<string> => {
   if (adminUrl) return adminUrl;
-  if (!starting) {
-    starting = (async () => {
-      const external = process.env.PARLOR_TEST_PG_URL;
-      adminUrl = external ?? await startEmbedded();
-      return adminUrl;
-    })();
+  const url = process.env.PARLOR_TEST_PG_URL;
+  if (!url || !/^[a-z0-9]{6}$/.test(process.env.PARLOR_TEST_RUN_ID || '')) {
+    throw new Error('缺少受管隔离PG；请用 pnpm test:pg 或 test:all，不在worker内另起PG');
   }
-  return starting;
+  adminUrl = url;
+  return adminUrl;
 };
 
 const adminClient = async () => {
@@ -84,10 +46,12 @@ const adminClient = async () => {
 
 const databaseName = (file: string): { name: string; ephemeral: boolean } => {
   if (file === ':memory:' || file === '') {
-    return { name: `parlor_t_${randomBytes(6).toString('hex')}`, ephemeral: true };
+    const name = `parlor_t_${process.env.PARLOR_TEST_RUN_ID || 'local'}_${randomBytes(6).toString('hex')}`;
+    ephemeralDbs.add(name);
+    return { name, ephemeral: true };
   }
   const hash = createHash('sha1').update(file).digest('hex').slice(0, 16);
-  return { name: `parlor_file_${hash}`, ephemeral: false };
+  return { name: `parlor_file_${process.env.PARLOR_TEST_RUN_ID || 'local'}_${hash}`, ephemeral: false };
 };
 
 const createDatabase = async (name: string): Promise<void> => {
@@ -122,29 +86,30 @@ export const closePgTestDb = async (db: Db): Promise<void> => {
   try {
     await client.query(`DROP DATABASE IF EXISTS ${info.name} WITH (FORCE)`);
     created.delete(info.name);
+    ephemeralDbs.delete(info.name);
   } finally {
     await client.end();
   }
 };
 
-/** 手动停掉嵌入式 PG（vitest globalTeardown 用）。 */
-export const stopPgTestServer = async (): Promise<void> => {
-  if (!embedded) return;
-  const handle = embedded;
-  embedded = undefined;
-  adminUrl = undefined;
-  starting = undefined;
-  await handle.stop();
+export const cleanupClosedPgTestDbs = async ():Promise<void> => {
+  if (ephemeralDbs.size===0) return;
+  const client=await adminClient();
+  try {
+    for (const name of [...ephemeralDbs]) {
+      if (!created.has(name)) {ephemeralDbs.delete(name);continue;}
+      const active=await client.query('SELECT 1 FROM pg_stat_activity WHERE datname=$1 LIMIT 1',[name]);
+      if (active.rowCount) continue;
+      await client.query(`DROP DATABASE IF EXISTS "${name}"`);
+      created.delete(name);ephemeralDbs.delete(name);
+    }
+  } finally {await client.end();}
 };
-
-process.once('exit', () => {
-  // 嵌入式实例是 persistent:false，进程退出时它会自己停；这里只兜个底。
-});
 
 /**
  * 给 `WorldServer.create({...})` 用的存储参数。
  *
- * SQLite 模式原样返回 `{ dbFile }`；PG 模式返回 `{ storage: 'postgres', databaseUrl }`，
+ * 返回 `{ storage: 'postgres', databaseUrl }`，没有SQLite回退；
  * 库名按 dbFile 路径哈希映射（`:memory:` 每次一个新库），语义与「同一个文件」一致。
  */
 export const pgServerStorage = async (
