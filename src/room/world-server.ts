@@ -2402,17 +2402,22 @@ export class WorldServer {
     const room = await getRoom(this.db, seat.roomId);
     const host = await this.host(seat.roomId);
     const snapshot = await host.snapshot(cooId, { since, limit });
-    // 家长防偷看：桌上还有别的真人时，藏起孩子的暗牌与私牌事件。
+    // 家长防偷看：桌上还有「真人」席位时，藏起孩子的暗牌与私牌事件。同桌的 Coo 不算真人。
     const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
       ? snapshot.table.id ?? snapshot.table.tableId
       : undefined;
-    const otherReal = liveTableId
-      ? (await this.db.prepare(
-        `SELECT coo_id FROM table_seats
-          WHERE table_id = ? AND left_at IS NULL AND coo_id IS NOT NULL`,
-      ).all(liveTableId) as { coo_id: string }[]).some((row) => row.coo_id !== cooId)
-      : false;
-    const ownerPrivateHidden = !!liveTableId && otherReal;
+    let humanAtTable = false;
+    if (liveTableId) {
+      const row = await this.db.prepare(
+        `SELECT 1 AS hit
+           FROM table_seats ts
+           JOIN room_seats rs ON rs.room_id = ts.room_id AND rs.id = ts.seat_id
+          WHERE ts.table_id = ? AND ts.left_at IS NULL AND rs.kind = 'human'
+          LIMIT 1`,
+      ).get(liveTableId) as { hit?: number } | undefined;
+      humanAtTable = !!row;
+    }
+    const ownerPrivateHidden = !!liveTableId && humanAtTable;
     return {
       seat: snapshot.seat,
       room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },

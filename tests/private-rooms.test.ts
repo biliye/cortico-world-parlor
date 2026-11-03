@@ -276,6 +276,34 @@ describe('家长页防偷看', () => {
     expect(shown.body.ownerPrivateHidden).toBe(false);
     expect((shown.body.tablePrivate as { text?: string } | null)?.text).toContain('斗地主');
   });
+
+  it('同桌是另一只 Coo、没有真人时家长照常看到私视图', async () => {
+    const { app } = await start();
+    const child = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, {
+      ...cooHeaders(CHILD), 'x-parlor-invite': 'inv',
+    });
+    const ownerKey = child.body.ownerKey as string;
+    const session = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ownerKey }),
+    });
+    const cookie = (session.headers.get('set-cookie') || '').split(';')[0];
+    const childToken = child.body.token as string;
+
+    // 另一只 Coo（pet 席位）坐进孩子的斗地主桌；桌上没有任何真人。
+    const otherToken = await enter(app, 'coo-pv000099', '另一只 Coo');
+    const opened = await post(app.url, '/v1/action', { type: 'table_open', game: 'ddz', requestId: 'open' }, bearer(childToken));
+    const tableId = opened.body.tableId as string;
+    const joined = await post(app.url, '/v1/action', { type: 'table_join', table: tableId, requestId: 'other-join' }, bearer(otherToken));
+    expect(joined.status).toBe(200);
+    const started = await post(app.url, '/v1/action', { type: 'table_start', table: tableId, requestId: 'start' }, bearer(childToken));
+    expect(started.status).toBe(200);
+
+    const shown = await get(app.url, '/v1/parent/view?limit=50', { cookie });
+    expect(shown.body.ownerPrivateHidden).toBe(false);
+    expect((shown.body.tablePrivate as { text?: string } | null)?.text).toContain('斗地主');
+  });
 });
 
 describe('成员管理：现在在厅里', () => {
