@@ -358,7 +358,8 @@ export function suggestMove(hand: readonly string[], target: Move | null): Card[
           if (pairs.length !== need) continue;
           for (const pair of pairs) picked.push(...take(pair.card, 2));
         } else {
-          const wingCards = others(used).flatMap((group) => take(group.card, group.count));
+          // 飞机带单的每组翅膀最多两张，不能被最低的三张/四张同点挡住其他合法组合。
+          const wingCards = others(used).flatMap((group) => take(group.card, Math.min(group.count, 2)));
           if (wingCards.length < need) continue;
           picked.push(...sortCards(wingCards).slice(0, need));
         }

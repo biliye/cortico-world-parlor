@@ -1026,17 +1026,34 @@ describe('契约点：suggestMove 的目标牌型矩阵', () => {
     }
   });
 
-  it('飞机带单的翅膀取到同点三张时会漏解（已知缺陷 E4，修好后本断言应改为 not.toBeNull）', () => {
+  it('飞机带单有合法翅膀时，提示与代打都能接牌（E4）', () => {
     const hand: R[] = ['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '9', '10'];
     const target = parseMove(['3', '3', '3', '4', '4', '4', '5', '5', '5', '6', '7', '8'])!;
     // 合法解确实存在:444 555 666 + 9 9 10。
     expect(parseMove(['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10'])).not.toBeNull();
     expect(canBeat(parseMove(['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10'])!, target)).toBe(true);
-    // 现状:suggestMove 拿最低三张当翅膀(9 9 9)判非法,又不换翅膀,于是返回 null。
-    expect(suggestMove(hand, target)).toBeNull();
-    expect(chooseMove(hand, target, { role: 'farmer', lastPlayBy: 'landlord', minOpponentLeft: 10 })).toBeNull();
+    const expected = ['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10'];
+    for (const picked of [
+      suggestMove(hand, target),
+      chooseMove(hand, target, { role: 'farmer', lastPlayBy: 'landlord', minOpponentLeft: 10 }),
+    ]) {
+      expect(picked).toEqual(expected);
+      expect(canBeat(parseMove(picked!)!, target)).toBe(true);
+    }
     // 对照:翅膀里没有三张同点就能解。
     expect(suggestMove(['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10', 'J'], target))
       .not.toBeNull();
+  });
+
+  it('四组飞机不会把四张同点全塞进翅膀；无同型解仍可用炸弹', () => {
+    const target = move(['3', '3', '3', '4', '4', '4', '5', '5', '5', '6', '6', '6', '8', '9', '10', 'J']);
+    const body = ['4', '4', '4', '5', '5', '5', '6', '6', '6', '7', '7', '7'];
+    const picked = suggestMove([...body, '9', '9', '9', '9', '10', '10'], target)!;
+    expect(parseMove(picked)?.type).toBe('airplane-single');
+    expect(canBeat(parseMove(picked)!, target)).toBe(true);
+    expect(picked.filter((card) => card === '9')).toHaveLength(2);
+    expect(picked.filter((card) => card === '10')).toHaveLength(2);
+    expect(suggestMove([...body, '9', '9', '9', '9'], target)).toEqual(['9', '9', '9', '9']);
+    expect(suggestMove([...body, '9', '9', '9'], target)).toBeNull();
   });
 });
