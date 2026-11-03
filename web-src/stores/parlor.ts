@@ -422,7 +422,10 @@ function withTableFields(body: Record<string, unknown>): Record<string, unknown>
 
 /** 通用动作。回执里可能带桌与私视图，这一刀先统一「动作后拉一份快照」，保证状态一致。 */
 export async function act(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-  if (acting) return null;
+  if (acting) {
+    showToast('上一操作正在处理，这次尚未发送，请稍后重试。', 'bad');
+    return null;
+  }
   acting = true;
   try {
     const payload = withTableFields(body);

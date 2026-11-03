@@ -1056,4 +1056,19 @@ describe('契约点：suggestMove 的目标牌型矩阵', () => {
     expect(suggestMove([...body, '9', '9', '9', '9'], target)).toEqual(['9', '9', '9', '9']);
     expect(suggestMove([...body, '9', '9', '9'], target)).toBeNull();
   });
+
+  it('真实 54 张牌的桌面提示和超时代打都能跟飞机带单（E4）', () => {
+    // 主体用互不重叠的点数，保证上一手与本人手牌能同时存在于真实牌堆。
+    const previous = ['3', '3', '3', '4', '4', '4', '5', '5', '5', 'J', 'Q', 'K'];
+    const hand = ['6', '6', '6', '7', '7', '7', '8', '8', '8', '9', '9', '9', '10'];
+    const table = directedTable({ landlord: previous, b: hand });
+    table.act('a', { move: 'play', cards: previous }, 0);
+    const hint = viewOf(table, 'b').hint;
+    expect(hint.pass).not.toBe(true);
+    expect(parseMove(hint.cards)?.type).toBe('airplane-single');
+    expect(canBeat(parseMove(hint.cards)!, move(previous))).toBe(true);
+    const step = table.autoPlay('b', 1)!;
+    expect(playEvent(step)?.data?.label).toContain('飞机带单');
+    expect(viewOf(table, 'b').hand).toHaveLength(5);
+  });
 });

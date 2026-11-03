@@ -201,9 +201,14 @@ function applyHint(): void {
     selection.value = next;
   }
 }
+function sendAction(body: Record<string, unknown>): void {
+  const submittedSelection = selection.value;
+  void props.ctx.act(body).then((receipt) => {
+    if (receipt && selection.value === submittedSelection) selection.value = new Set();
+  }).catch(() => {});
+}
 function sendBid(call: boolean): void {
-  selection.value = new Set();
-  void props.ctx.act({ type: 'ddz_action', move: 'bid', call }).catch(() => {});
+  sendAction({ type: 'ddz_action', move: 'bid', call });
 }
 function sendPlay(): void {
   const cards = [...selection.value].sort((left, right) => left - right)
@@ -212,12 +217,10 @@ function sendPlay(): void {
     props.ctx.toast('先点几张牌');
     return;
   }
-  selection.value = new Set();
-  void props.ctx.act({ type: 'ddz_action', move: 'play', cards }).catch(() => {});
+  sendAction({ type: 'ddz_action', move: 'play', cards });
 }
 function sendPass(): void {
-  selection.value = new Set();
-  void props.ctx.act({ type: 'ddz_action', move: 'pass' }).catch(() => {});
+  sendAction({ type: 'ddz_action', move: 'pass' });
 }
 function clearSelection(): void {
   selection.value = new Set();

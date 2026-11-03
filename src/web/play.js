@@ -734,7 +734,10 @@ function isNetworkError(error) {
 }
 
 async function act(body) {
-  if (state.busy) return null;
+  if (state.busy) {
+    showToast('上一操作正在处理，这次尚未发送，请稍后重试。', 'bad');
+    return null;
+  }
   state.busy = true;
   try {
     const payload = withTableFields(body) || {};

@@ -284,6 +284,7 @@ export function mountDdz(root, ctx) {
 
   /** 点一张牌只改这张牌和几个按钮，不重画牌桌——重画会把焦点和手牌的滑动位置一起冲掉。 */
   function toggleCard(index) {
+    selection = new Set(selection);
     if (selection.has(index)) selection.delete(index);
     else selection.add(index);
     paintSelection();
@@ -325,6 +326,16 @@ export function mountDdz(root, ctx) {
 
   /* —— 按钮 —— */
 
+  function sendAction(body) {
+    const submittedSelection = selection;
+    void ctx.act(body).then((receipt) => {
+      if (receipt && selection === submittedSelection) {
+        selection = new Set();
+        paintSelection();
+      }
+    }).catch(() => {});
+  }
+
   function actionBar(table, priv, myTurn, seated, view) {
     const wrap = el('div', 'ddz-actionbar');
     const actions = el('div', 'ddz-actions');
@@ -333,12 +344,10 @@ export function mountDdz(root, ctx) {
     if (table.status === 'bidding') {
       if (myTurn) {
         actions.append(btn('叫地主', () => {
-          selection = new Set();
-          ctx.act({ type: 'ddz_action', move: 'bid', call: true }).catch(() => {});
+          sendAction({ type: 'ddz_action', move: 'bid', call: true });
         }, { primary: true }));
         actions.append(btn('不叫', () => {
-          selection = new Set();
-          ctx.act({ type: 'ddz_action', move: 'bid', call: false }).catch(() => {});
+          sendAction({ type: 'ddz_action', move: 'bid', call: false });
         }));
       } else if (seated) {
         actions.append(el('span', 'ddz-wait', '等 ' + (names.get(table.turn) || '？') + ' 叫地主'));
@@ -352,16 +361,12 @@ export function mountDdz(root, ctx) {
           ctx.toast('先点几张牌');
           return;
         }
-        selection = new Set();
-        paintSelection();
-        ctx.act({ type: 'ddz_action', move: 'play', cards }).catch(() => {});
+        sendAction({ type: 'ddz_action', move: 'play', cards });
       }, { primary: true, disabled: selection.size === 0 });
       playBtn = play;
       actions.append(play);
       actions.append(btn('不要', () => {
-        selection = new Set();
-        paintSelection();
-        ctx.act({ type: 'ddz_action', move: 'pass' }).catch(() => {});
+        sendAction({ type: 'ddz_action', move: 'pass' });
       }, {
         disabled: priv ? priv.canPass !== true : true,
         title: priv && priv.canPass === true ? '' : '你先出，必须出牌',

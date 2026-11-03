@@ -8,14 +8,16 @@ class TestNode {
   className = '';
   dataset = {};
   classList = { toggle() {}, add() {}, remove() {} };
+  attributes = new Map<string, string>();
+  listeners = new Map<string, () => void>();
   private text = '';
   get firstChild() { return this.children[0]; }
   get textContent(): string { return this.text + this.children.map((node) => node.textContent).join(''); }
   set textContent(text: string) { this.text = text; this.children = []; }
   append(...nodes: TestNode[]) { this.children.push(...nodes); }
   removeChild(node: TestNode) { this.children.splice(this.children.indexOf(node), 1); }
-  setAttribute() {}
-  addEventListener() {}
+  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+  addEventListener(name: string, listener: () => void) { this.listeners.set(name, listener); }
   remove() {}
 }
 
@@ -47,6 +49,62 @@ const history = [{ day: 1, target: 3, result: 'wolf' }];
 const state = (phase: string, priv: unknown, day = 1, status = 'playing', tableId = 'table-a') => ({
   table: { tableId, phase, day, status, seats, turn: 's2', speeches: [], votes: [] },
   priv, me: { id: 's1' }, online: seats.map((seat) => seat.id), seats, classes: new Map(),
+});
+
+const findNode = (root: TestNode, predicate: (node: TestNode) => boolean): TestNode | undefined => {
+  if (predicate(root)) return root;
+  for (const child of root.children) {
+    const found = findNode(child, predicate);
+    if (found) return found;
+  }
+};
+const clickSeat = (root: TestNode, seat: number) => {
+  const node = findNode(root, (entry) => entry.className.split(' ').includes('wf-seat')
+    && entry.attributes.get('aria-label')?.startsWith(`${seat}号 `) === true);
+  expect(node).toBeDefined();
+  node!.listeners.get('click')!();
+};
+
+describe('狼人杀 legacy 选人与狼队信息回归', () => {
+  it('同窗口重绘保留未提交投票，新窗口清除', () => {
+    const { root, game } = mount();
+    const priv = { role: 'villager', alive: true, canAct: true, myMove: 'vote', windowId: 'w1' };
+    game.update(state('vote', priv));
+    clickSeat(root, 3);
+    expect(root.textContent).toContain('投给 3号 玩家3');
+    game.update(state('vote', { ...priv }));
+    expect(root.textContent).toContain('投给 3号 玩家3');
+    game.update(state('vote', { ...priv, windowId: 'w2' }));
+    expect(root.textContent).not.toContain('投给 3号 玩家3');
+  });
+
+  it('环形座位重复点选可取消刀票', () => {
+    const { root, game } = mount();
+    game.update(state('night', { role: 'wolf', alive: true, canAct: true, myMove: 'wolf_kill', windowId: 'w1' }));
+    clickSeat(root, 3);
+    expect(root.textContent).toContain('刀 3号 玩家3');
+    clickSeat(root, 3);
+    expect(root.textContent).not.toContain('刀 3号 玩家3');
+  });
+
+  it('狼聊、刀票、锁定刀口独立于动作槽；权限或当夜数据移除后不残留', () => {
+    const { root, game } = mount();
+    const privateInfo = {
+      role: 'wolf', alive: true, windowId: 'w1',
+      wolfChat: [{ seatNo: 2, name: '同伴', text: '狼队秘密暗号' }],
+      killVotes: [{ seatNo: 2, target: 3 }], lockedKill: 3,
+    };
+    for (const myMove of ['wolf_chat', 'wolf_kill', null]) {
+      game.update(state('night', { ...privateInfo, myMove, canAct: !!myMove }));
+      expect(root.textContent).toContain('狼队秘密暗号');
+      expect(root.textContent).toContain('已交刀票：2号→3号');
+      expect(root.textContent).toContain('今夜锁定刀口：3号 玩家3');
+    }
+    game.update(state('night', { ...privateInfo, role: 'seer', canAct: false }));
+    expect(root.textContent).not.toContain('狼队秘密暗号');
+    game.update(state('night', { role: 'wolf', alive: true, canAct: false, windowId: 'w2' }));
+    expect(root.textContent).not.toContain('狼队信息');
+  });
 });
 const seer = (extra = {}) => ({ role: 'seer', alive: true, inspections: history, canAct: false, ...extra });
 const panelText = (root: TestNode): string => {

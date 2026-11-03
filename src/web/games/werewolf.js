@@ -40,6 +40,8 @@ export function mountWerewolf(root, ctx) {
   let inspectPick = null;
   let poisonPick = null;
   let shootPick = null;
+  let wolfKillPick = null;
+  let selectionContext = '';
   let revealed = false;         // 身份牌翻开中
   let identityOpen = false;     // 「我的身份」抽屉
   let draftFocused = false;
@@ -97,7 +99,7 @@ export function mountWerewolf(root, ctx) {
     }
     return ctx.act({ type: 'werewolf_action', windowId: view.priv.windowId, ...body })
       .then((ok) => {
-        if (ok !== false && onOk) onOk();
+        if (ok && onOk) onOk();
         return ok;
       })
       .catch(() => false);
@@ -134,6 +136,8 @@ export function mountWerewolf(root, ctx) {
     const side = el('div', 'wf-side');
     side.append(nowSpeechCard(table));
     if (inspections) side.append(inspections);
+    const wolves = wolfPanel(priv);
+    if (wolves) side.append(wolves);
     side.append(historyPanel(table));
     main.append(side);
     box.append(main);
@@ -260,8 +264,7 @@ export function mountWerewolf(root, ctx) {
     const move = myMove();
     if (move === 'vote') votePick = { target: votePick?.target === seatNo ? null : seatNo };
     else if (move === 'inspect') inspectPick = inspectPick === seatNo ? null : seatNo;
-    else if (move === 'wolf_kill') shootPick = null;
-    if (move === 'wolf_kill') shootPick = shootPick === seatNo ? null : seatNo;
+    else if (move === 'wolf_kill') wolfKillPick = wolfKillPick === seatNo ? null : seatNo;
     if (move === 'witch') poisonPick = poisonPick === seatNo ? null : seatNo;
     if (move === 'shoot') shootPick = shootPick === seatNo ? null : seatNo;
     render();
@@ -580,28 +583,32 @@ export function mountWerewolf(root, ctx) {
         composer.append(el('p', 'wf-composer-hint', '你的刀票已经交了；到点锁定刀口。'));
       } else {
         composer.append(el('p', 'wf-composer-hint', '交一张最终刀票（相对多数且唯一才成刀；平票或全弃 = 空刀）。'));
-        composer.append(targetChips(targets, shootPick, (no) => { shootPick = no; }));
+        composer.append(targetChips(targets, wolfKillPick, (no) => { wolfKillPick = wolfKillPick === no ? null : no; }));
         const row = el('div', 'wf-confirm');
-        if (shootPick) row.append(btn(`刀 ${seatLabel(shootPick)}`, () => {
-          void act({ move: 'wolf_kill', target: shootPick }, () => { shootPick = null; });
+        if (wolfKillPick) row.append(btn(`刀 ${seatLabel(wolfKillPick)}`, () => {
+          void act({ move: 'wolf_kill', target: wolfKillPick }, () => { wolfKillPick = null; });
         }, { primary: true }));
         row.append(btn('弃刀', () => { void act({ move: 'wolf_kill' }); }, { ghost: true }));
         composer.append(row);
       }
-      const votes = priv.killVotes ?? [];
-      if (votes.length) {
-        const line = el('p', 'wf-role-mates', '已交刀票：'
-          + votes.map((entry) => `${entry.seatNo}号→${entry.target === null ? '弃' : `${entry.target}号`}`).join('，'));
-        composer.append(line);
-      }
-      const chats = priv.wolfChat ?? [];
-      if (chats.length) {
-        for (const chat of chats) {
-          composer.append(el('p', 'wf-role-mates', `${chat.seatNo}号 ${chat.name}：「${chat.text}」`));
-        }
-      }
     }
     return composer;
+  }
+
+  function wolfPanel(priv) {
+    if (priv?.role !== 'wolf') return null;
+    const votes = priv.killVotes ?? [];
+    const chats = priv.wolfChat ?? [];
+    if (!votes.length && !chats.length && priv.lockedKill == null) return null;
+    const panel = el('section', 'wf-panel wf-wolf-info');
+    panel.append(el('h3', 'wf-panel-title', '狼队信息（仅狼人可见）'));
+    const body = el('div', 'wf-tabbody');
+    if (votes.length) body.append(el('p', 'wf-role-mates', '已交刀票：'
+      + votes.map((entry) => `${entry.seatNo}号→${entry.target === null ? '弃' : `${entry.target}号`}`).join('，')));
+    for (const chat of chats) body.append(el('p', 'wf-role-mates', `${chat.seatNo}号 ${chat.name}：「${chat.text}」`));
+    if (priv.lockedKill != null) body.append(el('p', 'wf-role-mates', `今夜锁定刀口：${seatLabel(priv.lockedKill)}`));
+    panel.append(body);
+    return panel;
   }
 
   // 查验记录属于整局私视图，不能随验人动作槽关闭而消失。
@@ -748,6 +755,14 @@ export function mountWerewolf(root, ctx) {
 
   return {
     update(next) {
+      const nextContext = JSON.stringify([
+        next.table?.tableId || next.table?.id || '', next.me?.id, next.priv?.role,
+        next.priv?.windowId, next.table?.phase,
+      ]);
+      if (nextContext !== selectionContext) {
+        selectionContext = nextContext;
+        votePick = inspectPick = poisonPick = shootPick = wolfKillPick = null;
+      }
       view = next;
       const nextTableId = next.table?.tableId || next.table?.id || '';
       if (nextTableId !== tableId) {

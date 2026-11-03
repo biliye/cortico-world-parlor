@@ -4,7 +4,7 @@
  * DOM 结构与类名，样式由 play.css 提供；旧文件 src/web/games/werewolf.js 留给 ?legacy=1。
  * 规则、窗口、时限全在服务器；这里只摆座位、卡片、草稿与按钮。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
 import { fmtClock } from '../../lib/cards.ts';
 import { initialOf } from '../../lib/text.ts';
@@ -49,6 +49,7 @@ interface WPriv {
   knownKill?: number | null; inspections?: Array<{ day: number; target: number; result: string }>;
   speechKind?: string; killVotes?: Array<{ seatNo: number; target: number | null }>;
   wolfChat?: Array<{ seatNo: number; name: string; text: string }>;
+  lockedKill?: number | null;
 }
 
 const table = computed(() => props.view.table as unknown as WTable);
@@ -146,6 +147,7 @@ const votePick = ref<{ target: number | null } | null>(null);
 const inspectPick = ref<number | null>(null);
 const poisonPick = ref<number | null>(null);
 const shootPick = ref<number | null>(null);
+const wolfKillPick = ref<number | null>(null);
 const revealed = ref(false);
 const identityOpen = ref(false);
 const enlargedImage = ref<string | null>(null);
@@ -158,8 +160,7 @@ function pickTarget(seatNo: number): void {
   const move = myMove.value;
   if (move === 'vote') votePick.value = { target: votePick.value?.target === seatNo ? null : seatNo };
   else if (move === 'inspect') inspectPick.value = inspectPick.value === seatNo ? null : seatNo;
-  else if (move === 'wolf_kill') shootPick.value = null;
-  if (move === 'wolf_kill') shootPick.value = shootPick.value === seatNo ? null : seatNo;
+  else if (move === 'wolf_kill') wolfKillPick.value = wolfKillPick.value === seatNo ? null : seatNo;
   if (move === 'witch') poisonPick.value = poisonPick.value === seatNo ? null : seatNo;
   if (move === 'shoot') shootPick.value = shootPick.value === seatNo ? null : seatNo;
 }
@@ -168,6 +169,19 @@ function pickTarget(seatNo: number): void {
 function tableIdValue(): string {
   return table.value.tableId || table.value.id || '';
 }
+watch([
+  tableIdValue,
+  () => props.view.me.id,
+  () => priv.value?.role,
+  () => priv.value?.windowId,
+  () => table.value.phase,
+], () => {
+  votePick.value = null;
+  inspectPick.value = null;
+  poisonPick.value = null;
+  shootPick.value = null;
+  wolfKillPick.value = null;
+}, { flush: 'sync' });
 function draftKey(scope: string): string {
   return `ww.draft.${location.host}.${props.view.me.id || 'me'}.${tableIdValue()}.${scope}`;
 }
@@ -211,7 +225,7 @@ function act(body: Record<string, unknown>, onOk?: () => void): Promise<unknown>
   }
   return props.ctx.act({ type: 'werewolf_action', windowId: own.windowId, ...body })
     .then((ok) => {
-      if (ok !== false && onOk) onOk();
+      if (ok && onOk) onOk();
       return ok;
     })
     .catch(() => false);
@@ -242,8 +256,8 @@ function submitVote(): void {
   else void act({ move: 'vote', target: pick.target }, () => { votePick.value = null; });
 }
 function submitWolfKill(): void {
-  if (shootPick.value === null) return;
-  void act({ move: 'wolf_kill', target: shootPick.value }, () => { shootPick.value = null; });
+  if (wolfKillPick.value === null) return;
+  void act({ move: 'wolf_kill', target: wolfKillPick.value }, () => { wolfKillPick.value = null; });
 }
 function giveUpWolfKill(): void {
   void act({ move: 'wolf_kill' });
@@ -331,6 +345,9 @@ function speechName(entry: WSpeech): string {
   return seat?.name ?? '';
 }
 const seerInspections = computed(() => (priv.value?.role === 'seer' ? (priv.value.inspections ?? []) : []));
+const wolfChat = computed(() => (priv.value?.role === 'wolf' ? (priv.value.wolfChat ?? []) : []));
+const wolfVotes = computed(() => (priv.value?.role === 'wolf' ? (priv.value.killVotes ?? []) : []));
+const lockedKill = computed(() => (priv.value?.role === 'wolf' ? priv.value.lockedKill : undefined));
 
 /* —— 操作条派生 —— */
 const targetsAliveOthers = computed<number[]>(() => seats.value
@@ -544,6 +561,19 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
+          <section v-if="wolfChat.length || wolfVotes.length || lockedKill != null" class="wf-panel wf-wolf-info">
+            <h3 class="wf-panel-title">狼队信息（仅狼人可见）</h3>
+            <div class="wf-tabbody">
+              <p v-if="wolfVotes.length" class="wf-role-mates">
+                已交刀票：{{ wolfVotes.map((entry) => `${entry.seatNo}号→${entry.target === null ? '弃' : `${entry.target}号`}`).join('，') }}
+              </p>
+              <p v-for="(chat, index) in wolfChat" :key="'wolf-chat-' + index" class="wf-role-mates">
+                {{ chat.seatNo }}号 {{ chat.name }}：「{{ chat.text }}」
+              </p>
+              <p v-if="lockedKill != null" class="wf-role-mates">今夜锁定刀口：{{ seatLabel(lockedKill) }}</p>
+            </div>
+          </section>
+
           <section class="wf-panel wf-history">
             <div class="wf-tabs">
               <button class="wf-tab" :class="{ 'is-active': tab === 'today' }" type="button" @click="tab = 'today'">本日</button>
@@ -718,22 +748,16 @@ onBeforeUnmount(() => {
                     v-for="no in wolfTargets"
                     :key="'wolf-target-' + no"
                     class="wf-chip"
-                    :class="{ 'is-active': shootPick === no }"
+                    :class="{ 'is-active': wolfKillPick === no }"
                     type="button"
-                    @click="shootPick = no"
+                    @click="wolfKillPick = wolfKillPick === no ? null : no"
                   >{{ seatLabel(no) }}</button>
                 </div>
                 <div class="wf-confirm">
-                  <button v-if="shootPick !== null" class="btn primary" type="button" @click="submitWolfKill">刀 {{ seatLabel(shootPick) }}</button>
+                  <button v-if="wolfKillPick !== null" class="btn primary" type="button" @click="submitWolfKill">刀 {{ seatLabel(wolfKillPick) }}</button>
                   <button class="btn ghost" type="button" @click="giveUpWolfKill">弃刀</button>
                 </div>
               </template>
-              <p v-if="priv?.killVotes?.length" class="wf-role-mates">
-                已交刀票：{{ (priv.killVotes ?? []).map((entry) => `${entry.seatNo}号→${entry.target === null ? '弃' : `${entry.target}号`}`).join('，') }}
-              </p>
-              <p v-for="(chat, index) in priv?.wolfChat ?? []" :key="'wolf-chat-' + index" class="wf-role-mates">
-                {{ chat.seatNo }}号 {{ chat.name }}：「{{ chat.text }}」
-              </p>
             </template>
           </div>
 
