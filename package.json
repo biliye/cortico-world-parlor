@@ -66,10 +66,13 @@
       "assets/screenshots/table.png",
       "assets/screenshots/lobby.png"
     ],
-    "describe": "describe.json"
+    "describe": "describe.json",
+    "webUiClient": "dist/webui.js",
+    "webUiStyle": "dist/webui.css"
   },
   "files": [
     "src",
+    "dist",
     "!src/web/assets/cards/cards.webp",
     "assets",
     "scripts",
@@ -80,9 +83,12 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.webui.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "build:web": "vite build",
+    "build:webui": "vite build --config vite.webui.config.ts",
+    "check:webui": "node scripts/check-webui.mjs",
+    "prepack": "pnpm build:webui && pnpm check:webui",
     "serve": "node --experimental-strip-types scripts/serve.ts",
     "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
     "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts",
