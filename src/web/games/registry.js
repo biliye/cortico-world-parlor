@@ -10,9 +10,9 @@
  * - `blurb` / `foot` / `guide` 是大厅卡片的文案与玩法说明。
  */
 import { mountDice } from './dice.js';
-import { mountDdz } from './ddz.js?v=0.36.1';
+import { mountDdz } from './ddz.js?v=0.36.2';
 import { mountMonopoly } from './monopoly.js';
-import { mountWerewolf } from './werewolf.js?v=0.36.1';
+import { mountWerewolf } from './werewolf.js?v=0.36.2';
 
 export const GAMES = {
   dice: {
