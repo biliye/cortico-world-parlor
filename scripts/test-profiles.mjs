@@ -18,6 +18,8 @@ export const pgSmokeTests = [
   'tests/pg-lifecycle-upgrade.test.ts',
   'tests/lifecycle-account.test.ts',
   'tests/table-host.test.ts',
+  'tests/ledger-db.test.ts',
+  'tests/pg-test-resources.test.ts',
 ];
 
 export function planTests(mode = 'unit', filters = []) {
