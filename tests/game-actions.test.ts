@@ -30,7 +30,7 @@ describe('W1/E1：未发出或失败的动作保留输入', () => {
   it.each(['store', 'legacy'])('%s 忙闸门返回 null 并明确提示未发送', async (entry) => {
     const toast = vi.fn();
     const path = entry === 'store' ? 'web-src/stores/parlor.ts' : 'src/web/play.js';
-    const act = sourceFunction(path, 'act', { acting: true, state: { busy: true }, showToast: toast });
+    const act = sourceFunction(path, 'act', { acting: true, switching: false, roomTransition: { value: null }, state: { busy: true }, showToast: toast });
     expect(await act({ type: 'werewolf_action', move: 'speak' })).toBeNull();
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('尚未发送'), 'bad');
   });
