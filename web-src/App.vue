@@ -3,10 +3,11 @@
  * 根组件：没有席位显示加入页；有席位按「大厅 / 客厅 / 牌桌」三层渲染。
  * 默认由 vue-loader 载入；?legacy=1 回退旧的 play.js（排障用）。
  */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';
+import RoomTransition from './components/RoomTransition.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
-import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh } from './stores/parlor.ts';
+import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition } from './stores/parlor.ts';
 import { entryNotice, seat } from './stores/session.ts';
 import { readView, view } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
@@ -17,6 +18,17 @@ import TableView from './views/TableView.vue';
 const ready = ref(false);
 const failed = ref('');
 let entering = false;
+const destination = computed(() => roomTransition.value?.name ||
+  ((new URLSearchParams(location.search).get('room') || seat.value?.room) === 'hall' ? '大厅' : '客厅'));
+
+async function retry(): Promise<void> {
+  if (!roomTransition.value) return enter();
+  if (await finishRoomTransition()) {
+    ready.value = true;
+    readView();
+    startAnnouncementWatch();
+  }
+}
 
 async function enter(): Promise<void> {
   if (entering) return;
@@ -77,16 +89,17 @@ watch(seat, (next) => {
 
 <template>
   <JoinView v-if="!seat" :initial-error="failed || entryNotice" @entered="enter" />
-  <AppShell v-else-if="ready">
+  <AppShell v-else-if="ready && !roomTransition">
     <LobbyView v-if="snapshot && snapshot.id === 'hall'" />
     <TableView v-else-if="view === 'table'" />
     <RoomView v-else />
   </AppShell>
-  <div v-else class="join">
-    <section class="panel">
-      <h1>连不上客厅</h1>
-      <p class="sub">{{ failed || '正在读取客厅状态…' }}</p>
-      <button class="btn primary" type="button" @click="enter">重试</button>
-    </section>
-  </div>
+  <RoomTransition
+    v-else
+    :destination="destination"
+    :from="roomTransition?.from || ''"
+    :returning="roomTransition?.to === 'hall'"
+    :error="roomTransition ? roomTransition.error : failed"
+    @retry="retry"
+  />
 </template>

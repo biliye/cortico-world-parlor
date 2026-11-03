@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ api: vi.fn(), toast: vi.fn() }));
+const navigation = vi.hoisted(() => ({ assign: vi.fn(), pushState: vi.fn(), replaceState: vi.fn() }));
 vi.mock('../web-src/api/client.ts', () => ({
   api: mocks.api, scopedPath: (path: string) => path, takeKeyFromHash: () => null,
   beginGlobalEntry: vi.fn(), finishGlobalEntry: vi.fn(), parentPlay: vi.fn(),
@@ -14,7 +15,7 @@ vi.mock('../web-src/stores/session.ts', async () => {
 });
 vi.mock('../web-src/stores/view.ts', async () => {
   const { ref } = await import('vue');
-  return { watchTableId: ref(''), backToRoom: vi.fn(), enterTable: vi.fn() };
+  return { watchTableId: ref(''), backToRoom: vi.fn(), enterTable: vi.fn(), readView: vi.fn() };
 });
 
 class Stream {
@@ -227,5 +228,121 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
     ledger.resolve({ ledger: { balance: 80 } });
     await vi.advanceTimersByTimeAsync(0);
     expect(store.snapshot.value.ledger.balance).toBe(80);
+  });
+});
+
+describe('大厅与客厅就地转场', () => {
+  beforeEach(() => {
+    Object.values(navigation).forEach(mock => mock.mockClear());
+    vi.stubGlobal('location', { pathname: '/play', search: '?room=room1', hash: '', assign: navigation.assign });
+    vi.stubGlobal('history', { pushState: navigation.pushState, replaceState: navigation.replaceState });
+    session.saveSeat.mockImplementation((next: any) => { session.seat.value = next; });
+  });
+  const moved = (room = 'hall') => ({ room, token: 'next-token', seat: { id: 's2', name: '小满' } });
+  const destination = (id = 'hall') => ({ ...snap(), id, latest: 5, table: null, tables: [], tablePrivate: null });
+
+  it('返回大厅不重载页面，快照到达就完成，不等待历史回放', async () => {
+    const replay = deferred();
+    mocks.api.mockImplementation((path: string) => {
+      if (path.endsWith('/switch')) return Promise.resolve(moved());
+      if (path.startsWith('/v1/replay')) return replay.promise;
+      return Promise.resolve(destination());
+    });
+    store.log.value = [{ seq: 900, text: '旧厅消息' }];
+    expect(await store.goRoom('hall')).toBe(true);
+    expect(navigation.assign).not.toHaveBeenCalled();
+    expect(navigation.pushState).toHaveBeenCalledWith({ parlor: true }, '', '/play?room=hall');
+    expect(store.snapshot.value.id).toBe('hall');
+    expect(store.log.value).toEqual([]);
+    expect(store.connection.value).toBe('connecting');
+    expect(store.roomTransition.value).toBeNull();
+    expect(mocks.api.mock.calls.map(([path]) => path)).not.toContain('/v1/me/location');
+    replay.resolve({ events: [] });
+  });
+
+  it('去客厅时立即显示目的地，连续点击只发一次换厅', async () => {
+    const post = deferred();
+    store.rooms.value = [{ id: 'room2', name: '月光客厅' }];
+    mocks.api.mockImplementation((path: string) => path.endsWith('/switch') ? post.promise
+      : Promise.resolve(path.startsWith('/v1/replay') ? { events: [] } : destination('room2')));
+    const first = store.goRoom('room2');
+    expect(store.roomTransition.value).toMatchObject({ to: 'room2', name: '月光客厅', error: '' });
+    expect(await store.goRoom('room2')).toBe(false);
+    expect(mocks.api).toHaveBeenCalledTimes(1);
+    post.resolve(moved('room2'));
+    expect(await first).toBe(true);
+  });
+
+  it('换厅失败保留原席位与画面，不写入新的浏览历史', async () => {
+    mocks.api.mockRejectedValue(new Error('客厅已满'));
+    expect(await store.goRoom('hall')).toBe(false);
+    expect(session.seat.value.room).toBe('room1');
+    expect(store.snapshot.value.id).toBe('room1');
+    expect(store.roomTransition.value).toBeNull();
+    expect(navigation.pushState).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith('客厅已满', 'bad');
+  });
+
+  it('已换到大厅但快照失败时，重试只读快照，不重复换席位', async () => {
+    let unavailable = true;
+    mocks.api.mockImplementation((path: string) => {
+      if (path.endsWith('/switch')) return Promise.resolve(moved());
+      if (path.startsWith('/v1/replay')) return Promise.resolve({ events: [] });
+      return unavailable ? Promise.reject(new Error('快照超时')) : Promise.resolve(destination());
+    });
+    expect(await store.goRoom('hall')).toBe(false);
+    expect(session.seat.value.room).toBe('hall');
+    expect(store.roomTransition.value.error).toBe('快照超时');
+    unavailable = false;
+    expect(await store.finishRoomTransition()).toBe(true);
+    expect(mocks.api.mock.calls.filter(([path]) => path.endsWith('/switch'))).toHaveLength(1);
+    expect(store.roomTransition.value).toBeNull();
+  });
+
+  it('旧厅快照在途不阻塞新厅，迟到响应和回放不串厅', async () => {
+    const oldSnapshot = deferred();
+    const oldReplay = deferred();
+    mocks.api.mockImplementation((path: string) => path.startsWith('/v1/replay') ? oldReplay.promise : oldSnapshot.promise);
+    const refreshing = store.refreshSnapshot();
+    const replaying = store.seedLog();
+    mocks.api.mockImplementation((path: string) => Promise.resolve(path.endsWith('/switch') ? moved()
+      : path.startsWith('/v1/replay') ? { events: [{ seq: 1, text: '大厅消息' }] } : destination()));
+    expect(await store.goRoom('hall')).toBe(true);
+    oldSnapshot.resolve(snap(99));
+    oldReplay.resolve({ events: [{ seq: 900, text: '旧厅私密消息' }] });
+    await Promise.all([refreshing, replaying]);
+    expect(store.snapshot.value.id).toBe('hall');
+    expect(store.log.value.map((event: any) => event.text)).toEqual(['大厅消息']);
+  });
+
+  it('切厅途中前台位置恢复和动作不能发起第二次迁移或污染旧厅', async () => {
+    const post = deferred();
+    mocks.api.mockReturnValue(post.promise);
+    const pending = store.goRoom('hall');
+    expect(await store.syncLocation()).toBe(false);
+    expect(await store.act({ type: 'say', text: 'hello' })).toBeNull();
+    expect(mocks.api).toHaveBeenCalledTimes(1);
+    mocks.api.mockImplementation((path: string) => Promise.resolve(path.startsWith('/v1/replay') ? { events: [] } : destination()));
+    post.resolve(moved());
+    await pending;
+  });
+
+  it('前进后退使用替换历史，定向牌桌参数保留', async () => {
+    mocks.api.mockImplementation((path: string) => Promise.resolve(path.endsWith('/switch') ? moved('room2')
+      : path.startsWith('/v1/replay') ? { events: [] } : destination('room2')));
+    expect(await store.goRoom('room2', 't2', true)).toBe(true);
+    expect(navigation.replaceState).toHaveBeenCalledWith({ parlor: true }, '', '/play?room=room2&view=table&table=t2');
+    expect(navigation.pushState).not.toHaveBeenCalled();
+  });
+
+  it('首次进入也不等待聊天回放，后补历史与实时消息按序去重', async () => {
+    const replay = deferred();
+    mocks.api.mockImplementation((path: string) => path.startsWith('/v1/replay') ? replay.promise
+      : Promise.resolve(path === '/v1/me/location' ? { room: 'room1', seat: { id: 's1', name: '小满' } } : snap()));
+    expect(await store.boot()).toBe(true);
+    Stream.last.emit(3, 'parlor.say');
+    replay.resolve({ events: [{ seq: 1 }, { seq: 2 }, { seq: 3 }] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.log.value.map((event: any) => event.seq)).toEqual([1, 2, 3]);
   });
 });

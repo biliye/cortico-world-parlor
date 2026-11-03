@@ -11,7 +11,7 @@ import { noteChatEvent, resetChatState } from './chat.ts';
 import { noteWhisper, resetDmState } from './dm.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
 import { showToast } from './ui.ts';
-import { backToRoom, enterTable, watchTableId } from './view.ts';
+import { backToRoom, enterTable, readView, watchTableId } from './view.ts';
 import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot, TableSummary } from '../api/types.ts';
 import type { TableEntryResponse, TableRecruitment } from '../../src/room/table-discovery-db.ts';
 
@@ -26,6 +26,7 @@ export const hallLoaded = ref(false);
 export const hallError = ref('');
 export const bootError = ref('');
 export const log = ref<ChatEvent[]>([]);
+export const roomTransition = ref<{ from: string; to: string; name: string; error: string } | null>(null);
 
 let stream: EventSource | null = null;
 let reconnectTimer: number | undefined;
@@ -33,7 +34,7 @@ let reconnectFailures = 0;
 let locationTask: Promise<boolean> | undefined;
 let refreshTimer: number | undefined;
 let hallTimer: number | undefined;
-let refreshing = false;
+let refreshTask: { key: string; promise: Promise<void> } | undefined;
 let hallFetching = false;
 let hallAt = 0;
 const seen = new Set<number>();
@@ -90,9 +91,12 @@ function resetRoomState(): void {
 
 /** 首屏补历史；拿不到不影响开局。 */
 export async function seedLog(): Promise<void> {
+  const key = seatKey();
   try {
     const page = await api<{ events?: ChatEvent[] }>('/v1/replay?limit=80');
+    if (key !== seatKey()) return;
     for (const event of page.events || []) pushLog(event);
+    log.value = [...log.value].sort((a, b) => (a.seq || 0) - (b.seq || 0));
   } catch {
     /* 回放失败就等 SSE */
   }
@@ -147,26 +151,32 @@ export function activePrivate(): Record<string, unknown> | null {
 }
 
 export async function refreshSnapshot(): Promise<void> {
-  if (!seat.value || refreshing) return;
-  refreshing = true;
+  if (!seat.value) return;
   const key = seatKey();
+  if (refreshTask?.key === key) return refreshTask.promise;
   const epoch = syncEpoch;
   const coveredSeq = tableTargetSeq;
-  try {
-    const next = await api<Snapshot>('/v1/room?limit=1');
-    if (key !== seatKey() || epoch !== syncEpoch) return;
-    syncEpoch += 1;
-    snapshot.value = next;
-    appliedTableSeq = Math.max(appliedTableSeq, coveredSeq);
-    offset.value = next.now - Date.now();
-  } catch (error) {
-    if ((error as { status?: number }).status === 401) {
-      await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
+  const task = { key, promise: Promise.resolve() };
+  task.promise = (async () => {
+    try {
+      const next = await api<Snapshot>('/v1/room?limit=1');
+      if (key !== seatKey() || epoch !== syncEpoch) return;
+      syncEpoch += 1;
+      snapshot.value = next;
+      appliedTableSeq = Math.max(appliedTableSeq, coveredSeq);
+      offset.value = next.now - Date.now();
+    } catch (error) {
+      if (key !== seatKey()) return;
+      if ((error as { status?: number }).status === 401) {
+        await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
+      }
+      throw error;
+    } finally {
+      if (refreshTask === task) refreshTask = undefined;
     }
-    throw error;
-  } finally {
-    refreshing = false;
-  }
+  })();
+  refreshTask = task;
+  return task.promise;
 }
 
 function newerTable(incoming: { tableId?: string; id?: string; revision?: number }, current?: typeof incoming | null): boolean {
@@ -259,7 +269,7 @@ function scheduleLedgerRefresh(delay = 200): void {
  * 与旧 play.js 的 handleExpiredSeat 同一套判断。
  */
 async function handleExpiredSeat(token: string): Promise<void> {
-  if (readPendingEntry()) return;
+  if (switching || readPendingEntry()) return;
   if (!locationTask && token === seat.value?.token && await syncLocation()) { connect(); return; }
   const decision = decideExpiredSeat(
     token,
@@ -349,6 +359,7 @@ function handleEvent(event: ChatEvent): void {
 }
 
 export async function syncLocation(): Promise<boolean> {
+  if (switching || roomTransition.value) return false;
   if (locationTask) return locationTask;
   const cfg = seat.value;
   if (!cfg) return false;
@@ -356,13 +367,14 @@ export async function syncLocation(): Promise<boolean> {
   locationTask = (async () => {
     try {
       const current = await api<{ room:string|null;seat:{id:string;name:string}|null }>('/v1/me/location');
+      if (switching || roomTransition.value) return false;
       if (!current?.room || !current.seat || key !== seatKey() || (current.room === cfg.room && current.seat.id === cfg.seatId)) return false;
       disconnect(); resetRoomState(); backToRoom();
       saveSeat({ ...cfg, room:current.room, seatId:current.seat.id, name:current.seat.name });
       const params = new URLSearchParams(location.search);
       params.set('room', current.room); params.delete('table'); params.delete('view');
       history.replaceState(null, '', location.pathname + '?' + params);
-      await refreshSnapshot(); await seedLog();
+      await refreshSnapshot(); void seedLog();
       showToast('席位已更新，现已回到大厅。');
       return true;
     } catch { return false; }
@@ -415,20 +427,37 @@ export function disconnect(): void {
 
 let switching = false;
 
-/** 换客厅：服务器换一张令牌，然后整页跳到新客厅（与旧版同一做法）。 */
-export async function goRoom(id: string, targetTable = ''): Promise<boolean> {
+/** 服务器确认换席位后就地加载目的地，不再重载整页和串行等待聊天历史。 */
+export async function goRoom(id: string, targetTable = '', replace = false): Promise<boolean> {
   const cfg = seat.value;
   // 启动时快照还没到，用席位里记着的客厅当出发地。
   const from = cfg?.room || snapshot.value?.id || '';
   if (!cfg || !from || switching) return false;
   if (id === from) return true;
+  if (acting) {
+    showToast('上一操作正在处理，请稍后再换客厅。', 'bad');
+    return false;
+  }
   switching = true;
+  const previousTransition = roomTransition.value;
+  roomTransition.value = {
+    from: from === 'hall' ? '大厅' : (snapshot.value?.name || '客厅'),
+    to: id,
+    name: id === 'hall' ? '大厅' : (rooms.value.find(room => room.id === id)?.name || '客厅'),
+    error: '',
+  };
+  disconnect();
+  window.clearTimeout(refreshTimer);
+  refreshTimer = undefined;
+  let movedSeat = false;
   try {
     const moved = await api<{ room: string; token: string; seat: { id: string; name: string } }>(
       `/v1/rooms/${encodeURIComponent(from)}/switch`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: id }) },
     );
     saveSeat({ ...cfg, room: moved.room, token: moved.token, seatId: moved.seat.id, name: moved.seat.name });
+    movedSeat = true;
+    resetRoomState();
     const params = new URLSearchParams(location.search);
     params.set('room', moved.room);
     params.delete('view');
@@ -437,16 +466,43 @@ export async function goRoom(id: string, targetTable = ''): Promise<boolean> {
       params.set('view', 'table');
       params.set('table', targetTable);
     }
-    location.assign('/play?' + params.toString());
-    return true;
+    history[replace ? 'replaceState' : 'pushState']({ parlor: true }, '', '/play?' + params.toString());
+    readView();
+    return await finishRoomTransition();
   } catch (error) {
+    if (movedSeat) {
+      if (roomTransition.value) roomTransition.value.error = (error as Error).message || '暂时没有读到目的地，请重试。';
+      return false;
+    }
+    roomTransition.value = previousTransition;
     if ((error as { status?:number }).status === 401) await handleExpiredSeat((error as { seatToken?:string }).seatToken || cfg.token);
     if ((error as { status?:number }).status === 403) await syncLocation();
     hallError.value = (error as Error).message || '换不了客厅';
     showToast(hallError.value, 'bad');
+    if (seat.value?.token === cfg.token && !roomTransition.value) connect();
     return false;
   } finally {
     switching = false;
+  }
+}
+
+/** 换席位已经成功时，重试只补目的地快照，不能再发一次换厅请求。 */
+export async function finishRoomTransition(): Promise<boolean> {
+  const transition = roomTransition.value;
+  if (!transition) return false;
+  transition.error = '';
+  try {
+    await refreshSnapshot();
+    const next = snapshot.value;
+    if (!next || next.id !== seat.value?.room) throw new Error('暂时没有读到目的地，请重试。');
+    latest.value = next.latest || 0;
+    connect();
+    void seedLog();
+    roomTransition.value = null;
+    return true;
+  } catch (error) {
+    transition.error = (error as Error).message || '暂时没有读到目的地，请重试。';
+    return false;
   }
 }
 
@@ -454,7 +510,7 @@ export async function goRoom(id: string, targetTable = ''): Promise<boolean> {
 export async function syncRouteRoom(): Promise<boolean> {
   const wanted = new URLSearchParams(location.search).get('room') || '';
   if (!seat.value || !wanted || wanted === seat.value.room) return false;
-  return goRoom(wanted, new URLSearchParams(location.search).get('table') || '');
+  return goRoom(wanted, new URLSearchParams(location.search).get('table') || '', true);
 }
 
 let acting = false;
@@ -572,6 +628,10 @@ function withTableFields(body: Record<string, unknown>): Record<string, unknown>
 
 /** 有桌增量时直接应用；非牌桌动作或旧服务器仍走全量快照。 */
 export async function act(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  if (switching || roomTransition.value) {
+    showToast('正在换客厅，请稍后再操作。', 'bad');
+    return null;
+  }
   if (acting) {
     showToast('上一操作正在处理，这次尚未发送，请稍后重试。', 'bad');
     return null;
@@ -681,13 +741,13 @@ export async function boot(): Promise<boolean> {
   // 分享/邀请链接带着 ?room=：席位在别的客厅时先换过去（旧版在启动时做同一件事）。
   const wanted = new URLSearchParams(location.search).get('room') || '';
   if (wanted && wanted !== seat.value.room) {
-    const moved = await goRoom(wanted, new URLSearchParams(location.search).get('table') || '');
-    if (moved) return false;
+    const moved = await goRoom(wanted, new URLSearchParams(location.search).get('table') || '', true);
+    if (moved) return true;
     throw new Error(hallError.value || '换不到这个客厅');
   }
   await refreshSnapshot();
   latest.value = snapshot.value?.latest || 0;
-  await seedLog();
   connect();
+  void seedLog();
   return true;
 }
