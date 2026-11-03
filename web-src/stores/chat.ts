@@ -78,3 +78,9 @@ export function noteChatEvent(event: { type?: string }): void {
   if (tab.value === channel && chatExpanded()) return;
   unread[channel] += 1;
 }
+
+/** 换席位后清掉旧厅的未读角标；消息本身在 parlor 的 log 里，那边一起清。 */
+export function resetChatState(): void {
+  unread.room = 0;
+  unread.table = 0;
+}

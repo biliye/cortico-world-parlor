@@ -191,3 +191,15 @@ export function noteWhisper(): void {
   window.clearTimeout(refreshTimer);
   refreshTimer = window.setTimeout(() => { void loadThreads(); }, 400);
 }
+
+/** 换席位后清掉上一个身份的会话列表与未读；窗口开合状态保留。 */
+export function resetDmState(): void {
+  threads.value = [];
+  unread.value = 0;
+  peer.value = null;
+  messages.value = [];
+  people.value = [];
+  query.value = '';
+  error.value = '';
+}
+

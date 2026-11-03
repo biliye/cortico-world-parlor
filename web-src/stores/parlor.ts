@@ -4,10 +4,11 @@
  */
 import { computed, ref } from 'vue';
 import { api, beginGlobalEntry, finishGlobalEntry, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
+import { seatChanged } from '../lib/seat-switch.ts';
 import { decideExpiredSeat } from '../lib/seat-errors.ts';
 import { SEAT_EXPIRED_MESSAGE } from '../lib/join.ts';
-import { noteChatEvent } from './chat.ts';
-import { noteWhisper } from './dm.ts';
+import { noteChatEvent, resetChatState } from './chat.ts';
+import { noteWhisper, resetDmState } from './dm.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
 import { showToast } from './ui.ts';
 import { backToRoom, enterTable, watchTableId } from './view.ts';
@@ -47,6 +48,17 @@ function pushLog(event: ChatEvent): void {
     }
   }
   log.value = [...log.value, event].slice(-300);
+}
+
+/** 换席位后清掉上一个厅的界面状态：事件 seq 每厅各自从 1 开始，不能跨厅去重。 */
+function resetRoomState(): void {
+  log.value = [];
+  seen.clear();
+  latest.value = 0;
+  offset.value = 0;
+  snapshot.value = null;
+  resetChatState();
+  resetDmState();
 }
 
 /** 首屏补历史；拿不到不影响开局。 */
@@ -471,6 +483,7 @@ export async function leaveRoomTable(): Promise<boolean> {
 
 /** 首次进入：钥匙/统一身份票据 → 取第一份快照 → 连 SSE。没有席位时返回 false。 */
 export async function boot(): Promise<boolean> {
+  const previousSeat = seat.value;
   const identityArgs = new URLSearchParams(location.hash.slice(1));
   if (identityArgs.has('identity')) {
     history.replaceState(null, '', location.pathname + location.search);
@@ -491,6 +504,8 @@ export async function boot(): Promise<boolean> {
       showToast((error as Error).message || '这个家长链接没换成席位', 'bad');
     }
   }
+  // 页面内换席位（#key= / 身份回跳）：清掉上一个厅的日志与游标，否则旧厅 seq 会吞新厅事件。
+  if (seatChanged(previousSeat, seat.value)) resetRoomState();
   if (!seat.value) return false;
   const unfinishedEntry = readPendingEntry();
   if (unfinishedEntry && await enterDiscoveredTable(unfinishedEntry.target)) return false;
