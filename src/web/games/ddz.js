@@ -448,7 +448,7 @@ export function mountDdz(root, ctx) {
     const table = view.table;
     const me = view.me;
     const names = view.names;
-    const data = (view.endEvent && view.endEvent.data) || {};
+    const data = { ...table, ...((view.endEvent && view.endEvent.data) || {}) };
     const revealed = Array.isArray(data.revealed) ? data.revealed : [];
     const winners = Array.isArray(data.winners) ? data.winners : [];
     const landlordId = data.landlord || (view.priv && view.priv.landlord)
@@ -465,7 +465,7 @@ export function mountDdz(root, ctx) {
     banner.append(el('span', 'ddz-end-kicker', '斗地主 · 已结束'));
     banner.append(el('h2', '', side + extra));
     const sub = el('p');
-    sub.append(document.createTextNode('倍数 ×' + (data.multiplier || (view.priv && view.priv.multiplier) || 1)));
+    sub.append(document.createTextNode('倍数 ×' + (data.multiplier || (view.priv && view.priv.multiplier) || table.multiplier || 1)));
     if (winners.length) {
       sub.append(document.createTextNode(' · 赢家 ' + winners.map((id) => names.get(id) || id).join('、')));
     }

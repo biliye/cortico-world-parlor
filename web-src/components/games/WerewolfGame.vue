@@ -345,9 +345,9 @@ function speechName(entry: WSpeech): string {
   return seat?.name ?? '';
 }
 const seerInspections = computed(() => (priv.value?.role === 'seer' ? (priv.value.inspections ?? []) : []));
-const wolfChat = computed(() => (priv.value?.role === 'wolf' ? (priv.value.wolfChat ?? []) : []));
-const wolfVotes = computed(() => (priv.value?.role === 'wolf' ? (priv.value.killVotes ?? []) : []));
-const lockedKill = computed(() => (priv.value?.role === 'wolf' ? priv.value.lockedKill : undefined));
+const wolfChat = computed(() => (priv.value?.role === 'wolf' && priv.value.alive !== false ? (priv.value.wolfChat ?? []) : []));
+const wolfVotes = computed(() => (priv.value?.role === 'wolf' && priv.value.alive !== false ? (priv.value.killVotes ?? []) : []));
+const lockedKill = computed(() => (priv.value?.role === 'wolf' && priv.value.alive !== false ? priv.value.lockedKill : undefined));
 
 /* —— 操作条派生 —— */
 const targetsAliveOthers = computed<number[]>(() => seats.value

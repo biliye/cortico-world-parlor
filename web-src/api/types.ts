@@ -48,8 +48,9 @@ export interface Snapshot {
   maxSeats?: number;
   online?: string[];
   tables?: TableSummary[];
-  table?: TableSummary;
-  tablePrivate?: { tableId?: string; id?: string } | null;
+  table?: TableSummary | null;
+  tablePrivate?: { tableId?: string; id?: string; revision?: number } | null;
+  ledger?: Record<string, unknown>;
 }
 
 export interface TableSeat {

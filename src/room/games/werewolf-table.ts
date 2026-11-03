@@ -1147,7 +1147,7 @@ export class WerewolfTable implements TableEngine {
       ...(isWolf ? {
         teammates: this.seats.filter((entry) => entry.role === 'wolf' && entry.seatNo !== seat.seatNo)
           .map((entry) => ({ seatNo: entry.seatNo, name: entry.name, alive: entry.alive })),
-        ...(night ? {
+        ...(night && seat.alive ? {
           wolfChat: night.wolfChats.map((entry) => ({ seatNo: entry.seatNo, name: this.seatByNo(entry.seatNo)?.name ?? '', text: entry.text })),
           killVotes: [...night.killVotes.entries()].map(([voter, target]) => ({ seatNo: voter, target })),
           ...(night.kill !== null && phase.half === 'b' ? { lockedKill: night.kill } : {}),

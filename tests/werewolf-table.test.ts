@@ -147,6 +147,39 @@ const advance = (rig: Rig, ms: number): void => {
 const eventType = (rig: Rig, type: string): TableEvent[] => rig.events.filter((event) => event.type === type);
 
 describe('狼人杀引擎', () => {
+  it('狼人出局后不再收到后续狼聊、刀票与锁定刀口，存活同伴仍正常接收', () => {
+    const rig = makeRig(7, 1);
+    startGame(rig);
+    const deadWolf = idWithRole(rig, 'wolf');
+    runNightA(rig, { kill: null });
+    runNightB(rig, { choice: 'none' });
+    runSpeeches(rig, () => '');
+    const votes: Record<number, number | ''> = {};
+    for (const id of aliveIds(rig)) votes[seatNo(id)] = id === deadWolf ? '' : seatNo(deadWolf);
+    runVote(rig, votes);
+    runSpeeches(rig, () => '');
+    expect(view(rig, deadWolf)).toMatchObject({ alive: false, phase: 'night' });
+    const wolves = rig.ids.filter(id => roleOf(rig, id) === 'wolf' && view(rig, id).alive);
+    const target = rig.ids.find(id => roleOf(rig, id) !== 'wolf' && view(rig, id).alive)!;
+    for (const wolf of wolves) {
+      collect(rig, act(rig, wolf, { move: 'wolf_chat', text: '出局之后才讨论的新暗号' }));
+      collect(rig, act(rig, wolf, { move: 'wolf_kill', target: seatNo(target) }));
+    }
+    const check = (table: WerewolfTable) => {
+      for (const key of ['wolfChat', 'killVotes', 'lockedKill']) expect(table.view(deadWolf)).not.toHaveProperty(key);
+      expect(table.privateText(deadWolf, rig.clock.now)).not.toContain('出局之后才讨论的新暗号');
+      expect(table.view(wolves[0])).toHaveProperty('wolfChat');
+      expect(table.view(wolves[0])).toHaveProperty('killVotes');
+    };
+    check(rig.table);
+    advance(rig, T + 1);
+    check(rig.table);
+    expect(view(rig, wolves[0]).lockedKill).toBe(seatNo(target));
+    const restored = makeRig(7, 1).table;
+    restored.restoreState(rig.table.exportState());
+    check(restored);
+    expect((restored.view(wolves[0]) as AnyView).lockedKill).toBe(seatNo(target));
+  });
   it('等人时不发假身份或倒计时，开局条件提前可见且仍由服务端阻挡', () => {
     const rig = makeRig(7, 0);
     expect(rig.table.public()).toMatchObject({ status: 'open', phase: 'waiting', phaseLabel: '等待入座' });

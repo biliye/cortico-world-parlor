@@ -30,6 +30,10 @@ interface DdzTable {
   passed?: string[];
   lastPlay?: DdzPlay;
   result?: string;
+  winners?: string[];
+  revealed?: Array<{ id: string; cards?: string[]; handCards?: DdzArt[] }>;
+  spring?: boolean;
+  antiSpring?: boolean;
 }
 interface DdzPriv {
   yourTurn?: boolean;
@@ -251,7 +255,7 @@ const statusText = computed(() => {
 /* —— 结算 —— */
 const end = computed(() => {
   const event = props.view.endEvent as { data?: Record<string, unknown> } | null;
-  const data = (event?.data ?? {}) as {
+  const data = { ...table.value, ...(event?.data ?? {}) } as {
     revealed?: Array<{ id: string; cards?: string[]; handCards?: DdzArt[] }>;
     winners?: string[];
     landlord?: string;
@@ -270,7 +274,7 @@ const end = computed(() => {
       : result.includes('地主赢') ? '地主赢'
         : result.includes('农民赢') ? '农民赢' : '这局结束了';
   const extra = data.spring ? ' · 春天' : data.antiSpring ? ' · 反春' : '';
-  const multiplier = data.multiplier || priv.value?.multiplier || 1;
+  const multiplier = data.multiplier || priv.value?.multiplier || table.value.multiplier || 1;
   const winnersText = winners.map((id) => nameOf(id, id)).join('、');
   const rows = (table.value.seats || []).map((seat) => {
     const row = revealed.find((entry) => entry.id === seat.id);

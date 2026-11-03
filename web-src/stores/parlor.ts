@@ -35,6 +35,25 @@ let refreshing = false;
 let hallFetching = false;
 let hallAt = 0;
 const seen = new Set<number>();
+let syncEpoch = 0;
+let appliedTableSeq = 0;
+let tableTargetSeq = 0;
+let tableTimer: number | undefined;
+let tableFetching = false;
+let tableQueued = false;
+let ledgerTimer: number | undefined;
+
+type TablePatch = {
+  seq?: number;
+  table?: TableSummary | null;
+  tablePrivate?: Snapshot['tablePrivate'];
+  tables?: TableSummary[];
+};
+
+function seatKey(): string {
+  const cfg = seat.value;
+  return cfg ? JSON.stringify([cfg.room, cfg.seatId, cfg.token, cfg.cooId]) : '';
+}
 
 /** 去重后追加；上限 300 条，和旧版一样只留最近的。 */
 function pushLog(event: ChatEvent): void {
@@ -52,6 +71,12 @@ function pushLog(event: ChatEvent): void {
 
 /** 换席位后清掉上一个厅的界面状态：事件 seq 每厅各自从 1 开始，不能跨厅去重。 */
 function resetRoomState(): void {
+  syncEpoch += 1;
+  appliedTableSeq = tableTargetSeq = 0;
+  tableQueued = false;
+  window.clearTimeout(tableTimer);
+  window.clearTimeout(ledgerTimer);
+  tableTimer = ledgerTimer = undefined;
   log.value = [];
   seen.clear();
   latest.value = 0;
@@ -122,9 +147,15 @@ export function activePrivate(): Record<string, unknown> | null {
 export async function refreshSnapshot(): Promise<void> {
   if (!seat.value || refreshing) return;
   refreshing = true;
+  const key = seatKey();
+  const epoch = syncEpoch;
+  const coveredSeq = tableTargetSeq;
   try {
     const next = await api<Snapshot>('/v1/room?limit=1');
+    if (key !== seatKey() || epoch !== syncEpoch) return;
+    syncEpoch += 1;
     snapshot.value = next;
+    appliedTableSeq = Math.max(appliedTableSeq, coveredSeq);
     offset.value = next.now - Date.now();
   } catch (error) {
     if ((error as { status?: number }).status === 401) {
@@ -134,6 +165,90 @@ export async function refreshSnapshot(): Promise<void> {
   } finally {
     refreshing = false;
   }
+}
+
+function newerTable(incoming: { tableId?: string; id?: string; revision?: number }, current?: typeof incoming | null): boolean {
+  if (!current || tableIdOf(incoming as TableSummary) !== tableIdOf(current as TableSummary)) return true;
+  return (incoming.revision ?? 0) >= (current.revision ?? 0);
+}
+
+/** 回执与 /table 共用投影；迟到响应不能盖掉更高 revision 的桌或私视图。 */
+function applyTablePatch(patch: TablePatch): boolean {
+  const snap = snapshot.value;
+  if (!snap || (patch.seq !== undefined && patch.seq < appliedTableSeq)) return false;
+  let next: Snapshot = { ...snap };
+  if (Array.isArray(patch.tables)) {
+    next.tables = patch.tables.map((table) => {
+      const current = tableList().find(entry => tableIdOf(entry) === tableIdOf(table));
+      return newerTable(table, current) ? table : current!;
+    });
+  }
+  const acceptTable = !patch.table || newerTable(patch.table, snap.table);
+  if ('table' in patch && acceptTable) next.table = patch.table ?? null;
+  if (patch.table) {
+    const entries = [...(next.tables ?? [])];
+    const index = entries.findIndex(entry => tableIdOf(entry) === tableIdOf(patch.table));
+    if (index < 0) entries.push(patch.table);
+    else if (newerTable(patch.table, entries[index])) entries[index] = patch.table;
+    next.tables = entries;
+  }
+  if ('tablePrivate' in patch && acceptTable
+    && (!patch.tablePrivate || newerTable(patch.tablePrivate, snap.tablePrivate))) {
+    next.tablePrivate = patch.tablePrivate ?? null;
+  }
+  syncEpoch += 1;
+  if (typeof patch.seq === 'number') appliedTableSeq = Math.max(appliedTableSeq, patch.seq);
+  snapshot.value = next;
+  return true;
+}
+
+function scheduleTableRefresh(delay = 120): void {
+  if (!seat.value || tableTimer) return;
+  tableTimer = window.setTimeout(() => {
+    tableTimer = undefined;
+    void refreshTable();
+  }, delay);
+}
+
+async function refreshTable(): Promise<void> {
+  if (!seat.value || !snapshot.value || tableTargetSeq <= appliedTableSeq) { tableQueued = false; return; }
+  // 自己的 SSE 往往先于 POST 回执；先等回执，避免同一状态再拉两次。
+  if (acting || tableFetching) { tableQueued = true; return; }
+  tableFetching = true;
+  tableQueued = false;
+  const key = seatKey();
+  const epoch = syncEpoch;
+  const coveredSeq = tableTargetSeq;
+  let failed = false;
+  try {
+    const patch = await api<TablePatch>('/v1/table');
+    if (key !== seatKey() || epoch !== syncEpoch) return;
+    if (!('table' in patch) && !('tablePrivate' in patch) && !Array.isArray(patch.tables)) {
+      throw new Error('服务器未返回牌桌增量');
+    }
+    if (applyTablePatch(patch)) appliedTableSeq = Math.max(appliedTableSeq, coveredSeq);
+  } catch (error) {
+    failed = true;
+    if (key !== seatKey()) return;
+    if ((error as { status?: number }).status === 401) await handleExpiredSeat(seat.value?.token || '');
+    else scheduleRefresh(0); // 旧服务器没有 /table 时保留全量兜底。
+  } finally {
+    tableFetching = false;
+    if (!failed && (tableQueued || tableTargetSeq > appliedTableSeq)) scheduleTableRefresh(0);
+  }
+}
+
+/** 开局押注与终局改变账本；单独刷新，不让成功动作等待另一次网络请求。 */
+function scheduleLedgerRefresh(delay = 200): void {
+  if (!seat.value || ledgerTimer) return;
+  ledgerTimer = window.setTimeout(async () => {
+    ledgerTimer = undefined;
+    const key = seatKey();
+    try {
+      const body = await api<{ ledger?: Record<string, unknown> }>('/v1/me/ledger');
+      if (key === seatKey() && snapshot.value && body.ledger) snapshot.value = { ...snapshot.value, ledger: body.ledger };
+    } catch { /* 账本失败不改变已确认动作，下次快照仍可恢复。 */ }
+  }, delay);
 }
 
 /**
@@ -220,10 +335,13 @@ function handleEvent(event: ChatEvent): void {
     scheduleRefresh(1000);
     scheduleHallRefresh();
   }
-  // 别人出牌、开局、结算：旧版在牌桌事件后拉一次增量，Vue 版也必须刷快照，
-  // 否则渲染器只更新「日志」，桌面状态停在旧快照。
-  if (type === 'parlor.ledger' || (type.startsWith('parlor.table.') && type !== 'parlor.table.say')) {
+  if (type === 'parlor.ledger') {
     scheduleRefresh(120);
+  }
+  if (type.startsWith('parlor.table.') && type !== 'parlor.table.say') {
+    tableTargetSeq = Math.max(tableTargetSeq, event.seq);
+    if (event.seq > appliedTableSeq) scheduleTableRefresh();
+    if (type === 'parlor.table.end' || type === 'parlor.table.cancel') scheduleLedgerRefresh();
   }
 }
 
@@ -238,6 +356,7 @@ export function connect(): void {
     scheduleRefresh();
   };
   source.onmessage = (message) => {
+    if (stream !== source) return;
     let event: { seq?: number; type?: string };
     try {
       event = JSON.parse(message.data);
@@ -420,13 +539,14 @@ function withTableFields(body: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
-/** 通用动作。回执里可能带桌与私视图，这一刀先统一「动作后拉一份快照」，保证状态一致。 */
+/** 有桌增量时直接应用；非牌桌动作或旧服务器仍走全量快照。 */
 export async function act(body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   if (acting) {
     showToast('上一操作正在处理，这次尚未发送，请稍后重试。', 'bad');
     return null;
   }
   acting = true;
+  const key = seatKey();
   try {
     const payload = withTableFields(body);
     const retryable = typeof payload.type === 'string' && IDEMPOTENT.has(payload.type);
@@ -444,19 +564,33 @@ export async function act(body: Record<string, unknown>): Promise<Record<string,
       if (!retryable || !(error instanceof TypeError)) throw error;
       receipt = await send();
     }
+    if (key !== seatKey()) return null;
     if (typeof receipt.seq === 'number') latest.value = Math.max(latest.value, receipt.seq);
-    await refreshSnapshot();
+    if ('table' in receipt || 'tablePrivate' in receipt || Array.isArray(receipt.tables)) {
+      if (!applyTablePatch(receipt as TablePatch)) {
+        if (!snapshot.value) await refreshSnapshot();
+      }
+      if (payload.type === 'table_start') scheduleLedgerRefresh(0);
+    } else {
+      await refreshSnapshot();
+    }
     return receipt;
   } catch (error) {
+    if (key !== seatKey()) throw error;
     if ((error as { status?: number }).status === 401) {
       await handleExpiredSeat((error as { seatToken?: string }).seatToken || seat.value?.token || '');
       throw error;
     }
     // 渲染器把 act 的错误吞掉了（`.catch(() => {})`），所以提示要在这里发。
     showToast((error as Error).message || '动作没成功', 'bad');
+    if ((error as { status?: number }).status === 409) scheduleRefresh(0);
     throw error;
   } finally {
     acting = false;
+    if (tableQueued || tableTargetSeq > appliedTableSeq) {
+      tableQueued = false;
+      scheduleTableRefresh(0);
+    }
   }
 }
 

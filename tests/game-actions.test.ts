@@ -136,6 +136,17 @@ describe('W2/W3：选人生命周期与刀票独立状态', () => {
 });
 
 describe('W4：真实 Vue 模板的狼队面板', () => {
+  it('出局狼人不呈现旧服务器仍下发的后续狼队信息', async () => {
+    const view = fixture();
+    Object.assign(view.priv, {
+      alive: false, canAct: false, myMove: null,
+      wolfChat: [{ seatNo: 2, name: '同伴', text: '出局后的新暗号' }],
+      killVotes: [{ seatNo: 2, target: 3 }], lockedKill: 3,
+    });
+    const html = await werewolf.html({ view, ctx: context() });
+    expect(html).not.toContain('wf-wolf-info');
+    expect(html).not.toContain('出局后的新暗号');
+  });
   it.each(['wolf_chat', 'wolf_kill', null])('动作槽 %s 时私信息均可读', async (myMove) => {
     const view = fixture();
     Object.assign(view.priv, {

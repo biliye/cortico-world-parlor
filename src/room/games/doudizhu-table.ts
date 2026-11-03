@@ -242,6 +242,7 @@ export class DoudizhuTable implements TableEngine {
 
   public(): unknown {
     const landlord = this.landlord();
+    const winner = this.status === 'ended' ? this.seats.find((seat) => seat.hand.length === 0) : undefined;
     return {
       game: this.game,
       status: this.status,
@@ -277,6 +278,8 @@ export class DoudizhuTable implements TableEngine {
         }
         : null,
       result: this.result || undefined,
+      // 终局事件可能已滚出回放窗口；公开结果由存档中的最终牌局重建。
+      ...(winner ? this.roundResult(winner) : {}),
     };
   }
 
@@ -638,7 +641,7 @@ export class DoudizhuTable implements TableEngine {
     return { events, views: this.turnViews() };
   }
 
-  private finish(winner: Seat, events: TableEvent[]): void {
+  private roundResult(winner: Seat) {
     const landlord = this.landlord()!;
     const landlordWon = winner.role === 'landlord';
     const farmers = this.seats.filter((seat) => seat.role === 'farmer');
@@ -648,26 +651,34 @@ export class DoudizhuTable implements TableEngine {
       farmerPlays: farmers.reduce((sum, seat) => sum + seat.plays, 0),
       landlordPlays: landlord.plays,
     });
+    return {
+      landlord: landlord.id,
+      winners: (landlordWon ? [landlord] : farmers).map((seat) => seat.id),
+      multiplier: score.multiplier,
+      spring: score.spring,
+      antiSpring: score.antiSpring,
+      revealed: this.seats.map((seat) => ({
+        id: seat.id, name: seat.name, cards: [...seat.hand], handCards: seat.cards.map((card) => ({ ...card })),
+      })),
+    };
+  }
+
+  private finish(winner: Seat, events: TableEvent[]): void {
+    const landlord = this.landlord()!;
+    const result = this.roundResult(winner);
     this.status = 'ended';
     this.turnId = undefined;
     this.deadline = 0;
-    const side = landlordWon ? '地主赢' : '农民赢';
-    const extra = score.spring ? '，春天' : score.antiSpring ? '，反春' : '';
-    this.result = `${side}；地主 ${landlord.name}，倍数 x${score.multiplier}${extra}。`;
+    const side = winner.role === 'landlord' ? '地主赢' : '农民赢';
+    const extra = result.spring ? '，春天' : result.antiSpring ? '，反春' : '';
+    this.result = `${side}；地主 ${landlord.name}，倍数 x${result.multiplier}${extra}。`;
     events.push({
       type: 'parlor.table.end',
       scope: { kind: 'room' },
       text: `斗地主结束：${this.result}手牌：${this.seats.map((seat) => `${seat.name} 剩 ${formatCards(seat.hand) || '无'}`).join('；')}。`,
       data: {
         game: this.game,
-        landlord: landlord.id,
-        winners: (landlordWon ? [landlord] : farmers).map((seat) => seat.id),
-        multiplier: score.multiplier,
-        spring: score.spring,
-        antiSpring: score.antiSpring,
-        revealed: this.seats.map((seat) => ({
-          id: seat.id, name: seat.name, cards: [...seat.hand], handCards: [...seat.cards],
-        })),
+        ...result,
       },
     });
   }

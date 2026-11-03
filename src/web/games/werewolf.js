@@ -596,7 +596,7 @@ export function mountWerewolf(root, ctx) {
   }
 
   function wolfPanel(priv) {
-    if (priv?.role !== 'wolf') return null;
+    if (priv?.role !== 'wolf' || priv.alive === false) return null;
     const votes = priv.killVotes ?? [];
     const chats = priv.wolfChat ?? [];
     if (!votes.length && !chats.length && priv.lockedKill == null) return null;

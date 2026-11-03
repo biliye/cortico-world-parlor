@@ -102,6 +102,9 @@ describe('狼人杀 legacy 选人与狼队信息回归', () => {
     }
     game.update(state('night', { ...privateInfo, role: 'seer', canAct: false }));
     expect(root.textContent).not.toContain('狼队秘密暗号');
+    game.update(state('night', { ...privateInfo, alive: false, canAct: false }));
+    expect(root.textContent).not.toContain('狼队秘密暗号');
+    expect(root.textContent).not.toContain('今夜锁定刀口');
     game.update(state('night', { role: 'wolf', alive: true, canAct: false, windowId: 'w2' }));
     expect(root.textContent).not.toContain('狼队信息');
   });

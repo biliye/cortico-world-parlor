@@ -475,6 +475,10 @@ describe('导演式：整局到结算', () => {
     const end = endEvent(step);
     expect(end).toMatchObject({ spring: true, antiSpring: false, multiplier: 2, landlord: 'a' });
     expect(end?.winners).toEqual(['a']);
+    expect(publicOf(table)).toMatchObject(end!);
+    const recovered = new DoudizhuTable({ host: { ...HOST }, now: 0 });
+    recovered.restoreState(table.exportState());
+    expect(publicOf(recovered)).toMatchObject(end!);
     expect(viewOf(table, 'b').status).toBe('ended');
     expect(table.privateText('b', 1)).toContain('【斗地主·结束】');
     expect(table.nextWakeAt()).toBeUndefined();
@@ -529,6 +533,7 @@ describe('导演式：整局到结算', () => {
     const end = endEvent(step);
     expect(end).toMatchObject({ spring: false, antiSpring: true, multiplier: 2 });
     expect(end?.winners).toEqual(['b', 'c']);
+    expect(publicOf(table)).toMatchObject(end!);
     expect(publicOf(table).result).toContain('反春');
     expect(viewOf(table, 'a').hand).toHaveLength(19);
   });
