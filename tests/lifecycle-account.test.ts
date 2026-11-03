@@ -1,11 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorldServer } from '../src/room/world-server.ts';
 import { CooAccountDb } from '../src/room/coo-account-db.ts';
-import { createRoom, activeSeatForCoo, getRoom, hashSeatToken } from '../src/room/room-seat-db.ts';
+import { createRoom, activeSeatForCoo, getRoom, hashSeatToken, archive, joinSeat } from '../src/room/room-seat-db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
 import { personalHistory } from '../src/room/personal-account.ts';
 import { pgServerStorage } from './helpers/pg.ts';
+import { withTransaction } from '../src/room/db.ts';
+import { PgDb } from '../src/room/storage/postgres.ts';
+import { lockRoomRow } from '../src/room/storage/locks.ts';
+import { touchActivity } from '../src/room/activity.ts';
 
 const A = 'coo-lifecycle-a';
 const B = 'coo-lifecycle-b';
@@ -14,9 +18,11 @@ let app: WorldServer;
 let now: number;
 let room: RoomHost;
 let token: string;
+let storage: Awaited<ReturnType<typeof pgServerStorage>>;
 beforeEach(async () => {
   now = Date.now();
-  app = await WorldServer.create({ ...(await pgServerStorage(':memory:')), now:() => now });
+  storage = await pgServerStorage(':memory:');
+  app = await WorldServer.create({ ...storage, inviteCode:'life-test', now:() => now });
   const coos = new CooAccountDb(app.dbHandle, { now:() => now });
   for (const id of [A, B]) expect(await coos.registerCoo(id, `test-secret-${id}-0123456789`, 'pet', id)).toBe('ok');
   await createRoom(app.dbHandle, { id:'r-life', name:'测试客厅', ownerCooId:A, visibility:'public' }, now);
@@ -27,6 +33,75 @@ beforeEach(async () => {
 afterEach(async () => { await app?.close(); });
 
 describe('60 分钟闲置、48 小时归档与全局账户', () => {
+  it('迁厅后再释放席位，旧地址重新入座只读一次请求体并保留入场码/名字/类型/挡位', async () => {
+    const {url} = await app.listen();
+    now += HOUR;
+    expect((await app.runLifecycle()).moved).toBe(1);
+    const hall = await RoomHost.create(app.dbHandle, 'hall', { now:() => now });
+    await hall.leave(A);
+    const response = await fetch(url + '/v1/rooms/r-life/join', {
+      method:'POST', signal:AbortSignal.timeout(3000),
+      headers:{'content-type':'application/json','x-parlor-coo':A,'x-parlor-coo-secret':`test-secret-${A}-0123456789`},
+      body:JSON.stringify({invite:'life-test',name:'回厅新名字',kind:'pet',tier:'quiet'}),
+    });
+    expect(response.status).toBe(200);
+    const joined = await response.json() as {room:string;seat:{name:string;kind:string;tier:string}};
+    expect(joined).toMatchObject({room:'hall',seat:{name:'回厅新名字',kind:'pet',tier:'quiet'}});
+    expect((await activeSeatForCoo(app.dbHandle,A))?.roomId).toBe('hall');
+    expect(await app.dbHandle.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(A)).toMatchObject({return_room_id:null});
+  });
+  it('同一席位新旧连接混用时暂缓闲置迁厅，最后一个旧连接关闭后才迁移', async () => {
+    const {url} = await app.listen();
+    const modern = new AbortController();
+    const legacy = new AbortController();
+    try {
+      await fetch(url + `/v1/rooms/r-life/stream?token=${token}&cap=seat-location-v1`,{signal:modern.signal});
+      await fetch(url + `/v1/rooms/r-life/stream?token=${token}`,{signal:legacy.signal});
+      now += HOUR;
+      expect((await app.runLifecycle()).moved).toBe(0);
+      modern.abort();
+      expect((await app.runLifecycle()).moved).toBe(0);
+      legacy.abort();
+      await vi.waitFor(async () => { expect((await app.runLifecycle()).moved).toBe(1); }, {timeout:3000,interval:20});
+    } finally { modern.abort(); legacy.abort(); }
+  });
+  it.each(['pet','observer'] as const)('归档先取得房间锁：并发 %s 入座必须等提交后拒绝，不留下席位或续活动时钟', async kind => {
+    await room.leave(A);
+    const before = await app.dbHandle.prepare('SELECT business_active_at FROM rooms WHERE id=?').get('r-life');
+    const joiner = await PgDb.open({url:storage.databaseUrl!,applicationName:'parlor-join-race'});
+    let unlock!:()=>void;
+    let locked!:()=>void;
+    const gate = new Promise<void>(resolve => {unlock=resolve;});
+    const ready = new Promise<void>(resolve => {locked=resolve;});
+    const archiving = withTransaction(app.dbHandle, async () => {
+      await lockRoomRow(app.dbHandle,'r-life');
+      await archive(app.dbHandle,'r-life',now);
+      locked(); await gate;
+    });
+    await ready;
+    const host = await RoomHost.create(joiner,'r-life',{now:()=>now+1000});
+    const entering = (kind === 'pet' ? host.join(B,{name:'并发来客',kind}) : joinSeat(joiner,{
+      roomId:'r-life',cooId:B,name:'并发观察者',kind,token:'observer-race-token',visibleFromSeq:0,now:now+1000,
+    })).then(value=>({value,error:undefined}),error=>({value:undefined,error}));
+    try {
+      await vi.waitFor(async () => {
+        const waiting = await app.dbHandle.prepare("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND application_name='parlor-join-race' AND wait_event_type='Lock'").get();
+        expect(waiting).toBeTruthy();
+      },{timeout:3000,interval:20});
+      unlock();await archiving;
+      expect((await entering).error?.code).toBe(kind === 'pet' ? 'conflict' : 'room_archived');
+      expect(await activeSeatForCoo(app.dbHandle,B)).toBeNull();
+      expect(await app.dbHandle.prepare('SELECT business_active_at FROM rooms WHERE id=?').get('r-life')).toEqual(before);
+    } finally {unlock();await archiving;await entering;await joiner.close();}
+  });
+  it('入座先完成：新的真实活动阻止48小时归档；业务位置冲突使用可恢复错误码', async () => {
+    now += 48*HOUR;
+    await room.join(B,{name:'及时进来的客人'});
+    expect((await app.runLifecycle()).archived).toBe(0);
+    await expect(touchActivity(app.dbHandle,'missing-room',A,now)).rejects.toMatchObject({code:'conflict'});
+    await archive(app.dbHandle,'r-life',now);
+    await expect(withTransaction(app.dbHandle,()=>touchActivity(app.dbHandle,'r-life',B,now))).rejects.toMatchObject({code:'conflict'});
+  });
   it('旧客户端未声明位置恢复能力时不强制闲置迁厅，升级后才启用', async () => {
     await app.dbHandle.prepare('UPDATE room_seats SET location_capable=0 WHERE coo_id=?').run(A);
     now += HOUR;

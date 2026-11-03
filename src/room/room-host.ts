@@ -384,7 +384,7 @@ export class RoomHost {
   }
 
   /** 原子换房：源客厅写离开事件并释放席位，目标客厅拿新席位并写入加入事件。 */
-  async switchTo(cooId: string, targetRoomId: string, input: { name?: string; token?: string; preserveToken?: boolean; idleBefore?: number } = {}): Promise<SwitchResult> {
+  async switchTo(cooId: string, targetRoomId: string, input: { name?: string; token?: string; preserveToken?: boolean; idleBefore?: number; allowIdleMove?: () => boolean } = {}): Promise<SwitchResult> {
     if (targetRoomId === this.roomId) throw new HostError('invalid', '已经在这个客厅里');
     const source = await this.requireRoom();
     const target = await getRoom(this.db, targetRoomId);
@@ -404,6 +404,7 @@ export class RoomHost {
       const current = await this.seatOf(cooId);
       if (!current || current.id !== seat.id) throw new HostError('conflict', '席位已经变化，请刷新后重试');
       if (input.idleBefore !== undefined) {
+        if (input.allowIdleMove && !input.allowIdleMove()) throw new HostError('conflict', '还有旧客户端连接，暂缓闲置迁厅');
         const fresh = await this.db.prepare('SELECT business_active_at FROM room_seats WHERE room_id=? AND id=?').get(this.roomId, current.id) as { business_active_at: number };
         if (Number(fresh.business_active_at) > input.idleBefore) throw new HostError('conflict', '席位刚有新活动');
       }

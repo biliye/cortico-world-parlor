@@ -1,4 +1,3 @@
-import { personalHistory } from './personal-account.ts';
 /**
  * 全局账本的 store。
  *
@@ -43,7 +42,7 @@ export interface LedgerDbOptions {
   now?: () => number;
 }
 
-/** 给旧版 World/网页用的完整摘要；字段与旧 LedgerStore.summaryFor 一致。 */
+/** 兼容旧版摘要字段与 recent 的逐条流水语义；PG 已停用承诺，open 恒为空。 */
 export type LedgerSummaryLite = LedgerSummary;
 
 const STATUS_BY_KIND: Partial<Record<LedgerKind, PromiseStatus>> = {
@@ -409,7 +408,7 @@ export class LedgerDb {
   async summaryFor(cooId: string): Promise<LedgerSummary> {
     if (this.db.kind === 'postgres') {
       const groups = await this.db.prepare(`SELECT COALESCE(e.game,'unknown') AS game,
-        MAX(e.data_json->>'gameLabel') AS label, COUNT(*) AS games,
+        MAX(NULLIF(e.data_json->>'gameLabel','')) AS label, COUNT(*) AS games,
         SUM(CASE WHEN w.coo_id IS NOT NULL AND COALESCE(e.data_json->>'tie','false')<>'true' THEN 1 ELSE 0 END) AS wins,
         SUM(CASE WHEN w.coo_id IS NOT NULL AND e.data_json->>'tie'='true' THEN 1 ELSE 0 END) AS draws,
         SUM(CASE WHEN w.coo_id IS NULL THEN 1 ELSE 0 END) AS losses
@@ -417,10 +416,25 @@ export class LedgerDb {
         WHERE e.kind='game' AND (e.from_coo_id=? OR e.to_coo_id=? OR w.coo_id IS NOT NULL
           OR EXISTS(SELECT 1 FROM ledger_participants p WHERE p.entry_id=e.id AND p.coo_id=?))
         GROUP BY e.game ORDER BY COUNT(*) DESC, e.game`).all(cooId, cooId, cooId, cooId) as GameTally[];
-      const byGame = groups.map(g => ({ game: g.game, label: g.label || g.game, games: Number(g.games), wins: Number(g.wins), losses: Number(g.losses), draws: Number(g.draws) }));
+      const byGame = groups.map(g => ({ game: g.game, label: labelOf(g.game, {gameLabel:g.label}), games: Number(g.games), wins: Number(g.wins), losses: Number(g.losses), draws: Number(g.draws) }));
       const total = byGame.reduce((a,g) => ({ games:a.games+g.games,wins:a.wins+g.wins,losses:a.losses+g.losses,draws:a.draws+g.draws }), { games:0,wins:0,losses:0,draws:0 });
-      const recent = (await personalHistory(this.db, cooId, { kind:'games', limit:5 })).items;
-      return { cooId, ...total, byGame, chips: await this.balanceOf(cooId), open: [], recent: recent.map(row => ({ ...row, kind: 'game' as const })) };
+      // Keep the existing summary contract: latest five entries of any kind,
+      // and each entry's own net transfer, not a game's ante+result aggregate.
+      const recentRows = await this.db.prepare(`SELECT e.*,
+        COALESCE((SELECT SUM(CASE WHEN tr.to_coo_id=? THEN tr.amount ELSE 0 END - CASE WHEN tr.from_coo_id=? THEN tr.amount ELSE 0 END)
+          FROM ledger_transfers tr WHERE tr.entry_id=e.id),0) AS chips
+        FROM ledger_entries e WHERE e.from_coo_id=? OR e.to_coo_id=?
+          OR EXISTS(SELECT 1 FROM ledger_participants p WHERE p.entry_id=e.id AND p.coo_id=?)
+          OR EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id=e.id AND w.coo_id=?)
+        ORDER BY e.ord DESC LIMIT 5`).all(cooId, cooId, cooId, cooId, cooId, cooId) as (EntryRow & {chips:number})[];
+      const recent: LedgerEntryView[] = recentRows.map(row => {
+        const data = parseData(row.data_json);
+        return { id:row.id, ts:Number(row.ts), room:row.room_id ?? '', kind:row.kind as LedgerKind, text:row.text,
+          ...(data ? {data} : {}), ...(row.kind === 'game' ? {game:row.game || (typeof data?.game === 'string' ? data.game : 'unknown')} : {}),
+          ...(Number(row.chips) !== 0 ? {chips:Number(row.chips)} : {}),
+        };
+      });
+      return { cooId, ...total, byGame, chips: await this.balanceOf(cooId), open: [], recent };
     }
     const rows = await this.db.prepare(
       `SELECT e.id, e.game, e.data_json,

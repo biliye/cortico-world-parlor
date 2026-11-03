@@ -13,10 +13,12 @@ export class RoomLifecycle {
   private defaultRoom: string;
   private idleMs: number;
   private archiveMs: number;
+  private allowIdleMove: (cooId: string) => boolean;
   constructor(db: Db, hostFor: HostFor, hall: () => string, defaultRoom: string,
-    idleMs = 60 * 60_000, archiveMs = 48 * 3_600_000) {
+    idleMs = 60 * 60_000, archiveMs = 48 * 3_600_000, allowIdleMove: (cooId: string) => boolean = () => true) {
     this.db = db; this.hostFor = hostFor; this.hall = hall; this.defaultRoom = defaultRoom;
     this.idleMs = idleMs; this.archiveMs = archiveMs;
+    this.allowIdleMove = allowIdleMove;
   }
 
   async sweep(now: number): Promise<{ moved: number; archived: number }> {
@@ -30,9 +32,11 @@ export class RoomLifecycle {
           AND NOT EXISTS(SELECT 1 FROM active_table_players a WHERE a.coo_id=s.coo_id)
           ORDER BY business_active_at LIMIT 50`).all(this.hall(), now - this.idleMs) as { room_id: string; coo_id: string }[];
         for (const item of candidates) {
+          if (!this.allowIdleMove(item.coo_id)) continue;
           try {
             await (await this.hostFor(item.room_id)).switchTo(item.coo_id, this.hall(), {
               preserveToken: true, idleBefore: now - this.idleMs,
+              allowIdleMove: () => this.allowIdleMove(item.coo_id),
             });
             result.moved++;
           } catch (error) {

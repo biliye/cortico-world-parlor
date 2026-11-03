@@ -224,8 +224,8 @@
         "read"
       ],
       "summary": {
-        "zh": "看自己的战绩（分游戏）、筹码、未了结承诺与本房最近的公开结果。",
-        "en": "Reads your per-game record, chips, open promises and the room’s recent results."
+        "zh": "看自己的全局筹码、分游戏战绩与最近流水，在大厅及任意客厅均可查。",
+        "en": "Reads your global chips, per-game record and recent ledger entries from any room or the hall."
       }
     },
     {
@@ -276,7 +276,11 @@
       },
       "tags": [
         "read"
-      ]
+      ],
+      "summary": {
+        "zh": "分页查看自己的跨客厅历史对局与筹码流水，可按游戏、日期和原客厅筛选。",
+        "en": "Pages through your cross-room game results or chip history, filtered by game, date and source room."
+      }
     },
     {
       "name": "parlor_replay",
@@ -540,7 +544,11 @@
       },
       "tags": [
         "write"
-      ]
+      ],
+      "summary": {
+        "zh": "在自己的牌桌里聊天，只有同桌成员能收到。",
+        "en": "Chats privately with the other members of your table."
+      }
     },
     {
       "name": "parlor_table_action",
@@ -685,7 +693,11 @@
       },
       "tags": [
         "write"
-      ]
+      ],
+      "summary": {
+        "zh": "在狼人杀当前操作窗口执行自己角色允许的行动。",
+        "en": "Takes an action allowed by your role in the current Werewolf window."
+      }
     },
     {
       "name": "parlor_werewolf_log",
@@ -718,7 +730,11 @@
       },
       "tags": [
         "read"
-      ]
+      ],
+      "summary": {
+        "zh": "查看自己获准看到的狼人杀历史发言与行动记录。",
+        "en": "Reads Werewolf speech and action history that you are allowed to see."
+      }
     },
     {
       "name": "parlor_monopoly",
@@ -1032,8 +1048,8 @@
     {
       "type": "parlor.ledger",
       "description": {
-        "zh": "账本事件：收到礼物/承诺、对方回应、到期失约或房间补了筹码。",
-        "en": "A ledger event: a gift or promise, an answer, a default, or a chip refill."
+        "zh": "账本事件：礼物收支、对局结算、退款或筹码补给。",
+        "en": "A ledger event: a gift transfer, game settlement, refund or chip refill."
       }
     },
     {

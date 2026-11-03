@@ -1845,7 +1845,8 @@ export class ParlorWorld implements World {
     if (!this.client) return this.failed('还没连接茶室');
     try {
       const page = await this.client.accountHistory(this.token, args);
-      return ['【我的全局记录】', ...page.items.map(row => `- ${this.ledgerTime(row.ts)} · ${row.roomName} · ${row.game || '筹码'} · ${row.result || row.text} · 筹码 ${row.chips >= 0 ? '+' : ''}${row.chips}`),
+      const resultLabels: Record<string, string> = { win:'胜', loss:'负', draw:'平' };
+      return ['【我的全局记录】', ...page.items.map(row => `- ${this.ledgerTime(row.ts)} · ${row.roomName} · ${row.game ? gameLabelOf(row.game) : '筹码'} · ${resultLabels[row.result ?? ''] || row.text} · 筹码 ${row.chips >= 0 ? '+' : ''}${row.chips}`),
         page.items.length ? '' : '暂无记录。', page.next ? `下一页：before=${page.next}` : '已到末尾。'].filter(Boolean).join('\n');
     } catch (error) { return this.failed(messageOf(error)); }
   }

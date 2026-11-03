@@ -70,6 +70,25 @@ const promise = async (
 });
 
 describe('全局账本 SQLite store', () => {
+  it('PG 摘要 recent 保持最近五条混合流水及单条净额，对局分页另算含底注净额', async () => {
+    await store.ensureGrant(A,'lobby');
+    await store.record({kind:'ante',room:'lobby',from:A,participants:[A],text:'底注',visibility:'private',effectId:'recent-game/ante',transfers:[{from:A,to:'room',amount:100}]});
+    await store.record({...game('lobby',[A],[A]),game:'ddz',text:'结算',effectId:'recent-game/result',data:{tableId:'recent-game'},transfers:[{from:'room',to:A,amount:300}]});
+    await store.record({kind:'gift',room:'a',from:A,to:B,text:'送礼',visibility:'private',transfers:[{from:A,to:B,amount:25}]});
+    await store.record({kind:'note',room:'b',from:'room',to:A,text:'作废退款',visibility:'private',transfers:[{from:'room',to:A,amount:100}]});
+    const summary = await store.summaryFor(A);
+    expect(summary.recent.map(row=>[row.kind,row.chips])).toEqual([['note',100],['gift',-25],['game',300],['ante',-100],['grant',1000]]);
+    expect(summary.chips).toBe(1275);
+    const {personalHistory} = await import('../src/room/personal-account.ts');
+    expect((await personalHistory(db,A)).items[0].chips).toBe(200);
+    expect(summary.recent.every(row=>!('from_coo_id' in row) && !('transfers' in row))).toBe(true);
+    await store.record({kind:'gift',room:'a',from:B,to:A,text:'回礼',visibility:'private',transfers:[{from:B,to:A,amount:5}]});
+    expect((await store.summaryFor(A)).recent.map(row=>row.kind)).toEqual(['gift','note','gift','game','ante']);
+  });
+  it('旧对局缺少游戏信息时，全局战绩显示其他', async () => {
+    await store.record({...game('lobby',[A],[A]),game:undefined,data:{}});
+    expect((await store.summaryFor(A)).byGame).toMatchObject([{game:'unknown',label:'其他',games:1}]);
+  });
   it('余额由 transfers 现算：房间发行进来，礼物与了结出去', async () => {
     const grant = await store.ensureGrant(A, 'lobby');
     expect(grant).not.toBeNull();

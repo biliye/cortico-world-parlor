@@ -77,6 +77,7 @@ export interface WorldServerOptions {
 }
 
 interface SseClient {
+  locationCapable: boolean;
   cooId: string;
   seatId: string;
   seatName: string;
@@ -293,7 +294,8 @@ export class WorldServer {
     // 启动恢复基准在 init() 里读；构造函数只落字段，不碰库。
     this.recovery = {};
     this.lifecycle = new RoomLifecycle(db, room => this.host(room), () => this.hallIdValue, this.defaultRoomId,
-      (options.cooIdleMinutes ?? 60) * 60_000, (options.roomArchiveHours ?? 48) * 3_600_000);
+      (options.cooIdleMinutes ?? 60) * 60_000, (options.roomArchiveHours ?? 48) * 3_600_000,
+      cooId => [...this.sse.values()].every(clients => [...clients].every(client => client.cooId !== cooId || client.closed || client.locationCapable)));
   }
 
   /**
@@ -1802,9 +1804,10 @@ export class WorldServer {
       if (this.identityAuthority || await this.identify(req) === null) this.checkInvite(req, body);
       const cooId = await this.cooAuth(req, name);
       const relocation = await this.db.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(cooId) as { return_room_id:string|null } | undefined;
-      if (relocation?.return_room_id && relocation.return_room_id !== roomId) {
-        await this.roomRoute(req, res, url, relocation.return_room_id, action, method); return;
-      }
+      // Resolve the canonical target using the body already parsed above.
+      // IncomingMessage is one-shot: recursively re-entering join would await a
+      // second end event forever and lose body-based invite/name/kind/tier.
+      roomId = relocation?.return_room_id || roomId;
       await this.assertRoomEntry(roomId, cooId);
       const host = await this.host(roomId);
       // 同一身份丢了令牌时续用原席位；身份认证与房间准入已在上面核过。
@@ -2150,8 +2153,9 @@ export class WorldServer {
   private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {
     const host = await this.host(roomId);
     const seat = await host.seatByToken(token);
-    if (headerValue(req, 'x-parlor-capabilities').split(',').includes('seat-location-v1')
-      || new URL(req.url ?? '/', 'http://localhost').searchParams.get('cap') === 'seat-location-v1') {
+    const locationCapable = headerValue(req, 'x-parlor-capabilities').split(',').map(value => value.trim()).includes('seat-location-v1')
+      || new URL(req.url ?? '/', 'http://localhost').searchParams.get('cap') === 'seat-location-v1';
+    if (locationCapable) {
       await this.db.prepare('UPDATE room_seats SET location_capable=1 WHERE room_id=? AND id=? AND location_capable=0').run(roomId,seat.id);
     }
     const allClients = [...this.sse.values()].flatMap(set => [...set]);
@@ -2167,6 +2171,7 @@ export class WorldServer {
     if (req.destroyed || res.destroyed) return;
     const cursor = initial.length > 0 ? initial[initial.length - 1]!.seq : since;
     const client: SseClient = {
+      locationCapable,
       cooId: seat.cooId,
       seatId: seat.id,
       seatName: seat.name,

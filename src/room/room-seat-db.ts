@@ -14,6 +14,7 @@ import { globalIdentityEnabled } from './global-identity.ts';
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
+import { lockCooRows, lockRoomRow } from './storage/locks.ts';
 import { isCooId } from './ledger.ts';
 import { MAX_USER_ROOM_CAPACITY } from './schema.ts';
 import type { SeatKind, WakeTier } from './protocol.ts';
@@ -507,6 +508,10 @@ const clearPresenceTx = async (db: Db, cooId: string, roomId: string, seatId: st
 };
 
 const joinSeatTx = async (db: Db, input: JoinSeatInput, now: number): Promise<SeatRow> => {
+  // All callers, including observers and low-level migration/admin paths, must
+  // serialize admission with archival before reading the room's current state.
+  await lockCooRows(db, [input.cooId]);
+  await lockRoomRow(db, input.roomId);
   const room = await requireRoom(db, input.roomId);
   if (room.archivedAt !== null) throw new RoomSeatError('room_archived', '客厅已经归档，不能再进');
   await requireCoo(db, input.cooId, '席位');
@@ -519,8 +524,7 @@ const joinSeatTx = async (db: Db, input: JoinSeatInput, now: number): Promise<Se
   const tokenHash = input.tokenHash ?? hashSeatToken(input.token);
 
   // 容量检查这一层只是给可读错误；真正的闸门是库里的触发器：
-  // PostgreSQL 的 trg_room_capacity 先 SELECT rooms … FOR UPDATE 再数，
-  // SQLite 本来就是单写者。这里不写 FOR UPDATE，因为 SQLite 不认。
+  // 已按身份→房间取得行锁；PG 触发器还会兜底容量，SQLite 本来就是单写者。
   const current = await activeSeatRow(db, input.cooId);
   if (current) {
     throw new RoomSeatError('already_seated', `这个 Coo 已经在 ${current.roomId}/${current.id} 坐着，先释放席位`);
@@ -561,7 +565,7 @@ const joinSeatTx = async (db: Db, input: JoinSeatInput, now: number): Promise<Se
   await setPresenceTx(db, input.cooId, room.id, seatId, now);
   if (db.kind === 'postgres') {
     await db.prepare('UPDATE room_seats SET business_active_at = ? WHERE room_id = ? AND id = ?').run(now, room.id, seatId);
-    if (!input.tokenHash) await db.prepare('UPDATE rooms SET business_active_at = ? WHERE id = ?').run(now, room.id);
+    if (!input.tokenHash) await db.prepare('UPDATE rooms SET business_active_at = GREATEST(business_active_at, ?) WHERE id = ? AND archived_at IS NULL').run(now, room.id);
   }
   return (await seatRow(db, room.id, seatId))!;
 };
@@ -602,6 +606,8 @@ export const releaseSeat = (
 ): Promise<SeatRow | null> => withTransaction(db, () => releaseSeatTx(db, roomId, seatId, visibleToSeq, now));
 
 const switchSeatTx = async (db: Db, input: SwitchSeatInput, now: number): Promise<SwitchSeatResult> => {
+  await lockCooRows(db, [input.to.cooId]);
+  for (const roomId of [...new Set([input.fromRoomId, input.to.roomId])].sort()) await lockRoomRow(db, roomId);
   const source = await seatRow(db, input.fromRoomId, input.fromSeatId);
   if (!source) throw new RoomSeatError('seat_not_found', `没有这个源席位：${input.fromRoomId}/${input.fromSeatId}`);
   if (source.releasedAt !== null) throw new RoomSeatError('invalid', '源席位已经释放，不是换房');

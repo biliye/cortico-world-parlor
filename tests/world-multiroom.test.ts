@@ -13,6 +13,7 @@ import { ParlorClient } from '../src/room/client.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 import type { WakeTier } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
+import { LedgerDb } from '../src/room/ledger-db.ts';
 
 const until = async (predicate: () => boolean | Promise<boolean>, timeout = 5000): Promise<void> => {
   const start = Date.now();
@@ -294,6 +295,20 @@ describe('大厅进出不主动推给 Coo', () => {
 });
 
 describe('World 多客厅', () => {
+  it('本人历史对局回执使用中文游戏名和胜负平，不向 Coo 输出内部枚举', async () => {
+    await startWorld();
+    const row = await server!.dbHandle.prepare("SELECT coo_id FROM room_seats WHERE name='小满' AND released_at IS NULL").get() as {coo_id:string};
+    const ledger = new LedgerDb(server!.dbHandle);
+    for (const [game,result] of [['ddz','win'],['dice','loss'],['werewolf','draw']] as const) {
+      await ledger.record({kind:'game',room:'lobby',game,from:'room',participants:[row.coo_id],
+        winners:result==='loss'?[]:[row.coo_id],data:{tie:result==='draw'},text:'回合结束',visibility:'room'});
+    }
+    const history = await call('parlor_my_history');
+    expect(history).toContain('斗地主 · 胜');
+    expect(history).toContain('骰子 · 负');
+    expect(history).toContain('狼人杀 · 平');
+    expect(history).not.toMatch(/\bddz\b|\bwerewolf\b|\bwin\b|\bloss\b|\bdraw\b/);
+  });
   it('删除所在客厅后自动回大厅，并能重启继续用同一身份聊天', async () => {
     const { host, secrets, ctx } = await startWorld();
     const created = await call('parlor_room_create', { name: '将删除的厅', visibility: 'public' });
