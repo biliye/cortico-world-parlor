@@ -691,9 +691,20 @@ describe('导演式：整局到结算', () => {
     expect(() => table.act('a', { move: 'play', cards: ['3', '4'] }, 0)).toThrow(/不是合法/);
     expect(() => table.act('a', { move: 'play', cards: ['3', '4', '5', '6'] }, 0)).toThrow(/不是合法/);
     expect(() => table.act('a', { move: 'play', cards: ['3', '3', '3', '3', '3'] }, 0)).toThrow(/不是合法/);
+    // 五次拒绝之后，引擎状态必须与出牌前一模一样：回合、手牌、桌面、倍数都不许动。
+    expect(table.exportState()).toEqual(before);
+    expect(viewOf(table, 'a').hand).toHaveLength(20);
+    expect(viewOf(table, 'a').yourTurn).toBe(true);
+    expect(publicOf(table).lastPlay).toBeNull();
+    expect(publicOf(table).multiplier).toBe(1);
     table.act('a', { move: 'play', cards: ['3', '3', '3'] }, 0);
+    const afterLead = table.exportState();
     expect(() => table.act('b', { move: 'play', cards: ['8', '8'] }, 0)).toThrow(/压不过/);
     expect(() => table.act('b', { move: 'play', cards: ['8', '8', '8', '3'] }, 0)).toThrow(/没有这张牌/);
+    // 被拒后回合仍在 b、手牌与桌面不变（`8 8 8 3` 里 3 不在 b 手上，不该扣掉那三张 8）。
+    expect(table.exportState()).toEqual(afterLead);
+    expect(viewOf(table, 'b').yourTurn).toBe(true);
+    expect(viewOf(table, 'b').hand).toHaveLength(17);
     const step = table.act('b', { move: 'play', cards: ['8', '8', '8'] }, 0);
     expectLabel(step, '三张 8');
   });
@@ -786,12 +797,14 @@ describe('重上桌：存档恢复续打', () => {
     table.act('a', { move: 'play', cards: ['4', '4', '4', '4', '5', '6'] }, 0);
     const original = table.exportState();
     const legacy = structuredClone(original) as Record<string, any>;
-    // 旧版把附件 6 当成主牌存（rank 3）；若恢复不重算，7 的四带二（rank 4）会被 3 挡住。
-    legacy.lastPlay.move.rank = RANKS.indexOf('6');
-    for (const [, entry] of legacy.roundPlays) entry.move.rank = RANKS.indexOf('6');
+    // 把附件 6 当主牌存,而且存成比 K 还大的脏值:若恢复不重算,7 的四带二(rank 4)会被挡住。
+    // 这样「重算」这件事在裁决层就能验,不用只靠深等。
+    legacy.lastPlay.move.rank = RANKS.indexOf('2') + 5;
+    for (const [, entry] of legacy.roundPlays) entry.move.rank = RANKS.indexOf('2') + 5;
     const revived = new DoudizhuTable({ host: { ...HOST }, now: 0, rng: seeded(97) });
     revived.restoreState(legacy);
     expect(revived.exportState()).toEqual(original);
+    expect(publicOf(revived).lastPlay.label).toBe('四带二 4');
     const step = revived.act('b', { move: 'play', cards: ['7', '7', '7', '7', '9', 'Q'] }, 0);
     expectLabel(step, '四带二 7');
   });
@@ -896,5 +909,134 @@ describe('视图与私话契约', () => {
     table.act('a', { move: 'play', cards: [viewOf(table, 'a').hand[0]] }, 0);
     expect(table.privateText('b', 0)).toContain('上一手');
     expect(table.privateText('b', 0)).toContain('压过它');
+  });
+});
+
+/** 交叉核对补的契约点：回归不会叫疼、但坏了会伤人的那些。 */
+describe('契约点：底牌时机、唤醒时刻、恢复保底', () => {
+  it('叫牌阶段底牌一无所知；叫成之后才公开', () => {
+    const table = new DoudizhuTable({ host: { ...HOST }, now: 0, rng: seeded(71) });
+    table.join({ ...GUESTS[0] });
+    table.join({ ...GUESTS[1] });
+    table.start('a', 0);
+    expect(table.status).toBe('bidding');
+    expect(publicOf(table).bottom).toBeUndefined();
+    expect(publicOf(table).bottomCards).toBeUndefined();
+    expect(publicOf(table).landlord).toBeUndefined();
+    expect(JSON.stringify(publicOf(table))).not.toContain('bottom');
+    table.act('a', { move: 'bid', call: true }, 0);
+    expect(publicOf(table).bottom).toHaveLength(3);
+    expect(publicOf(table).bottomCards).toHaveLength(3);
+    expect(viewOf(table, 'a').hand).toHaveLength(20);
+  });
+
+  it('nextWakeAt：进行中给这一手的截止，终局与未开局都不唤醒', () => {
+    const open = new DoudizhuTable({ host: { ...HOST }, now: 0, rng: seeded(73) });
+    open.join({ ...GUESTS[0] });
+    open.join({ ...GUESTS[1] });
+    open.start('a', 0);
+    expect(open.nextWakeAt()).toBe(30_000);
+    open.act('a', { move: 'bid', call: true }, 0);
+    expect(open.nextWakeAt()).toBe(60_000);
+    open.act('a', { move: 'play', cards: [viewOf(open, 'a').hand[0]] }, 0);
+    expect(open.nextWakeAt()).toBe(60_000);
+    const fresh = new DoudizhuTable({ host: { ...HOST }, now: 0 });
+    expect(fresh.nextWakeAt()).toBeUndefined();
+  });
+
+  it('rearm：真人按「停机前还剩多少」重新计时，不够才抬到保底', () => {
+    // 停机前还剩 40 秒（旧 now = 1_000_000）→ 重连后照样给 40 秒，
+    // 不掐掉停机耗掉的那 10 秒（契约写的是「保留停机前的剩余时间」）。
+    const table = directedTable({}, { turn: 'b', deadline: 1_040_000 });
+    table.rearm(1_010_000, 10_000, 10_000);
+    expect((table.exportState() as Record<string, unknown>).deadline).toBe(1_050_000);
+    // 停机前只剩 2 秒 → 抬到保底 10 秒。
+    const tight = directedTable({}, { turn: 'b', deadline: 1_002_000 });
+    tight.rearm(1_010_000, 10_000, 10_000);
+    expect((tight.exportState() as Record<string, unknown>).deadline).toBe(1_020_000);
+    // 原截止已过 → 也给保底。
+    const late = directedTable({}, { turn: 'b', deadline: 1_000_000 });
+    late.rearm(1_100_000, 100_000, 15_000);
+    expect((late.exportState() as Record<string, unknown>).deadline).toBe(1_115_000);
+  });
+
+  it('入座守卫：满员、重复入座、开局后入座/离桌、非主持开局都被拒', () => {
+    const table = new DoudizhuTable({ host: { ...HOST }, now: 0, rng: seeded(79) });
+    expect(() => table.start('b', 0)).toThrow(/只有开桌的人/);
+    table.join({ ...GUESTS[0] });
+    expect(() => table.join({ ...GUESTS[0] })).toThrow(/已经在桌上/);
+    table.join({ ...GUESTS[1] });
+    expect(() => table.join({ id: 'd', name: '第四位' })).toThrow(/最多 3 个人/);
+    // 开局前:开桌的人不能自己走,客人可以走,走了还能再坐回来。
+    expect(() => table.leave('a')).toThrow(/开桌的人/);
+    expect(table.leave('c').text).toContain('离开了斗地主桌');
+    expect(table.seatIds()).toEqual(['a', 'b']);
+    table.join({ id: 'c', name: '阿满' });
+    expect(table.seatIds()).toEqual(['a', 'b', 'c']);
+    table.start('a', 0);
+    expect(() => table.leave('b')).toThrow(/已经开始/);
+    expect(() => table.join({ id: 'd', name: '第四位' })).toThrow(/已经开始了/);
+    expect(() => table.start('a', 0)).toThrow(/已经开始了/);
+    expect(() => table.act('b', { move: 'bid', call: true }, 0)).toThrow(/还没轮到你叫地主/);
+  });
+
+  it('坏存档一律抛错，不猜、不半途恢复', () => {
+    const fresh = () => new DoudizhuTable({ host: { ...HOST }, now: 0 });
+    const base = (() => {
+      const table = directedTable({ landlord: ['3'] });
+      return table.exportState() as Record<string, any>;
+    })();
+    const broken: Array<[string, unknown, RegExp]> = [
+      ['不是对象', null, /不是对象/],
+      ['版本不认识', { ...base, version: 99 }, /不认识的斗地主存档版本/],
+      ['主持席位对不上', { ...base, host: 'zzz' }, /主持席位对不上/],
+      ['状态非法', { ...base, status: 'weird' }, /状态不对/],
+      ['没有席位', { ...base, seats: [] }, /缺席位/],
+      ['席位形状不对', { ...base, seats: [{ id: 'a' }] }, /席位形状不对/],
+      ['手牌形状不对', { ...base, seats: [{ id: 'a', name: 'n', hand: 'x', cards: [] }] }, /手牌形状不对/],
+      ['牌堆形状不对', { ...base, hands: [[], []] }, /牌堆形状不对/],
+      ['轮次出牌形状不对', { ...base, roundPlays: [['a', null]] }, /轮次出牌形状不对/],
+      ['上一手牌型不合法', { ...base, lastPlay: { seat: 'a', move: { cards: ['3', '4'] }, cards: [] } }, /出牌牌型不合法/],
+    ];
+    for (const [name, state, error] of broken) {
+      expect(() => fresh().restoreState(state), name).toThrow(error);
+    }
+  });
+});
+
+describe('契约点：suggestMove 的目标牌型矩阵', () => {
+  const pick = (hand: R[], target: R[] | null) => suggestMove(hand, target ? parseMove(target) : null);
+
+  it('三张/三带一/三带二/飞机/飞机带对/四带二/四带两对 都能给出最小合法解', () => {
+    const cases: Array<[string, R[], R[]]> = [
+      ['三张', ['5', '5', '5', '9'], ['4', '4', '4']],
+      ['三带一', ['5', '5', '5', '9'], ['4', '4', '4', '7']],
+      ['三带二', ['5', '5', '5', '9', '9'], ['4', '4', '4', '8', '8']],
+      ['飞机', ['4', '4', '4', '5', '5', '5', '9'], ['3', '3', '3', '4', '4', '4']],
+      ['飞机带对', ['4', '4', '4', '5', '5', '5', '9', '9', '10', '10'], ['3', '3', '3', '4', '4', '4', '7', '7', '8', '8']],
+      ['四带二', ['5', '5', '5', '5', '9', '10'], ['4', '4', '4', '4', '8', '8']],
+      ['四带两对', ['5', '5', '5', '5', '9', '9', '10', '10'], ['4', '4', '4', '4', '7', '7', '8', '8']],
+    ];
+    for (const [name, hand, target] of cases) {
+      const picked = pick(hand, target);
+      expect(picked, name).not.toBeNull();
+      const parsed = parseMove(picked!);
+      expect(parsed, name).not.toBeNull();
+      expect(canBeat(parsed!, parseMove(target)), name).toBe(true);
+    }
+  });
+
+  it('飞机带单的翅膀取到同点三张时会漏解（已知缺陷 E4，修好后本断言应改为 not.toBeNull）', () => {
+    const hand: R[] = ['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '9', '10'];
+    const target = parseMove(['3', '3', '3', '4', '4', '4', '5', '5', '5', '6', '7', '8'])!;
+    // 合法解确实存在:444 555 666 + 9 9 10。
+    expect(parseMove(['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10'])).not.toBeNull();
+    expect(canBeat(parseMove(['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10'])!, target)).toBe(true);
+    // 现状:suggestMove 拿最低三张当翅膀(9 9 9)判非法,又不换翅膀,于是返回 null。
+    expect(suggestMove(hand, target)).toBeNull();
+    expect(chooseMove(hand, target, { role: 'farmer', lastPlayBy: 'landlord', minOpponentLeft: 10 })).toBeNull();
+    // 对照:翅膀里没有三张同点就能解。
+    expect(suggestMove(['4', '4', '4', '5', '5', '5', '6', '6', '6', '9', '9', '10', 'J'], target))
+      .not.toBeNull();
   });
 });
