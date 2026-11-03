@@ -5,8 +5,8 @@
  */
 import { el, btn, icon } from './common.js';
 /* 内部模块统一带同一个版本号：版本不一致会让浏览器当成两份，订阅会各记各的。 */
-import { onAnnouncements } from './announcements.js?v=0.35.5';
-import { pickAnnouncement, rememberDismissed, excerpt } from './announcement-rules.js?v=0.35.5';
+import { onAnnouncements } from './announcements.js?v=0.35.6';
+import { pickAnnouncement, rememberDismissed, excerpt } from './announcement-rules.js?v=0.35.6';
 
 const DISMISSED_KEY = 'parlor-announcements-dismissed';
 const SEEN_KEY = 'parlor-announcements-seen';
