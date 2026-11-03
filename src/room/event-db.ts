@@ -12,6 +12,7 @@
 import { withTransaction, type Db } from './db.ts';
 import type { RoomEvent, Scope } from './protocol.ts';
 import { jsonObject, jsonValue } from './storage/json.ts';
+import { touchActivity } from './activity.ts';
 
 export interface EventAudience {
   cooId: string;
@@ -125,6 +126,12 @@ export class EventDb {
       if (Number(updated.changes) === 0) throw new Error(`客厅不存在：${roomId}`);
       const seq = await this.latest(roomId);
 
+      if (input.from !== 'system' && input.type !== 'parlor.left') {
+        const actor = await this.db.prepare('SELECT coo_id FROM room_seats WHERE room_id=? AND id=? AND released_at IS NULL')
+          .get(roomId, input.from) as { coo_id: string } | undefined;
+        if (actor) await touchActivity(this.db, roomId, actor.coo_id, input.ts);
+      }
+
       const scope = input.scope;
       const scopeSeatId = scope.kind === 'seat' ? scope.seatId : null;
       const scopeTableId = scope.kind === 'table' ? scope.tableId : null;
@@ -164,16 +171,17 @@ export class EventDb {
           const seat = await lookup.get(roomId, scope.seatId) as { coo_id: string } | undefined;
           if (seat) audience.set(seat.coo_id, { cooId: seat.coo_id, seatId: scope.seatId });
         } else {
-          for (const seatId of scope.seats) {
-            const seat = await lookup.get(roomId, seatId) as { coo_id: string } | undefined;
-            if (seat) audience.set(seat.coo_id, { cooId: seat.coo_id, seatId });
+          if (scope.seats.length > 0) {
+            const rows = await this.db.prepare(`SELECT id,coo_id FROM room_seats WHERE room_id=? AND id IN (${scope.seats.map(() => '?').join(',')})`)
+              .all(roomId, ...scope.seats) as { id: string; coo_id: string }[];
+            for (const seat of rows) audience.set(seat.coo_id, { cooId: seat.coo_id, seatId: seat.id });
           }
         }
-        const insert = this.db.prepare(
-          'INSERT INTO event_audience(room_id, seq, coo_id, seat_id) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
-        );
-        for (const item of audience.values()) {
-          await insert.run(roomId, seq, item.cooId, item.seatId ?? null);
+        const items = [...audience.values()];
+        if (items.length > 0) {
+          await this.db.prepare(`INSERT INTO event_audience(room_id, seq, coo_id, seat_id) VALUES
+            ${items.map(() => '(?,?,?,?)').join(',')} ON CONFLICT DO NOTHING`)
+            .run(...items.flatMap(item => [roomId, seq, item.cooId, item.seatId ?? null]));
         }
       }
 

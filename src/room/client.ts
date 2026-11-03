@@ -182,12 +182,22 @@ export class ParlorClient {
   }
 
   /** 身份级账本摘要。 */
-  async ledgerAsIdentity(): Promise<{ ledger: unknown }> {
+  async ledgerAsIdentity(token?: string): Promise<{ ledger: unknown }> {
     const response = await fetch(this.url('/v1/me/ledger'), {
-      headers: await this.headers({}),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<{ ledger: unknown }>(response);
+  }
+
+  async location(token: string): Promise<{ room: string | null; seat: RoomSnapshot['seat'] | null }> {
+    const response = await fetch(this.url('/v1/me/location'), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+    return this.parse(response);
+  }
+  async accountHistory(token: string, query: Record<string, unknown>) {
+    const params = new URLSearchParams(Object.entries(query).filter(([,v]) => v !== undefined).map(([k,v]): [string,string] => [k,String(v)]));
+    const response = await fetch(this.url('/v1/me/history') + '?' + params, { headers: await this.headers({ authorization: `Bearer ${token}` }), signal: AbortSignal.timeout(15_000) });
+    return this.parse<{ items: { id:string;ts:number;roomName:string;game:string;text:string;chips:number;result?:string }[]; next:number|null }>(response);
   }
 
   /** 身份级回放：按历次到访区间的并集，不需要席位。 */
@@ -419,7 +429,7 @@ export class ParlorClient {
 
   private async headers(extra: Record<string, string>): Promise<Record<string, string>> {
     // 快照与 SSE 续连也携带能力，升级后无需退桌重入。
-    extra = { 'x-parlor-client': PARLOR_CLIENT_VERSION, ...extra };
+    extra = { 'x-parlor-client': PARLOR_CLIENT_VERSION, 'x-parlor-capabilities':'seat-location-v1', ...extra };
     if (!this.identity) return extra;
     if (this.global) {
       if (extra.authorization) return extra;

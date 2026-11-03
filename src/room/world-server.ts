@@ -1,3 +1,7 @@
+import { touchActivity } from './activity.ts';
+import { RoomLifecycle } from './lifecycle.ts';
+import { personalHistory } from './personal-account.ts';
+import { EventDb } from './event-db.ts';
 /**
  * 多客厅 HTTP 网关（聊天切片）。
  *
@@ -23,7 +27,7 @@ import { isBlockedPort } from './ports.ts';
 import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import {
-  RoomSeatError, activeSeatForCoo, activeSeats, archive, createRoom, getRoom, hashSeatToken,
+  RoomSeatError, activeSeatForCoo, activeSeats, archive, unarchive, createRoom, getRoom, hashSeatToken,
   listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash, seatsForOfflineRelease,
   touchSeatSeen, type RoomRow,
 } from './room-seat-db.ts';
@@ -41,9 +45,9 @@ import { TableDiscovery } from './table-discovery.ts';
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
   operatorKey?: string;
-  /** 存储后端；不设就是 sqlite（老部署零改动）。 */
+  /** 服务端只支持 PostgreSQL。 */
   storage?: StorageKind;
-  /** SQLite 的库文件；只用于 sqlite 路径。 */
+  /** 已停用的旧参数；传入会报错，不会创建 SQLite。 */
   dbFile?: string;
   /** PostgreSQL 连接串；storage=postgres 时必填，缺了直接报错。 */
   databaseUrl?: string;
@@ -65,6 +69,8 @@ export interface WorldServerOptions {
   offlineReleaseHours?: number;
   /** Coo 的 pet 席位离线多少小时后释放；默认 6，0 = 关。 */
   cooOfflineReleaseHours?: number;
+  cooIdleMinutes?: number;
+  roomArchiveHours?: number;
   /** 牌桌每手/每窗时限基准（staging/测试调短用；不传用各游戏默认）。 */
   tableTurnMs?: number;
   now?: () => number;
@@ -80,6 +86,7 @@ interface SseClient {
   /** 谁先关的：服务端主动收（席位没了/写失败）时写原因，客户端断则留空。 */
   closeReason?: string;
   closed: boolean;
+  blockedAt?: number;
   res: ServerResponse;
 }
 
@@ -228,6 +235,7 @@ export class WorldServer {
   private readonly offlineReleaseMs: number;
   private readonly cooOfflineReleaseMs: number;
   private readonly tableTurnMs?: number;
+  private readonly lifecycle: RoomLifecycle;
   private readonly hostName: string;
   private readonly port: number;
   private server?: Server;
@@ -284,6 +292,8 @@ export class WorldServer {
     this.port = options.port ?? 0;
     // 启动恢复基准在 init() 里读；构造函数只落字段，不碰库。
     this.recovery = {};
+    this.lifecycle = new RoomLifecycle(db, room => this.host(room), () => this.hallIdValue, this.defaultRoomId,
+      (options.cooIdleMinutes ?? 60) * 60_000, (options.roomArchiveHours ?? 48) * 3_600_000);
   }
 
   /**
@@ -291,10 +301,9 @@ export class WorldServer {
    * 迁移是异步的，服务必须先 await 完迁移再开始接请求，所以构造不能是同步的。
    */
   static async create(options: WorldServerOptions = {}): Promise<WorldServer> {
-    // file 只在 sqlite 路径下给：openStorage 见到 postgres + file 会直接报错，
-    // 而省略 file 时它自己会退回 sqlite 的 :memory:。
+    // 服务端缺少 PG 连接串时立即失败，不回退到本地空库。
     const db = await openStorage({
-      storage: options.storage ?? 'sqlite',
+      storage: options.storage ?? 'postgres',
       ...(options.dbFile !== undefined ? { file: options.dbFile } : {}),
       ...(options.databaseUrl !== undefined ? { url: options.databaseUrl } : {}),
       ...(options.poolMax !== undefined ? { poolMax: options.poolMax } : {}),
@@ -333,6 +342,7 @@ export class WorldServer {
           try { res.end(); } catch { /* 已断开 */ }
           return;
         }
+        if (statusOf(error) >= 500) console.error('parlor: 请求失败', { method: req.method, path: new URL(req.url ?? '/', 'http://localhost').pathname, error: messageOf(error) });
         json(res, statusOf(error), { error: messageOf(error) });
       });
     });
@@ -374,10 +384,12 @@ export class WorldServer {
     await this.heartbeat(true);
     // 离线席位清理（真人 + Coo）：每 5 分钟一次；刚启动 10 秒先扫一遍（这时还没有 SSE）。
     this.janitorTimer = setInterval(() => {
+      void this.runLifecycle().catch(error => console.error('parlor: 生命周期维护失败', error));
       void this.releaseOfflineSeats().catch((error) => { console.error('parlor: 离线席位清理失败', error); });
     }, 5 * 60_000);
     this.janitorTimer.unref?.();
     this.janitorFirstTimer = setTimeout(() => {
+      void this.runLifecycle().catch(error => console.error('parlor: 生命周期维护失败', error));
       void this.releaseOfflineSeats().catch((error) => { console.error('parlor: 离线席位清理失败', error); });
     }, 10_000);
     this.janitorFirstTimer.unref?.();
@@ -580,20 +592,20 @@ export class WorldServer {
     this.clocking = true;
     const now = this.now();
     let next: number | undefined;
+    let hasTables = false;
     try {
       const occupied = await this.db.prepare(
         'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
       ).all() as { room_id: string }[];
-      const due = await this.db.prepare(
-        `SELECT DISTINCT room_id FROM ledger_entries
-          WHERE kind = 'promise' AND due_at IS NOT NULL AND due_at <= ? AND room_id IS NOT NULL`,
-      ).all(now) as { room_id: string }[];
       // 席位可能都走了，但牌局还挂着：这些客厅也得继续推进。
       const tables = await this.db.prepare(
         "SELECT DISTINCT room_id FROM tables WHERE status IN ('open','bidding','playing')",
       ).all() as { room_id: string }[];
-      for (const row of [...occupied, ...due, ...tables]) await this.host(row.room_id);
-      for (const host of this.hosts.values()) {
+      hasTables = tables.length > 0;
+      for (const row of [...occupied, ...tables]) await this.host(row.room_id);
+      const needed = new Set([...occupied, ...tables].map(row => row.room_id));
+      for (const [id, host] of this.hosts) {
+        if (!needed.has(id) && !this.sse.has(id)) continue;
         try { await host.tickClock(now); } catch (error) {
           console.error('parlor: 客厅时钟出错', error);
         }
@@ -618,7 +630,7 @@ export class WorldServer {
     // 有牌局/承诺：一拍一秒（与旧的每秒 tick 同节奏，但没到点的桌不 hydrate）；
     // 什么都没有：十秒空扫一次，等席位或牌局出现。
     const at = next !== undefined
-      ? Math.min(next, now + CLOCK_SAFETY_MS)
+      ? Math.max(now + 50, hasTables ? Math.min(next, now + CLOCK_SAFETY_MS) : next)
       : now + CLOCK_IDLE_MS;
     this.scheduleClock(at);
   }
@@ -628,6 +640,8 @@ export class WorldServer {
    * 「在线」以 SSE 连接为准：还有一条连着就不动；牌桌锁着也不动（等这局结束）。
    * 返回这次释放了几个，方便测试和运维日志。
    */
+  async runLifecycle(now = this.now()) { return this.lifecycle.sweep(now); }
+
   async releaseOfflineSeats(now = this.now()): Promise<number> {
     const sweeps = [
       { kind: 'human' as const, ms: this.offlineReleaseMs },
@@ -824,6 +838,8 @@ export class WorldServer {
         room: this.defaultRoomId,
         version: PACKAGE_VERSION,
         protocol: 2,
+        storage: 'postgres',
+        capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled'],
         ...(this.identityAuthority ? { globalIdentity: { authority: this.authorityUrl(), audience: this.audienceUrl() } } : {}),
         guestJoin: this.allowGuestJoin,
         offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
@@ -984,6 +1000,24 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'GET' && url.pathname === '/v1/me/location') {
+      const cooId = await this.cooOrSeat(req);
+      const current = await activeSeatForCoo(this.db, cooId);
+      json(res, 200, { room: current?.roomId ?? null, seat: current ? await seatOfRow(this.db, current.roomId, current) : null });
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/v1/me/history') {
+      const cooId = await this.cooOrSeat(req);
+      try {
+        const q = Object.fromEntries(url.searchParams);
+        const page = await personalHistory(this.db, cooId, {
+          kind: (q.kind ?? 'games') as 'games' | 'chips', game: q.game, room: q.room,
+          ...Object.fromEntries(['from','until','before','limit'].filter(k => q[k] !== undefined).map(k => [k, Number(q[k])])),
+        });
+        json(res, 200, page);
+      } catch (error) { throw new HttpError(400, messageOf(error)); }
+      return;
+    }
     if (method === 'GET' && url.pathname === '/v1/me/ledger') {
       const cooId = await this.cooOrSeat(req);
       json(res, 200, { ledger: await new LedgerDb(this.db, { now: this.now }).summaryFor(cooId) });
@@ -1245,7 +1279,7 @@ export class WorldServer {
     }
 
     // —— 房主：成员管理 / 可见性 / 房主邀请 / 删除客厅 ——
-    const managed = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(access|visibility|invite|delete)$/);
+    const managed = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(access|visibility|invite|delete|restore)$/);
     if (managed) {
       const roomId = managed[1];
       const what = managed[2];
@@ -1268,6 +1302,11 @@ export class WorldServer {
           await archive(this.db, roomId, now);
         });
         json(res, 200, { ok: true, room: await roomSummary(this.db, (await getRoom(this.db, roomId))!) });
+        return;
+      }
+      if (what === 'restore' && method === 'POST') {
+        await unarchive(this.db, roomId, now);
+        json(res, 200, { ok:true, room: await roomSummary(this.db, (await getRoom(this.db,roomId))!) });
         return;
       }
       if (room.archivedAt !== null) throw new HttpError(409, '这个客厅已经删除');
@@ -1495,29 +1534,7 @@ export class WorldServer {
     }
 
     if (url.pathname === '/v1/join' && method === 'POST') {
-      const body = await readJson(req);
-      this.checkInvite(req, body);
-      const name = typeof body.name === 'string' ? body.name : '';
-      const cooId = await this.cooAuth(req, name);
-      await this.assertRoomEntry(this.defaultRoomId, cooId);
-      const host = await this.host(this.defaultRoomId);
-      if (await host.seatOf(cooId)) await host.leave(cooId);
-      const joined = await host.join(cooId, {
-        name,
-        ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
-        ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
-      });
-      this.pokeClock();
-      const account = await this.coo.ensureAccount(cooId);
-      json(res, 200, {
-        room: this.defaultRoomId,
-        seat: await seatOfRow(this.db, this.defaultRoomId, joined.seat),
-        token: joined.token,
-        ownerToken: '',
-        maxSeats: (await host.room()).capacity,
-        ...(account.created && account.ownerKey ? { ownerKey: account.ownerKey } : {}),
-      });
-      return;
+      await this.roomRoute(req, res, url, this.defaultRoomId, 'join', method); return;
     }
 
     if (url.pathname === '/v1/player/join' && method === 'POST') {
@@ -1687,13 +1704,16 @@ export class WorldServer {
     if (!text) throw new HttpError(400, '消息不能是空的');
     if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
     this.checkDmRate(cooId);
-    const letter = await new MailDb(this.db, { now: this.now }).append({
+    const letter = await withTransaction(this.db, async () => {
+      await touchActivity(this.db, seat.roomId, cooId, this.now());
+      return new MailDb(this.db, { now: this.now }).append({
       to: peer.cooId,
       fromCooId: cooId,
       room: seat.roomId,
       kind: 'whisper',
       fromName: seat.name,
       text,
+    });
     });
     const target = await activeSeatForCoo(this.db, peer.cooId);
     if (target) {
@@ -1781,6 +1801,10 @@ export class WorldServer {
       // 全局登记只证明身份，入场仍需目标服务器的邀请码；换厅使用已入场的席位令牌。
       if (this.identityAuthority || await this.identify(req) === null) this.checkInvite(req, body);
       const cooId = await this.cooAuth(req, name);
+      const relocation = await this.db.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(cooId) as { return_room_id:string|null } | undefined;
+      if (relocation?.return_room_id && relocation.return_room_id !== roomId) {
+        await this.roomRoute(req, res, url, relocation.return_room_id, action, method); return;
+      }
       await this.assertRoomEntry(roomId, cooId);
       const host = await this.host(roomId);
       // 同一身份丢了令牌时续用原席位；身份认证与房间准入已在上面核过。
@@ -1789,10 +1813,12 @@ export class WorldServer {
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
+      await this.db.prepare('UPDATE coo_sessions SET return_room_id=NULL WHERE coo_id=?').run(cooId);
       this.pokeClock();
       const account = await this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: roomId,
+        ownerToken: '',
         seat: await seatOfRow(this.db, roomId, joined.seat),
         token: joined.token,
         maxSeats: (await host.room()).capacity,
@@ -1921,22 +1947,8 @@ export class WorldServer {
           body.chips,
         );
         delivered = result.delivered;
-      } else if (type === 'promise') {
-        const result = await host.promise(
-          seat.cooId,
-          typeof body.to === 'string' ? body.to : '',
-          typeof body.text === 'string' ? body.text : '',
-          body.due,
-          body.chips,
-        );
-        delivered = result.delivered;
-      } else if (type === 'respond') {
-        const actionName = body.action;
-        if (actionName !== 'accept' && actionName !== 'decline' && actionName !== 'done' && actionName !== 'cancel') {
-          throw new HttpError(400, '回应只能是 accept / decline / done / cancel');
-        }
-        const result = await host.respond(seat.cooId, typeof body.id === 'string' ? body.id : '', actionName);
-        delivered = result.delivered;
+      } else if (type === 'promise' || type === 'respond') {
+        throw new HttpError(410, '承诺功能已停用；已有筹码转移保留。');
       } else if (type === 'table_open') {
         if (body.matchOpen !== undefined && typeof body.matchOpen !== 'boolean') throw new HttpError(400, 'matchOpen 必须是 true 或 false');
         const opened = await host.openTable(seat.cooId, {
@@ -2138,6 +2150,14 @@ export class WorldServer {
   private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {
     const host = await this.host(roomId);
     const seat = await host.seatByToken(token);
+    if (headerValue(req, 'x-parlor-capabilities').split(',').includes('seat-location-v1')
+      || new URL(req.url ?? '/', 'http://localhost').searchParams.get('cap') === 'seat-location-v1') {
+      await this.db.prepare('UPDATE room_seats SET location_capable=1 WHERE room_id=? AND id=? AND location_capable=0').run(roomId,seat.id);
+    }
+    const allClients = [...this.sse.values()].flatMap(set => [...set]);
+    if (allClients.length >= 2000 || allClients.filter(client => client.cooId === seat.cooId).length >= 6) {
+      throw new HttpError(429, '实时连接过多，请关闭多余页面后重试');
+    }
     await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
     // PG 查询会让出事件循环。发出 200 之前先完成在线登记，否则客户端已
     // 看到 SSE 建连成功时，离线清理仍可能把它当成没有连接的旧席位释放。
@@ -2150,7 +2170,7 @@ export class WorldServer {
       cooId: seat.cooId,
       seatId: seat.id,
       seatName: seat.name,
-      since: cursor,
+      since,
       lastPing: now,
       openedAt: now,
       closed: false,
@@ -2161,6 +2181,8 @@ export class WorldServer {
       clients = new Set();
       this.sse.set(roomId, clients);
     }
+    const latestClients = [...this.sse.values()].flatMap(set => [...set]);
+    if (latestClients.length >= 2000 || latestClients.filter(c => c.cooId === seat.cooId).length >= 6) throw new HttpError(429,'实时连接过多，请关闭多余页面后重试');
     clients.add(client);
     // 掉线排查用：一行开、一行关（谁断的、持续多久）。不带令牌。
     console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条）`);
@@ -2182,7 +2204,7 @@ export class WorldServer {
     });
     res.flushHeaders?.();
     res.write('retry: 3000\n\n');
-    for (const event of initial) res.write(`data: ${JSON.stringify(event)}\n\n`);
+    for (const event of initial) if (!this.writeEvent(roomId, client, event)) break;
   }
 
   private checkParentKeyRate(req: IncomingMessage): void {
@@ -2444,7 +2466,7 @@ export class WorldServer {
     const rooms = await this.db.prepare('SELECT id FROM rooms').all() as { id: string }[];
     for (const room of rooms) {
       try {
-        await (await this.host(room.id)).pruneEvents(before, 500);
+        await new EventDb(this.db).prune(room.id, before, 500);
       } catch (error) {
         console.error(`parlor: 清理事件失败（${room.id}）`, error);
       }
@@ -2521,6 +2543,16 @@ export class WorldServer {
     });
   }
 
+  private writeEvent(room: string, client: SseClient, event: RoomEvent): boolean {
+    const ready = client.res.write(`data: ${JSON.stringify(event)}\n\n`);
+    client.since = event.seq; // write(false) has accepted this event into the bounded buffer
+    if (!ready) {
+      client.blockedAt = this.now();
+      client.res.once('drain', () => { client.blockedAt = undefined; this.markDirty(room); });
+    }
+    return ready;
+  }
+
   private async pump(): Promise<void> {
     if (this.closing) return;
     // 上一轮还没跑完就跳过这一轮：两条循环同时读 client.since 会把同一批事件推两遍。
@@ -2536,19 +2568,28 @@ export class WorldServer {
         this.dirtyRooms.delete(roomId);
         const clients = this.sse.get(roomId);
         if (!clients) continue;
-        const host = await this.host(roomId);
+        const seats = new Map((await activeSeats(this.db, roomId)).map(row => [row.cooId, row]));
+        const eventsDb = new EventDb(this.db);
+        const shared = new Map<string, RoomEvent[]>();
         for (const client of [...clients]) {
           try {
-            if (!await host.seatOf(client.cooId)) {
+            if (client.res.writableLength > 1_048_576 || (client.blockedAt !== undefined && now - client.blockedAt > 30_000)) {
+              clients.delete(client); client.closeReason = '客户端接收过慢'; client.res.destroy(); continue;
+            }
+            if (client.blockedAt !== undefined) continue;
+            const seat = seats.get(client.cooId);
+            if (!seat || seat.id !== client.seatId) {
               clients.delete(client);
               client.closeReason = '席位已经不在这个客厅';
               client.res.end();
               continue;
             }
-            const events: RoomEvent[] = await host.eventsSince(client.cooId, client.since, 200);
+            const key = JSON.stringify([client.cooId, client.since]);
+            const events = shared.get(key) ?? await eventsDb.history(roomId, { cooId:client.cooId, since:client.since, limit:200,
+              interval:{ visibleFromSeq:seat.visibleFromSeq, visibleUntilSeq:seat.visibleToSeq } });
+            shared.set(key, events);
             for (const event of events) {
-              client.res.write(`data: ${JSON.stringify(event)}\n\n`);
-              client.since = event.seq;
+              if (!this.writeEvent(roomId, client, event)) break;
             }
             if (events.length === 0 && now - client.lastPing >= 15_000) {
               client.res.write(': ping\n\n');

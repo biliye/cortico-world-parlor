@@ -68,7 +68,8 @@ async function send(path: string, init: RequestInit, headers: Headers): Promise<
 async function supportsScopedPaths(): Promise<boolean> {
   if (scopedPaths !== null) return scopedPaths;
   const health = await fetchHealth();
-  scopedPaths = !!health && typeof health.rooms === 'number';
+  if (!health) return !!currentRoom();
+  scopedPaths = typeof health.rooms === 'number';
   return scopedPaths;
 }
 

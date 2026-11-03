@@ -30,8 +30,8 @@ const has = (flag: string): boolean => argv.includes(flag);
 
 const storage = parseStorageKind(valueOf('--storage') ?? process.env.PARLOR_STORAGE);
 const dbFile = valueOf('--db') ?? process.env.PARLOR_DB ?? '';
-if (storage === 'sqlite' && !dbFile) {
-  console.error('要写 --db <parlor.db>（或设 PARLOR_DB）');
+if (dbFile) {
+  console.error('服务端已改为 PostgreSQL，请移除 --db/PARLOR_DB，设置 PARLOR_DATABASE_URL');
   process.exit(2);
 }
 const voidId = valueOf('--void');
@@ -44,7 +44,7 @@ if (!listOnly && !voidId) {
 
 const db = await openStorage({
   storage,
-  ...(storage === 'sqlite' ? { file: dbFile } : { url: process.env.PARLOR_DATABASE_URL }),
+  url: process.env.PARLOR_DATABASE_URL,
 });
 try {
   await migrate(db);

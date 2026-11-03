@@ -6,7 +6,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
-import { boot, snapshot, syncRouteRoom } from './stores/parlor.ts';
+import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh } from './stores/parlor.ts';
 import { entryNotice, seat } from './stores/session.ts';
 import { readView, view } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
@@ -47,13 +47,24 @@ function onPopState(): void {
   void syncRouteRoom();
 }
 
+function restoreForeground(): void {
+  if (document.visibilityState !== 'hidden' && seat.value) void syncLocation().then(() => {
+    if (connection.value !== 'on') connect(); else scheduleRefresh(0);
+  });
+}
 onMounted(() => {
+  document.addEventListener('visibilitychange', restoreForeground);
+  window.addEventListener('pageshow', restoreForeground);
+  window.addEventListener('focus', restoreForeground);
   if (seat.value || location.hash.includes('identity') || location.hash.includes('key')) void enter();
   window.addEventListener('hashchange', onHashChange);
   window.addEventListener('popstate', onPopState);
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', restoreForeground);
+  window.removeEventListener('pageshow', restoreForeground);
+  window.removeEventListener('focus', restoreForeground);
   window.removeEventListener('hashchange', onHashChange);
   window.removeEventListener('popstate', onPopState);
 });

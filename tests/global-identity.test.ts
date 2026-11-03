@@ -1,3 +1,4 @@
+import { pgServerStorage } from './helpers/pg.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -20,7 +21,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 const start = async (authority = 'self', dbFile?: string, now?: () => number) => {
-  const s = await WorldServer.create({ identityAuthority: authority, dbFile, now, allowGuestJoin: true });
+  const s = await WorldServer.create({ ...(await pgServerStorage(dbFile ?? ':memory:')), identityAuthority: authority, now, allowGuestJoin: true });
   servers.push(s); await s.listen(); return s;
 };
 const id = (suffix: string) => ({ cooId: `12345678-${suffix}-4000-8000-000000000000`, cooSecret: `secret-${suffix}-01234567890123456789` });
@@ -167,7 +168,7 @@ describe('全局身份', () => {
 
   it('其他服务器的家长入口沿用统一玩家身份，关闭访客入口时仍可下场', async () => {
     const authority = await start();
-    const remote = await WorldServer.create({ identityAuthority: authority.url, allowGuestJoin: false });
+    const remote = await WorldServer.create({ ...(await pgServerStorage(':memory:')), identityAuthority: authority.url, allowGuestJoin: false });
     servers.push(remote); await remote.listen();
     const child = new ParlorClient(remote.url, id('cccc'));
     await child.initializeIdentity(authority.url, '', '小满');

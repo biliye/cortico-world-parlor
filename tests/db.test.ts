@@ -1,5 +1,6 @@
+import { openDb } from '../src/room/storage/sqlite.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { migrate, openDb, withTransaction, SCHEMA_VERSION, type Db } from '../src/room/db.ts';
+import { migrate, withTransaction, SCHEMA_VERSION, type Db } from '../src/room/db.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 import { pgTestEnabled } from './helpers/pg.ts';
 

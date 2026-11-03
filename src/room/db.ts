@@ -10,10 +10,8 @@
  */
 
 import type { Db } from './storage/types.ts';
-import { SqliteDb, openDb } from './storage/sqlite.ts';
 
 export type { Db, DbKind, PreparedStatement, RunResult, SqlParam } from './storage/types.ts';
-export { openDb, SqliteDb };
 export { migrate } from './storage/migrate.ts';
 export { SQLITE_SCHEMA_VERSION as SCHEMA_VERSION } from './storage/migrate.ts';
 

@@ -1,3 +1,4 @@
+import { openDb } from '../src/room/storage/sqlite.ts';
 /**
  * SQLite → PostgreSQL 迁移工具（M3）：
  * - 来源只读、结构/外键/JSON/整数范围/重复活跃席位全审一遍，有问题就中止；
@@ -11,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDb, type Db } from '../src/room/db.ts';
+import { type Db } from '../src/room/db.ts';
 import { migrate } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom, getRoom } from '../src/room/room-seat-db.ts';

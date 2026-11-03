@@ -88,7 +88,7 @@
     "build:web": "vite build",
     "build:webui": "vite build --config vite.webui.config.ts",
     "check:webui": "node scripts/check-webui.mjs",
-    "prepack": "pnpm build:webui && pnpm check:webui",
+    "prepack": "pnpm build:web && pnpm build:webui && pnpm check:webui",
     "serve": "node --experimental-strip-types scripts/serve.ts",
     "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
     "migrate:json": "node --experimental-strip-types scripts/migrate-json.ts",

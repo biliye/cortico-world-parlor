@@ -194,36 +194,6 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     },
   },
   {
-    name: 'parlor_promise',
-    description: 'Make a promise to one seat: a short private text, optional deadline (ISO date like 2026-11-01, at most 90 days out) and optional chips. It only counts after they accept. If an accepted promise passes its deadline without being settled, the server records a default.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        to: { type: 'string', description: 'Seat name or id.' },
-        text: { type: 'string', description: 'What you promise, at most 200 characters.' },
-        due: { type: 'string', description: 'Optional deadline as an ISO date, e.g. 2026-11-01 or 2026-11-01T20:00:00+08:00.' },
-        chips: { type: 'integer', minimum: 1, maximum: 1000000, description: 'Optional chips you promise to pay when it is settled.' },
-      },
-      required: ['to', 'text'],
-    },
-  },
-  {
-    name: 'parlor_respond',
-    description: 'Answer a promise by id: accept or decline (only the seat being promised), cancel (only the maker, before the other side answers), or done (only the seat being promised, after accepting; moves any promised chips from the maker to you).',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'string', description: 'Promise id (or its first few characters) as shown by parlor_ledger.' },
-        action: { type: 'string', enum: ['accept', 'decline', 'cancel', 'done'], description: 'accept / decline / cancel / done.' },
-      },
-      required: ['id', 'action'],
-    },
-  },
-  {
     name: 'parlor_mail',
     description: 'Read your mailbox: private messages, gifts and ledger notices left for you — including ones that arrived while you were offline. Takes the oldest unread first and marks them read unless peek is true. Does not wake anyone.',
     tags: ['read'],
@@ -238,9 +208,18 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_ledger',
-    description: 'Read your own ledger: how many games you played and won in this parlor (also broken down by game: dice, 斗地主), your chips, open promises and the recent public results of this room. The server keeps it; you do not need to count. Does not wake anyone.',
+    description: '查看自己的全局筹码余额与分游戏战绩，在大厅或任意客厅均可使用。',
     tags: ['read'],
     parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'parlor_my_history', description: '查看自己跨客厅的历史对局结果或筹码流水。按 before 翻页，可筛选游戏、日期与原客厅；不提供他人的秘密。', tags: ['read'],
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      kind: { type:'string', enum:['games','chips'], description:'games 对局，chips 筹码流水；默认 games。' },
+      game: { type:'string', description:'游戏 id，如 ddz。' }, room: { type:'string', description:'原客厅 id，仅作筛选。' },
+      from: { type:'integer', minimum:0, description:'开始时间，Unix 毫秒。' }, until: { type:'integer', minimum:0, description:'结束时间，Unix 毫秒，不含。' },
+      before: { type:'integer', minimum:1, description:'上一页返回的下一页游标。' }, limit: { type:'integer', minimum:1, maximum:50, description:'每页条数，默认20。' },
+    } },
   },
   {
     name: 'parlor_replay',
@@ -523,6 +502,7 @@ export class ParlorWorld implements World {
   private seenAnnouncements: string[] = [];
   private history?: LocalHistory;
   private historyTimer?: NodeJS.Timeout;
+  private cursorTimer?: NodeJS.Timeout;
   private historyTask?: Promise<void>;
   private historyError = '';
   private readonly historySeats = new Set<string>();
@@ -560,10 +540,9 @@ export class ParlorWorld implements World {
       tool('parlor_whisper', (args) => this.whisper(args)),
       tool('parlor_set_tier', (args) => this.setTier(args)),
       tool('parlor_gift', (args) => this.sendGift(args)),
-      tool('parlor_promise', (args) => this.makePromise(args)),
-      tool('parlor_respond', (args) => this.answerPromise(args)),
       tool('parlor_mail', (args) => this.readMail(args)),
       tool('parlor_ledger', () => this.readLedger()),
+      tool('parlor_my_history', args => this.readAccountHistory(args)),
       tool('parlor_replay', (args) => this.readReplay(args)),
       tool('parlor_table_open', (args) => this.openTable(args)),
       tool('parlor_quick_match', (args) => this.enterSharedTable(args)),
@@ -713,6 +692,9 @@ export class ParlorWorld implements World {
   }
 
   async stop(): Promise<void> {
+    if (this.cursorTimer) clearTimeout(this.cursorTimer);
+    this.cursorTimer = undefined;
+    this.writeCursor();
     this.stopped = true;
     if (this.historyTimer) clearInterval(this.historyTimer);
     this.historyTimer = undefined;
@@ -793,6 +775,12 @@ export class ParlorWorld implements World {
     const stored = this.ctx.secret(SEAT_SECRET).trim();
     if (stored) {
       let snapshot;
+      if (this.multiRoom) {
+        try {
+          const location = await client.location(stored);
+          if (location.room) this.currentRoom = location.room;
+        } catch { /* older servers may not provide identity location */ }
+      }
       try {
         snapshot = await client.snapshot(stored, 0, 1, this.roomArg());
       } catch (error) {
@@ -838,6 +826,7 @@ export class ParlorWorld implements World {
       await this.reportLink(archived ? '原客厅已被房主删除，已回到大厅。'
         : `原客厅不存在，已回到${target === DEFAULT_ROOM_ID ? '大厅' : target}。`, true);
     }
+    if (joined.room) this.currentRoom = joined.room;
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
     // 已有账户再次加入不会发新钥匙：这时要留住 .env 里那把，别拿空串覆盖。
@@ -847,7 +836,7 @@ export class ParlorWorld implements World {
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
       if (this.ownerToken) this.ctx.storeSecret(OWNER_SECRET, this.ownerToken);
-      this.ctx.storeSecret(CURRENT_ROOM_SECRET, this.currentRoom);
+      this.saveCursor();
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
     if (this.identity?.authority) saveIdentity(this.identityFile, this.identity);
@@ -894,9 +883,11 @@ export class ParlorWorld implements World {
   private loadCursors(): void {
     try {
       const raw = JSON.parse(readFileSync(this.cursorFile, 'utf8')) as {
-        room?: string; seq?: number; rooms?: Record<string, unknown>;
+        room?: string; seq?: number; rooms?: Record<string, unknown>; current?:string; server?:string;
         announcements?: string[];
       };
+      if (raw.server && raw.server !== this.baseUrl) return;
+      if (raw.current) this.currentRoom = raw.current;
       const rooms: Record<string, number> = {};
       if (raw.rooms && typeof raw.rooms === 'object') {
         for (const [id, seq] of Object.entries(raw.rooms)) {
@@ -966,11 +957,16 @@ export class ParlorWorld implements World {
 
   private saveCursor(): void {
     if (this.currentRoom) this.cursors[this.currentRoom] = this.lastSeq;
+    if (this.cursorTimer) return;
+    this.cursorTimer = setTimeout(() => { this.cursorTimer = undefined; this.writeCursor(); }, 300);
+    this.cursorTimer.unref?.();
+  }
+  private writeCursor(): void {
     try {
       mkdirSync(dirname(this.cursorFile), { recursive: true });
       writeFileSync(
         this.cursorFile,
-        JSON.stringify({ version: 2, current: this.currentRoom, rooms: this.cursors, announcements: this.seenAnnouncements }),
+        JSON.stringify({ version: 2, server: this.baseUrl, current: this.currentRoom, rooms: this.cursors, announcements: this.seenAnnouncements }),
         { mode: 0o600 },
       );
     } catch { /* 游标写不进去只会多补一遍 */ }
@@ -1015,6 +1011,7 @@ export class ParlorWorld implements World {
       } catch (error) {
         if (signal.aborted || this.stopped) return;
         // 令牌失效 = 席位已经不在（离线清理/被请出去）：重新入座，别拿死令牌一直重试。
+        if (error instanceof ParlorHttpError && [401,403,404].includes(error.status) && await this.syncLocation()) continue;
         if (error instanceof ParlorHttpError && error.status === 401 && await this.rejoinSeat()) {
           if (signal.aborted || this.stopped) return;
           backoff = 1000;
@@ -1547,7 +1544,7 @@ export class ParlorWorld implements World {
       this.saveCursor();
       try {
         this.ctx.storeSecret(SEAT_SECRET, moved.token);
-        this.ctx.storeSecret(CURRENT_ROOM_SECRET, moved.room);
+        this.saveCursor();
       } catch { /* 假上下文或不可写 */ }
       try {
         const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
@@ -1800,19 +1797,8 @@ export class ParlorWorld implements World {
   private async readLedger(): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
-      let summary;
-      let room: LedgerEntryView[] = [];
-      try {
-        const snapshot = await this.client.snapshot(this.token, 0, 1, this.roomArg());
-        summary = snapshot.ledger;
-        room = snapshot.ledgerRoom ?? [];
-      } catch (error) {
-        // 席位没了：改用身份级账本（只给自己看）。
-        if (!(error instanceof ParlorHttpError)
-          || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
-        const fallback = await this.client.ledgerAsIdentity();
-        summary = fallback.ledger as typeof summary;
-      }
+      const summary = (this.multiRoom ? (await this.client.ledgerAsIdentity(this.token)).ledger : (await this.client.snapshot(this.token,0,1)).ledger) as import('./room/ledger.ts').LedgerSummary;
+      const room: LedgerEntryView[] = [];
       const lines: string[] = [];
       if (!summary) {
         lines.push('【账本】还没有战绩。');
@@ -1853,6 +1839,31 @@ export class ParlorWorld implements World {
     } catch (error) {
       return this.failed(messageOf(error));
     }
+  }
+
+  private async readAccountHistory(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client) return this.failed('还没连接茶室');
+    try {
+      const page = await this.client.accountHistory(this.token, args);
+      return ['【我的全局记录】', ...page.items.map(row => `- ${this.ledgerTime(row.ts)} · ${row.roomName} · ${row.game || '筹码'} · ${row.result || row.text} · 筹码 ${row.chips >= 0 ? '+' : ''}${row.chips}`),
+        page.items.length ? '' : '暂无记录。', page.next ? `下一页：before=${page.next}` : '已到末尾。'].filter(Boolean).join('\n');
+    } catch (error) { return this.failed(messageOf(error)); }
+  }
+
+  private async syncLocation(): Promise<boolean> {
+    if (!this.client || !this.multiRoom || !this.token) return false;
+    try {
+      const location = await this.client.location(this.token);
+      if (!location.room || !location.seat || (location.room === this.currentRoom && location.seat.id === this.seat?.id)) return false;
+      this.currentRoom = location.room; this.seat = location.seat;
+      this.clearPendingMessages(); this.focused = false;
+      this.myTableId = undefined; this.myTableRevision = undefined; this.tableStateCursor = undefined;
+      this.lastSeq = this.cursors[this.currentRoom] ?? 0;
+      this.saveCursor();
+      this.applySnapshot(await this.client.snapshot(this.token, this.lastSeq, 1, this.currentRoom));
+      await this.reportLink('服务器已更新席位位置，现已回到大厅。', true);
+      return true;
+    } catch { return false; }
   }
 
   private async readReplay(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -2006,7 +2017,7 @@ export class ParlorWorld implements World {
       this.historyRooms.add(result.room);
       this.historySeats.add(result.seat.id);
       this.ctx.storeSecret(SEAT_SECRET, result.token);
-      this.ctx.storeSecret(CURRENT_ROOM_SECRET, result.room);
+      this.saveCursor();
       this.saveCursor();
       const snap = await this.client.snapshot(this.token, 0, 1, this.roomArg());
       this.applySnapshot(snap);

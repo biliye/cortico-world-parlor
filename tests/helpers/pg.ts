@@ -150,7 +150,7 @@ process.once('exit', () => {
 export const pgServerStorage = async (
   file: string,
 ): Promise<{ dbFile?: string; storage?: 'postgres'; databaseUrl?: string }> => {
-  if (!pgTestEnabled()) return { dbFile: file };
+  if (!pgTestEnabled()) throw new Error('测试必须使用真实 PostgreSQL');
   const base = await ensureAdmin();
   const { name } = databaseName(file);
   if (!created.has(name)) await createDatabase(name);

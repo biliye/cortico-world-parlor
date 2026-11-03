@@ -13,20 +13,9 @@
  * 传文件路径的测试（重启续用同一库）在 SQLite 下就是同一个文件；
  * PG 下会按文件路径映射成同一个库名。
  */
-import { migrate, openDb, type Db } from '../../src/room/db.ts';
+import { type Db } from '../../src/room/db.ts';
 import { closePgTestDb, openPgTestDb, pgTestEnabled } from './pg.ts';
 
-export const openTestDb = async (file = ':memory:'): Promise<Db> => {
-  if (pgTestEnabled()) return openPgTestDb(file);
-  const db = openDb(file);
-  await migrate(db);
-  return db;
-};
+export const openTestDb = async (file = ':memory:'): Promise<Db> => openPgTestDb(file);
 
-export const closeTestDb = async (db: Db): Promise<void> => {
-  if (pgTestEnabled()) {
-    await closePgTestDb(db);
-    return;
-  }
-  await db.close();
-};
+export const closeTestDb = closePgTestDb;

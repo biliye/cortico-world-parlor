@@ -284,7 +284,7 @@ describe('客厅 World', () => {
     expect(text).toContain('这一轮你先出');
   });
 
-  it('礼物与承诺走工具：对方收到账本通知，接受后 parlor_ledger 能看到未了结与筹码', async () => {
+  it('礼物工具继续可用，承诺工具退出且账户能查看筹码', async () => {
     await startServer();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx = makeContext(secrets);
@@ -302,33 +302,11 @@ describe('客厅 World', () => {
     expect(String(await gift.handler({ to: '阿岚', text: '一杯奶茶', chips: 30 }, {} as ToolCallContext)))
       .toContain('30 枚筹码');
 
-    const promise = world.tools().find((tool) => tool.name === 'parlor_promise')!;
-    const made = String(await promise.handler({ to: '阿岚', text: '帮你看一次代码' }, {} as ToolCallContext));
-    expect(made).toContain('等对方');
-
-    const friendSnap = await client.snapshot(friend.token, 0, 100);
-    expect(friendSnap.ledger?.chips).toBe(30);
-    expect(friendSnap.ledger?.open).toHaveLength(1);
-    expect(friendSnap.ledger?.open[0]).toMatchObject({ direction: 'in', status: 'pending' });
-    const openId = friendSnap.ledger!.open[0].id;
-
+    expect(world.tools().some(tool => ['parlor_promise','parlor_respond'].includes(tool.name))).toBe(false);
     const friendMail = await client.mail(friend.token, 10);
-    expect(friendMail.items.some((item) => item.kind === 'gift')).toBe(true);
-    expect(friendMail.items.some((item) => item.kind === 'promise')).toBe(true);
-
-    await client.action(friend.token, { type: 'respond', id: openId, action: 'accept' });
-    await until(() => host.events.some((event) => event.type === 'parlor.message' && event.text.includes('答应了你的承诺')));
-
-    const mailTool = world.tools().find((tool) => tool.name === 'parlor_mail')!;
-    const mailText = String(await mailTool.handler({}, {} as ToolCallContext));
-    expect(mailText).toContain('答应了你的承诺');
-
-    const ledger = world.tools().find((tool) => tool.name === 'parlor_ledger')!;
-    const text = String(await ledger.handler({}, {} as ToolCallContext));
-    expect(text).toContain('筹码：');
-    expect(text).toContain('未了结：');
-    expect(text).toContain('我欠 阿岚');
-    expect(text).toContain('帮你看一次代码');
+    expect(friendMail.items.some(item=>item.kind==='gift')).toBe(true);
+    const ledger=world.tools().find(tool=>tool.name==='parlor_ledger')!;
+    expect(String(await ledger.handler({},{} as ToolCallContext))).toContain('筹码：');
   });
 
   it('打一局后 parlor_ledger 能看到战绩，身份文件落盘', async () => {

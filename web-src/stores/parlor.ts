@@ -29,6 +29,8 @@ export const log = ref<ChatEvent[]>([]);
 
 let stream: EventSource | null = null;
 let reconnectTimer: number | undefined;
+let reconnectFailures = 0;
+let locationTask: Promise<boolean> | undefined;
 let refreshTimer: number | undefined;
 let hallTimer: number | undefined;
 let refreshing = false;
@@ -258,6 +260,7 @@ function scheduleLedgerRefresh(delay = 200): void {
  */
 async function handleExpiredSeat(token: string): Promise<void> {
   if (readPendingEntry()) return;
+  if (!locationTask && token === seat.value?.token && await syncLocation()) { connect(); return; }
   const decision = decideExpiredSeat(
     token,
     readStoredSeat()?.token ?? null,
@@ -345,14 +348,39 @@ function handleEvent(event: ChatEvent): void {
   }
 }
 
+export async function syncLocation(): Promise<boolean> {
+  if (locationTask) return locationTask;
+  const cfg = seat.value;
+  if (!cfg) return false;
+  const key = seatKey();
+  locationTask = (async () => {
+    try {
+      const current = await api<{ room:string|null;seat:{id:string;name:string}|null }>('/v1/me/location');
+      if (!current?.room || !current.seat || key !== seatKey() || (current.room === cfg.room && current.seat.id === cfg.seatId)) return false;
+      disconnect(); resetRoomState(); backToRoom();
+      saveSeat({ ...cfg, room:current.room, seatId:current.seat.id, name:current.seat.name });
+      const params = new URLSearchParams(location.search);
+      params.set('room', current.room); params.delete('table'); params.delete('view');
+      history.replaceState(null, '', location.pathname + '?' + params);
+      await refreshSnapshot(); await seedLog();
+      showToast('席位已更新，现已回到大厅。');
+      return true;
+    } catch { return false; }
+    finally { locationTask = undefined; }
+  })();
+  return locationTask;
+}
+
 export function connect(): void {
   if (!seat.value) return;
   disconnect();
   connection.value = 'connecting';
-  const source = new EventSource(scopedPath('/v1/stream?since=' + latest.value + '&token=' + encodeURIComponent(seat.value.token)));
+  const source = new EventSource(scopedPath('/v1/stream?cap=seat-location-v1&since=' + latest.value + '&token=' + encodeURIComponent(seat.value.token)));
   stream = source;
   source.onopen = () => {
+    if (stream !== source) return;
     connection.value = 'on';
+    reconnectFailures = 0;
     scheduleRefresh();
   };
   source.onmessage = (message) => {
@@ -366,11 +394,12 @@ export function connect(): void {
     handleEvent(event);
   };
   source.onerror = () => {
+    if (stream !== source) return;
     connection.value = 'off';
     source.close();
     if (stream === source) stream = null;
-    scheduleRefresh();
-    reconnectTimer = window.setTimeout(connect, 3000);
+    const delay = Math.min(30000, 3000 * 2 ** Math.min(reconnectFailures++, 4)) + Math.floor(Math.random()*1500);
+    reconnectTimer = window.setTimeout(() => { void syncLocation().then(() => { if (seat.value && !stream) connect(); }); }, delay);
   };
 }
 
@@ -411,6 +440,8 @@ export async function goRoom(id: string, targetTable = ''): Promise<boolean> {
     location.assign('/play?' + params.toString());
     return true;
   } catch (error) {
+    if ((error as { status?:number }).status === 401) await handleExpiredSeat((error as { seatToken?:string }).seatToken || cfg.token);
+    if ((error as { status?:number }).status === 403) await syncLocation();
     hallError.value = (error as Error).message || '换不了客厅';
     showToast(hallError.value, 'bad');
     return false;
@@ -644,6 +675,7 @@ export async function boot(): Promise<boolean> {
   // 页面内换席位（#key= / 身份回跳）：清掉上一个厅的日志与游标，否则旧厅 seq 会吞新厅事件。
   if (seatChanged(previousSeat, seat.value)) resetRoomState();
   if (!seat.value) return false;
+  await syncLocation();
   const unfinishedEntry = readPendingEntry();
   if (unfinishedEntry && await enterDiscoveredTable(unfinishedEntry.target)) return false;
   // 分享/邀请链接带着 ?room=：席位在别的客厅时先换过去（旧版在启动时做同一件事）。

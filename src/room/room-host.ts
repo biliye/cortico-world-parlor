@@ -1,3 +1,4 @@
+import { touchActivity } from './activity.ts';
 /**
  * 一个客厅的运行时：席位、聊天、私聊、信箱、账本与牌桌。
  *
@@ -195,6 +196,7 @@ export class RoomHost {
     const tableHost = await TableHost.create({
       db,
       roomId,
+      onCommit: options.onCommit,
       now,
       ledger,
       mail,
@@ -382,7 +384,7 @@ export class RoomHost {
   }
 
   /** 原子换房：源客厅写离开事件并释放席位，目标客厅拿新席位并写入加入事件。 */
-  async switchTo(cooId: string, targetRoomId: string, input: { name?: string; token?: string } = {}): Promise<SwitchResult> {
+  async switchTo(cooId: string, targetRoomId: string, input: { name?: string; token?: string; preserveToken?: boolean; idleBefore?: number } = {}): Promise<SwitchResult> {
     if (targetRoomId === this.roomId) throw new HostError('invalid', '已经在这个客厅里');
     const source = await this.requireRoom();
     const target = await getRoom(this.db, targetRoomId);
@@ -401,6 +403,10 @@ export class RoomHost {
       for (const roomId of [this.roomId, targetRoomId].sort()) await lockRoomRow(this.db, roomId);
       const current = await this.seatOf(cooId);
       if (!current || current.id !== seat.id) throw new HostError('conflict', '席位已经变化，请刷新后重试');
+      if (input.idleBefore !== undefined) {
+        const fresh = await this.db.prepare('SELECT business_active_at FROM room_seats WHERE room_id=? AND id=?').get(this.roomId, current.id) as { business_active_at: number };
+        if (Number(fresh.business_active_at) > input.idleBefore) throw new HostError('conflict', '席位刚有新活动');
+      }
       await this.assertNotLocked(cooId, '换客厅');
       const leaveEvent = await this.events.append(this.roomId, {
         type: 'parlor.left',
@@ -418,11 +424,17 @@ export class RoomHost {
       }
       let joined: SeatRow;
       try {
+        if (input.preserveToken) {
+          // The old interval stays immutable; only its retired credential hash is discarded.
+          await this.db.prepare('UPDATE room_seats SET token_hash=? WHERE room_id=? AND id=?')
+            .run(randomBytes(32).toString('hex'), this.roomId, seat.id);
+        }
         joined = await joinSeat(this.db, {
           roomId: targetRoomId,
           cooId,
           name,
           token,
+          ...(input.preserveToken ? { tokenHash: seat.tokenHash } : {}),
           visibleFromSeq: targetFrom,
           kind: seat.kind,
           tier: seat.tier,
@@ -439,6 +451,8 @@ export class RoomHost {
         text: `${joined.name} 进了${await this.placeOf(targetRoomId)}。`,
         data: { seatId: joined.id, name: joined.name, from: source.id },
       });
+      if (this.db.kind === 'postgres') await this.db.prepare('UPDATE coo_sessions SET return_room_id=? WHERE coo_id=?')
+        .run(input.preserveToken ? targetRoomId : null, cooId);
       return { released, seat: joined, token, leaveEvent, joinEvent };
     });
   }
@@ -551,15 +565,16 @@ export class RoomHost {
     const latest = await this.events.latest(this.roomId);
     const room = await this.requireRoom();
     const seatRows = await this.seats();
-    const seats: Seat[] = [];
-    for (const row of seatRows) seats.push(await seatOfRow(this.db, row));
+    const handles = seatRows.length ? await this.db.prepare(`SELECT coo_id,handle FROM global_handles WHERE coo_id IN (${seatRows.map(() => '?').join(',')})`).all(...seatRows.map(row => row.cooId)) as { coo_id: string; handle: string }[] : [];
+    const handleMap = new Map(handles.map(row => [row.coo_id, row.handle]));
+    const seats: Seat[] = seatRows.map(row => ({ id: row.id, name: row.name, kind: row.kind, tier: row.tier, joinedAt: row.joinedAt, handle: handleMap.get(row.cooId) ?? row.cooId.slice(0,8).toLowerCase() }));
     const tablePublic = await this.tableHost.public(cooId);
     return {
       id: this.roomId,
       name: room.name,
       topic: room.topic,
       visibility: room.visibility,
-      seat: await seatOfRow(this.db, seat),
+      seat: seats.find(row => row.id === seat.id) ?? await seatOfRow(this.db, seat),
       seats,
       maxSeats: room.capacity,
       latest,
@@ -735,7 +750,7 @@ export class RoomHost {
   /** 网关每秒调一次：开桌超时、牌局超时代打、承诺到期、余额补给。 */
   async tickClock(now = this.now()): Promise<void> {
     await this.tableHost.tick();
-    await this.expireLedger(now);
+
     // 补给是 6 小时的节奏，没必要每秒对每个席位查一次余额：按 30 秒一拍扫。
     if (now >= this.nextRefillAt) {
       this.nextRefillAt = now + REFILL_SCAN_MS;
@@ -749,9 +764,8 @@ export class RoomHost {
    */
   async nextWakeAt(now = this.now()): Promise<number | undefined> {
     let next = this.tableHost.nextWakeAt(now);
-    const promise = await this.nextPromiseAt();
-    if (promise !== undefined && (next === undefined || promise < next)) next = promise;
-    if (next === undefined || this.nextRefillAt < next) next = this.nextRefillAt;
+    const occupied = await this.db.prepare('SELECT 1 FROM room_seats WHERE room_id=? AND released_at IS NULL LIMIT 1').get(this.roomId);
+    if (occupied && (next === undefined || this.nextRefillAt < next)) next = this.nextRefillAt;
     return next;
   }
 
@@ -796,6 +810,7 @@ export class RoomHost {
         data: { fromName: seat.name, toName: target.name, ...(amount ? { chips: amount } : {}) },
         ...(amount ? { transfers: [{ from: cooId, to: target.cooId, amount }] } : {}),
       });
+      await touchActivity(this.db, this.roomId, cooId, this.now());
       const delivered = await this.notify(target.cooId, `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
         kind: 'gift', action: 'gift', from: seat.name, entryId: entry.id, toName: target.name,
       });

@@ -15,7 +15,7 @@
 import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 3;
+export const PG_SCHEMA_VERSION = 4;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -423,4 +423,14 @@ export const PG_MIGRATIONS: PgMigration[] = [
   { version: 1, name: 'initial', sql: PG_SCHEMA_SQL },
   { version: 2, name: 'feedback-and-announcements', sql: SUPPORT_SCHEMA_SQL },
   { version: 3, name: 'table-matching-and-recruitment', sql: TABLE_DISCOVERY_SCHEMA_SQL },
+  { version: 4, name: 'room-and-seat-lifecycle', sql: `
+    ALTER TABLE rooms ADD COLUMN business_active_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+    ALTER TABLE room_seats ADD COLUMN business_active_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+    ALTER TABLE room_seats ADD COLUMN location_capable SMALLINT NOT NULL DEFAULT 0 CHECK(location_capable IN (0,1));
+    ALTER TABLE rooms ADD COLUMN archive_reason TEXT;
+    ALTER TABLE coo_sessions ADD COLUMN return_room_id TEXT REFERENCES rooms(id);
+    CREATE INDEX ix_rooms_idle_due ON rooms(business_active_at) WHERE archived_at IS NULL AND kind = 'room';
+    CREATE INDEX ix_seats_idle_due ON room_seats(business_active_at) WHERE released_at IS NULL AND kind = 'pet';
+    INSERT INTO meta(key,value) VALUES ('promises_disabled','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+  ` },
 ];

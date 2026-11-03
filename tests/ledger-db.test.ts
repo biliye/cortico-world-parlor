@@ -213,7 +213,7 @@ describe('全局账本 SQLite store', () => {
     expect(await store.summaryFor(A)).toMatchObject({
       cooId: A, games: 3, wins: 1, losses: 1, draws: 1, chips: -20,
     });
-    expect((await store.summaryFor(A)).open.map((item) => item.direction)).toEqual(['in']);
+    expect((await store.summaryFor(A)).open).toEqual([]); // retired promises do not appear in the personal account
     expect(await store.summaryFor(B)).toMatchObject({
       games: 3, wins: 1, losses: 1, draws: 1, chips: 20,
     });

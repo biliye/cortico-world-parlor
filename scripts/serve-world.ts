@@ -1,33 +1,12 @@
 #!/usr/bin/env node
 /**
- * 独立运行多客厅网关：给 VPS / staging 用。
- *
- * 默认 SQLite（老部署零改动）：
- *   node --experimental-strip-types scripts/serve-world.ts \
- *     --host 0.0.0.0 --port 8790 --invite <邀请码> --db ./parlor.db --default-room lobby
- *
- * PostgreSQL：
- *   PARLOR_STORAGE=postgres PARLOR_DATABASE_URL=postgres://用户:密码@主机:5432/库名 \
- *     node --experimental-strip-types scripts/serve-world.ts --host 0.0.0.0 --port 8790 --invite <邀请码>
- * 也可以写成 --storage postgres --database-url postgres://…；--db 只属于 SQLite，
- * 两个同时给会报错（不猜、不悄悄退回 SQLite）。
- *
- * 网页「用户名 + 邀请码」的访客入口默认关闭。压测/本地需要它时加
- *   --allow-guest-join true   或   PARLOR_ALLOW_GUEST_JOIN=1
- *
- * 席位离线超过阈值自动释放：真人默认 6 小时，Coo 的 pet 席位默认 6 小时。要改：
- *   --offline-release-hours 12      或 PARLOR_OFFLINE_RELEASE_HOURS=12       （0 = 关）
- *   --coo-offline-release-hours 24  或 PARLOR_COO_OFFLINE_RELEASE_HOURS=24   （0 = 关）
- *
- * 牌桌时限基准（狼人杀各窗口、骰子每回合、斗地主每手都按它缩放；默认用各游戏正式值）。
- * staging / 本地测试想快点打完一局时用，生产别设：
- *   --table-turn-ms 2000   或 PARLOR_TABLE_TURN_MS=2000
- *
- * 连接池（只对 PostgreSQL 生效）：
- *   --pool-max 8   或 PARLOR_PG_POOL_MAX=8
- *   --statement-timeout-ms 30000   或 PARLOR_PG_STATEMENT_TIMEOUT_MS=30000
- *
- * Node >= 22.13（node:sqlite 免 flag）。Node 24 默认支持类型剥离，可以去掉 --experimental-strip-types。
+ * PostgreSQL-only 多客厅网关。设置 PARLOR_DATABASE_URL 后运行：
+ * node --experimental-strip-types scripts/serve-world.ts --host 127.0.0.1 --port 8790 --invite <码>
+ * --coo-idle-minutes 60 / PARLOR_COO_IDLE_MINUTES，0 关闭闲置回大厅。
+ * --room-archive-hours 48 / PARLOR_ROOM_ARCHIVE_HOURS，0 关闭自动归档。
+ * --pool-max 8 / PARLOR_PG_POOL_MAX；--statement-timeout-ms 30000。
+ * --offline-release-hours / --coo-offline-release-hours 仍是独立的离线回收策略。
+ * Coo 本机消息档案继续使用 SQLite；本服务拒绝 --db/PARLOR_DB，不自动建库。
  */
 import { randomBytes } from 'node:crypto';
 import { DEFAULT_SERVER_URL } from '../src/config.ts';
@@ -39,7 +18,7 @@ for (let index = 2; index < process.argv.length; index += 2) {
   const key = process.argv[index];
   const value = process.argv[index + 1];
   if (!key?.startsWith('--') || value === undefined) {
-    console.error('参数要成对：--host --port --invite --db --default-room');
+    console.error('参数要成对：--host --port --invite --database-url --default-room');
     process.exit(2);
   }
   args.set(key, value);
@@ -48,7 +27,6 @@ for (let index = 2; index < process.argv.length; index += 2) {
 const host = args.get('--host') ?? '127.0.0.1';
 const port = Number(args.get('--port') ?? 8790);
 const invite = args.get('--invite') ?? process.env.PARLOR_INVITE_CODE ?? randomBytes(9).toString('base64url');
-const dbFile = args.get('--db') ?? process.env.PARLOR_DB ?? './parlor.db';
 const defaultRoomId = args.get('--default-room') ?? 'lobby';
 const guestFlag = (args.get('--allow-guest-join') ?? process.env.PARLOR_ALLOW_GUEST_JOIN ?? '').toLowerCase();
 const allowGuestJoin = ['1', 'true', 'yes', 'on'].includes(guestFlag);
@@ -66,6 +44,11 @@ if (!Number.isFinite(cooOfflineHours) || cooOfflineHours < 0) {
   console.error('Coo 席位离线释放小时数不对');
   process.exit(2);
 }
+const cooIdleMinutes = Number(args.get('--coo-idle-minutes') ?? process.env.PARLOR_COO_IDLE_MINUTES ?? 60);
+const roomArchiveHours = Number(args.get('--room-archive-hours') ?? process.env.PARLOR_ROOM_ARCHIVE_HOURS ?? 48);
+if (![cooIdleMinutes, roomArchiveHours].every(n => Number.isFinite(n) && n >= 0)) {
+  console.error('闲置/归档时限须为非负数，0 表示关闭'); process.exit(2);
+}
 const tableTurnMsRaw = args.get('--table-turn-ms') ?? process.env.PARLOR_TABLE_TURN_MS;
 let tableTurnMs: number | undefined;
 if (tableTurnMsRaw !== undefined && tableTurnMsRaw !== '') {
@@ -76,7 +59,7 @@ if (tableTurnMsRaw !== undefined && tableTurnMsRaw !== '') {
   }
 }
 
-const storageRaw = args.get('--storage') ?? process.env.PARLOR_STORAGE ?? 'sqlite';
+const storageRaw = args.get('--storage') ?? process.env.PARLOR_STORAGE ?? 'postgres';
 let storage: ReturnType<typeof parseStorageKind>;
 try {
   storage = parseStorageKind(storageRaw);
@@ -89,7 +72,7 @@ if (storage === 'postgres' && !databaseUrl) {
   console.error('PARLOR_STORAGE=postgres 时必须配 PARLOR_DATABASE_URL；不配不会退回 SQLite。');
   process.exit(2);
 }
-if (storage === 'postgres' && args.has('--db')) {
+if (args.has('--db') || process.env.PARLOR_DB) {
   console.error('--db 只用于 SQLite；PostgreSQL 用 --database-url 或 PARLOR_DATABASE_URL。');
   process.exit(2);
 }
@@ -113,7 +96,6 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 
 /** 只显示「主机:端口/库名」，永远不打印密码。 */
 const shownDatabase = ((): string => {
-  if (storage === 'sqlite') return dbFile;
   try {
     const url = new URL(databaseUrl);
     return `${url.host}${url.pathname}（PostgreSQL）`;
@@ -126,7 +108,7 @@ let server: WorldServer;
 try {
   server = await WorldServer.create({
     storage,
-    ...(storage === 'sqlite' ? { dbFile } : { databaseUrl }),
+    databaseUrl,
     ...(poolMax !== undefined ? { poolMax } : {}),
     ...(statementTimeoutMs !== undefined ? { statementTimeoutMs } : {}),
     host,
@@ -139,6 +121,7 @@ try {
     publicUrl: args.get('--public-url') ?? process.env.PARLOR_PUBLIC_URL,
     offlineReleaseHours: offlineHours,
     cooOfflineReleaseHours: cooOfflineHours,
+    cooIdleMinutes, roomArchiveHours,
     ...(tableTurnMs !== undefined ? { tableTurnMs } : {}),
   });
 } catch (error) {
@@ -156,6 +139,7 @@ try {
   console.log(`真人席位离线释放：${offlineHours > 0 ? `${offlineHours} 小时` : '关'}`);
   console.log(`Coo 席位离线释放：${cooOfflineHours > 0 ? `${cooOfflineHours} 小时` : '关'}`);
   if (tableTurnMs !== undefined) console.log(`牌桌时限基准：${tableTurnMs} 毫秒（staging/测试用）`);
+  console.log(`Coo 闲置 ${cooIdleMinutes} 分钟回大厅；客厅闲置 ${roomArchiveHours} 小时归档（0 为关闭）。`);
   console.log(`数据库：${shownDatabase}`);
   console.log(`网页：${address.url}/play`);
 } catch (error) {

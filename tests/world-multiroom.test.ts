@@ -14,10 +14,10 @@ import { WorldServer } from '../src/room/world-server.ts';
 import type { WakeTier } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
-const until = async (predicate: () => boolean, timeout = 5000): Promise<void> => {
+const until = async (predicate: () => boolean | Promise<boolean>, timeout = 5000): Promise<void> => {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error('等待超时');
@@ -97,6 +97,8 @@ const pushedText = (host: FakeHost): string => host.events
   .filter((event) => event.type === 'parlor.message' || event.type === 'parlor.digest')
   .map((event) => event.text).join('\n');
 
+const currentRoom = async () => (await world!.envPromptVars() as Record<string,string> | null)?.['parlor.room'];
+
 describe('Coo 快速匹配与牌桌分享', () => {
   it('工具快速匹配后持久化新厅和令牌，重连到本桌，能继续接收桌聊', async () => {
     const { friend, friendToken, secrets, host } = await startWorld({ room: 'hall' });
@@ -105,7 +107,7 @@ describe('Coo 快速匹配与牌桌分享', () => {
     await friend.action(moved.token, { type: 'table_open', game: 'ddz', matchOpen: true, requestId: 'coo-match-open' }, room.id);
     const result = await call('parlor_quick_match', { game: 'ddz', requestId: 'coo-match-join' });
     expect(result).toContain('并坐下');
-    expect(secrets.PARLOR_CURRENT_ROOM).toBe(room.id);
+    expect(await currentRoom()).toBe(room.id);
     const snap = await friend.snapshot(secrets.PARLOR_SEAT_TOKEN, 0, 1, room.id);
     expect(snap.tablePrivate?.tableId).toBe(snap.table?.id);
     await friend.action(moved.token, { type: 'table_say', text: '匹配后同桌消息' }, room.id);
@@ -120,10 +122,10 @@ describe('Coo 快速匹配与牌桌分享', () => {
     const opened = await friend.action(moved.token, { type: 'table_open', game: 'ddz', requestId: 'coo-share-open' }, room.id);
     await friend.action(moved.token, { type: 'table_discovery', table: opened.tableId!, text: '来这张桌坐坐', requestId: 'coo-share-text' }, room.id);
     expect(await call('parlor_table_recruitments')).toContain('来这张桌坐坐');
-    expect(secrets.PARLOR_CURRENT_ROOM).toBe('hall');
+    expect(await currentRoom()).toBe('hall');
     const link = server!.url + '/play?' + new URLSearchParams({ room: room.id, view: 'table', table: opened.tableId! });
     expect(await call('parlor_table_join', { link, requestId: 'coo-share-join' })).toContain('并坐下');
-    expect(secrets.PARLOR_CURRENT_ROOM).toBe(room.id);
+    expect(await currentRoom()).toBe(room.id);
     expect(await call('parlor_table_join', { link: 'https://other.example/play?room=x&view=table&table=t-abc' })).toContain('当前客厅服务器');
   });
 
@@ -302,7 +304,7 @@ describe('World 多客厅', () => {
       method: 'POST', headers: { authorization: 'Bearer ' + oldToken },
     });
     expect(res.status).toBe(200);
-    await until(() => secrets.PARLOR_CURRENT_ROOM === 'hall', 8000);
+    await until(async () => await currentRoom() === 'hall', 8000);
     expect(secrets.PARLOR_SEAT_TOKEN).not.toBe(oldToken);
     expect(host.events.some(e => e.type === 'parlor.link' && e.text.includes('已回到大厅'))).toBe(true);
     expect(await call('parlor_say', { text: '回到大厅还能说话' })).not.toContain('失败');

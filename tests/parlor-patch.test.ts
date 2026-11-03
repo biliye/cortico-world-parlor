@@ -58,6 +58,37 @@ const roomCalls = () => mocks.api.mock.calls.filter(([path]) => path === '/v1/ro
 const tableCalls = () => mocks.api.mock.calls.filter(([path]) => path === '/v1/table');
 
 describe('E3：直接应用回执并合并牌桌 SSE', () => {
+  it('断流时不拉整厅快照，按退避重连', async () => {
+    mocks.api.mockRejectedValue(new Error('offline'));
+    store.connect();
+    (Stream.last as any).onerror();
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(mocks.api).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mocks.api).toHaveBeenCalledWith('/v1/me/location');
+    expect(roomCalls()).toHaveLength(0);
+  });
+  it('服务器迁厅后清旧日志并采用 canonical 席位，迟到的位置响应不覆盖新身份', async () => {
+    vi.stubGlobal('location', { pathname:'/play',search:'?room=room1&view=table' });
+    vi.stubGlobal('history', { replaceState:vi.fn() });
+    session.saveSeat.mockImplementation((next:any) => { session.seat.value=next; });
+    store.log.value=[{seq:900,text:'旧厅私密消息'}];
+    mocks.api.mockImplementation((path:string) => {
+      if (path==='/v1/me/location') return Promise.resolve({room:'hall',seat:{id:'s2',name:'小满'}});
+      if (path.startsWith('/v1/replay')) return Promise.resolve({events:[]});
+      return Promise.resolve({...snap(),id:'hall',table:null,tablePrivate:null});
+    });
+    expect(await store.syncLocation()).toBe(true);
+    expect(session.seat.value.room).toBe('hall');
+    expect(store.log.value).toEqual([]);
+    const old=deferred();
+    mocks.api.mockReturnValueOnce(old.promise);
+    const pending=store.syncLocation();
+    session.seat.value={...session.seat.value,token:'new-identity',seatId:'new-seat'};
+    old.resolve({room:'room1',seat:{id:'old-seat',name:'旧身份'}});
+    expect(await pending).toBe(false);
+    expect(session.seat.value.token).toBe('new-identity');
+  });
   it('有增量只发 POST，更新桌和本人私视图，保留其他桌和账本', async () => {
     mocks.api.mockResolvedValue(patch(2));
     await store.act({ type: 'ddz_action', move: 'play', cards: ['4'] });

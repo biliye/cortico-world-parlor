@@ -9,6 +9,7 @@ import DmWindow from './DmWindow.vue';
 import Icon from './Icon.vue';
 import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
+import AccountPanel from './AccountPanel.vue';
 import { initialOf } from '../lib/text.ts';
 import { chatExpanded, chooseTab, closeSheet, sheetOpen, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
@@ -22,6 +23,7 @@ const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
 const switcherOpen = ref(false);
+const accountOpen = ref(false);
 
 const sections = [
   { id: 'all', label: '发现', long: '发现客厅', icon: 'lamp' },
@@ -109,6 +111,9 @@ onMounted(() => {
         </span>
         <span v-if="!connected" class="conn-chip">{{ connectionText }}</span>
         <div class="top-right">
+          <button class="tool" type="button" @click="accountOpen = true" title="我的筹码、战绩与历史对局">
+            <Icon name="users" /><span class="tool-label">账户</span>
+          </button>
           <button class="tool" type="button" @click="openMail">
             <Icon name="mail" /><span class="tool-label">信箱</span>
             <span v-if="mailUnread" class="tool-badge">{{ mailUnread }}</span>
@@ -132,6 +137,7 @@ onMounted(() => {
     <ChatPanel />
     <DmWindow />
     <RoomSwitcher v-model:open="switcherOpen" />
+    <AccountPanel v-model:open="accountOpen" />
     <div class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
     <button v-if="!chatExpanded()" class="chat-fab" type="button" @click="toggleChat(true)">
       <Icon name="chat" />有话慢慢聊

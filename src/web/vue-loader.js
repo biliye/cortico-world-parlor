@@ -21,10 +21,11 @@ document.addEventListener('securitypolicyviolation', (event) => {
 const params = new URLSearchParams(location.search);
 // 版本串只改 play.html 里这一处：loader 自己带什么版本，两个入口就跟着带什么。
 // 静态资源有 5 分钟缓存，改了包却不换串，页面会继续跑旧文件。
+const legacy = ['1','true'].includes(params.get('legacy'));
 const version = new URL(import.meta.url).searchParams.get('v') || '';
 const withVersion = (path) => (version ? path + '?v=' + version : path);
-const entry = withVersion(params.has('legacy') ? './play.js' : './vue/main.js');
-if (!params.has('legacy')) {
+const entry = withVersion(legacy ? './play.js' : './vue/main.js');
+if (!legacy) {
   const style = document.createElement('link');
   style.rel = 'stylesheet';
   style.href = new URL(withVersion('./vue/vue-style.css'), import.meta.url).href;
@@ -32,4 +33,10 @@ if (!params.has('legacy')) {
 }
 import(entry).catch((error) => {
   console.error('[parlor] 客户端载入失败', error);
+  const box = document.getElementById('boot-note');
+  if (box) {
+    box.textContent = '页面载入失败，请刷新重试，或打开兼容页面。';
+    const link = document.createElement('a');
+    link.href = '/play?legacy=1'; link.textContent = '打开兼容页面'; box.append(link);
+  }
 });

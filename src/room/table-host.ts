@@ -1,3 +1,4 @@
+import { touchActivity } from './activity.ts';
 /**
  * 一个客厅的牌桌运行时：多桌、可靠存档与动作回执。
  *
@@ -53,6 +54,8 @@ const OFFLINE_REMINDER_MS = 90_000;
 export interface TableHostOptions {
   db: Db;
   roomId: string;
+  /** 仅在事件所在事务提交成功后通知网关推送。 */
+  onCommit?: (roomId: string) => void;
   now?: () => number;
   /** 每手时限（测试里调短）。 */
   turnMs?: number;
@@ -242,7 +245,7 @@ export class TableHost {
   private constructor(options: TableHostOptions & { seats: TableSeatLookup; ledger: LedgerDb; mail: MailDb }) {
     this.db = options.db;
     this.roomId = options.roomId;
-    this.events = new EventDb(options.db);
+    this.events = new EventDb(options.db, options.onCommit ? () => options.onCommit!(options.roomId) : undefined);
     this.ledger = options.ledger;
     this.mail = new MailDb(options.db, { now: options.now ?? Date.now });
     this.now = options.now ?? Date.now;
@@ -1251,6 +1254,8 @@ export class TableHost {
     ).run(table.id, entry.id, now, JSON.stringify({ winners, participants, stake, pot }));
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
+    if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN
+      (SELECT coo_id FROM table_seats WHERE table_id=? AND coo_id IS NOT NULL) AND released_at IS NULL`).run(now, this.roomId, table.id);
     await this.markTableSeatsLeft(table.id, now);
     await this.clearActivePlayers(table.id);
   }
@@ -1743,6 +1748,7 @@ export class TableHost {
     receipt: TableReceipt,
     now: number,
   ): Promise<void> {
+    await touchActivity(this.db, this.roomId, cooId, now);
     if (!requestId) return;
     // 幂等键靠主键挡第二次写；冲突就是要它抛，不做 ON CONFLICT 吞掉。
     await this.db.prepare(

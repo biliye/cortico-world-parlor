@@ -49,14 +49,15 @@ const start = async (ctx = context()) => {
   await world.start(host);
   return host;
 };
-const snapshot = () => new ParlorClient(server.url).snapshot(secrets.PARLOR_SEAT_TOKEN, 0, 1, secrets.PARLOR_CURRENT_ROOM);
+const currentRoom = async () => (await world!.envPromptVars() as Record<string,string> | null)?.['parlor.room'];
+const snapshot = async () => new ParlorClient(server.url).snapshot(secrets.PARLOR_SEAT_TOKEN, 0, 1, await currentRoom());
 
 describe('换服务器与启动时改名', () => {
   it.each([false, true])('失效的当前厅回配置默认厅并写回，残留令牌=%s', async staleToken => {
     secrets.PARLOR_CURRENT_ROOM = 'r-missing';
     if (staleToken) secrets.PARLOR_SEAT_TOKEN = 'stale-seat-token';
     const host = await start();
-    expect(secrets.PARLOR_CURRENT_ROOM).toBe('hall');
+    expect(await currentRoom()).toBe('hall');
     expect((await snapshot()).seat.name).toBe('小满');
     expect(host.events.some(e => e.type === 'parlor.link' && e.text.includes('原客厅不存在，已回到大厅'))).toBe(true);
   });
@@ -83,7 +84,7 @@ describe('换服务器与启动时改名', () => {
     const joinRequest = vi.spyOn(ParlorClient.prototype, 'join').mockRejectedValueOnce(new ParlorHttpError(404, '目标客厅不存在'));
     const ctx = context(); ctx.cfg.room = room.id;
     await start(ctx);
-    expect(secrets.PARLOR_CURRENT_ROOM).toBe(room.id);
+    expect(await currentRoom()).toBe(room.id);
     expect(joinRequest).toHaveBeenCalledTimes(2);
     await world!.stop();
     secrets.PARLOR_CURRENT_ROOM = 'r-missing'; delete secrets.PARLOR_SEAT_TOKEN;
@@ -103,7 +104,7 @@ describe('换服务器与启动时改名', () => {
     const ctx = context();
     ctx.cfg.identityUrl = server.url;
     await start(ctx);
-    expect(secrets.PARLOR_CURRENT_ROOM).toBe(room.id);
+    expect(await currentRoom()).toBe(room.id);
     expect((await snapshot()).seat.id).toBe(before.seat.id);
   });
 

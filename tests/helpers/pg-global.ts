@@ -8,9 +8,9 @@
  * 收尾时把本套测试建的库全删掉（只删 `parlor_t_*` 与 `parlor_file_*`），
  * 否则一次全量跑下来会留下几百个空库（实测 898 个、8.8GB）。
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 interface EmbeddedHandle {
   initialise(): Promise<void>;
@@ -22,8 +22,11 @@ let embedded: EmbeddedHandle | undefined;
 let dataDir: string | undefined;
 
 export async function setup(): Promise<void> {
+  const scratch = resolve('.task-tmp', 'pg-tests');
+  mkdirSync(scratch, {recursive:true});
+  process.env.TEMP = process.env.TMP = process.env.TMPDIR = scratch;
   if (process.env.PARLOR_TEST_PG_URL) return;
-  if (process.env.PARLOR_TEST_PG !== '1') return;
+  process.env.PARLOR_TEST_PG = '1';
   const module = await import('embedded-postgres');
   const EmbeddedPostgres = module.default;
   const dir = mkdtempSync(join(tmpdir(), 'parlor-pg-'));

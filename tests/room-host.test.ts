@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type Db } from '../src/room/db.ts';
+import { withTransaction, type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom } from '../src/room/room-seat-db.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
@@ -42,6 +42,26 @@ afterEach(async () => {
 });
 
 describe('RoomHost 聊天切片', () => {
+  it('牌桌事件提交后立即通知推送，外层事务回滚不通知、不泄漏桌聊', async () => {
+    const commits: string[] = [];
+    let now = Date.now();
+    const host = await RoomHost.create(db, 'lobby', { now: () => now, onCommit: room => commits.push(room) });
+    await host.join(A, { name:'阿岚' });
+    const opened = await host.openTable(A, { game:'ddz' }, 'notify-open');
+    expect(commits).toContain('lobby');
+    commits.length = 0;
+    await host.tableSay(A, '已提交桌聊', opened.tableId);
+    expect(commits).toEqual(['lobby']);
+    commits.length = 0;
+    now += 100;
+    await expect(withTransaction(db, async () => {
+      await host.tableSay(A, '不能发出的桌聊', opened.tableId);
+      expect(commits).toEqual([]);
+      throw new Error('rollback-notify');
+    })).rejects.toThrow('rollback-notify');
+    expect(commits).toEqual([]);
+    expect((await host.history(A)).some(event => event.text === '不能发出的桌聊')).toBe(false);
+  });
   it('加入/说话/提及/快照：本厅看得到，别厅看不到', async () => {
     const a = await lobby.join(A, { name: '阿岚' });
     const b = await lobby.join(B, { name: '小满' });

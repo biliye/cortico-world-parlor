@@ -1,3 +1,4 @@
+import { personalHistory } from './personal-account.ts';
 /**
  * 全局账本的 store。
  *
@@ -13,7 +14,7 @@
  * 由 RoomHost 的调用方负责；store 这里只保证「写」是原子的。
  */
 import { randomUUID } from 'node:crypto';
-import { migrate, openDb, withTransaction, type Db } from './db.ts';
+import { migrate, withTransaction, type Db } from './db.ts';
 import {
   REFILL_BELOW,
   REFILL_GAP_MS,
@@ -142,6 +143,7 @@ export class LedgerDb {
 
   /** 开一个库并建表；多客厅共用一个库时直接用 new LedgerDb(db)。 */
   static async open(file = ':memory:', options: LedgerDbOptions = {}): Promise<LedgerDb> {
+    const { openDb } = await import('./storage/sqlite.ts');
     const db = openDb(file);
     await migrate(db);
     return new LedgerDb(db, options);
@@ -405,6 +407,21 @@ export class LedgerDb {
    * 平局只算赢的人平，没赢的人算负；与旧 LedgerStore.summaryFor 一致。
    */
   async summaryFor(cooId: string): Promise<LedgerSummary> {
+    if (this.db.kind === 'postgres') {
+      const groups = await this.db.prepare(`SELECT COALESCE(e.game,'unknown') AS game,
+        MAX(e.data_json->>'gameLabel') AS label, COUNT(*) AS games,
+        SUM(CASE WHEN w.coo_id IS NOT NULL AND COALESCE(e.data_json->>'tie','false')<>'true' THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN w.coo_id IS NOT NULL AND e.data_json->>'tie'='true' THEN 1 ELSE 0 END) AS draws,
+        SUM(CASE WHEN w.coo_id IS NULL THEN 1 ELSE 0 END) AS losses
+        FROM ledger_entries e LEFT JOIN ledger_winners w ON w.entry_id=e.id AND w.coo_id=?
+        WHERE e.kind='game' AND (e.from_coo_id=? OR e.to_coo_id=? OR w.coo_id IS NOT NULL
+          OR EXISTS(SELECT 1 FROM ledger_participants p WHERE p.entry_id=e.id AND p.coo_id=?))
+        GROUP BY e.game ORDER BY COUNT(*) DESC, e.game`).all(cooId, cooId, cooId, cooId) as GameTally[];
+      const byGame = groups.map(g => ({ game: g.game, label: g.label || g.game, games: Number(g.games), wins: Number(g.wins), losses: Number(g.losses), draws: Number(g.draws) }));
+      const total = byGame.reduce((a,g) => ({ games:a.games+g.games,wins:a.wins+g.wins,losses:a.losses+g.losses,draws:a.draws+g.draws }), { games:0,wins:0,losses:0,draws:0 });
+      const recent = (await personalHistory(this.db, cooId, { kind:'games', limit:5 })).items;
+      return { cooId, ...total, byGame, chips: await this.balanceOf(cooId), open: [], recent: recent.map(row => ({ ...row, kind: 'game' as const })) };
+    }
     const rows = await this.db.prepare(
       `SELECT e.id, e.game, e.data_json,
          EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id = e.id AND w.coo_id = ?) AS won

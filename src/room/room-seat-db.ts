@@ -121,6 +121,8 @@ export interface JoinSeatInput {
   name: string;
   /** 明文令牌；库里只存 SHA-256。 */
   token: string;
+  /** Internal forced relocation only: transfer the existing hash without revealing a token. */
+  tokenHash?: string;
   visibleFromSeq: number;
   kind?: SeatKind;
   tier?: WakeTier;
@@ -331,6 +333,7 @@ const createRoomTx = async (db: Db, input: CreateRoomInput, now: number): Promis
      VALUES (?, 'room', ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
   ).run(id, name, input.ownerCooId, visibility, capacity, topic || null, randomUUID(), now, now);
 
+  if (db.kind === 'postgres') await db.prepare('UPDATE rooms SET business_active_at=? WHERE id=?').run(now, id);
   return requireRoom(db, id);
 };
 
@@ -388,7 +391,9 @@ export const archive = (db: Db, id: string, now = Date.now()): Promise<RoomRow |
 );
 
 const unarchiveRoomTx = async (db: Db, id: string, now: number): Promise<RoomRow | null> => {
-  await db.prepare('UPDATE rooms SET archived_at = NULL, last_active_at = ? WHERE id = ? AND archived_at IS NOT NULL').run(now, id);
+  if (db.kind === 'postgres') {
+    await db.prepare('UPDATE rooms SET archived_at=NULL,last_active_at=?,business_active_at=?,archive_reason=NULL WHERE id=? AND archived_at IS NOT NULL').run(now,now,id);
+  } else await db.prepare('UPDATE rooms SET archived_at = NULL, last_active_at = ? WHERE id = ? AND archived_at IS NOT NULL').run(now, id);
   return roomRow(db, id);
 };
 
@@ -511,7 +516,7 @@ const joinSeatTx = async (db: Db, input: JoinSeatInput, now: number): Promise<Se
   const tier = input.tier ?? 'digest';
   if (!isWakeTier(tier)) throw new RoomSeatError('invalid', '提醒挡位不对');
   const visibleFromSeq = cleanSeq(input.visibleFromSeq, 'visibleFromSeq');
-  const tokenHash = hashSeatToken(input.token);
+  const tokenHash = input.tokenHash ?? hashSeatToken(input.token);
 
   // 容量检查这一层只是给可读错误；真正的闸门是库里的触发器：
   // PostgreSQL 的 trg_room_capacity 先 SELECT rooms … FOR UPDATE 再数，
@@ -554,6 +559,10 @@ const joinSeatTx = async (db: Db, input: JoinSeatInput, now: number): Promise<Se
 
   await upsertMemberTx(db, room.id, input.cooId, now);
   await setPresenceTx(db, input.cooId, room.id, seatId, now);
+  if (db.kind === 'postgres') {
+    await db.prepare('UPDATE room_seats SET business_active_at = ? WHERE room_id = ? AND id = ?').run(now, room.id, seatId);
+    if (!input.tokenHash) await db.prepare('UPDATE rooms SET business_active_at = ? WHERE id = ?').run(now, room.id);
+  }
   return (await seatRow(db, room.id, seatId))!;
 };
 

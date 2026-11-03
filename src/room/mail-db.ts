@@ -12,7 +12,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { migrate, openDb, withTransaction, type Db } from './db.ts';
+import { migrate, withTransaction, type Db } from './db.ts';
 import { registeredHandle } from './global-identity.ts';
 import type { MailItem, MailKind, MailPage, MailView } from './mail.ts';
 
@@ -153,6 +153,7 @@ export class MailDb {
 
   /** 开库并建表；路径/权限问题会在这里抛出，不吞。 */
   static async open(file = ':memory:', options: MailDbOptions = {}): Promise<MailDb> {
+    const { openDb } = await import('./storage/sqlite.ts');
     const db = openDb(file);
     await migrate(db);
     return new MailDb(db, options);

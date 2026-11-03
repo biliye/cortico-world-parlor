@@ -281,27 +281,11 @@ describe('WorldServer 社交与回放', () => {
     expect((cMail.body.items as { text: string }[]).some((item) => item.text.includes('一点心意'))).toBe(false);
   });
 
-  it('承诺：答应、了结时筹码划给债权人', async () => {
-    const app = await start();
-    const a = await enter(app, A, '阿岚');
-    const b = await enter(app, B, '小满');
-
-    const promise = await act(app, a, { type: 'promise', to: '小满', text: '借你 20', chips: 20 });
-    expect(promise.status).toBe(200);
-
-    const bMail = await get(app.url, '/v1/mail?peek=1', b);
-    const letter = (bMail.body.items as { id?: string; text: string; entryId?: string }[])
-      .find((item) => item.text.includes('借你 20'));
-    expect(letter).toBeTruthy();
-    const promiseId = letter!.entryId as string;
-
-    expect((await act(app, b, { type: 'respond', id: promiseId, action: 'accept' })).status).toBe(200);
-    expect((await act(app, b, { type: 'respond', id: promiseId, action: 'done' })).status).toBe(200);
-
-    const bSnapshot = await get(app.url, '/v1/room', b);
-    expect((bSnapshot.body.ledger as { chips: number }).chips).toBe(1020);
-    const aSnapshot = await get(app.url, '/v1/room', a);
-    expect((aSnapshot.body.ledger as { chips: number }).chips).toBe(980);
+  it('承诺与回应返回停用，不修改筹码或投递新承诺', async () => {
+    const app=await start(); const a=await enter(app,A,'阿岚'); const b=await enter(app,B,'小满');
+    expect((await act(app,a,{type:'promise',to:'小满',text:'借你20',chips:20})).status).toBe(410);
+    expect((await act(app,b,{type:'respond',id:'old-promise',action:'done'})).status).toBe(410);
+    for (const token of [a,b]) expect(((await get(app.url,'/v1/room',token)).body.ledger as {chips:number}).chips).toBe(1000);
   });
 
   it('回放：公开事件人人有，私聊只有当事人有', async () => {

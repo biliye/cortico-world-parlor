@@ -144,6 +144,7 @@ async function loadEntryPolicy() {
 }
 
 async function boot() {
+  if (await followLocation()) return;
   startBootClock();
   const identityArgs = new URLSearchParams(location.hash.slice(1));
   if (identityArgs.has('identity')) {
@@ -800,6 +801,21 @@ function openNewTable(game = heroGame()) {
 
 /* —— 实时推送 —— */
 
+let reconnectFailures = 0;
+async function followLocation() {
+  if (!state.cfg) return false;
+  const old = state.cfg;
+  try {
+    const res = await fetch('/v1/me/location', { headers: { authorization:'Bearer ' + old.token }, signal:AbortSignal.timeout(15000) });
+    if (!res.ok) return false;
+    const current = await res.json();
+    if (!current.room || !current.seat || state.cfg !== old || (current.room === old.room && current.seat.id === old.seatId)) return false;
+    state.cfg = { ...old, room:current.room, seatId:current.seat.id, name:current.seat.name };
+    localStorage.setItem(STORE_KEY, JSON.stringify(state.cfg));
+    location.replace('/play?legacy=1&room=' + encodeURIComponent(current.room));
+    return true;
+  } catch { return false; }
+}
 function connect() {
   if (!state.cfg) return;
   if (state.stream) {
@@ -808,9 +824,10 @@ function connect() {
   }
   clearTimeout(state.reconnect);
   setConn('connecting');
-  const source = new EventSource(roomPath('/v1/stream?since=' + state.latest + '&token=' + encodeURIComponent(state.cfg.token)));
+  const source = new EventSource(roomPath('/v1/stream?cap=seat-location-v1&since=' + state.latest + '&token=' + encodeURIComponent(state.cfg.token)));
   state.stream = source;
   source.onopen = () => {
+    reconnectFailures = 0;
     setConn('on');
     // 连上之后补一次快照：online 与信箱未读只有在 SSE 连接建立后才准。
     scheduleRefresh();
@@ -829,8 +846,8 @@ function connect() {
     source.close();
     if (state.stream === source) state.stream = null;
     // 服务端收回席位后及时检查状态，进入重新入场流程。
-    scheduleRefresh();
-    state.reconnect = setTimeout(connect, 3000);
+    const delay = Math.min(30000, 3000 * 2 ** Math.min(reconnectFailures++, 4)) + Math.floor(Math.random()*1500);
+    state.reconnect = setTimeout(() => { void followLocation().then(moved => { if (!moved) connect(); }); }, delay);
   };
 }
 

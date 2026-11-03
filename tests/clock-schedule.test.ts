@@ -110,7 +110,7 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     expect(opened.tableId).toBeTruthy();
   });
 
-  it('承诺到期也在下一拍里：到点才会被追加 default', async () => {
+  it('历史承诺不再触发到期调度或新增失约', async () => {
     fixture = await setup();
     await fixture.host.join(A, { name: '阿岚' });
     await fixture.host.join(B, { name: '小满' });
@@ -120,7 +120,7 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     await fixture.host.respond(B, promised.entry.id, 'accept');
     await fixture.host.tickClock(fixture.clock.now);
     const wake = await fixture.host.nextWakeAt(fixture.clock.now);
-    expect(wake === undefined ? Infinity : wake).toBeLessThanOrEqual(due);
+    expect(wake === undefined ? Infinity : wake).toBeGreaterThan(due);
     // 还没到点：账本里不该有 default
     fixture.clock.now = due - 1;
     await fixture.host.tickClock(fixture.clock.now);
@@ -130,7 +130,7 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     fixture.clock.now = due;
     await fixture.host.tickClock(fixture.clock.now);
     const late = await fixture.db.prepare("SELECT COUNT(*) AS n FROM ledger_entries WHERE kind = 'default'").get() as { n: number };
-    expect(late.n).toBe(1);
+    expect(late.n).toBe(0);
   });
 });
 

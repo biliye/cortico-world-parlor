@@ -17,7 +17,9 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { migrate, openDb, withTransaction, type Db } from './db.ts';
+import { openDb } from './storage/sqlite.ts';
+import { MAX_USER_ROOM_CAPACITY } from './schema.ts';
+import { migrate, withTransaction, type Db } from './db.ts';
 import { hashSeatToken } from './room-seat-db.ts';
 
 export interface LegacyRoomSeat {
@@ -322,7 +324,7 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
       ).run(
         roomId,
         roomName,
-        Math.min(64, Math.max(2, Number(room.maxSeats) || 8)),
+        MAX_USER_ROOM_CAPACITY,
         '从旧单客厅迁移过来的房间。',
         typeof room.epoch === 'string' && room.epoch ? room.epoch : sha256(`${roomId}:${firstTs}`),
         Math.max(0, Number(room.seq) || 0),

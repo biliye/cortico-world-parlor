@@ -107,5 +107,5 @@ export const TABLE_BY_NAME = new Map(MIGRATION_TABLES.map((table) => [table.name
  * 其余（`global_identity`、`last_healthy_at`、`invite` 之类）照搬。
  */
 export const ROW_FILTERS: Record<string, (row: Record<string, unknown>) => boolean> = {
-  meta: (row) => row.key === 'schema_version' || row.key === 'storage_mode',
+  meta: (row) => row.key === 'schema_version' || row.key === 'storage_mode' || row.key === 'promises_disabled',
 };

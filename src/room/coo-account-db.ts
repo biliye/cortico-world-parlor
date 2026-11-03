@@ -11,7 +11,7 @@
  * - session_version 在轮换 key / 退出所有设备时 +1，旧会话按版本失效。
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { migrate, openDb, withTransaction, type Db } from './db.ts';
+import { migrate, withTransaction, type Db } from './db.ts';
 import { isCooId, isCooSecret, type ClaimResult } from './ledger.ts';
 
 export const DEFAULT_ACCOUNT_LIMIT = 500;
@@ -533,7 +533,8 @@ export const openCooAccountDb = async (
   file = ':memory:',
   options: CooAccountDbOptions = {},
 ): Promise<CooAccountDb> => {
-  const db = openDb(file);
+    const { openDb } = await import('./storage/sqlite.ts');
+    const db = openDb(file);
   await migrate(db);
   return new CooAccountDb(db, options);
 };

@@ -38,6 +38,26 @@ afterEach(async () => {
 });
 
 describe('席位被释放后的自动重入', () => {
+  it('服务器闲置迁厅后保留凭据回大厅，重启后不会回到旧配置客厅', async () => {
+    server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), inviteCode:'inv' });
+    await server.listen();
+    const secrets:Record<string,string>={ PARLOR_INVITE_CODE:'inv' };
+    const base=fakeWorldContext(PARLOR,{scratchDir});
+    const ctx:WorldContext<ParlorConfigSection>={...base,secret:name=>secrets[name]??'',storeSecret:(name,value)=>{secrets[name]=value;}};
+    ctx.cfg.serverUrl=server.url;ctx.cfg.identityUrl=server.url;ctx.cfg.room='lobby';ctx.cfg.seatName='自动回厅';
+    world=PARLOR.create(ctx);
+    const host=new FakeHost();await world.start(host);
+    await until(async()=>!!await server!.dbHandle.prepare("SELECT 1 FROM room_seats WHERE name='自动回厅' AND location_capable=1").get());
+    const token=secrets.PARLOR_SEAT_TOKEN;
+    await server.dbHandle.prepare("UPDATE room_seats SET business_active_at=? WHERE name='自动回厅'").run(Date.now()-3_600_000-1000);
+    expect((await server.runLifecycle()).moved).toBe(1);
+    await until(()=>host.events.some(event=>event.type==='parlor.link'&&event.text.includes('回到大厅')));
+    await world.stop();
+    world=PARLOR.create(ctx);await world.start(new FakeHost());
+    const active=await server.dbHandle.prepare("SELECT room_id FROM room_seats WHERE name='自动回厅' AND released_at IS NULL").get() as {room_id:string};
+    expect(active.room_id).toBe('hall');
+    expect(secrets.PARLOR_SEAT_TOKEN).toBe(token);
+  });
   it('旧令牌 401 时换新令牌重新入座，并留一句说明', async () => {
     server = await WorldServer.create({ allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv' });
     await server.listen();

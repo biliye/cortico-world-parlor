@@ -1,3 +1,4 @@
+import { pgServerStorage } from './helpers/pg.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 async function start(authority = 'self', inviteCode = '') {
-  const s = await WorldServer.create({ identityAuthority: authority, inviteCode });
+  const s = await WorldServer.create({ ...(await pgServerStorage(':memory:')), identityAuthority: authority, inviteCode });
   servers.push(s); await s.listen(); return s;
 }
 

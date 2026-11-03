@@ -1,0 +1,125 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { WorldServer } from '../src/room/world-server.ts';
+import { CooAccountDb } from '../src/room/coo-account-db.ts';
+import { createRoom, activeSeatForCoo, getRoom, hashSeatToken } from '../src/room/room-seat-db.ts';
+import { RoomHost } from '../src/room/room-host.ts';
+import { LedgerDb } from '../src/room/ledger-db.ts';
+import { personalHistory } from '../src/room/personal-account.ts';
+import { pgServerStorage } from './helpers/pg.ts';
+
+const A = 'coo-lifecycle-a';
+const B = 'coo-lifecycle-b';
+const HOUR = 3_600_000;
+let app: WorldServer;
+let now: number;
+let room: RoomHost;
+let token: string;
+beforeEach(async () => {
+  now = Date.now();
+  app = await WorldServer.create({ ...(await pgServerStorage(':memory:')), now:() => now });
+  const coos = new CooAccountDb(app.dbHandle, { now:() => now });
+  for (const id of [A, B]) expect(await coos.registerCoo(id, `test-secret-${id}-0123456789`, 'pet', id)).toBe('ok');
+  await createRoom(app.dbHandle, { id:'r-life', name:'测试客厅', ownerCooId:A, visibility:'public' }, now);
+  room = await RoomHost.create(app.dbHandle, 'r-life', { now:() => now });
+  token = (await room.join(A, { name:'小满', kind:'pet' })).token;
+  await app.dbHandle.prepare('UPDATE room_seats SET location_capable=1 WHERE coo_id=?').run(A);
+});
+afterEach(async () => { await app?.close(); });
+
+describe('60 分钟闲置、48 小时归档与全局账户', () => {
+  it('旧客户端未声明位置恢复能力时不强制闲置迁厅，升级后才启用', async () => {
+    await app.dbHandle.prepare('UPDATE room_seats SET location_capable=0 WHERE coo_id=?').run(A);
+    now += HOUR;
+    expect((await app.runLifecycle()).moved).toBe(0);
+    await app.dbHandle.prepare('UPDATE room_seats SET location_capable=1 WHERE coo_id=?').run(A);
+    expect((await app.runLifecycle()).moved).toBe(1);
+  });
+  it('59 分钟不迁，60 分钟原子迁厅，原令牌仅在新席位有效，重复扫描幂等', async () => {
+    now += 59 * 60_000;
+    expect((await app.runLifecycle()).moved).toBe(0);
+    // Snapshot / background reads do not renew the business timestamp.
+    await room.snapshot(A);
+    now += 60_000;
+    expect((await app.runLifecycle()).moved).toBe(1);
+    const moved = await activeSeatForCoo(app.dbHandle, A);
+    expect(moved?.roomId).toBe('hall');
+    expect(moved?.tokenHash).toBe(hashSeatToken(token));
+    await expect(room.seatByToken(token)).rejects.toThrow();
+    expect((await app.runLifecycle()).moved).toBe(0);
+    expect(await new LedgerDb(app.dbHandle).balanceOf(A)).toBe(1000);
+  });
+  it('本人成功聊天续时，持续 SSE 不作为活动；满大厅时源席位完整保留', async () => {
+    now += 59 * 60_000;
+    await room.say(A, '我还在这里');
+    now += 2 * 60_000;
+    expect((await app.runLifecycle()).moved).toBe(0);
+    // A full hall produces a readable store refusal and rolls the source release back.
+    await app.dbHandle.prepare("UPDATE rooms SET capacity=2 WHERE id='hall'").run();
+    const hall = await RoomHost.create(app.dbHandle, 'hall', { now:() => now });
+    await hall.join(B, { name:'另一位', kind:'pet' });
+    const coos = new CooAccountDb(app.dbHandle);
+    expect(await coos.registerCoo('coo-lifecycle-c', 'test-secret-coo-c-0123456789', 'pet', '第三位')).toBe('ok');
+    await hall.join('coo-lifecycle-c', { name:'第三位', kind:'pet' });
+    now += HOUR;
+    expect((await app.runLifecycle()).moved).toBe(0);
+    expect((await activeSeatForCoo(app.dbHandle, A))?.roomId).toBe('r-life');
+    expect((await room.seatByToken(token)).cooId).toBe(A);
+  });
+  it('等人牌桌也保护席位与客厅，归档不能中断活动桌', async () => {
+    await room.openTable(A, { game:'ddz' }, 'open-protected');
+    now += 49 * HOUR;
+    const result = await app.runLifecycle();
+    expect(result).toEqual({ moved:0, archived:0 });
+    expect((await getRoom(app.dbHandle, 'r-life'))?.archivedAt).toBeNull();
+  });
+  it('48 小时归档保留余额和结果，在大厅查询自己的跨厅记录且不能读别人的流水', async () => {
+    const ledger = new LedgerDb(app.dbHandle, { now:() => now });
+    await ledger.record({ kind:'ante', room:'r-life', from:'room', participants:[A], effectId:'game-test/ante', text:'开局押注', visibility:'room', transfers:[{from:A,to:'room',amount:100}] });
+    await ledger.record({ kind:'game', game:'ddz', room:'r-life', from:'room', participants:[A], winners:[A], effectId:'game-test/result', data:{tableId:'game-test'}, text:'地主胜', visibility:'room', transfers:[{from:'room',to:A,amount:300}] });
+    const before = await ledger.balanceOf(A);
+    now += 48 * HOUR;
+    expect((await app.runLifecycle()).archived).toBe(1);
+    expect((await getRoom(app.dbHandle, 'r-life'))?.archivedAt).not.toBeNull();
+    expect(await ledger.balanceOf(A)).toBe(before);
+    const page = await personalHistory(app.dbHandle, A);
+    expect(page.items[0]).toMatchObject({ room:'r-life', result:'win', chips:200 });
+    expect((await personalHistory(app.dbHandle, B)).items).toEqual([]);
+    expect((await personalHistory(app.dbHandle, B, { kind:'chips' })).items).toEqual([]);
+    expect((await ledger.summaryFor(A)).games).toBe(1);
+  });
+  it('真实业务活动阻止归档，系统自动迁厅不会给原客厅续时', async () => {
+    now += 47 * HOUR;
+    await room.say(A, '有人在');
+    now += 2 * HOUR;
+    expect((await app.runLifecycle()).archived).toBe(0);
+    now += 46 * HOUR;
+    expect((await app.runLifecycle()).archived).toBe(1);
+    expect((await getRoom(app.dbHandle, app.hallId))?.archivedAt).toBeNull();
+    expect((await getRoom(app.dbHandle, 'lobby'))?.archivedAt).toBeNull();
+  });
+  it('全局记录分页不重复，筛选按身份和发生地点；非法参数拒绝', async () => {
+    const ledger = new LedgerDb(app.dbHandle, { now:() => now });
+    for (let i=0;i<4;i++) await ledger.record({ kind:'game', game:i===3?'dice':'ddz', room:'r-life', from:'room', participants:[A], winners:[], text:`结果${i}`, visibility:'room' });
+    const first = await personalHistory(app.dbHandle, A, { limit:2 });
+    const second = await personalHistory(app.dbHandle, A, { limit:2, before:first.next! });
+    expect(new Set([...first.items,...second.items].map(row => row.id)).size).toBe(4);
+    expect(second.next).toBeNull();
+    expect((await personalHistory(app.dbHandle, A, { game:'dice', room:'r-life' })).items).toHaveLength(1);
+    await expect(personalHistory(app.dbHandle, A, { from:100, until:99 })).rejects.toThrow();
+  });
+  it('HTTP 位置查询跟随迁厅，旧厅拒绝访问；承诺新写入返回停用而不扣款', async () => {
+    const {url} = await app.listen();
+    now += HOUR;
+    await app.runLifecycle();
+    const headers = { authorization:`Bearer ${token}` };
+    const current = await fetch(url + '/v1/me/location', { headers });
+    expect(current.status).toBe(200);
+    expect((await current.json() as {room:string}).room).toBe('hall');
+    expect((await fetch(url + '/v1/rooms/r-life/room', { headers })).status).toBe(401);
+    const before = await new LedgerDb(app.dbHandle).balanceOf(A);
+    const response = await fetch(url + '/v1/rooms/hall/action', { method:'POST', headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({type:'promise',to:'另一位',text:'不再创建',chips:100}) });
+    expect(response.status).toBe(410);
+    expect(await new LedgerDb(app.dbHandle).balanceOf(A)).toBe(before);
+    expect((await fetch(url + '/v1/me/history', { headers })).status).toBe(200);
+  });
+});
