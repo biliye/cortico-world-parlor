@@ -383,7 +383,7 @@ export async function syncLocation(): Promise<boolean> {
   return locationTask;
 }
 
-export function connect(): void {
+export function connect(refreshOnOpen = true): void {
   if (!seat.value) return;
   disconnect();
   connection.value = 'connecting';
@@ -393,7 +393,11 @@ export function connect(): void {
     if (stream !== source) return;
     connection.value = 'on';
     reconnectFailures = 0;
-    scheduleRefresh();
+    if (refreshOnOpen) scheduleRefresh();
+    else if (snapshot.value && seat.value && snapshot.value.id === seat.value.room) {
+      // 首屏刚取过；连接确认后只补上本人在线状态，避免又拉一次整厅。
+      snapshot.value = { ...snapshot.value, online: [...new Set([...(snapshot.value.online || []), seat.value.seatId])] };
+    }
   };
   source.onmessage = (message) => {
     if (stream !== source) return;
@@ -451,9 +455,9 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
   refreshTimer = undefined;
   let movedSeat = false;
   try {
-    const moved = await api<{ room: string; token: string; seat: { id: string; name: string } }>(
+    const moved = await api<{ room: string; token: string; seat: { id: string; name: string }; snapshot?: Snapshot }>(
       `/v1/rooms/${encodeURIComponent(from)}/switch`,
-      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: id }) },
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: id, includeSnapshot: true }) },
     );
     saveSeat({ ...cfg, room: moved.room, token: moved.token, seatId: moved.seat.id, name: moved.seat.name });
     movedSeat = true;
@@ -468,7 +472,7 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
     }
     history[replace ? 'replaceState' : 'pushState']({ parlor: true }, '', '/play?' + params.toString());
     readView();
-    return await finishRoomTransition();
+    return await finishRoomTransition(moved.snapshot);
   } catch (error) {
     if (movedSeat) {
       if (roomTransition.value) roomTransition.value.error = (error as Error).message || '暂时没有读到目的地，请重试。';
@@ -487,16 +491,22 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
 }
 
 /** 换席位已经成功时，重试只补目的地快照，不能再发一次换厅请求。 */
-export async function finishRoomTransition(): Promise<boolean> {
+export async function finishRoomTransition(initial?: Snapshot): Promise<boolean> {
   const transition = roomTransition.value;
   if (!transition) return false;
   transition.error = '';
   try {
-    await refreshSnapshot();
+    if (initial && initial.id === seat.value?.room && initial.seat?.id === seat.value?.seatId) {
+      syncEpoch += 1;
+      snapshot.value = initial;
+      offset.value = initial.now - Date.now();
+    } else {
+      await refreshSnapshot();
+    }
     const next = snapshot.value;
     if (!next || next.id !== seat.value?.room) throw new Error('暂时没有读到目的地，请重试。');
     latest.value = next.latest || 0;
-    connect();
+    connect(false);
     void seedLog();
     roomTransition.value = null;
     return true;
@@ -747,7 +757,7 @@ export async function boot(): Promise<boolean> {
   }
   await refreshSnapshot();
   latest.value = snapshot.value?.latest || 0;
-  connect();
+  connect(false);
   void seedLog();
   return true;
 }

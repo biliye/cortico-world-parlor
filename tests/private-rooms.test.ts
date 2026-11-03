@@ -2,9 +2,12 @@
  * 私密厅：邀请制长期成员、统一准入、移除即断访问、改成私密要显式保留名单；
  * 家长页在桌上有别的真人时藏起孩子的暗牌与私牌事件。
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
+import { RoomHost } from '../src/room/room-host.ts';
+
+const snapshotHost: Pick<RoomHost, 'snapshot'> = RoomHost.prototype;
 
 const O = 'coo-pv000001';
 const U = 'coo-pv000002';
@@ -72,6 +75,56 @@ const makePrivate = async (app: WorldServer, owner: string, name: string): Promi
   expect(created.status).toBe(200);
   return (created.body.room as { id: string }).id;
 };
+
+describe('切厅首屏快照', () => {
+  it('附带快照与目的地本人GET投影一致，旧客户端不额外构建首屏', async () => {
+    const { app } = await start();
+    const token = await enter(app, O, '房主');
+    const room = await makePrivate(app, O, '首屏私密厅');
+    const moved = await post(app.url, '/v1/rooms/lobby/switch', { to: room, includeSnapshot: true }, bearer(token));
+    expect(moved.status).toBe(200);
+    const next = moved.body.token as string;
+    const view = await get(app.url, `/v1/rooms/${room}/room?limit=1`, bearer(next));
+    expect(view.status).toBe(200);
+    expect(moved.body.snapshot).toEqual(view.body);
+    expect(moved.body.snapshot).toMatchObject({ id: room, seat: moved.body.seat });
+    expect(JSON.stringify(moved.body.snapshot)).not.toMatch(/cooSecret|ownerKey|tokenHash/);
+    const spy = vi.spyOn(snapshotHost, 'snapshot');
+    try {
+      const legacy = await switchTo(app, next, room, 'hall');
+      expect(legacy.status).toBe(200);
+      expect(legacy.body).not.toHaveProperty('snapshot');
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
+  it('首屏读取失败不丢失已提交的新令牌，客户端仍能补读', async () => {
+    const { app } = await start();
+    const token = await enter(app, O, '房主');
+    const room = await makePrivate(app, O, '可恢复首屏');
+    const spy = vi.spyOn(snapshotHost, 'snapshot').mockRejectedValueOnce(new Error('临时快照失败'));
+    try {
+      const moved = await post(app.url, '/v1/rooms/lobby/switch', { to: room, includeSnapshot: true }, bearer(token));
+      expect(moved.status).toBe(200);
+      expect(moved.body).not.toHaveProperty('snapshot');
+      expect(moved.body.token).toBeTruthy();
+      const view = await get(app.url, `/v1/rooms/${room}/room?limit=1`, bearer(moved.body.token as string));
+      expect(view.status).toBe(200);
+      expect(view.body.id).toBe(room);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('请求附带首屏不能绕过私密厅准入', async () => {
+    const { app } = await start();
+    await enter(app, O, '房主');
+    const token = await enter(app, U, '访客');
+    const room = await makePrivate(app, O, '不可偷看');
+    const denied = await post(app.url, '/v1/rooms/lobby/switch', { to: room, includeSnapshot: true }, bearer(token));
+    expect(denied.status).toBe(403);
+    expect(denied.body).not.toHaveProperty('snapshot');
+    expect((await get(app.url, '/v1/rooms/lobby/room?limit=1', bearer(token))).status).toBe(200);
+  });
+});
 
 describe('私密厅准入与邀请', () => {
   it('没被邀请进不去；邀请要接受；接受后能自己进出；移除即断', async () => {

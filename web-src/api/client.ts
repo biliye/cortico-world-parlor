@@ -58,19 +58,29 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
  * 会悄悄拿到默认客厅的数据。
  */
 let scopedPaths: boolean | null = null;
+let scopedTask: Promise<boolean> | undefined;
 
 async function send(path: string, init: RequestInit, headers: Headers): Promise<Response> {
   const room = currentRoom();
-  const scoped = room && (await supportsScopedPaths()) ? roomPath(path) : path;
-  return fetch(scoped, { ...init, headers, signal: init.signal ?? timeoutSignal() });
+  // 位置、目录、切厅等全局/显式房间接口无需能力探测，直接发出。
+  const candidate = roomPath(path);
+  const scoped = room && candidate !== path && (await supportsScopedPaths()) ? candidate : path;
+  const request = fetch(scoped, { ...init, headers, signal: init.signal ?? timeoutSignal() });
+  // 全局请求先发出，顺便预热后续快照的能力探测，二者并行。
+  if (room && candidate === path && scopedPaths === null) void supportsScopedPaths();
+  return request;
 }
 
 async function supportsScopedPaths(): Promise<boolean> {
   if (scopedPaths !== null) return scopedPaths;
-  const health = await fetchHealth();
-  if (!health) return !!currentRoom();
-  scopedPaths = typeof health.rooms === 'number';
-  return scopedPaths;
+  if (scopedTask) return scopedTask;
+  scopedTask = (async () => {
+    const health = await fetchHealth();
+    if (!health) return !!currentRoom();
+    scopedPaths = typeof health.rooms === 'number';
+    return scopedPaths;
+  })().finally(() => { scopedTask = undefined; });
+  return scopedTask;
 }
 
 /** SSE 这类不走 api() 的地址也用它：能力还没探到时按「有房间号」处理，真服务器不会错。 */
@@ -96,7 +106,7 @@ async function read<T>(response: Response, headers: Headers): Promise<T> {
 
 export async function fetchHealth(): Promise<Health | null> {
   try {
-    const response = await fetch('/healthz');
+    const response = await fetch('/healthz', { signal: timeoutSignal() });
     if (!response.ok) return null;
     return await response.json() as Health;
   } catch {

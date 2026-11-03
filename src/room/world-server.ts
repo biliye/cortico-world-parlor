@@ -1840,6 +1840,14 @@ export class WorldServer {
       const moved = await (await this.host(roomId)).switchTo(seat.cooId, target.id, {
         ...(typeof body.name === 'string' ? { name: body.name } : {}),
       });
+      // 网页可在同一次往返取得目的地首屏；继续复用 /room 的本人权限投影。
+      // 换席位已经提交，首屏读取失败仍须交还新令牌，让客户端单独补读。
+      let snapshot: RoomSnapshot | undefined;
+      if (body.includeSnapshot === true) {
+        try {
+          snapshot = await (await this.host(target.id)).snapshot(seat.cooId, { limit: 1 });
+        } catch { /* 不把已成功换席位误报为失败，客户端可用新令牌重读。 */ }
+      }
       json(res, 200, {
         ok: true,
         room: target.id,
@@ -1847,6 +1855,7 @@ export class WorldServer {
         token: moved.token,
         leaveSeq: moved.leaveEvent.seq,
         joinSeq: moved.joinEvent.seq,
+        ...(snapshot ? { snapshot: { ...snapshot, online: this.onlineSeatIds(target.id) } } : {}),
       });
       return;
     }

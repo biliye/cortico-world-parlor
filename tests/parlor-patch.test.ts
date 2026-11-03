@@ -241,6 +241,37 @@ describe('大厅与客厅就地转场', () => {
   const moved = (room = 'hall') => ({ room, token: 'next-token', seat: { id: 's2', name: '小满' } });
   const destination = (id = 'hall') => ({ ...snap(), id, latest: 5, table: null, tables: [], tablePrivate: null });
 
+  it('切厅响应带首屏时只等一次请求，SSE首次连接不再重复取快照', async () => {
+    const first = { ...destination(), seat: { id: 's2', name: '小满' }, online: [] };
+    mocks.api.mockImplementation((path: string) => Promise.resolve(path.endsWith('/switch')
+      ? { ...moved(), snapshot: first } : { events: [] }));
+    expect(await store.goRoom('hall')).toBe(true);
+    expect(JSON.parse(mocks.api.mock.calls[0][1].body)).toMatchObject({ to: 'hall', includeSnapshot: true });
+    expect(roomCalls()).toHaveLength(0);
+    expect(store.snapshot.value).toMatchObject({ id: 'hall', seat: { id: 's2' } });
+    (Stream.last as any).onopen();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(roomCalls()).toHaveLength(0);
+    expect(store.snapshot.value.online).toContain('s2');
+    // 真正的恢复连接仍补一次快照，不能沿用首次连接的省略策略。
+    mocks.api.mockResolvedValue(first);
+    store.connect();
+    (Stream.last as any).onopen();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(roomCalls()).toHaveLength(1);
+  });
+
+  it.each([
+    { ...destination('other'), seat: { id: 's2' } },
+    { ...destination(), seat: { id: 'someone-else' } },
+  ])('附带快照的客厅或席位不匹配时，仍用新令牌单独补读', async (wrong) => {
+    mocks.api.mockImplementation((path: string) => Promise.resolve(path.endsWith('/switch')
+      ? { ...moved(), snapshot: wrong } : path.startsWith('/v1/replay') ? { events: [] } : destination()));
+    expect(await store.goRoom('hall')).toBe(true);
+    expect(roomCalls()).toHaveLength(1);
+    expect(store.snapshot.value.id).toBe('hall');
+  });
+
   it('返回大厅不重载页面，快照到达就完成，不等待历史回放', async () => {
     const replay = deferred();
     mocks.api.mockImplementation((path: string) => {
