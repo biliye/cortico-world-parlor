@@ -562,7 +562,7 @@ describe('狼人杀 · 宿主层', () => {
     await fixture.close();
   });
 
-  it('真人时限更长：开局看身份 15 秒，白天真人发言窗 120 秒、Coo 60 秒', async () => {
+  it('真人时限更长：开局看身份 15 秒，白天真人发言窗 180 秒、Coo 60 秒', async () => {
     const fixture = await setup();
     await enterAll(fixture);
     const tableId = await openWerewolf(fixture);
@@ -586,9 +586,9 @@ describe('狼人杀 · 宿主层', () => {
     expect(speakerPriv.canAct).toBe(true);
     const windowMs = (speakerPriv.deadline ?? 0) - fixture.clock.now;
     if (speakerId === seat.id) {
-      // 家长（human 席位）：120 秒。
-      expect(windowMs).toBeGreaterThan(118_000);
-      expect(windowMs).toBeLessThanOrEqual(120_000);
+      // 家长（human 席位）有 180 秒。
+      expect(windowMs).toBeGreaterThan(178_000);
+      expect(windowMs).toBeLessThanOrEqual(180_000);
     } else {
       expect(windowMs).toBeGreaterThan(58_000);
       expect(windowMs).toBeLessThanOrEqual(60_000);

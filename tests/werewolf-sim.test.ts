@@ -13,7 +13,7 @@ import type { TableEvent, TableStep } from '../src/room/table-engine.ts';
  * 恢复等价可以严格比较，而不是抽查字段。
  */
 
-const T = 40; // 缩放时长基准（真人发言 = 2T、其余 = T、阅读 = T/3）
+const T = 40; // 缩放时长基准（真人发言 = 3T、其余 = T、阅读 = T/3）
 const NAMES = ['一号', '二号', '三号', '四号', '五号', '六号', '七号', '八号', '九号'];
 
 /** 可存取内部状态的 mulberry32：恢复续打要连同随机流一起还原。 */

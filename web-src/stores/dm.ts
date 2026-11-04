@@ -102,17 +102,19 @@ export function setQuery(value: string): void {
 
 async function loadMessages(cooId: string, quiet = false): Promise<void> {
   const current = epoch;
+  const target = peer.value;
+  if (target?.cooId !== cooId) return;
   try {
     const data = await api<{ peer?: { name?: string; handle?: string }; messages?: DmMessage[] }>(
       '/v1/dm?peer=' + encodeURIComponent(cooId) + '&limit=60',
     );
-    if (current !== epoch || !peer.value || peer.value.cooId !== cooId) return;
-    if (data.peer?.name) peer.value.name = data.peer.name;
-    if (data.peer?.handle) peer.value.handle = data.peer.handle;
+    if (current !== epoch || peer.value !== target) return;
+    if (data.peer?.name) target.name = data.peer.name;
+    if (data.peer?.handle) target.handle = data.peer.handle;
     messages.value = data.messages || [];
     error.value = '';
   } catch (caught) {
-    if (current === epoch && !quiet) error.value = (caught as Error).message || '取不到聊天';
+    if (current === epoch && peer.value === target && !quiet) error.value = (caught as Error).message || '取不到聊天';
   }
 }
 
@@ -133,16 +135,16 @@ async function markRead(cooId: string): Promise<void> {
 export async function openThread(cooId: string, name = '', handle = ''): Promise<void> {
   const current = epoch;
   peer.value = { cooId, name, handle };
+  const target = peer.value;
   messages.value = [];
   loading.value = true;
   error.value = '';
   try {
     await loadMessages(cooId);
-    if (current !== epoch || peer.value?.cooId !== cooId) return;
-    await markRead(cooId);
   } finally {
-    if (current === epoch) loading.value = false;
+    if (current === epoch && peer.value === target) loading.value = false;
   }
+  if (current === epoch && peer.value === target) await markRead(cooId);
 }
 
 export async function send(text: string): Promise<boolean> {
@@ -181,9 +183,11 @@ function stopPolling(): void {
 }
 
 export function openWindow(): void {
+  const reopening = !open.value;
   open.value = true;
   void loadThreads();
   void loadPeople();
+  if (reopening && peer.value && !loading.value) void loadMessages(peer.value.cooId, true);
   startPolling();
 }
 

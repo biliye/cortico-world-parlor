@@ -2,7 +2,7 @@
 /**
  * 狼人杀桌面：房间信息、牌桌和房间聊天各有一栏，按服务器给出的窗口显示操作。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
 import { initialOf } from '../../lib/text.ts';
 import Icon from '../Icon.vue';
@@ -346,10 +346,26 @@ const deadText = computed(() => deaths.value
 const speeches = computed<WSpeech[]>(() => table.value.speeches ?? []);
 const lastSpeech = computed<WSpeech | null>(() => (speeches.value.length ? speeches.value[speeches.value.length - 1] : null));
 const todaySpeeches = computed<WSpeech[]>(() => speeches.value
-  .filter((entry) => entry.day === table.value.day).slice().reverse());
+  .filter((entry) => entry.day === table.value.day));
 const playerSpeeches = computed<WSpeech[]>(() => speeches.value
-  .filter((entry) => entry.seatNo === playerFilter.value).slice().reverse());
+  .filter((entry) => entry.seatNo === playerFilter.value));
 const voteRounds = computed<WVoteRound[]>(() => (table.value.votes ?? []).slice().reverse());
+
+const historyBox = ref<HTMLElement | null>(null);
+
+function scrollTodayToLatest(): void {
+  const node = historyBox.value;
+  if (node && tab.value === 'today') node.scrollTop = node.scrollHeight;
+}
+
+watch([historyBox, tab, roomChatOpen, tableIdValue, () => table.value.day], scrollTodayToLatest, { flush: 'post' });
+watch(() => todaySpeeches.value.length, () => {
+  const node = historyBox.value;
+  if (node && tab.value === 'today' && node.scrollHeight - node.scrollTop - node.clientHeight < 80) {
+    void nextTick(scrollTodayToLatest);
+  }
+});
+
 function whoKindOf(entry: WSpeech): string {
   const seat = entry.seatNo !== undefined ? seatAt(entry.seatNo) : null;
   return seat ? (KIND_LABEL[seat.kind ?? ''] ?? '') : '';
@@ -773,7 +789,7 @@ onBeforeUnmount(() => {
                 <button class="wf-tab" :class="{ 'is-active': tab === 'votes' }" :aria-pressed="tab === 'votes'" type="button" @click="tab = 'votes'">票型</button>
                 <button class="wf-tab" :class="{ 'is-active': tab === 'byPlayer' }" :aria-pressed="tab === 'byPlayer'" type="button" @click="tab = 'byPlayer'">按玩家</button>
               </div>
-              <div class="wf-tabbody">
+              <div ref="historyBox" class="wf-tabbody">
                 <template v-if="tab === 'today'">
                   <p v-if="!todaySpeeches.length" class="wf-hint">今天还没有发言。</p>
                   <WerewolfSpeech

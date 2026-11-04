@@ -142,7 +142,7 @@ const speeches = (rig: Rig, say: (no: number, kind: string) => string | 'timeout
     const speakerId = (rig.table.public() as AnyView).turn as string;
     const said = say(seatNo(speakerId), v.speechKind ?? 'day');
     if (said === 'timeout') {
-      rig.clock.now += 2 * T + 1;
+      rig.clock.now = view(rig, speakerId).deadline + 1;
       collect(rig, rig.table.tick(rig.clock.now));
       continue;
     }
@@ -267,7 +267,7 @@ describe('狼人杀端到端·主对局（五角色全出场）', () => {
       } else if (i === 2) {
         collect(rig, act(rig, speakerId, { move: 'pass_speech' }));
       } else if (i === 3) {
-        rig.clock.now += 2 * T + 1; // 超时：按过麦结算
+        rig.clock.now = view(rig, speakerId).deadline + 1; // 超时按过麦结算
         collect(rig, rig.table.tick(rig.clock.now));
       } else {
         collect(rig, act(rig, speakerId, { move: 'speak', text: `${seatNo(speakerId)}号发言` }));

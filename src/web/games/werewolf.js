@@ -35,6 +35,7 @@ export function mountWerewolf(root, ctx) {
   let tableId = '';
   let mySeatNo = 0;
   let tab = 'today';            // today | byPlayer | votes
+  let todayHistory = null;
   let playerFilter = 0;         // 按玩家回看的座号
   let votePick = null;          // {target: number|null} 已选未提交
   let inspectPick = null;
@@ -110,6 +111,11 @@ export function mountWerewolf(root, ctx) {
   function render() {
     const table = view.table;
     if (!table) return;
+    const previousToday = todayHistory;
+    const previousTop = previousToday?.scrollTop ?? 0;
+    const stick = !previousToday || previousToday.dataset.day !== String(table.day)
+      || previousToday.scrollHeight - previousTop - previousToday.clientHeight < 80;
+    todayHistory = null;
     clear(box);
     const inspections = inspectionPanel(view.priv);
     if (table.status === 'ended') {
@@ -141,6 +147,7 @@ export function mountWerewolf(root, ctx) {
     side.append(historyPanel(table));
     main.append(side);
     box.append(main);
+    if (todayHistory) todayHistory.scrollTop = stick ? todayHistory.scrollHeight : previousTop;
 
     if (table.phase === 'reveal' && priv?.role) {
       box.append(revealBanner(priv));
@@ -323,8 +330,10 @@ export function mountWerewolf(root, ctx) {
     const speeches = table.speeches ?? [];
     if (tab === 'today') {
       const today = speeches.filter((entry) => entry.day === table.day);
+      todayHistory = body;
+      body.dataset.day = String(table.day);
       if (!today.length) body.append(el('p', 'wf-hint', '今天还没有发言。'));
-      today.slice().reverse().forEach((entry) => body.append(speechCard(entry, false)));
+      today.forEach((entry) => body.append(speechCard(entry, false)));
     } else if (tab === 'byPlayer') {
       const picker = el('div', 'wf-people');
       for (const seat of (table.seats ?? [])) {
@@ -338,7 +347,7 @@ export function mountWerewolf(root, ctx) {
       const mine = speeches.filter((entry) => entry.seatNo === playerFilter);
       if (!playerFilter) body.append(el('p', 'wf-hint', '点一个座位，看这个人到目前的全部发言。'));
       else if (!mine.length) body.append(el('p', 'wf-hint', `${seatLabel(playerFilter)} 还没有发言记录。`));
-      mine.slice().reverse().forEach((entry) => body.append(speechCard(entry, false)));
+      mine.forEach((entry) => body.append(speechCard(entry, false)));
     } else {
       const votes = (table.votes ?? []).slice().reverse();
       if (!votes.length) body.append(el('p', 'wf-hint', '还没有已揭晓的票型。'));
@@ -768,6 +777,7 @@ export function mountWerewolf(root, ctx) {
       const nextTableId = next.table?.tableId || next.table?.id || '';
       if (nextTableId !== tableId) {
         tableId = nextTableId;
+        todayHistory = null;
         revealed = false;
         identityOpen = false;
         votePick = null;

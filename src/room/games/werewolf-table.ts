@@ -131,7 +131,7 @@ interface Durations {
 const DEFAULT_DURATIONS: Durations = {
   revealMs: 15_000,
   nightMs: 60_000,
-  humanSpeechMs: 120_000,
+  humanSpeechMs: 180_000,
   cooSpeechMs: 60_000,
   readMs: 20_000,
   voteMs: 60_000,
@@ -142,7 +142,7 @@ const DEFAULT_DURATIONS: Durations = {
 const scaledDurations = (base: number): Durations => ({
   revealMs: base,
   nightMs: base,
-  humanSpeechMs: base * 2,
+  humanSpeechMs: base * 3,
   cooSpeechMs: base,
   readMs: Math.max(1, Math.round(base / 3)),
   voteMs: base,
@@ -156,7 +156,7 @@ export interface WerewolfTableOptions {
   host: { id: string; name: string; kind?: 'pet' | 'human'; clientVersion?: string };
   now: number;
   requireHuman?: boolean;
-  /** 测试基准时长；不传用正式默认（真人 120 秒 / Coo 60 秒 / 阅读 20 秒）。 */
+  /** 测试基准时长；不传用正式默认（真人 180 秒 / Coo 60 秒 / 阅读 20 秒）。 */
   turnMs?: number;
   rng?: () => number;
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from '../src/room/games/werewolf-table.ts';
 import type { TableEvent, TableStep } from '../src/room/table-engine.ts';
 
-/** 测试基准毫秒：各窗口按比例缩（真人发言 = 2T、Coo 发言 = T、阅读 = T/3）。 */
+/** 测试基准毫秒。各窗口按比例缩（真人发言 = 3T、Coo 发言 = T、阅读 = T/3）。 */
 const T = 40;
 const READ = Math.max(1, Math.round(T / 3));
 
@@ -480,7 +480,7 @@ describe('狼人杀引擎', () => {
     for (let i = 1; i < order.length; i++) {
       expect(order[i]).toBe((order[i - 1] % 9) + 1);
     }
-    // 起点公开在开局里；真人席位发言窗 2T，Coo 席位 T。
+    // 起点公开在开局里。真人席位发言窗 3T，Coo 席位 T。
     const rig2 = makeRig(41, 1);
     startGame(rig2);
     runNightA(rig2, { kill: null });
@@ -491,7 +491,7 @@ describe('狼人杀引擎', () => {
     const firstView = view(rig2, firstId);
     expect(firstView.canAct).toBe(firstId === `s${humanNo}` || firstView.kind === 'pet');
     if (firstView.kind === 'human') {
-      expect(firstView.deadline - rig2.clock.now).toBeLessThanOrEqual(2 * T);
+      expect(firstView.deadline - rig2.clock.now).toBeLessThanOrEqual(3 * T);
       expect(firstView.deadline - rig2.clock.now).toBeGreaterThan(T);
     } else {
       expect(firstView.deadline - rig2.clock.now).toBeLessThanOrEqual(T);
@@ -985,7 +985,7 @@ describe('狼人杀·真实时长(A2:不传 turnMs 用正式默认)', () => {
     return { table, clock, ids: Array.from({ length: 9 }, (_, i) => `s${i + 1}`), steps: [], events: [] };
   };
 
-  it('开局 15s;夜 A 行动者 60s、对外 120s;夜 B 60s;真人发言 120s、Coo 60s、阅读 20s;投票 60s;开枪 60s', () => {
+  it('开局 15 秒，夜 A 行动者 60 秒、对外 120 秒，夜 B 60 秒，真人发言 180 秒、Coo 60 秒、阅读 20 秒，投票和开枪各 60 秒', () => {
     // —— 主线:空刀平安夜,一路量到投票 ——
     const rig = makeRealRig(5);
     collect(rig, rig.table.start('s1', rig.clock.now));
@@ -1009,7 +1009,7 @@ describe('狼人杀·真实时长(A2:不传 turnMs 用正式默认)', () => {
     rig.clock.now += 60000;
     collect(rig, rig.table.tick(rig.clock.now));
     expect(eventType(rig, 'parlor.table.werewolf.dawn')).toHaveLength(1);
-    // 白天发言:真人 120s、Coo 60s;每次提交后阅读 20s。
+    // 白天真人发言 180 秒，Coo 60 秒。每次提交后阅读 20 秒。
     expect(view(rig, 's1').phase).toBe('speech');
     let humanSeen = false;
     let cooSeen = false;
@@ -1023,7 +1023,7 @@ describe('狼人杀·真实时长(A2:不传 turnMs 用正式默认)', () => {
       }
       const speaker = (rig.table.public() as AnyView).turn as string;
       const speakerView = view(rig, speaker);
-      expect(speakerView.deadline).toBe(rig.clock.now + (speakerView.kind === 'human' ? 120000 : 60000));
+      expect(speakerView.deadline).toBe(rig.clock.now + (speakerView.kind === 'human' ? 180000 : 60000));
       if (speakerView.kind === 'human') humanSeen = true; else cooSeen = true;
       collect(rig, act(rig, speaker, { move: 'pass_speech' }));
       // 提交后进入阅读期:readUntil - now = 20s。

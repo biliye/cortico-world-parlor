@@ -84,11 +84,21 @@ function onEscape(event: KeyboardEvent): void {
   if (event.key === 'Escape' && open.value) close();
 }
 
-watch(() => messages.value.length, () => {
+function scrollToLatest(): void {
   const node = msgs.value;
-  if (!node) return;
-  const stick = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-  if (stick) void nextTick(() => { node.scrollTop = node.scrollHeight; });
+  if (node) node.scrollTop = node.scrollHeight;
+}
+
+// 打开浮窗或会话取完消息时，等 DOM 渲染后再定位。
+watch([msgs, loading], ([node, pending]) => {
+  if (node && !pending) scrollToLatest();
+}, { flush: 'post' });
+
+watch(() => messages.value.at(-1), () => {
+  const node = msgs.value;
+  if (node && node.scrollHeight - node.scrollTop - node.clientHeight < 80) {
+    void nextTick(scrollToLatest);
+  }
 });
 
 onMounted(() => {

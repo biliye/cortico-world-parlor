@@ -66,6 +66,20 @@ const clickSeat = (root: TestNode, seat: number) => {
 };
 
 describe('狼人杀 legacy 选人与狼队信息回归', () => {
+  it('本日发言按提交顺序呈现', () => {
+    const { root, game } = mount();
+    const view = state('speech', null);
+    game.update({
+      ...view,
+      table: { ...view.table, speeches: [
+        { day: 1, kind: 'day', seatNo: 2, text: '先发言' },
+        { day: 1, kind: 'day', seatNo: 3, text: '后发言' },
+      ] },
+    });
+    const panel = findNode(root, (node) => node.className.split(' ').includes('wf-history'));
+    expect(panel?.textContent).toMatch(/先发言.*后发言/);
+  });
+
   it('同窗口重绘保留未提交投票，新窗口清除', () => {
     const { root, game } = mount();
     const priv = { role: 'villager', alive: true, canAct: true, myMove: 'vote', windowId: 'w1' };

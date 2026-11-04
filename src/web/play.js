@@ -3883,7 +3883,13 @@ function openDm(peer = '', name = '', handle = '') {
   paintDmPeople();
   void loadDmThreads();
   if (peer) void openDmThread(peer, name, handle);
-  else view.search.focus();
+  else {
+    view.search.focus();
+    if (dm().peer) {
+      paintDmMessages(true);
+      void loadDmMessages(dm().peer.cooId, true);
+    }
+  }
   startDmPolling();
 }
 
@@ -4091,7 +4097,7 @@ async function sendDm() {
     });
     dm().messages.push(data.message);
     view.input.value = '';
-    paintDmMessages(true);
+    paintDmMessages();
     await loadDmThreads();
   } catch (error) {
     showToast(error.message || '没发出去', 'bad');
@@ -4187,10 +4193,11 @@ function paintDmPeer() {
   view.send.disabled = false;
 }
 
-function paintDmMessages(scroll = true) {
+function paintDmMessages(forceBottom = false) {
   const view = ui.dm;
   if (!view) return;
-  const nearBottom = view.msgs.scrollHeight - view.msgs.scrollTop - view.msgs.clientHeight < 80;
+  const previousTop = view.msgs.scrollTop;
+  const nearBottom = view.msgs.scrollHeight - previousTop - view.msgs.clientHeight < 80;
   clear(view.msgs);
   if (!dm().peer) {
     view.msgs.append(el('p', 'chat-empty', '选左边一个人，或者上面搜个名字。'));
@@ -4206,7 +4213,7 @@ function paintDmMessages(scroll = true) {
     node.append(el('time', 'dm-time', fmtClock(message.ts).slice(0, 5)));
     view.msgs.append(node);
   }
-  if (scroll && nearBottom) view.msgs.scrollTop = view.msgs.scrollHeight;
+  view.msgs.scrollTop = forceBottom || nearBottom ? view.msgs.scrollHeight : previousTop;
 }
 
 function updateDmBadge() {

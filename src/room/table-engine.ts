@@ -32,7 +32,7 @@ export interface TableSeat {
   id: string;
   name: string;
   /**
-   * 玩家类型：pet = Coo（引擎按它给 60 秒），human = 真人（120 秒）。
+   * 玩家类型：pet = Coo（狼人杀发言 60 秒），human = 真人（狼人杀发言 180 秒）。
    * 从服务端席位行带来，不信客户端自报；骰子/斗地主可以不理会。
    */
   kind?: 'pet' | 'human';
