@@ -1,13 +1,11 @@
 <script setup lang="ts">
 /**
- * 狼人杀桌面（Vue 版）：座位环、发言/票型/历史、身份牌、夜间动作条都沿用旧渲染器的
- * DOM 结构与类名，样式由 play.css 提供；旧文件 src/web/games/werewolf.js 留给 ?legacy=1。
- * 规则、窗口、时限全在服务器；这里只摆座位、卡片、草稿与按钮。
+ * 狼人杀桌面：房间信息、牌桌和房间聊天各有一栏，按服务器给出的窗口显示操作。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
-import { fmtClock } from '../../lib/cards.ts';
 import { initialOf } from '../../lib/text.ts';
+import Icon from '../Icon.vue';
 import ClockText from './ClockText.vue';
 import WerewolfRoleFace from './WerewolfRoleFace.vue';
 import WerewolfSpeech from './WerewolfSpeech.vue';
@@ -60,6 +58,7 @@ const mySeatNo = computed(() => (table.value.seats ?? [])
   .find((seat) => seat.id === props.view.me.id)?.seatNo ?? 0);
 const myMove = computed(() => (priv.value?.canAct ? priv.value.myMove ?? null : null));
 const seats = computed<WSeat[]>(() => table.value.seats ?? []);
+const aliveCount = computed(() => seats.value.filter((seat) => seat.alive !== false).length);
 const deaths = computed(() => table.value.deaths ?? []);
 
 function seatAt(no: number): WSeat | null {
@@ -88,11 +87,6 @@ function isMe(seat: WSeat): boolean {
 function seatInfo(seat: WSeat): { kind?: string } | undefined {
   return (props.view.seats || []).find((entry) => entry.id === seat.id);
 }
-function ringAvatarClass(seat: WSeat): string {
-  const info = seatInfo(seat);
-  const kind = info?.kind === 'pet' ? 'avatar-coo' : (props.view.classes.get(seat.id ?? '') || 's1');
-  return ['avatar', 'avatar-sm', kind].filter(Boolean).join(' ');
-}
 function canTarget(seatNo: number): boolean {
   const move = myMove.value;
   const own = priv.value;
@@ -119,6 +113,7 @@ function seatClasses(seat: WSeat, area: string): string {
     'wf-seat', area,
     isMe(seat) ? 'is-me' : '',
     talking ? 'is-speaking' : '',
+    pickedNo.value != null && seat.seatNo === pickedNo.value ? 'is-picked' : '',
     alive ? '' : 'is-dead',
     online ? '' : 'is-offline',
     seat.seatNo !== undefined && canTarget(seat.seatNo) ? 'is-targetable' : '',
@@ -148,6 +143,22 @@ const inspectPick = ref<number | null>(null);
 const poisonPick = ref<number | null>(null);
 const shootPick = ref<number | null>(null);
 const wolfKillPick = ref<number | null>(null);
+const pickedNo = computed(() => {
+  switch (myMove.value) {
+    case 'vote': return votePick.value?.target;
+    case 'inspect': return inspectPick.value;
+    case 'witch': return poisonPick.value;
+    case 'shoot': return shootPick.value;
+    case 'wolf_kill': return wolfKillPick.value;
+    default: return null;
+  }
+});
+const infoOpen = ref(false);
+const roomChatOpen = ref(false);
+const chatMove = computed(() => myMove.value === 'speak' || myMove.value === 'wolf_chat');
+watch(chatMove, (active) => {
+  if (active) roomChatOpen.value = true;
+}, { immediate: true });
 const revealed = ref(false);
 const identityOpen = ref(false);
 const enlargedImage = ref<string | null>(null);
@@ -312,7 +323,7 @@ const phaseText = computed(() => {
   else if (move === 'shoot') text = '你可以开枪';
   if (table.value.phase === 'speech' && table.value.turn) {
     const no = seatNoOf(table.value.turn);
-    if (no) text += ` · ${seatLabel(no)}`;
+    if (no && move !== 'speak') return `${seatLabel(no)} 发言中`;
   }
   return text;
 });
@@ -320,8 +331,12 @@ const coreDayText = computed(() => (table.value.day
   ? `第 ${table.value.day} ${table.value.phase === 'night' ? '夜' : '天'}`
   : '狼人杀'));
 const coreSubText = computed(() => {
+  if (pickedNo.value != null) return `已选 ${seatLabel(pickedNo.value)}`;
   if (!priv.value?.role) return '旁观视角';
-  return table.value.phase === 'night' ? '天亮前保持安静' : (table.value.phaseLabel ?? '');
+  if (myMove.value === 'speak') return '在房间聊天里提交发言';
+  if (myMove.value === 'vote') return '点选一位玩家';
+  if (myMove.value === 'inspect' || myMove.value === 'wolf_kill' || myMove.value === 'shoot') return '点选座位，再确认操作';
+  return '';
 });
 const deadText = computed(() => deaths.value
   .map((entry) => `${entry.seatNo}号（第${entry.day}${entry.phase === 'night' ? '夜' : '天'}）`)
@@ -448,7 +463,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="panel game-werewolf" :class="{ 'is-night': isNight, 'is-day': !isNight }">
+  <section class="panel game-werewolf" :class="{ 'is-night': isNight, 'is-day': !isNight, 'is-playing': !ended }">
     <template v-if="ended">
       <div class="wf-end">
         <div class="wf-end-banner">
@@ -496,224 +511,344 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else>
-      <div class="wf-strip">
-        <span class="wf-pill" :class="{ live: !!myMove }">
-          <span v-if="myMove" class="live-dot" />
-          {{ phaseText }}
-        </span>
-        <span v-if="table.day" class="wf-day">第 {{ table.day }} 天</span>
-        <span v-if="table.deadline" class="wf-clock">
-          {{ fmtClock(table.deadline) }} · <ClockText :deadline="table.deadline" :server-now="ctx.serverNow" />
-        </span>
-      </div>
-
       <div class="wf-main">
-        <div class="wf-ring-wrap">
-          <div class="wf-ring">
-            <div class="wf-table-core">
-              <div class="wf-core-day">{{ coreDayText }}</div>
-              <div class="wf-core-sub">{{ coreSubText }}</div>
-            </div>
-            <template v-for="slot in RING_SLOTS" :key="'ring-' + slot.area">
-              <button
-                v-if="seatAt(slot.seatNo)"
-                type="button"
-                :class="seatClasses(seatAt(slot.seatNo)!, slot.area)"
-                :aria-label="seatAria(seatAt(slot.seatNo)!)"
-                @click="onSeatClick(seatAt(slot.seatNo)!)"
-              >
-                <span class="wf-seat-head">
-                  <span :class="ringAvatarClass(seatAt(slot.seatNo)!)">{{ initialOf(seatAt(slot.seatNo)!.name) }}</span>
-                  <span class="wf-seatno">{{ seatAt(slot.seatNo)!.seatNo }}号</span>
-                </span>
-                <span class="wf-seatname">{{ seatAt(slot.seatNo)!.name }}{{ isMe(seatAt(slot.seatNo)!) ? '（你）' : '' }}</span>
-                <span class="wf-seat-tags">
-                  <span class="wf-kind">{{ KIND_LABEL[seatAt(slot.seatNo)!.kind || ''] || '' }}</span>
-                  <span v-if="seatAt(slot.seatNo)!.alive === false" class="wf-mark dead">出局</span>
-                  <span v-else-if="!onlineOf(slot.seatNo)" class="wf-mark off">离线</span>
-                </span>
-              </button>
-              <div v-else :class="['wf-seat-empty', slot.area]" />
-            </template>
-          </div>
-          <div v-if="deaths.length" class="wf-deadline">已出局：{{ deadText }}</div>
-        </div>
-
-        <div class="wf-side">
-          <section class="wf-panel wf-now">
-            <h3 class="wf-panel-title">当前发言</h3>
-            <p v-if="nowHint" class="wf-hint">{{ nowHint }}</p>
-            <WerewolfSpeech
-              v-else-if="lastSpeech"
-              :entry="{ ...lastSpeech, seatName: speechName(lastSpeech) }"
-              :who-kind="whoKindOf(lastSpeech)"
-              :live="true"
-            />
-            <p v-else class="wf-hint">还没有人发言。</p>
-          </section>
-
-          <section v-if="seerInspections.length" class="wf-panel wf-inspections">
-            <h3 class="wf-panel-title">我的查验记录（仅自己可见）</h3>
-            <div class="wf-tabbody">
-              <p v-for="entry in seerInspections" :key="'inspect-' + entry.day + '-' + entry.target" class="wf-role-mates">
-                第{{ entry.day }}夜 · {{ seatLabel(entry.target) }}：{{ entry.result === 'wolf' ? '狼人' : '好人' }}
-              </p>
-            </div>
-          </section>
-
-          <section v-if="wolfChat.length || wolfVotes.length || lockedKill != null" class="wf-panel wf-wolf-info">
-            <h3 class="wf-panel-title">狼队信息（仅狼人可见）</h3>
-            <div class="wf-tabbody">
-              <p v-if="wolfVotes.length" class="wf-role-mates">
-                已交刀票：{{ wolfVotes.map((entry) => `${entry.seatNo}号→${entry.target === null ? '弃' : `${entry.target}号`}`).join('，') }}
-              </p>
-              <p v-for="(chat, index) in wolfChat" :key="'wolf-chat-' + index" class="wf-role-mates">
-                {{ chat.seatNo }}号 {{ chat.name }}：「{{ chat.text }}」
-              </p>
-              <p v-if="lockedKill != null" class="wf-role-mates">今夜锁定刀口：{{ seatLabel(lockedKill) }}</p>
-            </div>
-          </section>
-
-          <section class="wf-panel wf-history">
-            <div class="wf-tabs">
-              <button class="wf-tab" :class="{ 'is-active': tab === 'today' }" type="button" @click="tab = 'today'">本日</button>
-              <button class="wf-tab" :class="{ 'is-active': tab === 'byPlayer' }" type="button" @click="tab = 'byPlayer'">按玩家</button>
-              <button class="wf-tab" :class="{ 'is-active': tab === 'votes' }" type="button" @click="tab = 'votes'">票型</button>
-            </div>
-            <div class="wf-tabbody">
-              <template v-if="tab === 'today'">
-                <p v-if="!todaySpeeches.length" class="wf-hint">今天还没有发言。</p>
-                <WerewolfSpeech
-                  v-for="(entry, index) in todaySpeeches"
-                  :key="'today-' + index"
-                  :entry="{ ...entry, seatName: speechName(entry) }"
-                  :who-kind="whoKindOf(entry)"
-                />
+        <aside class="wf-room" :class="{ 'is-open': infoOpen }" aria-label="房间信息">
+          <header class="wf-column-head">
+            <p class="wf-eyebrow">房间</p>
+            <h2 class="wf-column-title">房间信息</h2>
+          </header>
+          <button class="btn ghost small wf-mobile-toggle" type="button"
+            :aria-expanded="infoOpen" aria-controls="wf-room-content" @click="infoOpen = !infoOpen">
+            {{ infoOpen ? '收起房间信息' : '房间信息' }}
+          </button>
+          <div id="wf-room-content" class="wf-room-content">
+            <section class="wf-panel wf-room-summary">
+              <h3>9 人标准局</h3>
+              <p>3 狼 · 3 民 · 预言家 / 女巫 / 猎人</p>
+              <p v-if="tableIdValue()" class="wf-table-id">桌号 {{ tableIdValue() }}</p>
+            </section>
+            <div class="wf-mebar">
+              <template v-if="priv?.role">
+                <button class="wf-id-toggle" type="button" :class="{ 'is-wolf': priv.role === 'wolf' }"
+                  :aria-expanded="identityOpen" :aria-controls="identityOpen ? 'wf-identity-card' : undefined" @click="identityOpen = !identityOpen">
+                  <span class="wf-identity-meta"><Icon name="lock" /> 仅自己可见</span>
+                  <span class="wf-identity-role">{{ ROLE_NAMES[priv.role] }}</span>
+                  <span class="wf-identity-meta">{{ ROLE_FACTIONS[priv.role] }} · {{ identityOpen ? '收起身份牌' : '查看身份牌' }}</span>
+                </button>
+                <span v-if="priv.alive === false" class="wf-mark dead">你已出局 · 观战到终局</span>
               </template>
-              <template v-else-if="tab === 'byPlayer'">
-                <div class="wf-people">
+              <span v-else class="wf-hint">你在旁观这张桌。</span>
+            </div>
+            <div v-if="identityOpen && priv?.role" id="wf-identity-card" class="wf-id-drawer">
+              <h3 class="wf-panel-title">我的身份（仅自己可见）</h3>
+              <WerewolfRoleFace :role="priv.role" :mates="priv.teammates" :with-close="true" @close="closeIdentity" />
+            </div>
+            <section v-if="seerInspections.length" class="wf-panel wf-inspections">
+              <h3 class="wf-panel-title">我的查验记录（仅自己可见）</h3>
+              <div class="wf-tabbody">
+                <p v-for="entry in seerInspections" :key="'inspect-' + entry.day + '-' + entry.target" class="wf-role-mates">
+                  第{{ entry.day }}夜 · {{ seatLabel(entry.target) }}：{{ entry.result === 'wolf' ? '狼人' : '好人' }}
+                </p>
+              </div>
+            </section>
+            <section class="wf-panel wf-round-summary">
+              <h3 class="wf-panel-title">本局局面</h3>
+              <dl>
+                <div><dt>存活</dt><dd>{{ aliveCount }}</dd></div>
+                <div><dt>出局</dt><dd>{{ seats.length - aliveCount }}</dd></div>
+                <div v-if="table.day"><dt>天数</dt><dd>{{ table.day }}</dd></div>
+              </dl>
+              <p v-if="deaths.length" class="wf-hint">已出局：{{ deadText }}</p>
+            </section>
+          </div>
+        </aside>
+
+        <div class="wf-board">
+          <div class="wf-strip">
+            <span class="wf-pill" :class="{ live: !!myMove }">
+              <Icon :name="isNight ? 'moon' : 'sun'" />
+              {{ coreDayText }}
+            </span>
+            <span v-if="table.deadline" class="wf-clock">
+              <ClockText :deadline="table.deadline" :server-now="ctx.serverNow" />
+            </span>
+          </div>
+          <div class="wf-ring-wrap">
+            <div class="wf-ring">
+              <span class="wf-felt-mark" aria-hidden="true">WEREWOLF</span>
+              <div class="wf-table-core">
+                <div v-if="table.phaseLabel && table.phaseLabel !== phaseText" class="wf-core-day">{{ table.phaseLabel }}</div>
+                <div class="wf-core-phase">{{ phaseText }}</div>
+                <div v-if="coreSubText" class="wf-core-sub" :class="{ 'is-picked': pickedNo != null }">{{ coreSubText }}</div>
+              </div>
+              <template v-for="slot in RING_SLOTS" :key="'ring-' + slot.area">
+                <button
+                  v-if="seatAt(slot.seatNo)"
+                  type="button"
+                  :class="seatClasses(seatAt(slot.seatNo)!, slot.area)"
+                  :aria-label="seatAria(seatAt(slot.seatNo)!)"
+                  :aria-pressed="canTarget(slot.seatNo) ? pickedNo === slot.seatNo : undefined"
+                  @click="onSeatClick(seatAt(slot.seatNo)!)"
+                >
+                  <span class="wf-seat-medallion">{{ initialOf(seatAt(slot.seatNo)!.name) }}</span>
+                  <span class="wf-seatname">
+                    <span class="wf-seatno">{{ seatAt(slot.seatNo)!.seatNo }}号</span>
+                    {{ seatAt(slot.seatNo)!.name }}
+                  </span>
+                  <span class="wf-seat-tags">
+                    <span v-if="seatAt(slot.seatNo)!.alive === false" class="wf-mark dead">已出局</span>
+                    <span v-else-if="!onlineOf(slot.seatNo)" class="wf-mark off">离线</span>
+                    <span v-else-if="isMe(seatAt(slot.seatNo)!)" class="wf-mark self">你</span>
+                    <span v-else-if="seatAt(slot.seatNo)!.kind === 'pet'" class="wf-kind">Coo</span>
+                  </span>
+                </button>
+                <div v-else :class="['wf-seat-empty', slot.area]" />
+              </template>
+            </div>
+          </div>
+          <div v-if="table.phase === 'reveal' && priv?.role" class="wf-reveal">
+            <div class="wf-idflip" :class="{ 'is-open': revealed }">
+              <button class="wf-card-back" type="button" aria-label="点击查看你的身份" @click="revealed = true">
+                <span class="wf-card-back-inner">狼人杀</span>
+                <span class="wf-card-back-hint">点击查看你的身份</span>
+              </button>
+              <WerewolfRoleFace :role="priv.role" :mates="priv.teammates" :with-close="true" @close="closeIdentity" />
+            </div>
+            <p v-if="!revealed" class="wf-reveal-hint">看身份阶段；倒计时结束后自动盖牌，之后在「我的身份」里随时再看。</p>
+          </div>
+          <div class="wf-actionbar">
+            <div v-if="myMove === 'vote'" class="wf-composer">
+              <p class="wf-composer-hint">
+                {{ priv?.voteVariant === 'pk' ? '复投：只能投给进入 PK 的席位，或弃票；到点统一揭晓。' : '一人一票，不能投自己，可以弃票；提交后不能改，到点统一揭晓。' }}
+              </p>
+              <div class="wf-composer-note">点座位或点下面的名字选人；选中 ≠ 提交。</div>
+              <div class="wf-targets">
+                <button
+                  v-for="no in voteTargets"
+                  :key="'vote-target-' + no"
+                  class="wf-chip"
+                  :class="{ 'is-active': votePick?.target === no }"
+                  type="button"
+                  @click="votePick = { target: no }"
+                >{{ seatLabel(no) }}</button>
+              </div>
+              <div class="wf-confirm">
+                <button
+                  v-if="votePick && votePick.target !== null"
+                  class="btn primary"
+                  type="button"
+                  @click="submitVote"
+                >投给 {{ seatLabel(votePick.target) }}，提交后不可改</button>
+                <button
+                  v-else-if="votePick && votePick.target === null"
+                  class="btn primary"
+                  type="button"
+                  @click="submitVote"
+                >确认弃票（提交后不可改）</button>
+                <button v-else class="btn ghost" type="button" @click="votePick = { target: null }">弃票</button>
+              </div>
+            </div>
+            <div v-else-if="myMove === 'wolf_kill'" class="wf-composer">
+              <p v-if="submitted.includes('wolf_kill')" class="wf-composer-hint">你的刀票已经交了；到点锁定刀口。</p>
+              <template v-else>
+                <p class="wf-composer-hint">交一张最终刀票（相对多数且唯一才成刀；平票或全弃 = 空刀）。</p>
+                <div class="wf-targets">
                   <button
-                    v-for="seat in seats"
-                    :key="'people-' + seat.seatNo"
+                    v-for="no in wolfTargets"
+                    :key="'wolf-target-' + no"
                     class="wf-chip"
-                    :class="{ 'is-active': playerFilter === seat.seatNo }"
+                    :class="{ 'is-active': wolfKillPick === no }"
                     type="button"
-                    @click="playerFilter = seat.seatNo ?? 0"
-                  >{{ seat.seatNo }}号 {{ seat.name }}</button>
+                    @click="wolfKillPick = wolfKillPick === no ? null : no"
+                  >{{ seatLabel(no) }}</button>
                 </div>
-                <p v-if="!playerFilter" class="wf-hint">点一个座位，看这个人到目前的全部发言。</p>
-                <p v-else-if="!playerSpeeches.length" class="wf-hint">{{ seatLabel(playerFilter) }} 还没有发言记录。</p>
-                <WerewolfSpeech
-                  v-for="(entry, index) in playerSpeeches"
-                  :key="'player-' + index"
-                  :entry="{ ...entry, seatName: speechName(entry) }"
-                  :who-kind="whoKindOf(entry)"
-                />
+                <div class="wf-confirm">
+                  <button v-if="wolfKillPick !== null" class="btn primary" type="button" @click="submitWolfKill">刀 {{ seatLabel(wolfKillPick) }}</button>
+                  <button class="btn ghost" type="button" @click="giveUpWolfKill">弃刀</button>
+                </div>
+              </template>
+            </div>
+            <div v-else-if="myMove === 'inspect'" class="wf-composer">
+              <template v-if="checkSubmittedToday">
+                <p class="wf-composer-hint">今夜的槽已交；结果见「我的查验记录」。</p>
               </template>
               <template v-else>
-                <p v-if="!voteRounds.length" class="wf-hint">还没有已揭晓的票型。</p>
-                <article v-for="(round, index) in voteRounds" :key="'vote-' + index" class="wf-votes">
-                  <h4 class="wf-votes-title">第{{ round.day }}天{{ round.variant === 'pk' ? ' · 复投' : '' }}</h4>
-                  <div v-for="(line, lineIndex) in round.entries" :key="'vote-line-' + lineIndex" class="wf-vote-line">
-                    <span class="wf-vote-from">{{ line.seatNo }}号</span>
-                    <span class="wf-vote-arrow">→</span>
-                    <span class="wf-vote-to">
-                      {{ line.target === null ? (line.timeout ? '超时弃票' : '弃票') : `${line.target}号 ${nameOfNo(line.target)}` }}
-                    </span>
-                  </div>
-                  <p v-if="round.exiled !== undefined" class="wf-votes-note">放逐：{{ seatLabel(round.exiled) }}</p>
-                  <p v-else-if="round.tie" class="wf-votes-note">平票：{{ round.tie.map((no) => seatLabel(no)).join('、') }} 进入 PK</p>
-                  <p v-else class="wf-votes-note">无人放逐</p>
-                </article>
+                <p class="wf-composer-hint">查验一名其他存活玩家；不查就点「今夜不查」。</p>
+                <div class="wf-targets">
+                  <button
+                    v-for="no in targetsAliveOthers"
+                    :key="'inspect-target-' + no"
+                    class="wf-chip"
+                    :class="{ 'is-active': inspectPick === no }"
+                    type="button"
+                    @click="inspectPick = no"
+                  >{{ seatLabel(no) }}</button>
+                </div>
+                <div class="wf-confirm">
+                  <button v-if="inspectPick !== null" class="btn primary" type="button" @click="submitInspect">查验 {{ seatLabel(inspectPick) }}</button>
+                  <button class="btn ghost" type="button" @click="skipInspect">今夜不查</button>
+                </div>
               </template>
             </div>
-          </section>
-        </div>
-      </div>
 
-      <div v-if="table.phase === 'reveal' && priv?.role" class="wf-reveal">
-        <div class="wf-idflip" :class="{ 'is-open': revealed }">
-          <button class="wf-card-back" type="button" aria-label="点击查看你的身份" @click="revealed = true">
-            <span class="wf-card-back-inner">狼人杀</span>
-            <span class="wf-card-back-hint">点击查看你的身份</span>
+            <div v-else-if="myMove === 'witch'" class="wf-composer">
+              <p class="wf-composer-hint">{{ witchHint }}</p>
+              <div v-if="potions.poison > 0" class="wf-targets">
+                <button
+                  v-for="no in targetsAliveOthers"
+                  :key="'poison-target-' + no"
+                  class="wf-chip"
+                  :class="{ 'is-active': poisonPick === no }"
+                  type="button"
+                  @click="poisonPick = no"
+                >{{ seatLabel(no) }}</button>
+              </div>
+              <div class="wf-confirm">
+                <button v-if="potions.antidote > 0 && knownKill !== null && knownKill !== undefined" class="btn primary" type="button" @click="witchSave">
+                  救 {{ seatLabel(knownKill) }}
+                </button>
+                <button v-if="potions.poison > 0 && poisonPick !== null" class="btn primary" type="button" @click="witchPoison">毒 {{ seatLabel(poisonPick) }}</button>
+                <button class="btn ghost" type="button" @click="witchNone">今晚不用药</button>
+              </div>
+              <p v-if="potions.antidote > 0 && knownKill === null" class="wf-hint">今夜没有刀口；解药只能抵消狼刀。</p>
+            </div>
+
+            <div v-else-if="myMove === 'shoot'" class="wf-composer">
+              <p class="wf-composer-hint">你是猎人：可以带走一名其他存活玩家，也可以放弃（公开亮明身份后开枪）。</p>
+              <div class="wf-targets">
+                <button
+                  v-for="no in targetsAliveOthers"
+                  :key="'shoot-target-' + no"
+                  class="wf-chip"
+                  :class="{ 'is-active': shootPick === no }"
+                  type="button"
+                  @click="shootPick = no"
+                >{{ seatLabel(no) }}</button>
+              </div>
+              <div class="wf-confirm">
+                <button v-if="shootPick !== null" class="btn primary" type="button" @click="shootAt">开枪带走 {{ seatLabel(shootPick) }}</button>
+                <button class="btn ghost" type="button" @click="giveUpShoot">放弃开枪</button>
+              </div>
+            </div>
+
+            <div v-else-if="priv?.role && !chatMove" class="wf-wait"><span>{{ waitText }}</span></div>
+          </div>
+        </div>
+
+        <aside class="wf-side" :class="{ 'is-open': roomChatOpen }" aria-label="房间聊天">
+          <header class="wf-column-head">
+            <p class="wf-eyebrow">本局记录</p>
+            <h2 class="wf-column-title">房间聊天</h2>
+          </header>
+          <button class="btn ghost small wf-mobile-toggle" type="button"
+            :aria-expanded="roomChatOpen" aria-controls="wf-room-chat" @click="roomChatOpen = !roomChatOpen">
+            {{ roomChatOpen ? '收起房间聊天' : chatMove ? '房间聊天 · 轮到你发言' : '房间聊天' }}
           </button>
-          <WerewolfRoleFace :role="priv.role" :mates="priv.teammates" :with-close="true" @close="closeIdentity" />
-        </div>
-        <p v-if="!revealed" class="wf-reveal-hint">看身份阶段；倒计时结束后自动盖牌，之后在「我的身份」里随时再看。</p>
-      </div>
-
-      <div class="wf-actionbar">
-        <div class="wf-mebar">
-          <template v-if="priv?.role">
-            <button class="wf-id-toggle" type="button" @click="identityOpen = !identityOpen">
-              {{ identityOpen ? '收起身份' : `我的身份 · ${ROLE_NAMES[priv.role]}` }}
-            </button>
-            <span v-if="priv.alive === false" class="wf-mark dead">你已出局 · 观战到终局</span>
-          </template>
-          <span v-else class="wf-hint">你在旁观这张桌。</span>
-        </div>
-
-        <div class="wf-actions">
-          <div v-if="myMove === 'speak'" class="wf-composer">
-            <p class="wf-composer-hint">一次机会、一条完整发言（最多 300 字）；提交或过麦后进入全桌阅读。</p>
-            <div class="wf-draft">
-              <div class="wf-draft-main">
-                <textarea
-                  class="wf-input"
-                  rows="3"
-                  :maxlength="320"
-                  :placeholder="speechPlaceholder"
-                  :aria-label="speechPlaceholder"
-                  :value="draftText.speech"
-                  @input="onDraftInput('speech', $event)"
-                  @focus="draftFocused = true"
-                  @blur="draftFocused = false"
-                  @keydown="onDraftKey('speech', $event)"
-                />
-                <div class="wf-draft-row">
-                  <span class="wf-count" :class="{ 'is-over': draftCount > 300 }">{{ draftCount }}/300</span>
-                  <span class="wf-dclock"><ClockText v-if="priv?.deadline" :deadline="priv.deadline" :server-now="ctx.serverNow" /></span>
+          <div id="wf-room-chat" class="wf-room-chat">
+            <section v-if="nowHint || (lastSpeech && tab !== 'today')" class="wf-panel wf-now">
+              <h3 class="wf-panel-title">{{ nowHint ? '牌桌提示' : '最新发言' }}</h3>
+              <p v-if="nowHint" class="wf-hint">{{ nowHint }}</p>
+              <WerewolfSpeech
+                v-else-if="lastSpeech"
+                :entry="{ ...lastSpeech, seatName: speechName(lastSpeech) }"
+                :who-kind="whoKindOf(lastSpeech)"
+                :live="true"
+              />
+            </section>
+            <section v-if="wolfChat.length || wolfVotes.length || lockedKill != null" class="wf-panel wf-wolf-info">
+              <h3 class="wf-panel-title">狼队信息（仅狼人可见）</h3>
+              <div class="wf-tabbody">
+                <p v-if="wolfVotes.length" class="wf-role-mates">
+                  已交刀票：{{ wolfVotes.map((entry) => `${entry.seatNo}号→${entry.target === null ? '弃' : `${entry.target}号`}`).join('，') }}
+                </p>
+                <p v-for="(chat, index) in wolfChat" :key="'wolf-chat-' + index" class="wf-role-mates">
+                  {{ chat.seatNo }}号 {{ chat.name }}：「{{ chat.text }}」
+                </p>
+                <p v-if="lockedKill != null" class="wf-role-mates">今夜锁定刀口：{{ seatLabel(lockedKill) }}</p>
+              </div>
+            </section>
+            <section class="wf-panel wf-history">
+              <div class="wf-tabs">
+                <button class="wf-tab" :class="{ 'is-active': tab === 'today' }" :aria-pressed="tab === 'today'" type="button" @click="tab = 'today'">本日</button>
+                <button class="wf-tab" :class="{ 'is-active': tab === 'votes' }" :aria-pressed="tab === 'votes'" type="button" @click="tab = 'votes'">票型</button>
+                <button class="wf-tab" :class="{ 'is-active': tab === 'byPlayer' }" :aria-pressed="tab === 'byPlayer'" type="button" @click="tab = 'byPlayer'">按玩家</button>
+              </div>
+              <div class="wf-tabbody">
+                <template v-if="tab === 'today'">
+                  <p v-if="!todaySpeeches.length" class="wf-hint">今天还没有发言。</p>
+                  <WerewolfSpeech
+                    v-for="(entry, index) in todaySpeeches"
+                    :key="'today-' + index"
+                    :entry="{ ...entry, seatName: speechName(entry) }"
+                    :who-kind="whoKindOf(entry)"
+                  />
+                </template>
+                <template v-else-if="tab === 'byPlayer'">
+                  <div class="wf-people">
+                    <button
+                      v-for="seat in seats"
+                      :key="'people-' + seat.seatNo"
+                      class="wf-chip"
+                      :class="{ 'is-active': playerFilter === seat.seatNo }"
+                      type="button"
+                      @click="playerFilter = seat.seatNo ?? 0"
+                    >{{ seat.seatNo }}号 {{ seat.name }}</button>
+                  </div>
+                  <p v-if="!playerFilter" class="wf-hint">点一个座位，看这个人到目前的全部发言。</p>
+                  <p v-else-if="!playerSpeeches.length" class="wf-hint">{{ seatLabel(playerFilter) }} 还没有发言记录。</p>
+                  <WerewolfSpeech
+                    v-for="(entry, index) in playerSpeeches"
+                    :key="'player-' + index"
+                    :entry="{ ...entry, seatName: speechName(entry) }"
+                    :who-kind="whoKindOf(entry)"
+                  />
+                </template>
+                <template v-else>
+                  <p v-if="!voteRounds.length" class="wf-hint">还没有已揭晓的票型。</p>
+                  <article v-for="(round, index) in voteRounds" :key="'vote-' + index" class="wf-votes">
+                    <h4 class="wf-votes-title">第{{ round.day }}天{{ round.variant === 'pk' ? ' · 复投' : '' }}</h4>
+                    <div v-for="(line, lineIndex) in round.entries" :key="'vote-line-' + lineIndex" class="wf-vote-line">
+                      <span class="wf-vote-from">{{ line.seatNo }}号</span>
+                      <span class="wf-vote-arrow">→</span>
+                      <span class="wf-vote-to">
+                        {{ line.target === null ? (line.timeout ? '超时弃票' : '弃票') : `${line.target}号 ${nameOfNo(line.target)}` }}
+                      </span>
+                    </div>
+                    <p v-if="round.exiled !== undefined" class="wf-votes-note">放逐：{{ seatLabel(round.exiled) }}</p>
+                    <p v-else-if="round.tie" class="wf-votes-note">平票：{{ round.tie.map((no) => seatLabel(no)).join('、') }} 进入 PK</p>
+                    <p v-else class="wf-votes-note">无人放逐</p>
+                  </article>
+                </template>
+              </div>
+            </section>
+            <div v-if="myMove === 'speak'" class="wf-composer">
+              <p class="wf-composer-hint">一次机会、一条完整发言（最多 300 字）；提交或过麦后进入全桌阅读。</p>
+              <div class="wf-draft">
+                <div class="wf-draft-main">
+                  <textarea
+                    class="wf-input"
+                    rows="3"
+                    :maxlength="320"
+                    :placeholder="speechPlaceholder"
+                    :aria-label="speechPlaceholder"
+                    :value="draftText.speech"
+                    @input="onDraftInput('speech', $event)"
+                    @focus="draftFocused = true"
+                    @blur="draftFocused = false"
+                    @keydown="onDraftKey('speech', $event)"
+                  />
+                  <div class="wf-draft-row">
+                    <span class="wf-count" :class="{ 'is-over': draftCount > 300 }">{{ draftCount }}/300</span>
+                    <span class="wf-dclock"><ClockText v-if="priv?.deadline" :deadline="priv.deadline" :server-now="ctx.serverNow" /></span>
+                  </div>
                 </div>
               </div>
-              <button class="btn primary" type="button" @click="sendSpeech">提交并结束发言</button>
+              <div class="wf-send-actions">
+                <button class="btn ghost" type="button" @click="passSpeech">过麦</button>
+                <button class="btn primary" type="button" @click="sendSpeech">提交并结束发言</button>
+              </div>
             </div>
-            <button class="btn ghost" type="button" @click="passSpeech">过麦</button>
-          </div>
-
-          <div v-else-if="myMove === 'vote'" class="wf-composer">
-            <p class="wf-composer-hint">
-              {{ priv?.voteVariant === 'pk' ? '复投：只能投给进入 PK 的席位，或弃票；到点统一揭晓。' : '一人一票，不能投自己，可以弃票；提交后不能改，到点统一揭晓。' }}
-            </p>
-            <div class="wf-composer-note">点座位或点下面的名字选人；选中 ≠ 提交。</div>
-            <div class="wf-targets">
-              <button
-                v-for="no in voteTargets"
-                :key="'vote-target-' + no"
-                class="wf-chip"
-                :class="{ 'is-active': votePick?.target === no }"
-                type="button"
-                @click="votePick = { target: no }"
-              >{{ seatLabel(no) }}</button>
-            </div>
-            <div class="wf-confirm">
-              <button
-                v-if="votePick && votePick.target !== null"
-                class="btn primary"
-                type="button"
-                @click="submitVote"
-              >投给 {{ seatLabel(votePick.target) }}，提交后不可改</button>
-              <button
-                v-else-if="votePick && votePick.target === null"
-                class="btn primary"
-                type="button"
-                @click="submitVote"
-              >确认弃票（提交后不可改）</button>
-              <button v-else class="btn ghost" type="button" @click="votePick = { target: null }">弃票</button>
-            </div>
-          </div>
-
-          <div v-else-if="myMove === 'wolf_chat' || myMove === 'wolf_kill'" class="wf-composer">
-            <template v-if="myMove === 'wolf_chat'">
+            <div v-else-if="myMove === 'wolf_chat'" class="wf-composer">
               <p class="wf-composer-hint">
                 狼队交流（每夜一条、150 字内）；同伴立刻能看到。已交 {{ submitted.includes('wolf_chat') ? '✓' : '✗' }}
               </p>
@@ -738,99 +873,9 @@ onBeforeUnmount(() => {
                 </div>
                 <button class="btn primary" type="button" @click="sendWolfChat">交狼聊</button>
               </div>
-            </template>
-            <template v-else>
-              <p v-if="submitted.includes('wolf_kill')" class="wf-composer-hint">你的刀票已经交了；到点锁定刀口。</p>
-              <template v-else>
-                <p class="wf-composer-hint">交一张最终刀票（相对多数且唯一才成刀；平票或全弃 = 空刀）。</p>
-                <div class="wf-targets">
-                  <button
-                    v-for="no in wolfTargets"
-                    :key="'wolf-target-' + no"
-                    class="wf-chip"
-                    :class="{ 'is-active': wolfKillPick === no }"
-                    type="button"
-                    @click="wolfKillPick = wolfKillPick === no ? null : no"
-                  >{{ seatLabel(no) }}</button>
-                </div>
-                <div class="wf-confirm">
-                  <button v-if="wolfKillPick !== null" class="btn primary" type="button" @click="submitWolfKill">刀 {{ seatLabel(wolfKillPick) }}</button>
-                  <button class="btn ghost" type="button" @click="giveUpWolfKill">弃刀</button>
-                </div>
-              </template>
-            </template>
-          </div>
-
-          <div v-else-if="myMove === 'inspect'" class="wf-composer">
-            <template v-if="checkSubmittedToday">
-              <p class="wf-composer-hint">今夜的槽已交；结果见「我的查验记录」。</p>
-            </template>
-            <template v-else>
-              <p class="wf-composer-hint">查验一名其他存活玩家；不查就点「今夜不查」。</p>
-              <div class="wf-targets">
-                <button
-                  v-for="no in targetsAliveOthers"
-                  :key="'inspect-target-' + no"
-                  class="wf-chip"
-                  :class="{ 'is-active': inspectPick === no }"
-                  type="button"
-                  @click="inspectPick = no"
-                >{{ seatLabel(no) }}</button>
-              </div>
-              <div class="wf-confirm">
-                <button v-if="inspectPick !== null" class="btn primary" type="button" @click="submitInspect">查验 {{ seatLabel(inspectPick) }}</button>
-                <button class="btn ghost" type="button" @click="skipInspect">今夜不查</button>
-              </div>
-            </template>
-          </div>
-
-          <div v-else-if="myMove === 'witch'" class="wf-composer">
-            <p class="wf-composer-hint">{{ witchHint }}</p>
-            <div v-if="potions.poison > 0" class="wf-targets">
-              <button
-                v-for="no in targetsAliveOthers"
-                :key="'poison-target-' + no"
-                class="wf-chip"
-                :class="{ 'is-active': poisonPick === no }"
-                type="button"
-                @click="poisonPick = no"
-              >{{ seatLabel(no) }}</button>
-            </div>
-            <div class="wf-confirm">
-              <button v-if="potions.antidote > 0 && knownKill !== null && knownKill !== undefined" class="btn primary" type="button" @click="witchSave">
-                救 {{ seatLabel(knownKill) }}
-              </button>
-              <button v-if="potions.poison > 0 && poisonPick !== null" class="btn primary" type="button" @click="witchPoison">毒 {{ seatLabel(poisonPick) }}</button>
-              <button class="btn ghost" type="button" @click="witchNone">今晚不用药</button>
-            </div>
-            <p v-if="potions.antidote > 0 && knownKill === null" class="wf-hint">今夜没有刀口；解药只能抵消狼刀。</p>
-          </div>
-
-          <div v-else-if="myMove === 'shoot'" class="wf-composer">
-            <p class="wf-composer-hint">你是猎人：可以带走一名其他存活玩家，也可以放弃（公开亮明身份后开枪）。</p>
-            <div class="wf-targets">
-              <button
-                v-for="no in targetsAliveOthers"
-                :key="'shoot-target-' + no"
-                class="wf-chip"
-                :class="{ 'is-active': shootPick === no }"
-                type="button"
-                @click="shootPick = no"
-              >{{ seatLabel(no) }}</button>
-            </div>
-            <div class="wf-confirm">
-              <button v-if="shootPick !== null" class="btn primary" type="button" @click="shootAt">开枪带走 {{ seatLabel(shootPick) }}</button>
-              <button class="btn ghost" type="button" @click="giveUpShoot">放弃开枪</button>
             </div>
           </div>
-
-          <div v-else-if="priv?.role" class="wf-wait"><span>{{ waitText }}</span></div>
-        </div>
-      </div>
-
-      <div v-if="identityOpen && priv?.role" class="wf-id-drawer">
-        <h3 class="wf-panel-title">我的身份（仅自己可见）</h3>
-        <WerewolfRoleFace :role="priv.role" :mates="priv.teammates" :with-close="true" @close="closeIdentity" />
+        </aside>
       </div>
     </template>
 
@@ -847,3 +892,290 @@ onBeforeUnmount(() => {
     </div>
   </section>
 </template>
+
+<style scoped>
+.view-table .game-werewolf.is-playing {
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.wf-main {
+  grid-template-columns: minmax(170px, .65fr) minmax(0, 1.85fr) minmax(255px, 1fr);
+  grid-template-areas: "room board chat";
+  align-items: stretch;
+  gap: clamp(12px, 1.2vw, 20px);
+}
+
+.wf-room { grid-area: room; }
+.wf-board { grid-area: board; }
+.wf-side { grid-area: chat; }
+.wf-room, .wf-board, .wf-room-content, .wf-room-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 10px;
+}
+
+.wf-room, .wf-side {
+  padding: clamp(12px, 1.2vw, 18px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(155deg, var(--panel-2), var(--panel) 42%);
+}
+
+.wf-column-head { display: grid; gap: 3px; padding: 2px 2px 5px; }
+.wf-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .12em;
+}
+.wf-eyebrow::before { content: ''; width: 16px; height: 1px; background: var(--lime); }
+.game-werewolf .wf-column-title {
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.wf-room-summary h3, .wf-room-summary p { margin: 0; }
+.wf-room-summary h3 { color: var(--text); font-size: 16px; }
+.wf-room-summary p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.wf-room-summary .wf-table-id { font-size: 12px; overflow-wrap: anywhere; }
+.wf-round-summary dl { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; }
+.wf-round-summary dl div { flex: 1 1 38px; padding: 6px; border-radius: 9px; background: var(--panel); }
+.wf-round-summary dt { color: var(--muted); font-size: 11px; }
+.wf-round-summary dd { margin: 0; font-size: 18px; font-weight: 750; font-variant-numeric: tabular-nums; }
+
+.wf-main .wf-id-toggle {
+  display: grid;
+  justify-items: start;
+  align-content: space-between;
+  min-height: 140px;
+  width: 100%;
+  padding: 14px 12px;
+  text-align: left;
+  border: 1px solid #e4cb8c55;
+  border-radius: 16px;
+  background: radial-gradient(ellipse at 45% 0%, #e4cb8c29, transparent 67%), linear-gradient(152deg, #203e34, #122b25);
+  color: #fff2cf;
+}
+.wf-main .wf-id-toggle.is-wolf {
+  background: radial-gradient(ellipse at 45% 0%, #d78a7e35, transparent 67%), linear-gradient(152deg, #472a2b, #281c24);
+  color: #ffe4de;
+}
+.wf-identity-role { font-size: clamp(20px, 2vw, 28px); font-weight: 750; }
+.wf-identity-meta { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 550; }
+.wf-identity-meta .icon { width: 12px; height: 12px; }
+.wf-main .wf-id-drawer { max-width: 100%; background: var(--panel-2); border-color: var(--line-2); }
+
+.wf-board { justify-content: space-between; }
+.wf-ring-wrap { justify-content: center; flex: 1; }
+.wf-board .wf-strip { justify-content: space-between; }
+.wf-board .wf-pill { background: var(--panel-2); color: var(--text); border-color: var(--line); font-size: 12px; }
+.wf-board .wf-pill.live { border-color: var(--lime); }
+.wf-board .wf-pill .icon { width: 14px; height: 14px; }
+.wf-board .wf-clock { color: var(--muted); font-size: 12px; }
+.wf-ring {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 790px;
+  margin-inline: auto;
+  min-height: 340px;
+  aspect-ratio: 1.36;
+  border-radius: 50%;
+  isolation: isolate;
+  border: 1px solid #597f65;
+  background: radial-gradient(ellipse at 49% 41%, #4c7358, #2e5845 54%, #15392f 92%);
+  box-shadow: inset 0 0 0 8px #132f2666, inset 0 0 50px #0b281d70, 0 20px 56px #0004;
+}
+
+.game-werewolf.is-night .wf-ring {
+  border-color: #496d66;
+  background:
+    radial-gradient(circle at 26% 33%, #e1f5cf85 0 1px, transparent 1.6px),
+    radial-gradient(circle at 69% 29%, #c4e5d274 0 1px, transparent 1.6px),
+    radial-gradient(circle at 42% 72%, #e1f5cf65 0 1px, transparent 1.6px),
+    radial-gradient(circle at 76% 58%, #c4e5d260 0 1px, transparent 1.6px),
+    radial-gradient(ellipse at 48% 42%, #355952, #203e39 60%, #122e2a 92%);
+  box-shadow: inset 0 0 0 8px #0f292570, inset 0 0 50px #071d1a70, 0 20px 56px #0004;
+}
+.wf-ring::before {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed #ebf4d02c;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.wf-felt-mark {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #e2efc419;
+  font-size: clamp(20px, 4.1vw, 64px);
+  font-weight: 850;
+  letter-spacing: .14em;
+  pointer-events: none;
+}
+
+.wf-table-core, .wf-seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.wf-table-core { top: 50%; left: 50%; width: 50%; padding: 0; gap: 7px; color: #f3f9f3; }
+.wf-core-day { font-size: 11px; color: #dfedcd; letter-spacing: .1em; }
+.wf-core-phase { font-size: clamp(16px, 1.85vw, 28px); font-weight: 800; line-height: 1.2; text-wrap: balance; overflow-wrap: anywhere; }
+.wf-core-sub { color: #e6f0e7; font-size: 12px; opacity: 1; }
+.wf-core-sub.is-picked {
+  padding: 2px 8px;
+  border: 1px solid #ffd4ac85;
+  border-radius: 99px;
+  background: #112d24cc;
+  color: #ffe7cd;
+}
+.wf-ring .wf-seat {
+  top: var(--seat-y);
+  left: var(--seat-x);
+  width: min(23%, 100px);
+  min-height: 44px;
+  padding: 3px 2px;
+  border: 0;
+  background: transparent;
+  color: #f3f9f3;
+  gap: 4px;
+  box-shadow: none;
+}
+
+.wf-seat.a1 { --seat-x: 50%; --seat-y: 87%; }
+.wf-seat.a2 { --seat-x: 26%; --seat-y: 79%; }
+.wf-seat.a3 { --seat-x: 13%; --seat-y: 60%; }
+.wf-seat.a4 { --seat-x: 15%; --seat-y: 36%; }
+.wf-seat.a5 { --seat-x: 34%; --seat-y: 18%; }
+.wf-seat.a6 { --seat-x: 66%; --seat-y: 18%; }
+.wf-seat.a7 { --seat-x: 85%; --seat-y: 36%; }
+.wf-seat.a8 { --seat-x: 87%; --seat-y: 60%; }
+.wf-seat.a9 { --seat-x: 74%; --seat-y: 79%; }
+.wf-seat-empty { display: none; }
+.wf-seat-medallion {
+  display: grid;
+  place-items: center;
+  width: clamp(36px, 3.7vw, 54px);
+  aspect-ratio: 1;
+  border: 1px solid #dcebd460;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #e2efde36, #102f2988);
+  box-shadow: 0 4px 12px #061b2440;
+  font-size: clamp(15px, 1.45vw, 22px);
+  font-weight: 700;
+  line-height: 1;
+}
+.wf-seat .wf-seatname { font-size: 12px; line-height: 1.2; }
+.wf-seat .wf-seatno { font-size: 10px; color: #e0ead8; font-variant-numeric: tabular-nums; }
+.wf-seat .wf-kind { background: #17382b; color: #f5e5bb; }
+.wf-seat .wf-mark { color: #f7ddd4; }
+.wf-seat .wf-mark.self { color: #e1f8a1; }
+.wf-ring button.wf-seat:is(.is-me, .is-speaking, .is-targetable:hover, .is-targetable:focus-visible) {
+  background: transparent;
+  box-shadow: none;
+}
+.wf-seat.is-targetable .wf-seat-medallion { border-style: dashed; }
+.wf-seat.is-me .wf-seat-medallion, .wf-seat.is-speaking .wf-seat-medallion,
+.wf-seat.is-targetable:hover .wf-seat-medallion { border-color: #d9f889; }
+.wf-seat.is-speaking .wf-seat-medallion {
+  box-shadow: 0 0 0 3px #d9f88942, 0 0 19px #d9f88960;
+}
+.wf-seat.is-picked .wf-seat-medallion {
+  border: 2px solid #ffd4ac;
+  box-shadow: 0 0 0 3px #ffd4ac3b, 0 0 19px #ffd4ac66;
+}
+.wf-seat.is-dead { opacity: .7; }
+.wf-seat.is-dead .wf-seatname { text-decoration: line-through; }
+
+.wf-actionbar, .wf-room-chat > .wf-composer {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 10px;
+}
+.wf-actionbar:empty { display: none; }
+.wf-actionbar > .wf-composer { background: transparent; }
+.wf-room-chat { flex: 1; }
+.wf-room-chat > .wf-composer { margin-top: auto; border-color: var(--line-2); }
+.wf-room-chat .wf-draft { flex-direction: column; }
+.wf-room-chat .wf-draft > .btn { align-self: flex-end; }
+.wf-send-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+.wf-main .wf-panel {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.wf-main .wf-history { padding: 0; border: 0; background: transparent; }
+.wf-history .wf-tabs { gap: 14px; border-bottom: 1px solid var(--line); }
+.wf-main .wf-tab {
+  padding: 6px 2px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+}
+.wf-main .wf-tab.is-active { border-bottom-color: var(--lime); background: transparent; color: var(--text); }
+.wf-history .wf-tabbody { padding: 2px 1px; max-height: min(42vh, 430px); }
+.wf-history .wf-votes { border: 1px solid var(--line); background: var(--panel-2); }
+.wf-main .wf-panel-title, .wf-main .wf-hint, .wf-main .wf-role-mates,
+.wf-main .wf-composer-hint, .wf-main .wf-composer-note, .wf-main .wf-draft-row,
+.wf-main .wf-wait, .wf-main .wf-reveal-hint { color: var(--muted); }
+.wf-main .wf-input {
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--line-2);
+}
+.wf-main .wf-chip { border-color: var(--line-2); color: var(--text); }
+.wf-main .wf-chip.is-active {
+  border-color: var(--lime);
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+.game-werewolf .wf-end-banner {
+  padding: clamp(18px, 3vw, 34px);
+  border: 1px solid #dfc78852;
+  border-radius: var(--radius);
+  background: radial-gradient(ellipse at 10% 0%, #dbc77b31, transparent 70%), #17352d;
+  color: #fff1cc;
+}
+.game-werewolf .wf-end-kicker, .game-werewolf .wf-end-sub { color: #ebdcba; }
+.game-werewolf .wf-end-banner h2 { color: #fff1cc; font-size: clamp(24px, 3vw, 40px); }
+.game-werewolf .wf-mobile-toggle { display: none; }
+
+@media (max-width: 1100px) {
+  .wf-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "board" "chat" "room";
+  }
+  .wf-ring { max-width: 680px; margin-inline: auto; }
+  .wf-room, .wf-side { padding: 10px; }
+  .wf-column-head,
+  .wf-room:not(.is-open) .wf-room-content,
+  .wf-side:not(.is-open) .wf-room-chat { display: none; }
+  .game-werewolf .wf-mobile-toggle { display: inline-flex; align-self: flex-start; }
+}
+
+@media (max-width: 550px) {
+  .wf-ring { min-height: 0; aspect-ratio: 1; }
+  .wf-ring .wf-seat { gap: 2px; }
+  .wf-seat .wf-seatname { font-size: 11px; }
+  .wf-seat .wf-seatno { font-size: 9px; }
+  .wf-table-core { gap: 4px; }
+  .wf-seat.a1 { --seat-y: 86%; }
+  .wf-actionbar .wf-composer-note { display: none; }
+}
+</style>

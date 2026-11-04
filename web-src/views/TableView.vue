@@ -104,7 +104,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
 </script>
 
 <template>
-  <div class="view view-table">
+  <div class="view view-table" :class="{ 'view-werewolf': table?.game === 'werewolf' && activeStage }">
     <div class="club-page-nav">
       <button class="btn ghost small" type="button" @click="backToRoom">← 返回客厅</button>
     </div>
@@ -118,7 +118,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
         </div>
       </div>
       <div class="turn-box">
-        <div class="turn-copy">
+        <div v-if="table.game !== 'werewolf' || table.turn" class="turn-copy">
           <span class="turn-kicker">{{ myTurn ? '轮到你' : '轮到' }}</span>
           <span class="turn-name">{{ myTurn ? meName : (botTurn ? turnName + ' · 脚本' : turnName) }}</span>
         </div>
@@ -189,3 +189,14 @@ async function run(task: () => Promise<unknown>): Promise<void> {
     </template>
   </div>
 </template>
+
+<style scoped>
+.view-werewolf .table-head {
+  margin-top: 4px;
+  padding-block: 8px;
+}
+
+@media (max-width: 550px) {
+  .view-werewolf .table-head h1 { font-size: 22px; }
+}
+</style>

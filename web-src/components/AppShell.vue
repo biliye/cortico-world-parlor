@@ -3,7 +3,7 @@
  * 应用外壳：左侧窄门牌栏 + 顶部细条 + 内容 + 浮起来的「有话慢慢聊」。
  * 三层结构不变：大厅 → 客厅 → 牌桌；门牌栏负责在会馆里走动，顶条负责工具。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ChatPanel from './ChatPanel.vue';
 import DmWindow from './DmWindow.vue';
 import Icon from './Icon.vue';
@@ -11,13 +11,14 @@ import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
 import AccountPanel from './AccountPanel.vue';
 import { initialOf } from '../lib/text.ts';
-import { chatExpanded, chooseTab, closeSheet, sheetOpen, toggleChat } from '../stores/chat.ts';
+import { chatExpanded, chooseTab, closeSheet, setWerewolfChatTable, sheetOpen, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { loadMail, setUnread, unread as mailUnread } from '../stores/mail.ts';
-import { connection, goRoom, hallSeats, snapshot } from '../stores/parlor.ts';
+import { activeTable, connection, goRoom, hallSeats, snapshot, tableIdOf } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
+import { view } from '../stores/view.ts';
 
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
@@ -42,6 +43,15 @@ const connectionText = computed(() => (connection.value === 'off' ? '重连中�
 
 watch(sheetOpen, (open) => { document.body.classList.toggle('sheet-open', open); }, { immediate: true });
 
+const werewolfTableKey = computed(() => {
+  const table = activeTable.value;
+  return view.value === 'table' && !inHall.value && table?.game === 'werewolf'
+    ? JSON.stringify([snapshot.value?.id, tableIdOf(table)])
+    : '';
+});
+watch(werewolfTableKey, setWerewolfChatTable, { immediate: true });
+onBeforeUnmount(() => setWerewolfChatTable(''));
+
 // 快照里的未读是服务器算的总数；信箱列表本身按需刷新，角标始终跟快照走。
 watch(() => snapshot.value?.mailUnread, (count) => {
   if (typeof count === 'number') setUnread(count);
@@ -65,7 +75,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="shell" :class="{ 'chat-open': chatExpanded(), 'in-hall': inHall }">
+  <div class="shell" :class="{ 'chat-open': chatExpanded(), 'in-hall': inHall, 'on-werewolf': werewolfTableKey }">
     <aside class="rail" aria-label="会馆门牌">
       <a class="rail-mark" href="/play" aria-label="鲸语会馆">
         <Icon name="whale" />
@@ -145,3 +155,12 @@ onMounted(() => {
     <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>
   </div>
 </template>
+
+<style scoped>
+.shell.on-werewolf > .chat-fab {
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  color: var(--text);
+  box-shadow: 0 4px 16px #0003;
+}
+</style>

@@ -11,6 +11,15 @@ export type ChatTab = 'room' | 'table' | 'mail';
 export const tab = ref<ChatTab>('room');
 export const unread = reactive({ room: 0, table: 0 });
 export const sheetOpen = ref(false);
+const werewolfTable = ref('');
+const werewolfChatOpen = ref(false);
+
+export function setWerewolfChatTable(tableKey: string): void {
+  if (tableKey === werewolfTable.value) return;
+  if (sheetOpen.value) closeSheet();
+  werewolfTable.value = tableKey;
+  werewolfChatOpen.value = false;
+}
 
 function desktop(): boolean {
   return window.matchMedia('(min-width: 1101px)').matches;
@@ -18,33 +27,32 @@ function desktop(): boolean {
 
 /** 桌面看侧栏有没有展开；手机看抽屉有没有拉开。 */
 export function chatExpanded(): boolean {
-  return desktop() ? club.chatOpen : sheetOpen.value;
+  if (!desktop()) return sheetOpen.value;
+  return werewolfTable.value ? werewolfChatOpen.value : club.chatOpen;
 }
 
 export function toggleChat(force?: boolean): void {
   const next = force ?? !chatExpanded();
   if (desktop()) {
-    club.chatOpen = next;
+    if (werewolfTable.value) werewolfChatOpen.value = next;
+    else club.chatOpen = next;
   } else {
-    club.mobileChatOpen = next;
+    if (!werewolfTable.value) club.mobileChatOpen = next;
     sheetOpen.value = next;
   }
-  persistClub();
+  if (!werewolfTable.value) persistClub();
   if (next && tab.value !== 'mail') unread[tab.value] = 0;
 }
 
 export function chooseTab(next: ChatTab): void {
   tab.value = next;
   if (next !== 'mail') unread[next] = 0;
-  if (!desktop()) {
-    sheetOpen.value = true;
-    club.mobileChatOpen = true;
-    persistClub();
-  }
+  if (!desktop()) toggleChat(true);
 }
 
 export function closeSheet(): void {
   sheetOpen.value = false;
+  if (werewolfTable.value) return;
   club.mobileChatOpen = false;
   persistClub();
 }
