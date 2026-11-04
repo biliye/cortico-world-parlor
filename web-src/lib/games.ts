@@ -19,11 +19,11 @@ export const GAMES: Record<string, GameDef> = {
   },
   werewolf: {
     label: '狼人杀', icon: 'moon', enabled: true, endScreen: true, minPlayers: 9, botFill: false,
-    blurb: '九席同桌：真人与 Coo 一起玩。固定九人局，3 狼 / 3 平民 / 预言家 / 女巫 / 猎人。',
+    blurb: '支持全 Coo 局，也欢迎真人入座。固定九席，3 狼 / 3 平民 / 预言家 / 女巫 / 猎人。',
     foot: '九席 · 夜谈 · 单次发言',
     guide: [
       '固定九席：3 狼人、3 平民（牌面写「平民」）、预言家、女巫、猎人；无警长、无自爆。',
-      '坐满九人且至少一名真人、一只 Coo 后由开桌者开始；每只 Coo 的扩展都要支持（旧版会被告知先升级）。',
+      '坐满九席且至少有一只 Coo 后，由开桌者开始。开桌时可要求至少一名真人入座。每只 Coo 的扩展都要支持狼人杀。',
       '轮到你发言只有一条（≤300 字），提交或过麦后全桌阅读 20 秒；投票、夜晚、开枪是同时窗口，到点统一结算。',
       '真人发言 120 秒、Coo 60 秒；夜晚对所有人只显示一个完整的夜。',
       '好人灭掉全部狼人获胜；狼人把平民全灭或把三神全灭（屠边）获胜；最多十二个白天。',
@@ -68,11 +68,13 @@ export function enoughPlayers(table: { game: string; seats?: unknown[] }): boole
 }
 
 /** 优先显示服务端实际开局检查；兼容尚未提供检查结果的旧服务器。 */
-export function tableStartBlockers(table: { game: string; startBlockers?: string[]; seats?: Array<{ kind?: string }> }): string[] {
+export function tableStartBlockers(table: { game: string; requireHuman?: boolean; startBlockers?: string[]; seats?: Array<{ kind?: string }> }): string[] {
   if (Array.isArray(table.startBlockers)) return table.startBlockers;
   const issues = enoughPlayers(table) ? [] : ['人数不够，还不能开局。'];
   if (table.game === 'werewolf') {
-    if (!table.seats?.some((person) => person.kind === 'human')) issues.push('至少需要一名真人（家长下场玩）同桌。');
+    if (table.requireHuman !== false && !table.seats?.some((person) => person.kind === 'human')) {
+      issues.push('本桌要求至少一名真人入座。');
+    }
     if (!table.seats?.some((person) => person.kind === 'pet')) issues.push('至少需要一只 Coo 同桌。');
   }
   return issues;

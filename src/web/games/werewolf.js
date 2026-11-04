@@ -292,7 +292,8 @@ export function mountWerewolf(root, ctx) {
     const speeches = table.speeches ?? [];
     const last = speeches[speeches.length - 1];
     if (table.status === 'open') {
-      panel.append(el('p', 'wf-hint', `等待入座 ${(table.seats || []).length}/9，尚未分配角色；坐满九席且至少一名真人、一只 Coo 后，由开桌者开始。`));
+      const rule = table.requireHuman === false ? '本桌允许全 Coo 局。' : '本桌要求至少一名真人入座。';
+      panel.append(el('p', 'wf-hint', `等待入座 ${(table.seats || []).length}/9，尚未分配角色。坐满且至少有一只 Coo 后，由开桌者开始。${rule}`));
     } else if (table.phase === 'reveal') {
       panel.append(el('p', 'wf-hint', '大家在看身份牌，马上入夜。'));
     } else if (table.phase === 'night') {

@@ -16,6 +16,7 @@ import type { TableSummary } from '../api/types.ts';
 const notice = ref('');
 const busy = ref(false);
 const accessOpen = ref(false);
+const requireHuman = ref(false);
 
 const seats = computed(() => snapshot.value?.seats || []);
 const seatedCount = computed(() => seats.value.filter((person) => person.kind !== 'observer').length);
@@ -68,7 +69,11 @@ function backToMine(): void {
 }
 
 function open(game: string): void {
-  void run(() => openRoomTable(game));
+  void run(async () => {
+    if (await openRoomTable(game, game === 'werewolf' && requireHuman.value) && game === 'werewolf') {
+      requireHuman.value = false;
+    }
+  });
 }
 
 function join(table: TableSummary): void {
@@ -209,6 +214,10 @@ async function invite(): Promise<void> {
           <span class="eyebrow">{{ mine && mine.game === game ? '我的牌桌' : '开一张新桌' }}</span>
           <h2>{{ gameLabel(game) }}</h2>
           <p>{{ gameOf(game)?.blurb }}</p>
+          <label v-if="game === 'werewolf' && (!mine || mine.status === 'ended')" class="muted">
+            <input v-model="requireHuman" type="checkbox" :disabled="busy">
+            开局须至少一名真人入座
+          </label>
           <div class="game-card-foot">
             <span class="muted">{{ gameOf(game)?.foot }}</span>
             <button

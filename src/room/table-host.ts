@@ -435,7 +435,7 @@ export class TableHost {
     } finally { release(); }
   }
 
-  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
+  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
     // 开桌还没有 tableId，用房间级键；开桌与「数桌上限」要串行。
     const releaseOpen = await this.lockTable('#room');
     try {
@@ -451,6 +451,9 @@ export class TableHost {
     const id = input.game ?? 'dice';
     const def = gameById(id);
     if (!def) throw new HostError('invalid', `不认识的桌子：现在有 ${gameIds().join(' / ')}`);
+    if (input.requireHuman !== undefined && id !== 'werewolf') {
+      throw new HostError('invalid', 'requireHuman 仅适用于狼人杀');
+    }
     const stake = stakeOf(input.stake);
     if (stake > 0) {
       const balance = await this.ledger.balanceOf(cooId);
@@ -458,7 +461,11 @@ export class TableHost {
         throw new HostError('invalid', `你只有 ${balance} 枚筹码，押不起 ${stake} 枚`);
       }
     }
-    const openKey = { type: 'table_open', game: id, stake, ...(input.matchOpen ? { matchOpen: true } : {}) };
+    const openKey = {
+      type: 'table_open', game: id, stake,
+      ...(input.matchOpen ? { matchOpen: true } : {}),
+      ...(input.requireHuman ? { requireHuman: true } : {}),
+    };
     const replay = await this.replayReceipt(cooId, requestId, openKey);
     if (replay) {
       const at = this.now();
@@ -485,6 +492,7 @@ export class TableHost {
         ...(typeof input.clientVersion === 'string' && input.clientVersion ? { clientVersion: input.clientVersion } : {}),
       },
       now,
+      requireHuman: input.requireHuman,
       ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
     });
     const stateJson = JSON.stringify(engine.exportState());

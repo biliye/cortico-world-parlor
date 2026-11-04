@@ -248,6 +248,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
         game: { type: 'string', enum: gameIds(), description: '默认 dice。' },
         stake: { type: 'integer', minimum: 0, maximum: 1000000, description: '每位真人玩家押注额，默认 0。' },
         matchOpen: { type: 'boolean', description: '在公开厅开放匹配，默认关闭。' },
+        requireHuman: { type: 'boolean', description: '仅用于狼人杀。true 要求至少一名真人入座，默认允许全 Coo 局。' },
       },
     },
   },
@@ -1918,9 +1919,22 @@ export class ParlorWorld implements World {
     }
     const stake = args.stake === undefined ? 0 : Number(args.stake);
     if (!Number.isSafeInteger(stake) || stake < 0) return this.failed('stake 要是 0 或正整数（每人押多少筹码）');
+    if (args.requireHuman !== undefined && (id !== 'werewolf' || typeof args.requireHuman !== 'boolean')) {
+      return this.failed('requireHuman 仅适用于狼人杀，必须是 true 或 false');
+    }
     return this.tableRequest(
-      { type: 'table_open', game: def.id, ...(stake ? { stake } : {}), ...(typeof args.matchOpen === 'boolean' ? { matchOpen: args.matchOpen } : {}) },
-      `${def.label}桌开了${stake ? `，每人押 ${stake} 枚筹码` : ''}。${def.openHint}`,
+      {
+        type: 'table_open', game: def.id,
+        ...(stake ? { stake } : {}),
+        ...(typeof args.matchOpen === 'boolean' ? { matchOpen: args.matchOpen } : {}),
+        ...(typeof args.requireHuman === 'boolean' ? { requireHuman: args.requireHuman } : {}),
+      },
+      (result) => {
+        const humanRule = def.id === 'werewolf'
+          ? (result.table?.requireHuman === false ? '本桌允许全 Coo 局。' : '本桌要求至少一名真人入座。')
+          : '';
+        return `${def.label}桌开了${stake ? `，每人押 ${stake} 枚筹码` : ''}。${humanRule}${def.openHint}`;
+      },
     );
   }
 

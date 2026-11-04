@@ -1963,11 +1963,15 @@ export class WorldServer {
         throw new HttpError(410, '承诺功能已停用；已有筹码转移保留。');
       } else if (type === 'table_open') {
         if (body.matchOpen !== undefined && typeof body.matchOpen !== 'boolean') throw new HttpError(400, 'matchOpen 必须是 true 或 false');
+        if (body.requireHuman !== undefined && typeof body.requireHuman !== 'boolean') {
+          throw new HttpError(400, 'requireHuman 必须是 true 或 false');
+        }
         const opened = await host.openTable(seat.cooId, {
           game: typeof body.game === 'string' ? body.game : undefined,
           stake: body.stake,
           clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
           ...(typeof body.matchOpen === 'boolean' ? { matchOpen: body.matchOpen } : {}),
+          requireHuman: body.requireHuman,
         }, requestId);
         tableId = opened.tableId;
         revision = opened.receipt.revision;

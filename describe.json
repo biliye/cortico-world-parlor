@@ -319,6 +319,10 @@
           "matchOpen": {
             "type": "boolean",
             "description": "在公开厅开放匹配，默认关闭。"
+          },
+          "requireHuman": {
+            "type": "boolean",
+            "description": "仅用于狼人杀。true 要求至少一名真人入座，默认允许全 Coo 局。"
           }
         }
       },

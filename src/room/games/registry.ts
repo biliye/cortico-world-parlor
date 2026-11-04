@@ -21,6 +21,7 @@ export interface GameCreateContext {
   /** 开桌者：id/name 之外带服务端席位类型与客户端能力版本（狼人杀开局校验用）。 */
   host: { id: string; name: string; kind?: 'pet' | 'human'; clientVersion?: string };
   now: number;
+  requireHuman?: boolean;
   /** 开桌时给的「每回合多久」（测试里调短）；只有用得上它的游戏才读。 */
   turnMs?: number;
 }
@@ -146,10 +147,11 @@ const werewolf: GameDefinition = {
   id: 'werewolf',
   label: '狼人杀',
   icon: 'moon',
-  openHint: `（固定 ${9} 席、至少一名真人与一只 Coo）坐满后用 parlor_table_start 开局；开局前会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
+  openHint: `固定九席，至少一只 Coo。坐满后用 parlor_table_start 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
   create: (ctx) => new WerewolfTable({
     host: ctx.host,
     now: ctx.now,
+    requireHuman: ctx.requireHuman,
     ...(ctx.turnMs ? { turnMs: ctx.turnMs } : {}),
   }),
   actionType: 'werewolf_action',

@@ -6,6 +6,8 @@ describe('狼人杀开局前提示', () => {
     const table = { game: 'werewolf', seats: Array.from({ length: 9 }, () => ({ kind: 'pet' })) };
     expect(canStartTable(table)).toBe(false);
     expect(tableStartBlockers(table).join()).toContain('真人');
+    expect(canStartTable({ ...table, requireHuman: false })).toBe(true);
+    expect(canStartTable({ ...table, requireHuman: true })).toBe(false);
     table.seats[0] = { kind: 'human' };
     expect(canStartTable(table)).toBe(true);
     expect(canStartTable({ ...table, seats: table.seats.slice(1) })).toBe(false);

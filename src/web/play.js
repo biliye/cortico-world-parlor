@@ -2234,10 +2234,11 @@ function openTableCard(table) {
   } else if (host) {
     const count = (table.seats || []).length;
     const enough = count >= (def ? def.minPlayers : 2) || !!(def && def.botFill);
+    const blockers = table.startBlockers || [];
     actions.append(btn('开始', () => actAndGo({ type: 'table_start' }), {
       primary: true,
-      disabled: !enough,
-      title: enough ? '' : '人数不够',
+      disabled: !enough || blockers.length > 0,
+      title: blockers.join('；') || (enough ? '' : '人数不够'),
     }));
   } else {
     box.append(el('p', 'muted', '等 ' + (names.get(table.host) || '发起人') + ' 开局。'));
@@ -2633,7 +2634,15 @@ function lobbyCard(game) {
     if (mine.status === 'open') foot.append(btn(mine.host === state.snap.seat.id ? '收桌' : '退桌',
       () => actAndGo({ type: 'table_leave' }, 'lobby'), { ghost: true, small: true }));
   } else {
-    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game }), {
+    const requireHuman = el('input');
+    if (game === 'werewolf') {
+      requireHuman.type = 'checkbox';
+      requireHuman.disabled = occupied;
+      const label = el('label', 'muted');
+      label.append(requireHuman, ' 开局须至少一名真人入座');
+      body.append(label);
+    }
+    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game, ...(requireHuman.checked ? { requireHuman: true } : {}) }), {
       primary: true, small: true, disabled: occupied,
       title: occupied ? '先结束或离开自己的牌桌' : '',
     }));

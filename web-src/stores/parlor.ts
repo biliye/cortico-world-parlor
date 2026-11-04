@@ -776,8 +776,8 @@ export async function act(body: Record<string, unknown>): Promise<Record<string,
   }
 }
 
-export async function openRoomTable(game: string): Promise<boolean> {
-  const receipt = await act({ type: 'table_open', game });
+export async function openRoomTable(game: string, requireHuman = false): Promise<boolean> {
+  const receipt = await act({ type: 'table_open', game, ...(requireHuman ? { requireHuman: true } : {}) });
   if (!receipt) return false;
   enterTable(typeof receipt.tableId === 'string' ? receipt.tableId : '');
   return true;

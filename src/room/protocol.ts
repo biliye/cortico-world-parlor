@@ -118,7 +118,7 @@ export type ActionRequest =
   | { type: 'gift'; to: string; text: string; chips?: number }
   | { type: 'promise'; to: string; text: string; due?: number | string; chips?: number }
   | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
-  | { type: 'table_open'; game?: TableGame; stake?: number; matchOpen?: boolean; requestId?: string; table?: string }
+  | { type: 'table_open'; game?: TableGame; stake?: number; matchOpen?: boolean; requireHuman?: boolean; requestId?: string; table?: string }
   | { type: 'table_discovery'; table: string; requestId?: string; matchOpen?: boolean; text?: string; withdraw?: boolean }
   | { type: 'table_join'; requestId?: string; table?: string }
   | { type: 'table_leave'; requestId?: string; table?: string }
@@ -199,6 +199,7 @@ export interface DeliveryReceipt {
 export interface ActionResponse {
   ok: true;
   tableId?: string;
+  table?: TableSummary | null;
   revision?: number;
   /** 发言本身，供本地记录按实际消息游标去重；不含其他人的私密事件。 */
   event?: RoomEvent;

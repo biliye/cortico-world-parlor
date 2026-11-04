@@ -155,6 +155,7 @@ const WOLF_CHAT_LIMIT = 150;
 export interface WerewolfTableOptions {
   host: { id: string; name: string; kind?: 'pet' | 'human'; clientVersion?: string };
   now: number;
+  requireHuman?: boolean;
   /** 测试基准时长；不传用正式默认（真人 120 秒 / Coo 60 秒 / 阅读 20 秒）。 */
   turnMs?: number;
   rng?: () => number;
@@ -169,6 +170,7 @@ export class WerewolfTable implements TableEngine {
 
   private readonly rng: () => number;
   private readonly durations: Durations;
+  private requireHuman: boolean;
   private readonly seats: WSeat[] = [];
   private phase: Phase = { kind: 'reveal', queue: [], index: 0, stage: 'act', deadline: 0, readUntil: 0, windowId: 'w0' };
   private day = 0;
@@ -194,6 +196,7 @@ export class WerewolfTable implements TableEngine {
 
   constructor(options: WerewolfTableOptions) {
     this.host = options.host.id;
+    this.requireHuman = options.requireHuman === true;
     this.rng = options.rng ?? ((): number => randomInt(0, 0x7fffffff) / 0x7fffffff);
     this.durations = options.turnMs ? scaledDurations(options.turnMs) : DEFAULT_DURATIONS;
     this.seats.push({
@@ -251,7 +254,9 @@ export class WerewolfTable implements TableEngine {
       issues.push(`狼人杀要正好 ${WEREWOLF_SEAT_COUNT} 个人，现在 ${this.seats.length} 个`);
     }
     const pets = this.seats.filter((seat) => seat.kind === 'pet');
-    if (!this.seats.some((seat) => seat.kind === 'human')) issues.push('狼人杀要至少一名真人（家长下场玩）同桌');
+    if (this.requireHuman && !this.seats.some((seat) => seat.kind === 'human')) {
+      issues.push('这张狼人杀桌要求至少一名真人入座');
+    }
     if (!pets.length) issues.push('狼人杀要至少一只 Coo 同桌');
     const stale = pets.filter((seat) => !versionAtLeast(seat.clientVersion, WEREWOLF_MIN_CLIENT));
     if (stale.length) {
@@ -1126,7 +1131,7 @@ export class WerewolfTable implements TableEngine {
       day: this.day,
       phase: this.status === 'open' ? 'waiting' : phase.kind,
       phaseLabel: this.phaseLabel(),
-      ...(this.status === 'open' ? { startBlockers: this.startBlockers() } : {}),
+      ...(this.status === 'open' ? { requireHuman: this.requireHuman, startBlockers: this.startBlockers() } : {}),
       ...(phase.kind === 'speech' ? { stage: phase.stage, speechKind: phase.speechKind } : {}),
       ...(phase.kind === 'vote' && phase.voteVariant ? { voteVariant: phase.voteVariant } : {}),
       windowId: myWindowId ?? phase.windowId,
@@ -1230,7 +1235,7 @@ export class WerewolfTable implements TableEngine {
       day: this.day,
       phase: this.status === 'open' ? 'waiting' : phase.kind,
       phaseLabel: this.phaseLabel(),
-      ...(this.status === 'open' ? { startBlockers: this.startBlockers() } : {}),
+      ...(this.status === 'open' ? { requireHuman: this.requireHuman, startBlockers: this.startBlockers() } : {}),
       ...(turn ? { turn } : {}),
       deadline: this.publicDeadline(),
       seats: this.seats
@@ -1311,7 +1316,7 @@ export class WerewolfTable implements TableEngine {
     const seat = this.seatOf(seatId);
     if (!seat) return null;
     if (this.status === 'open') {
-      return `${this.publicText()}\n尚未分配角色；坐满九席且至少一名真人、一只 Coo，客户端能力符合后由开桌者开始。\n${this.startBlockers().join('；')}\n未开局可用 parlor_table_leave 退桌；开桌者退桌即收桌。`;
+      return `${this.publicText()}\n尚未分配角色。坐满九席且至少有一只 Coo 后，由开桌者开始。每只 Coo 的扩展都须支持狼人杀。\n${this.startBlockers().join('；')}\n未开局可用 parlor_table_leave 退桌；开桌者退桌即收桌。`;
     }
     const history = seat.role === 'seer'
       ? `查验历史（仅自己可见）：${this.inspections.length ? this.inspections.map((entry) => `第${entry.day}夜查 ${entry.target}号=${entry.result === 'wolf' ? '狼人' : '好人'}`).join('；') : '还没有查验记录'}。`
@@ -1446,7 +1451,8 @@ export class WerewolfTable implements TableEngine {
 
   publicText(): string {
     if (this.status === 'open') {
-      return `【狼人杀桌·等待入座】${this.seats.length}/${WEREWOLF_SEAT_COUNT} 席：${this.seats.map((seat) => `${seat.seatNo}号 ${seat.name}`).join('、')}。`;
+      const rule = this.requireHuman ? '本桌要求至少一名真人入座。' : '本桌允许全 Coo 局。';
+      return `【狼人杀桌·等待入座】${this.seats.length}/${WEREWOLF_SEAT_COUNT} 席：${this.seats.map((seat) => `${seat.seatNo}号 ${seat.name}`).join('、')}。${rule}`;
     }
     if (this.status === 'playing') {
       const alive = this.aliveSeats();
@@ -1464,6 +1470,7 @@ export class WerewolfTable implements TableEngine {
       version: this.stateVersion,
       status: this.status,
       host: this.host,
+      requireHuman: this.requireHuman,
       day: this.day,
       dayStart: this.dayStart,
       windowSeq: this.windowSeq,
@@ -1529,6 +1536,8 @@ export class WerewolfTable implements TableEngine {
     if (ids.size !== parsed.length) throw new Error('狼人杀存档的席位有重复');
     this.seats.splice(0, this.seats.length, ...parsed);
     this.status = raw.status as TableStatus;
+    // 旧存档开桌时采用的是必须有真人的规则。
+    this.requireHuman = raw.requireHuman !== false;
     this.day = Number(raw.day);
     this.dayStart = Number(raw.dayStart);
     this.windowSeq = Number(raw.windowSeq);

@@ -30,11 +30,12 @@ interface Rig {
   events: TableEvent[];
 }
 
-const makeRig = (seed = 7, humans = 1): Rig => {
+const makeRig = (seed = 7, humans = 1, requireHuman = false): Rig => {
   const clock = { now: 1_000_000 };
   const table = new WerewolfTable({
     host: { id: 's1', name: NAMES[0], kind: humans >= 1 ? 'human' : 'pet', clientVersion: '0.29.0' },
     now: clock.now,
+    requireHuman,
     turnMs: T,
     rng: seeded(seed),
   });
@@ -181,7 +182,7 @@ describe('狼人杀引擎', () => {
     expect((restored.view(wolves[0]) as AnyView).lockedKill).toBe(seatNo(target));
   });
   it('等人时不发假身份或倒计时，开局条件提前可见且仍由服务端阻挡', () => {
-    const rig = makeRig(7, 0);
+    const rig = makeRig(7, 0, true);
     expect(rig.table.public()).toMatchObject({ status: 'open', phase: 'waiting', phaseLabel: '等待入座' });
     const waiting = rig.table.privateText('s1', rig.clock.now)!;
     expect(waiting).toContain('尚未分配角色');
@@ -194,6 +195,23 @@ describe('狼人杀引擎', () => {
     expect(one.privateText('only', rig.clock.now)).toContain('1/9');
     expect(one.view('outsider')).toBeNull();
     expect(one.privateText('outsider', rig.clock.now)).toBeNull();
+  });
+
+  it('恢复等人桌时保留显式真人要求，旧存档沿用原先规则', () => {
+    const waiting = makeRig(7, 0, true);
+    const state = waiting.table.exportState() as Record<string, unknown>;
+    const restored = makeRig(7, 0);
+    restored.table.restoreState(state);
+    expect(restored.table.public()).toMatchObject({ requireHuman: true });
+    expect(() => restored.table.start('s1', restored.clock.now)).toThrow(/真人/);
+    delete state.requireHuman;
+    restored.table.restoreState(state);
+    expect(() => restored.table.start('s1', restored.clock.now)).toThrow(/真人/);
+
+    restored.table.leave('s9');
+    restored.table.join({ id: 'human', name: '家长', kind: 'human' });
+    expect((restored.table.public() as AnyView).startBlockers).toEqual([]);
+    expect(() => restored.table.start('s1', restored.clock.now)).not.toThrow();
   });
 
   it('本人查验提交后、白天、出局及恢复后持续可读，其他玩家和公开事件不泄漏', () => {
@@ -233,14 +251,13 @@ describe('狼人杀引擎', () => {
     expect(rig.table.privateText(seer, rig.clock.now)).toContain(result);
   });
 
-  it('开局闸：九席、至少一名真人与一只 Coo、旧版 Coo 点名拒绝；发牌数量与座号固定', () => {
+  it('开局闸：九席、至少一只 Coo、旧版 Coo 点名拒绝；发牌数量与座号固定', () => {
     // 少一人不能开。
     const ninth = makeRig(7, 1);
     ninth.table.leave('s9');
     expect(() => ninth.table.start('s1', ninth.clock.now)).toThrow(/9 个人/);
-    // 全 Coo 不行。
-    const allPets = makeRig(7, 0);
-    expect(() => allPets.table.start('s1', allPets.clock.now)).toThrow(/真人/);
+    const allHumans = makeRig(7, 9);
+    expect(() => allHumans.table.start('s1', allHumans.clock.now)).toThrow(/至少一只 Coo/);
     // 旧版 Coo 被点名。
     const stale = makeRig(7, 1);
     // s9 的版本换成旧的：直接改引擎内部太脏——用 join 的参数重新构造一张桌。
@@ -255,7 +272,9 @@ describe('狼人杀引擎', () => {
     expect(() => staleTable.start('s1', 0)).toThrow(WEREWOLF_MIN_CLIENT);
 
     // 正常开局：角色数量与存活座位。
-    const rig = makeRig(7, 1);
+    const rig = makeRig(7, 0);
+    rig.table.restoreState(rig.table.exportState());
+    expect(rig.table.public()).toMatchObject({ requireHuman: false, startBlockers: [] });
     startGame(rig);
     const roles = rig.ids.map((id) => roleOf(rig, id));
     expect(roles.filter((entry) => entry === 'wolf')).toHaveLength(3);

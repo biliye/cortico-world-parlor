@@ -659,7 +659,7 @@ export class RoomHost {
     return this.tableHost.lockOf(cooId);
   }
 
-  async openTable(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
+  async openTable(cooId: string, input: Parameters<TableHost['open']>[1] = {}, requestId?: string): Promise<TableOpenResult> {
     if ((await this.requireRoom()).kind === 'hall') {
       throw new HostError('conflict', '大厅是进场和选房的地方，不能开桌；先走进一个客厅');
     }

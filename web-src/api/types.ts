@@ -62,6 +62,7 @@ export interface TableSeat {
 
 export interface TableSummary {
   startBlockers?: string[];
+  requireHuman?: boolean;
   capacity?: number;
   matchOpen?: boolean;
   recruitText?: string;

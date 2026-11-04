@@ -47,8 +47,8 @@ const enter = async (app: WorldServer, cooId: string, name: string): Promise<str
   return joined.body.token as string;
 };
 
-const act = async (app: WorldServer, token: string, body: unknown) => (
-  post(app.url, '/v1/action', body, { authorization: `Bearer ${token}` })
+const act = async (app: WorldServer, token: string, body: unknown, headers: Record<string, string> = {}) => (
+  post(app.url, '/v1/action', body, { authorization: `Bearer ${token}`, ...headers })
 );
 
 /** 牌桌动作要带桌面版本与幂等键：现取一次快照。 */
@@ -63,6 +63,44 @@ const tableRef = async (app: WorldServer, token: string): Promise<{ table: strin
 };
 
 describe('WorldServer 牌桌网关', () => {
+  it('狼人杀按开桌选项决定全 Coo 能否开局', async () => {
+    const app = await start();
+    const tokens: string[] = [];
+    for (let index = 0; index < 9; index++) {
+      tokens.push(await enter(app, `coo-werewolf-${index}`, `Coo ${index + 1}`));
+    }
+    const [host, ...others] = tokens;
+    const headers = { 'x-parlor-client': '0.36.5' };
+    const open = { type: 'table_open', game: 'werewolf' };
+    expect((await act(app, host, { ...open, requireHuman: 'false' }, headers)).status).toBe(400);
+
+    for (const requireHuman of [true, undefined]) {
+      const opened = await act(app, host, {
+        ...open, ...(requireHuman ? { requireHuman } : {}), requestId: `open-wolf-${requireHuman}`,
+      }, headers);
+      expect(opened.status).toBe(200);
+      expect(opened.body.table).toMatchObject({ requireHuman: requireHuman === true });
+      const table = opened.body.tableId;
+      for (const [index, token] of others.entries()) {
+        const joined = await act(app, token, {
+          type: 'table_join', table, requestId: `join-wolf-${requireHuman}-${index}`,
+        }, headers);
+        expect(joined.status).toBe(200);
+      }
+      const started = await act(app, host, {
+        type: 'table_start', table, requestId: `start-wolf-${requireHuman}`,
+      }, headers);
+      if (requireHuman) {
+        expect(started.status).toBe(400);
+        expect(JSON.stringify(started.body)).toContain('至少一名真人');
+        expect((await act(app, host, { type: 'table_leave', table, requestId: 'leave-wolf' }, headers)).status).toBe(200);
+      } else {
+        expect(started.status).toBe(200);
+        expect(started.body.table).toMatchObject({ status: 'playing' });
+      }
+    }
+  });
+
   it('旧 /v1/action 就能开桌、坐下、开局、停牌与结算', async () => {
     const app = await start();
     const a = await enter(app, A, '阿岚');
