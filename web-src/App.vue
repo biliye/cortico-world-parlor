@@ -7,7 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';
 import RoomTransition from './components/RoomTransition.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
-import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition } from './stores/parlor.ts';
+import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition, onSeatStorage } from './stores/parlor.ts';
 import { entryNotice, seat } from './stores/session.ts';
 import { readView, view } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
@@ -65,6 +65,7 @@ function restoreForeground(): void {
   });
 }
 onMounted(() => {
+  window.addEventListener('storage', onSeatStorage);
   document.addEventListener('visibilitychange', restoreForeground);
   window.addEventListener('pageshow', restoreForeground);
   window.addEventListener('focus', restoreForeground);
@@ -74,6 +75,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('storage', onSeatStorage);
   document.removeEventListener('visibilitychange', restoreForeground);
   window.removeEventListener('pageshow', restoreForeground);
   window.removeEventListener('focus', restoreForeground);

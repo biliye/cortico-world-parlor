@@ -11,7 +11,7 @@ vi.mock('../web-src/stores/dm.ts', () => ({ noteWhisper: vi.fn(), resetDmState: 
 vi.mock('../web-src/stores/ui.ts', () => ({ showToast: mocks.toast }));
 vi.mock('../web-src/stores/session.ts', async () => {
   const { ref } = await import('vue');
-  return { seat: ref(null), saveSeat: vi.fn(), clearSeat: vi.fn(), readStoredSeat: vi.fn() };
+  return { seat: ref(null), saveSeat: vi.fn(), clearSeat: vi.fn(), readStoredSeat: vi.fn(), adoptSeat: vi.fn(), STORE_KEY: 'parlor-play-v1' };
 });
 vi.mock('../web-src/stores/view.ts', async () => {
   const { ref } = await import('vue');
@@ -21,7 +21,8 @@ vi.mock('../web-src/stores/view.ts', async () => {
 class Stream {
   static last: Stream;
   onmessage?: (message: { data: string }) => void;
-  constructor() { Stream.last = this; }
+  url: string;
+  constructor(url: string) { this.url = url; Stream.last = this; }
   close() {}
   emit(seq: number, type = 'parlor.table.action') { this.onmessage?.({ data: JSON.stringify({ seq, type }) }); }
 }
@@ -45,18 +46,161 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.stubGlobal('window', { setTimeout, clearTimeout });
   vi.stubGlobal('EventSource', Stream);
+  vi.stubGlobal('location', { pathname: '/play', search: '?room=room1', hash: '', reload: vi.fn(), assign: navigation.assign });
+  vi.stubGlobal('history', { state: null, pushState: navigation.pushState, replaceState: navigation.replaceState });
   mocks.api.mockReset(); mocks.toast.mockReset();
   // 计算式 import 让 Node 侧 tsconfig 不把整套 DOM 源码纳入服务端类型检查。
   const sessionPath = '../web-src/stores/session.ts';
   const storePath = '../web-src/stores/parlor.ts';
   session = await import(sessionPath);
   store = await import(storePath);
+  session.saveSeat.mockReset().mockImplementation((next:any) => { session.seat.value = next; });
+  session.adoptSeat.mockReset().mockImplementation((next:any) => { session.seat.value = next; });
+  session.clearSeat.mockReset().mockImplementation(() => { session.seat.value = null; });
+  session.readStoredSeat.mockReset().mockImplementation(() => session.seat.value);
   session.seat.value = { token: 'test-token', room: 'room1', seatId: 's1', cooId: 'c1' };
   store.snapshot.value = snap();
 });
-afterEach(() => { store.disconnect(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { store.disconnect(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const roomCalls = () => mocks.api.mock.calls.filter(([path]) => path === '/v1/room?limit=1');
 const tableCalls = () => mocks.api.mock.calls.filter(([path]) => path === '/v1/table');
+
+describe('H2/H3：多个窗口跟随最新席位', () => {
+  let stored: any;
+  let address: any;
+  let browserHistory: any;
+  const nextSeat = (room = 'hall', token = 'new-token', seatId = 's2') => ({ ...stored, room, token, seatId });
+  const currentSnapshot = () => ({ ...snap(), id: stored.room, seat: { id: stored.seatId }, latest: 5 });
+  const changed = () => store.onSeatStorage({ key: 'parlor-play-v1', storageArea: null });
+  beforeEach(() => {
+    stored = { ...session.seat.value };
+    address = { pathname: '/play', search: '?room=room1&view=table&table=t1', hash: '', reload: vi.fn() };
+    browserHistory = { state: null, replaceState: vi.fn((state: any, _title: string, url: string) => {
+      browserHistory.state = state; address.search = new URL(url, 'http://localhost').search;
+    }), pushState: vi.fn() };
+    vi.stubGlobal('location', address); vi.stubGlobal('history', browserHistory);
+    session.readStoredSeat.mockImplementation(() => stored);
+    session.saveSeat.mockImplementation((next:any) => { stored = next; session.seat.value = next; });
+    mocks.api.mockImplementation((path: string) => Promise.resolve(path === '/v1/me/location'
+      ? { room: stored.room, seat: { id: stored.seatId, name: '当前席位' } }
+      : path.startsWith('/v1/replay') ? { events: [] } : currentSnapshot()));
+  });
+
+  it('另一窗换厅后就地更新令牌、URL和快照，清旧私视图，不重写storage或发switch', async () => {
+    store.log.value = [{ seq: 900, text: '旧厅私密消息' }];
+    stored = nextSeat(); changed();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.seat.value).toMatchObject({ room: 'hall', token: 'new-token' });
+    expect(store.snapshot.value.id).toBe('hall');
+    expect(store.log.value).toEqual([]);
+    expect(address.search).toBe('?room=hall');
+    expect(Stream.last.url).toContain('new-token');
+    expect(session.saveSeat).not.toHaveBeenCalled();
+    expect(mocks.api.mock.calls.some(([path]) => path.endsWith('/switch'))).toBe(false);
+    expect(address.reload).not.toHaveBeenCalled();
+  });
+
+  it('同厅再次下场只轮换令牌时保留牌桌地址和已有记录', async () => {
+    store.log.value = [{ seq: 1, text: '仍在当前牌桌' }];
+    stored = nextSeat('room1', 'rotated', 's1'); changed();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Stream.last.url).toContain('rotated');
+    expect(address.search).toContain('table=t1');
+    expect(store.log.value[0].text).toBe('仍在当前牌桌');
+  });
+
+  it('漏掉storage事件的断线重试也先采用新令牌；旧连接迟到的error不干扰新连接', async () => {
+    store.connect(); const old = Stream.last;
+    stored = nextSeat(); (old as any).onerror();
+    await vi.advanceTimersByTimeAsync(5000);
+    const current = Stream.last;
+    expect(current.url).toContain('new-token');
+    expect(session.seat.value.room).toBe('hall');
+    (old as any).onerror();
+    await vi.advanceTimersByTimeAsync(35000);
+    expect(Stream.last).toBe(current);
+    expect(address.reload).not.toHaveBeenCalled();
+  });
+
+  it('旧位置请求未返回时，新席位能独立恢复；迟到的旧位置不能覆盖它', async () => {
+    const old = deferred(); mocks.api.mockReturnValueOnce(old.promise);
+    const pending = store.syncLocation();
+    stored = nextSeat(); changed();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.value.id).toBe('hall');
+    old.resolve({ room: 'room1', seat: { id: 's1' } });
+    await pending;
+    expect(session.seat.value.token).toBe('new-token');
+    expect(store.snapshot.value.id).toBe('hall');
+  });
+
+  it('共享席位被移除时清掉本页私密状态且不重连；忽略无关键', async () => {
+    stored = null;
+    store.onSeatStorage({ key: 'other-key', storageArea: null });
+    expect(session.seat.value).not.toBeNull();
+    changed(); await vi.advanceTimersByTimeAsync(0);
+    expect(session.seat.value).toBeNull(); expect(store.snapshot.value).toBeNull();
+    expect(mocks.api).not.toHaveBeenCalled();
+    expect(session.clearSeat).not.toHaveBeenCalled();
+  });
+
+  it.each(['reload', 'back_forward'])('%s旧客厅URL跟随最新位置，不发反向换厅', async navigationType => {
+    stored = nextSeat(); session.seat.value = stored;
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([{ type: navigationType }] as any);
+    expect(await store.boot()).toBe(true);
+    expect(address.search).toBe('?room=hall');
+    expect(mocks.api.mock.calls.some(([path]) => path.endsWith('/switch'))).toBe(false);
+  });
+
+  it('新分享链接仍进入目标厅及指定桌；已消费的地址再次boot不重复切厅', async () => {
+    address.search = '?room=room2&view=table&table=t2';
+    mocks.api.mockImplementation((path: string) => {
+      if (path.endsWith('/switch')) return Promise.resolve({ room: 'room2', token: 'share-token', seat: { id: 'share-seat', name: '玩家' }, snapshot: { ...snap(), id: 'room2', seat: { id: 'share-seat' } } });
+      return Promise.resolve(path === '/v1/me/location' ? { room: stored.room, seat: { id: stored.seatId } } : path.startsWith('/v1/replay') ? { events: [] } : currentSnapshot());
+    });
+    expect(await store.boot()).toBe(true);
+    expect(session.seat.value.room).toBe('room2');
+    expect(browserHistory.replaceState).toHaveBeenCalledWith({ parlor: true }, '', '/play?room=room2&view=table&table=t2');
+    stored = nextSeat('hall', 'latest-token', 'latest-seat');
+    expect(await store.boot()).toBe(true);
+    expect(mocks.api.mock.calls.filter(([path]) => path.endsWith('/switch'))).toHaveLength(1);
+    expect(address.search).toBe('?room=hall');
+  });
+
+  it('真正失效且没有替代令牌时仍清席位，不会永久重连', async () => {
+    mocks.api.mockRejectedValue(Object.assign(new Error('expired'), { status: 401, seatToken: stored.token }));
+    await expect(store.refreshSnapshot()).rejects.toThrow('expired');
+    expect(session.clearSeat).toHaveBeenCalled();
+  });
+
+  it('只有SSE断线、没有其他快照请求时，位置接口401也能结束无效令牌重连', async () => {
+    store.connect(); const original = Stream.last;
+    mocks.api.mockRejectedValue(Object.assign(new Error('expired'), { status: 401 }));
+    (original as any).onerror();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(session.clearSeat).toHaveBeenCalled();
+    expect(session.seat.value).toBeNull(); expect(Stream.last).toBe(original);
+  });
+
+  it('本窗换厅迟到回执不能覆盖另一窗的新席位，随后自动恢复', async () => {
+    const response = deferred(); mocks.api.mockReturnValueOnce(response.promise);
+    const pending = store.goRoom('room2');
+    stored = nextSeat(); changed();
+    response.resolve({ room: 'room2', token: 'obsolete', seat: { id: 'obsolete', name: '旧回包' } });
+    expect(await pending).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.seat.value.token).toBe('new-token');
+    expect(session.saveSeat).not.toHaveBeenCalled();
+  });
+
+  it('网络失败时若席位已经变化，不把旧动作重发给新客厅', async () => {
+    mocks.api.mockImplementationOnce(() => { stored = nextSeat(); return Promise.reject(new TypeError('network')); });
+    expect(await store.act({ type: 'ddz_action', move: 'pass' })).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.api.mock.calls.filter(([path]) => path === '/v1/action')).toHaveLength(1);
+    expect(session.seat.value.room).toBe('hall');
+  });
+});
 
 describe('E3：直接应用回执并合并牌桌 SSE', () => {
   it('网页补历史与实时事件都隐藏被限频的进出，实时游标和成员刷新继续', async () => {

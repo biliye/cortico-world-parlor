@@ -26,27 +26,38 @@ export function setUnread(count: number): void {
 }
 
 let at = 0;
+let epoch = 0;
+
+export function resetMailState(): void {
+  epoch += 1; at = 0;
+  items.value = []; unread.value = 0; loading.value = false; error.value = '';
+}
 
 export async function loadMail(force = false): Promise<void> {
   if (loading.value) return;
   if (at && !force && Date.now() - at < 15000) return;
   loading.value = true;
+  const current = epoch;
   try {
     const page = await api<{ items?: MailItem[]; unread?: number }>('/v1/mail?recent=1&limit=12');
+    if (current !== epoch) return;
     items.value = page.items || [];
     unread.value = page.unread || 0;
     error.value = '';
     at = Date.now();
   } catch (caught) {
+    if (current !== epoch) return;
     error.value = (caught as Error).message || '取不到信箱';
   } finally {
-    loading.value = false;
+    if (current === epoch) loading.value = false;
   }
 }
 
 /** 不带 recent/peek 读一次信箱就是「都看过了」。 */
 export async function markAllRead(): Promise<void> {
+  const current = epoch;
   await api('/v1/mail?limit=50');
+  if (current !== epoch) return;
   await loadMail(true);
   await refreshSnapshot();
 }
@@ -61,21 +72,25 @@ export function inviteErrorText(caught: unknown): string {
 }
 
 export async function acceptInvite(item: MailItem): Promise<string> {
+  const current = epoch;
   if (!item.invitationId) throw new Error('这封邀请没有编号');
   const result = await api<{ room?: string }>(
     '/v1/invitations/' + encodeURIComponent(item.invitationId) + '/accept',
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
   );
+  if (current !== epoch) throw new Error('席位已更新，请在当前身份下重新查看邀请。');
   await loadMail(true);
   return result.room || item.room || '';
 }
 
 export async function declineInvite(item: MailItem): Promise<void> {
+  const current = epoch;
   if (!item.invitationId) throw new Error('这封邀请没有编号');
   await api('/v1/invitations/' + encodeURIComponent(item.invitationId) + '/decline', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: '{}',
   });
+  if (current !== epoch) return;
   await loadMail(true);
 }

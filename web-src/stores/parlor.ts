@@ -9,10 +9,11 @@ import { decideExpiredSeat } from '../lib/seat-errors.ts';
 import { SEAT_EXPIRED_MESSAGE } from '../lib/join.ts';
 import { noteChatEvent, resetChatState } from './chat.ts';
 import { noteWhisper, resetDmState } from './dm.ts';
-import { saveSeat, seat, clearSeat, readStoredSeat } from './session.ts';
+import { resetMailState } from './mail.ts';
+import { saveSeat, seat, clearSeat, readStoredSeat, adoptSeat, STORE_KEY } from './session.ts';
 import { showToast } from './ui.ts';
 import { backToRoom, enterTable, readView, watchTableId } from './view.ts';
-import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, Snapshot, TableSummary } from '../api/types.ts';
+import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, SeatConfig, Snapshot, TableSummary } from '../api/types.ts';
 import type { TableEntryResponse, TableRecruitment } from '../../src/room/table-discovery-db.ts';
 
 export const snapshot = ref<Snapshot | null>(null);
@@ -31,7 +32,8 @@ export const roomTransition = ref<{ from: string; to: string; name: string; erro
 let stream: EventSource | null = null;
 let reconnectTimer: number | undefined;
 let reconnectFailures = 0;
-let locationTask: Promise<boolean> | undefined;
+let locationTask: { key: string; promise: Promise<boolean> } | undefined;
+let sharedSeatPending = false;
 let refreshTimer: number | undefined;
 let hallTimer: number | undefined;
 let refreshTask: { key: string; promise: Promise<void> } | undefined;
@@ -53,9 +55,50 @@ type TablePatch = {
   tables?: TableSummary[];
 };
 
-function seatKey(): string {
-  const cfg = seat.value;
+function seatKey(cfg: SeatConfig | null = seat.value): string {
   return cfg ? JSON.stringify([cfg.room, cfg.seatId, cfg.token, cfg.cooId]) : '';
+}
+
+function replaceRoomUrl(room: string, resetView = true): void {
+  const params = new URLSearchParams(location.search);
+  params.set('room', room);
+  if (resetView) { params.delete('table'); params.delete('view'); }
+  history.replaceState({ ...history.state, parlor: true }, '', location.pathname + '?' + params);
+}
+
+/** 各窗口跟随同一身份的最新席位；不向服务器发起换厅，也不回写共享存储。 */
+function adoptSharedSeat(): boolean {
+  const stored = readStoredSeat();
+  const previous = seat.value;
+  if (seatKey(stored) === seatKey()) return false;
+  disconnect();
+  window.clearTimeout(refreshTimer);
+  refreshTimer = undefined;
+  roomTransition.value = null;
+  const moved = !stored || !previous || stored.room !== previous.room
+    || stored.seatId !== previous.seatId || stored.cooId !== previous.cooId;
+  if (moved) { resetRoomState(); backToRoom(); }
+  else syncEpoch += 1; // 同席位只换令牌，保留牌桌视图及输入。
+  if (stored?.cooId !== previous?.cooId) {
+    rooms.value = []; hallSeats.value = []; recruitments.value = [];
+    hallLoaded.value = false; hallAt = 0; hallError.value = '';
+  }
+  adoptSeat(stored, stored ? '' : '这台浏览器的席位已退出，请重新加入。');
+  if (stored) replaceRoomUrl(stored.room, moved);
+  return true;
+}
+
+/** storage事件本身可能迟到：只读此刻存储，不采用event.newValue。 */
+export function onSeatStorage(event: StorageEvent): void {
+  if (event.key !== STORE_KEY && event.key !== null) return;
+  if (event.storageArea && event.storageArea !== localStorage) return;
+  if (switching) { sharedSeatPending = true; return; }
+  void followSharedSeat();
+}
+
+async function followSharedSeat(): Promise<void> {
+  await syncLocation();
+  if (seat.value && !stream) connect();
 }
 
 /** 去重后追加；上限 300 条，和旧版一样只留最近的。 */
@@ -88,6 +131,7 @@ function resetRoomState(): void {
   snapshot.value = null;
   resetChatState();
   resetDmState();
+  resetMailState();
 }
 
 /** 首屏补历史；拿不到不影响开局。 */
@@ -266,7 +310,7 @@ function scheduleLedgerRefresh(delay = 200): void {
 
 /**
  * 席位令牌失效（401）分两种：存着的令牌就是刚失败的那个 → 真失效，清掉回加入页；
- * 存的已经换了（别的标签页换过席位）→ 这一页只是旧了，重载一次，不能把新令牌删掉。
+ * 存的已经换了（别的标签页换过席位）→ 就地采用新席位，不能重载旧地址或删新令牌。
  * 与旧 play.js 的 handleExpiredSeat 同一套判断。
  */
 async function handleExpiredSeat(token: string): Promise<void> {
@@ -279,7 +323,9 @@ async function handleExpiredSeat(token: string): Promise<void> {
   );
   if (decision === 'ignore') return;
   if (decision === 'reload') {
-    location.reload();
+    // 兼容纯判断函数的旧分支名；实际恢复不再重载页面。
+    adoptSharedSeat();
+    void followSharedSeat();
     return;
   }
   disconnect();
@@ -360,28 +406,45 @@ function handleEvent(event: ChatEvent): void {
 }
 
 export async function syncLocation(): Promise<boolean> {
-  if (switching || roomTransition.value) return false;
-  if (locationTask) return locationTask;
+  if (switching) return false;
+  const adopted = adoptSharedSeat();
+  if (roomTransition.value) return false;
   const cfg = seat.value;
-  if (!cfg) return false;
+  if (!cfg) return adopted;
   const key = seatKey();
-  locationTask = (async () => {
+  if (locationTask?.key === key) return locationTask.promise;
+  const task = { key, promise: Promise.resolve(false) };
+  task.promise = (async () => {
+    let changed = adopted;
     try {
       const current = await api<{ room:string|null;seat:{id:string;name:string}|null }>('/v1/me/location');
       if (switching || roomTransition.value) return false;
-      if (!current?.room || !current.seat || key !== seatKey() || (current.room === cfg.room && current.seat.id === cfg.seatId)) return false;
-      disconnect(); resetRoomState(); backToRoom();
-      saveSeat({ ...cfg, room:current.room, seatId:current.seat.id, name:current.seat.name });
-      const params = new URLSearchParams(location.search);
-      params.set('room', current.room); params.delete('table'); params.delete('view');
-      history.replaceState(null, '', location.pathname + '?' + params);
-      await refreshSnapshot(); void seedLog();
-      showToast('席位已更新，现已回到大厅。');
-      return true;
-    } catch { return false; }
-    finally { locationTask = undefined; }
+      if (!current?.room || !current.seat || key !== seatKey()) return false;
+      // 另一窗可能刚完成换厅但storage事件尚未分发，旧位置响应不能写回覆盖它。
+      if (seatKey(readStoredSeat()) !== key) {
+        adoptSharedSeat(); void followSharedSeat(); return true;
+      }
+      if (current.room !== cfg.room || current.seat.id !== cfg.seatId) {
+        disconnect(); resetRoomState(); backToRoom();
+        saveSeat({ ...cfg, room:current.room, seatId:current.seat.id, name:current.seat.name });
+        replaceRoomUrl(current.room);
+        changed = true;
+        showToast(current.room === 'hall' ? '席位已更新，现已回到大厅。' : '席位已更新，已跟随到当前客厅。');
+      }
+      if (changed) { await refreshSnapshot(); void seedLog(); }
+      return changed;
+    } catch (error) {
+      if (key !== seatKey()) return false;
+      if (adoptSharedSeat()) { void followSharedSeat(); return true; }
+      if ((error as { status?: number }).status === 401) {
+        disconnect(); resetRoomState(); clearSeat(SEAT_EXPIRED_MESSAGE);
+      }
+      return changed;
+    }
+    finally { if (locationTask === task) locationTask = undefined; }
   })();
-  return locationTask;
+  locationTask = task;
+  return task.promise;
 }
 
 export function connect(refreshOnOpen = true): void {
@@ -444,6 +507,7 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
     return false;
   }
   switching = true;
+  const key = seatKey();
   const previousTransition = roomTransition.value;
   roomTransition.value = {
     from: from === 'hall' ? '大厅' : (snapshot.value?.name || '客厅'),
@@ -460,6 +524,11 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
       `/v1/rooms/${encodeURIComponent(from)}/switch`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: id, includeSnapshot: true }) },
     );
+    if (key !== seatKey() || seatKey(readStoredSeat()) !== key) {
+      sharedSeatPending = true;
+      roomTransition.value = null;
+      return false;
+    }
     saveSeat({ ...cfg, room: moved.room, token: moved.token, seatId: moved.seat.id, name: moved.seat.name });
     movedSeat = true;
     resetRoomState();
@@ -480,7 +549,7 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
       return false;
     }
     roomTransition.value = previousTransition;
-    if ((error as { status?:number }).status === 401) await handleExpiredSeat((error as { seatToken?:string }).seatToken || cfg.token);
+    if ((error as { status?:number }).status === 401) sharedSeatPending = true;
     if ((error as { status?:number }).status === 403) await syncLocation();
     hallError.value = (error as Error).message || '换不了客厅';
     showToast(hallError.value, 'bad');
@@ -488,6 +557,7 @@ export async function goRoom(id: string, targetTable = '', replace = false): Pro
     return false;
   } finally {
     switching = false;
+    if (sharedSeatPending) { sharedSeatPending = false; void followSharedSeat(); }
   }
 }
 
@@ -571,6 +641,7 @@ export async function enterDiscoveredTable(target: { game: string } | { room: st
   if (switching || acting || !seat.value) return false;
   switching = true;
   const cfg = seat.value;
+  const key = seatKey();
   const previous = readPendingEntry();
   const entry = previous || { sourceSeatId: cfg.seatId, requestId: newRequestId(), target };
   if (previous) showToast('正在确认上一次加入的结果…');
@@ -585,10 +656,12 @@ export async function enterDiscoveredTable(target: { game: string } | { room: st
     let result: TableEntryResponse;
     try { result = await send(); } catch (error) {
       if (!(error instanceof TypeError) && (error as Error).name !== 'TimeoutError') throw error;
+      if (key !== seatKey() || seatKey(readStoredSeat()) !== key) { unresolved = false; sharedSeatPending = true; savePendingEntry(null); return false; }
       result = await send();
     }
     unresolved = false;
     savePendingEntry(null);
+    if (key !== seatKey() || seatKey(readStoredSeat()) !== key) { sharedSeatPending = true; return false; }
     if (!result.matched) {
       showToast('暂时没有合适的开放牌桌，你仍在原来的客厅。');
       return false;
@@ -609,6 +682,7 @@ export async function enterDiscoveredTable(target: { game: string } | { room: st
     throw error;
   } finally {
     switching = false;
+    if (sharedSeatPending) { sharedSeatPending = false; void followSharedSeat(); }
     // 结果不确定时保留原凭证与编号；不能让旧 SSE 的 401 把恢复入口清掉。
     if (!unresolved && !navigating && seat.value?.token === cfg.token) connect();
   }
@@ -647,6 +721,11 @@ export async function act(body: Record<string, unknown>): Promise<Record<string,
     showToast('上一操作正在处理，这次尚未发送，请稍后重试。', 'bad');
     return null;
   }
+  if (adoptSharedSeat()) {
+    void followSharedSeat();
+    showToast('席位已更新，请确认当前客厅后再操作。');
+    return null;
+  }
   acting = true;
   const key = seatKey();
   try {
@@ -664,9 +743,10 @@ export async function act(body: Record<string, unknown>): Promise<Record<string,
     } catch (error) {
       // 只重发「可能没到服务器」的那一次；同一个 requestId，服务器会去重。
       if (!retryable || !(error instanceof TypeError)) throw error;
+      if (key !== seatKey() || seatKey(readStoredSeat()) !== key) { void followSharedSeat(); return null; }
       receipt = await send();
     }
-    if (key !== seatKey()) return null;
+    if (key !== seatKey() || seatKey(readStoredSeat()) !== key) { void followSharedSeat(); return null; }
     if (typeof receipt.seq === 'number') latest.value = Math.max(latest.value, receipt.seq);
     if ('table' in receipt || 'tablePrivate' in receipt || Array.isArray(receipt.tables)) {
       if (!applyTablePatch(receipt as TablePatch)) {
@@ -724,6 +804,13 @@ export async function leaveRoomTable(): Promise<boolean> {
 export async function boot(): Promise<boolean> {
   const previousSeat = seat.value;
   const identityArgs = new URLSearchParams(location.hash.slice(1));
+  const entrySearch = location.search;
+  const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+  const explicitEntry = identityArgs.has('identity') || identityArgs.has('key');
+  // 新打开的分享链接是换厅意图；刷新、历史恢复及已消费的页内地址只恢复当前位置。
+  const useEntryRoom = explicitEntry || (navigation?.type !== 'reload' && navigation?.type !== 'back_forward' && !history.state?.parlor);
+  const target = new URLSearchParams(entrySearch);
+  const wanted = useEntryRoom ? target.get('room') || '' : '';
   if (identityArgs.has('identity')) {
     history.replaceState(null, '', location.pathname + location.search);
     await finishGlobalEntry(identityArgs.get('identity') || '', identityArgs.get('state') || '');
@@ -746,16 +833,18 @@ export async function boot(): Promise<boolean> {
   // 页面内换席位（#key= / 身份回跳）：清掉上一个厅的日志与游标，否则旧厅 seq 会吞新厅事件。
   if (seatChanged(previousSeat, seat.value)) resetRoomState();
   if (!seat.value) return false;
+  history.replaceState({ ...history.state, parlor: true }, '', location.pathname + location.search);
   await syncLocation();
+  if (!seat.value) return false;
   const unfinishedEntry = readPendingEntry();
   if (unfinishedEntry && await enterDiscoveredTable(unfinishedEntry.target)) return false;
-  // 分享/邀请链接带着 ?room=：席位在别的客厅时先换过去（旧版在启动时做同一件事）。
-  const wanted = new URLSearchParams(location.search).get('room') || '';
   if (wanted && wanted !== seat.value.room) {
-    const moved = await goRoom(wanted, new URLSearchParams(location.search).get('table') || '', true);
+    const moved = await goRoom(wanted, target.get('table') || '', true);
     if (moved) return true;
     throw new Error(hallError.value || '换不到这个客厅');
   }
+  if (wanted) history.replaceState({ ...history.state, parlor: true }, '', location.pathname + entrySearch);
+  else if (target.get('room') !== seat.value.room) replaceRoomUrl(seat.value.room);
   await refreshSnapshot();
   latest.value = snapshot.value?.latest || 0;
   connect(false);

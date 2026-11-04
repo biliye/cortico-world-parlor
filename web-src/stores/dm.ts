@@ -45,6 +45,7 @@ export const pos = ref<{ left: number; top: number } | null>(readPos());
 let timer: number | undefined;
 let searchTimer: number | undefined;
 let refreshTimer: number | undefined;
+let epoch = 0;
 
 function readPos(): { left: number; top: number } | null {
   try {
@@ -66,8 +67,10 @@ export function savePos(left: number, top: number): void {
 }
 
 export async function loadThreads(): Promise<void> {
+  const current = epoch;
   try {
     const data = await api<{ threads?: DmThread[]; unread?: number }>('/v1/dm/threads');
+    if (current !== epoch) return;
     threads.value = data.threads || [];
     unread.value = data.unread || 0;
   } catch {
@@ -76,6 +79,7 @@ export async function loadThreads(): Promise<void> {
 }
 
 export async function loadPeople(): Promise<void> {
+  const current = epoch;
   const text = query.value.trim();
   if (!text) {
     people.value = [];
@@ -83,7 +87,7 @@ export async function loadPeople(): Promise<void> {
   }
   try {
     const data = await api<{ people?: DmPerson[] }>('/v1/people?q=' + encodeURIComponent(text));
-    if (query.value.trim() !== text) return;
+    if (current !== epoch || query.value.trim() !== text) return;
     people.value = data.people || [];
   } catch {
     /* 搜索失败就当没有 */
@@ -97,47 +101,52 @@ export function setQuery(value: string): void {
 }
 
 async function loadMessages(cooId: string, quiet = false): Promise<void> {
+  const current = epoch;
   try {
     const data = await api<{ peer?: { name?: string; handle?: string }; messages?: DmMessage[] }>(
       '/v1/dm?peer=' + encodeURIComponent(cooId) + '&limit=60',
     );
-    if (!peer.value || peer.value.cooId !== cooId) return;
+    if (current !== epoch || !peer.value || peer.value.cooId !== cooId) return;
     if (data.peer?.name) peer.value.name = data.peer.name;
     if (data.peer?.handle) peer.value.handle = data.peer.handle;
     messages.value = data.messages || [];
     error.value = '';
   } catch (caught) {
-    if (!quiet) error.value = (caught as Error).message || '取不到聊天';
+    if (current === epoch && !quiet) error.value = (caught as Error).message || '取不到聊天';
   }
 }
 
 async function markRead(cooId: string): Promise<void> {
+  const current = epoch;
   try {
     await api('/v1/dm/read', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ peer: cooId }),
     });
-    await loadThreads();
+    if (current === epoch) await loadThreads();
   } catch {
     /* 已读标不上不影响看 */
   }
 }
 
 export async function openThread(cooId: string, name = '', handle = ''): Promise<void> {
+  const current = epoch;
   peer.value = { cooId, name, handle };
   messages.value = [];
   loading.value = true;
   error.value = '';
   try {
     await loadMessages(cooId);
+    if (current !== epoch || peer.value?.cooId !== cooId) return;
     await markRead(cooId);
   } finally {
-    loading.value = false;
+    if (current === epoch) loading.value = false;
   }
 }
 
 export async function send(text: string): Promise<boolean> {
+  const current = epoch;
   const target = peer.value;
   if (!target || !text.trim()) return false;
   try {
@@ -146,10 +155,12 @@ export async function send(text: string): Promise<boolean> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: target.cooId, text: text.trim() }),
     });
+    if (current !== epoch || peer.value?.cooId !== target.cooId) return false;
     if (data.message) messages.value = [...messages.value, data.message];
     await loadThreads();
     return true;
   } catch (caught) {
+    if (current !== epoch) return false;
     error.value = (caught as Error).message || '没发出去';
     return false;
   }
@@ -194,6 +205,9 @@ export function noteWhisper(): void {
 
 /** 换席位后清掉上一个身份的会话列表与未读；窗口开合状态保留。 */
 export function resetDmState(): void {
+  epoch += 1;
+  window.clearTimeout(searchTimer); window.clearTimeout(refreshTimer);
+  loading.value = false;
   threads.value = [];
   unread.value = 0;
   peer.value = null;

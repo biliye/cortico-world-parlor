@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import type { SeatConfig } from '../api/types.ts';
 
-const STORE_KEY = 'parlor-play-v1';
+export const STORE_KEY = 'parlor-play-v1';
 
 function read(): SeatConfig | null {
   try {
@@ -24,9 +24,14 @@ export const seat = ref<SeatConfig | null>(read());
 /** 席位被清掉时给加入页看的原因（例如令牌失效、被另一台设备顶掉）。 */
 export const entryNotice = ref('');
 
-export function saveSeat(next: SeatConfig): void {
+/** 采用其他窗口已写入的席位，只改本页内存，避免相互回写触发通知。 */
+export function adoptSeat(next: SeatConfig | null, notice = ''): void {
   seat.value = next;
-  entryNotice.value = '';
+  entryNotice.value = notice;
+}
+
+export function saveSeat(next: SeatConfig): void {
+  adoptSeat(next);
   localStorage.setItem(STORE_KEY, JSON.stringify(next));
 }
 

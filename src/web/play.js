@@ -129,6 +129,9 @@ window.addEventListener('hashchange', async () => {
   if (!key) return;
   if (await tryParentEntry(key, { hadSeat: true })) location.reload();
 });
+window.addEventListener('storage', event => {
+  if ((event.key === STORE_KEY || event.key === null) && (!event.storageArea || event.storageArea === localStorage)) followSharedSeat();
+});
 
 /* —— 起步 —— */
 
@@ -144,6 +147,9 @@ async function loadEntryPolicy() {
 }
 
 async function boot() {
+  const navigation = performance.getEntriesByType('navigation')[0];
+  const explicitEntry = /(?:^|[&#])(key|identity)=/.test(location.hash);
+  const useEntryRoom = explicitEntry || (navigation?.type !== 'reload' && navigation?.type !== 'back_forward' && !history.state?.parlor);
   if (await followLocation()) return;
   startBootClock();
   const identityArgs = new URLSearchParams(location.hash.slice(1));
@@ -187,9 +193,10 @@ async function boot() {
     await refreshSnapshot();
     state.latest = state.snap.latest;
     const route = readRoute(location.search);
-    if (route.room && route.room !== currentRoom()) {
+    if (useEntryRoom && route.room && route.room !== currentRoom()) {
       if (await goRoom(route.room, { replace: true })) return;
     }
+    if (!useEntryRoom && route.room !== currentRoom()) { route.table = ''; route.view = 'lobby'; }
     state.watchTableId = route.table;
     normalizeWatch();
     state.view = inHall() ? 'hall' : route.view;
@@ -283,7 +290,7 @@ async function handleExpiredSeat(token) {
   if (stored && token && stored.token !== token) {
     // 本页刚换好席位，迟到的旧请求不能清掉新令牌，也不用重载旧地址。
     if (state.cfg && state.cfg.token === stored.token) return;
-    location.reload();
+    followSharedSeat();
     return;
   }
   // 本来就在加入页（没有席位）：这不是「令牌失效」，重画会把正在填的名字冲掉。
@@ -309,6 +316,25 @@ function readStore() {
   } catch {
     return null;
   }
+}
+
+function sharedSeatKey(cfg) {
+  return cfg ? JSON.stringify([cfg.room, cfg.seatId, cfg.token, cfg.cooId]) : '';
+}
+
+/** 旧入口安全地重开当前位置，不再刷新它原来指向的旧客厅。 */
+function followSharedSeat() {
+  const stored = readStore();
+  if (sharedSeatKey(stored) === sharedSeatKey(state.cfg)) return false;
+  if (state.stream) { state.stream.close(); state.stream = null; }
+  clearTimeout(state.reconnect);
+  state.cfg = stored;
+  state.syncEpoch += 1;
+  state.snap = null; state.log = []; state.mail = null;
+  state.dm.messages = []; state.dm.threads = []; state.dm.peer = null;
+  if (stored) location.replace('/play?legacy=1&room=' + encodeURIComponent(stored.room));
+  else renderJoin('这台浏览器的席位已退出，请重新加入。');
+  return true;
 }
 
 function writeStore(cfg) {
@@ -739,6 +765,8 @@ async function act(body) {
     showToast('上一操作正在处理，这次尚未发送，请稍后重试。', 'bad');
     return null;
   }
+  if (followSharedSeat()) return null;
+  const requestSeat = sharedSeatKey(state.cfg);
   state.busy = true;
   try {
     const payload = withTableFields(body) || {};
@@ -755,8 +783,10 @@ async function act(body) {
     } catch (error) {
       // 只重发「可能没到服务器」的那一次；重发用同一个 requestId，服务器会去重。
       if (!retryable || !isNetworkError(error)) throw error;
+      if (requestSeat !== sharedSeatKey(readStore())) { followSharedSeat(); return null; }
       receipt = await send();
     }
+    if (requestSeat !== sharedSeatKey(readStore())) { followSharedSeat(); return null; }
     if ((payload.type === 'table_open' || payload.type === 'table_join')
       && receipt && typeof receipt.tableId === 'string' && receipt.tableId) {
       state.watchTableId = receipt.tableId;
@@ -803,12 +833,17 @@ function openNewTable(game = heroGame()) {
 
 let reconnectFailures = 0;
 async function followLocation() {
+  if (followSharedSeat()) return true;
   if (!state.cfg) return false;
   const old = state.cfg;
   try {
     const res = await fetch('/v1/me/location', { headers: { authorization:'Bearer ' + old.token }, signal:AbortSignal.timeout(15000) });
-    if (!res.ok) return false;
+    if (!res.ok) {
+      if (res.status === 401) { await handleExpiredSeat(old.token); return true; }
+      return false;
+    }
     const current = await res.json();
+    if (sharedSeatKey(readStore()) !== sharedSeatKey(old)) return followSharedSeat();
     if (!current.room || !current.seat || state.cfg !== old || (current.room === old.room && current.seat.id === old.seatId)) return false;
     state.cfg = { ...old, room:current.room, seatId:current.seat.id, name:current.seat.name };
     localStorage.setItem(STORE_KEY, JSON.stringify(state.cfg));
@@ -817,6 +852,7 @@ async function followLocation() {
   } catch { return false; }
 }
 function connect() {
+  if (followSharedSeat()) return;
   if (!state.cfg) return;
   if (state.stream) {
     state.stream.close();
@@ -827,12 +863,14 @@ function connect() {
   const source = new EventSource(roomPath('/v1/stream?cap=seat-location-v1&since=' + state.latest + '&token=' + encodeURIComponent(state.cfg.token)));
   state.stream = source;
   source.onopen = () => {
+    if (state.stream !== source) return;
     reconnectFailures = 0;
     setConn('on');
     // 连上之后补一次快照：online 与信箱未读只有在 SSE 连接建立后才准。
     scheduleRefresh();
   };
   source.onmessage = (message) => {
+    if (state.stream !== source) return;
     let event;
     try {
       event = JSON.parse(message.data);
@@ -842,6 +880,7 @@ function connect() {
     handleEvent(event);
   };
   source.onerror = () => {
+    if (state.stream !== source) return;
     setConn('off');
     source.close();
     if (state.stream === source) state.stream = null;
@@ -3235,12 +3274,14 @@ async function goRoom(id, options = {}) {
     return true;
   }
   roomSwitching = true;
+  const requestSeat = sharedSeatKey(state.cfg);
   try {
     const moved = await api(`/v1/rooms/${encodeURIComponent(from)}/switch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: id }),
     });
+    if (requestSeat !== sharedSeatKey(readStore())) { followSharedSeat(); return false; }
     writeStore({
       ...state.cfg,
       room: moved.room,
@@ -3801,11 +3842,12 @@ setInterval(() => {
 document.addEventListener('visibilitychange', () => {
   syncFeaturedRotation();
   if (document.hidden) return;
+  if (followSharedSeat()) return;
   // 手机/浏览器切回来时 EventSource 可能已经悄悄断了；没开着就立刻重连，别等 3 秒定时器。
   if (state.cfg && (!state.stream || state.stream.readyState !== EventSource.OPEN)) connect();
   scheduleRefresh();
 });
-window.addEventListener('focus', () => scheduleRefresh());
+window.addEventListener('focus', () => { if (!followSharedSeat()) scheduleRefresh(); });
 
 /* —— 私聊浮窗 —— */
 /* 位置存在本地：拖标题栏移动、点窗外空白或 Esc 关闭；手机上是全屏抽屉。 */
