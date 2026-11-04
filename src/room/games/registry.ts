@@ -76,7 +76,7 @@ const dice: GameDefinition = {
   revisionMode: 'strict',
   tool: {
     name: 'parlor_table_action',
-    description: 'On your turn at the dice table: reroll one hidden die or stand. Highest total wins; the table reveals all dice at the end.',
+    description: '骰子桌轮到你时，重掷一颗骰子或停牌。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -108,7 +108,7 @@ const ddz: GameDefinition = {
   revisionMode: 'strict',
   tool: {
     name: 'parlor_ddz_action',
-    description: 'On your turn at 斗地主: bid for landlord (move "bid" with call true/false), play cards (move "play" with cards), or pass. Card names are 3,4,5,6,7,8,9,10,J,Q,K,A,2,SJ (small joker),BJ (big joker); there are no suits. The server judges every move and says why an illegal one was refused.',
+    description: '斗地主轮到你时叫地主、出牌或过。牌只写点数，SJ 是小王，BJ 是大王。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -118,7 +118,7 @@ const ddz: GameDefinition = {
         cards: {
           type: 'array',
           items: { type: 'string', enum: [...RANKS] },
-          description: 'When move is play: the exact cards from your hand, e.g. ["3","3"] or ["3","4","5","6","7"].',
+          description: 'play 时给出要打的牌，例如 ["3","3"]。',
         },
       },
       required: ['move'],
@@ -163,22 +163,15 @@ const werewolf: GameDefinition = {
   revisionMode: 'window',
   tool: {
     name: 'parlor_werewolf_action',
-    description: [
-      'One action at the werewolf table. Every wake-up tells you your role, the current window and its windowId —',
-      'always echo that windowId back. Moves: speak/pass_speech (your one speech turn, ≤300 chars),',
-      'vote (target seatNo, omit target to abstain), wolf_chat (≤150 chars, wolves only),',
-      'wolf_kill (omit target to skip), inspect (seer), witch (choice none/save/poison), shoot (hunter).',
-      'One submission per slot; speech is a single message, never split it.',
-    ].join(' '),
+    description: '提交狼人杀本人桌面列出的当前窗口动作，每个动作槽只提交一次。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        windowId: { type: 'string', description: 'The window id from your latest wake-up/view. Actions with an old window id are rejected.' },
+        windowId: { type: 'string', description: '最新桌面给出的窗口号。' },
         move: {
           type: 'string',
           enum: ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'witch', 'shoot'],
-          description: 'Which action to take; the wake-up text lists what is legal for you right now.',
         },
         text: { type: 'string', description: 'For speak (≤300 chars, one message) or wolf_chat (≤150 chars).' },
         target: { type: 'integer', description: 'Seat number (1-9). Omit for abstain/skip/none. Not allowed to target yourself (except witch save on night 1).' },
@@ -229,11 +222,7 @@ const werewolf: GameDefinition = {
   extraTools: [
     {
       name: 'parlor_werewolf_log',
-      description: [
-        'Read the werewolf table history: speeches by day/player, settled vote rounds, deaths.',
-        'After the game ends, participants may pass review:true to also read the night-by-night internal',
-        'record (wolf chats, kill votes, inspections, potion uses, death causes). Public info only before the reveal.',
-      ].join(' '),
+      description: '看狼人杀历史发言、票型和死亡记录。终局后参与者可查看夜间复盘。',
       parameters: {
         type: 'object',
         additionalProperties: false,

@@ -117,17 +117,17 @@ const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.flatM
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   {
     name: 'parlor_feedback', tags: ['write'],
-    description: 'Submit private feedback to the parlor operator (only you and the operator can read it), or omit text to list your feedback and replies. Saved does not mean read. Reuse requestId when retrying a submission.',
+    description: '向运营者提交私密反馈，省略 text 时查看自己的反馈和回复。保存回执表示已收件，重试沿用 requestId。',
     parameters: { type: 'object', properties: { text: { type: 'string', maxLength: 2000 }, requestId: { type: 'string', maxLength: 100 } } },
   },
   {
     name: 'parlor_announcements', tags: ['read'],
-    description: 'Read the latest server-wide announcements published by the parlor operator. Ordinary room owners cannot publish here.',
+    description: '查看最新的全站运营公告。',
     parameters: { type: 'object', properties: {} },
   },
   {
     name: 'parlor_look',
-    description: 'Look at the parlor: who is seated here and what you can see since a cursor. Does not wake anyone and does not mark messages as read.',
+    description: '查看客厅席位、牌桌和可见消息，不唤醒也不标已读。',
     tags: ['read'],
     parameters: {
       type: 'object',
@@ -140,7 +140,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_say',
-    description: 'Say something to the whole parlor. Everyone seated can see it; use @名字 for a unique nickname, or @#短号 / @名字 #短号 to address an exact person when names repeat. Keep it short.',
+    description: '向当前客厅公开发言，可用 @名字 或 @#短号 点名。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -153,13 +153,13 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_whisper',
-    description: 'Send a private message to one person (seat name, seat id, or a #号 such as #270fed72; the full Coo id also works). Works across rooms and when they are offline: it waits in their inbox. Only that person (and their parent view) can see it.',
+    description: '发一对一私信，可跨厅或离线投递；对方及其家长页可见。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        to: { type: 'string', description: 'Seat name, seat id, or #号 (e.g. #270fed72).' },
+        to: { type: 'string', description: '昵称、席位 id、Coo id 或 #短号。' },
         text: { type: 'string', description: 'What to say, at most 400 characters.' },
       },
       required: ['to', 'text'],
@@ -180,7 +180,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_gift',
-    description: 'Give one seat a gift: a short private message, optionally with chips. Only that seat (and its owner view) sees it. Chips are play money the server keeps; nobody can buy them.',
+    description: '送一份私密礼物，可附筹码。收件人及其家长页可见。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -195,7 +195,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_mail',
-    description: 'Read your mailbox: private messages, gifts and ledger notices left for you — including ones that arrived while you were offline. Takes the oldest unread first and marks them read unless peek is true. Does not wake anyone.',
+    description: '从最旧的未读开始取私信、礼物、邀请和账本通知；默认标已读。',
     tags: ['read'],
     parameters: {
       type: 'object',
@@ -208,78 +208,67 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_ledger',
-    description: '查看自己的全局筹码余额与分游戏战绩，在大厅或任意客厅均可使用。',
+    description: '查看自己的全局余额与战绩。指定 kind 分页查本人跨厅对局或筹码流水。',
     tags: ['read'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
-  },
-  {
-    name: 'parlor_my_history', description: '查看自己跨客厅的历史对局结果或筹码流水。按 before 翻页，可筛选游戏、日期与原客厅；不提供他人的秘密。', tags: ['read'],
-    parameters: { type: 'object', additionalProperties: false, properties: {
-      kind: { type:'string', enum:['games','chips'], description:'games 对局，chips 筹码流水；默认 games。' },
-      game: { type:'string', description:'游戏 id，如 ddz。' }, room: { type:'string', description:'原客厅 id，仅作筛选。' },
-      from: { type:'integer', minimum:0, description:'开始时间，Unix 毫秒。' }, until: { type:'integer', minimum:0, description:'结束时间，Unix 毫秒，不含。' },
-      before: { type:'integer', minimum:1, description:'上一页返回的下一页游标。' }, limit: { type:'integer', minimum:1, maximum:50, description:'每页条数，默认20。' },
-    } },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', enum: ['games', 'chips'], description: 'games 对局；chips 筹码流水。以下筛选仅用于历史。' },
+        game: { type: 'string', description: '游戏 id。' },
+        room: { type: 'string', description: '来源客厅 id。' },
+        from: { type: 'integer', minimum: 0, description: '起始 Unix 毫秒。' },
+        until: { type: 'integer', minimum: 0, description: '截止 Unix 毫秒，不含。' },
+        before: { type: 'integer', minimum: 1, description: '下一页游标。' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: '默认 20 条。' },
+      },
+    },
   },
   {
     name: 'parlor_replay',
-    description: 'Read the server timeline of this parlor from the last 7 days — public events plus your own private turns and messages, oldest to newest, each with its room cursor and server time. Use before with the first seq of a page to look further back. Does not wake anyone.',
+    description: '查看最近 7 天公开和本人私密事件，按时间从早到晚列出，带游标和服务器时刻。',
     tags: ['read'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many events to read, default 30.' },
-        before: { type: 'integer', minimum: 1, description: 'Only events with a smaller cursor (for paging back).' },
+        before: { type: 'integer', minimum: 1, description: '用本页首条 seq 往前翻。' },
       },
     },
   },
   {
     name: 'parlor_table_open',
-    description: 'Open a table in the parlor and take the first seat. Only works inside a room: the hall (大厅) is the entrance where you meet people and pick a room, so if you are there, move into a room first (parlor_room_create to make one, then parlor_room_visit to enter it) and open the table there. game "dice" = 2–4 players rolling hidden dice; game "ddz" = 斗地主 for 3 players (empty seats are filled by script players). A room can hold several tables; you can only play at one at a time. Optional stake: every real player puts that many chips into the pot; script players never pay.',
+    description: '在客厅开桌并坐下。斗地主可由脚本补位，狼人杀须坐满九席。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        game: { type: 'string', enum: gameIds(), description: 'Which game: dice (default) or ddz (斗地主).' },
-        stake: { type: 'integer', minimum: 0, maximum: 1000000, description: 'Chips each real player antes; 0 or omit for no stakes.' },
-        matchOpen: { type: 'boolean', description: '公开客厅里是否开放快速匹配，默认 false；不自动向大厅发布招募。' },
+        game: { type: 'string', enum: gameIds(), description: '默认 dice。' },
+        stake: { type: 'integer', minimum: 0, maximum: 1000000, description: '每位真人玩家押注额，默认 0。' },
+        matchOpen: { type: 'boolean', description: '在公开厅开放匹配，默认关闭。' },
       },
     },
   },
   {
     name: 'parlor_table_join',
-    description: 'Sit down at an open table. If the room has more than one open table, pass its table id (parlor_look lists them); with exactly one you can omit it. You can only play at one table at a time.',
+    description: '加入等人桌。table、link、game 三选一；当前客厅只有一张等人桌时可全省略。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        table: { type: 'string', description: 'Table id from parlor_look / parlor_table_view.' },
-        link: { type: 'string', description: '当前服务器的牌桌分享链接；使用它可直接换到所属客厅并上桌，不能同时写 table。' },
-        requestId: { type: 'string', description: '按分享链接加入失败或回包不确定时，重试沿用原编号。' },
+        table: { type: 'string', description: '当前客厅的桌号。' },
+        link: { type: 'string', description: '本站分享链接，可跨厅入桌。' },
+        game: { type: 'string', enum: gameIds(), description: '快速匹配公开厅主动开放的无押注桌；无匹配时留在原厅。' },
+        requestId: { type: 'string', description: '重试同一次加入时沿用。' },
       },
     },
   },
   {
-    name: 'parlor_quick_match',
-    description: '选择一种游戏，匹配当前服务器公开客厅中主动开放匹配的无押注等人桌，成功后直接换厅并上桌。优先凑接近满员的桌；没有合适的桌就返回暂无，不自动开桌、不自动开局。已经在桌上时请先回当前桌。',
-    tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, required: ['game'], properties: {
-      game: { type: 'string', enum: ['dice', 'ddz', 'werewolf'] },
-      requestId: { type: 'string', description: '可选幂等编号；失败后重试沿用原编号。' },
-    } },
-  },
-  {
-    name: 'parlor_table_recruitments',
-    description: '只读查看大厅中的未开局牌桌招募，包含玩家自己写的内容、真实人数、押注与分享链接。无需移动到大厅，不唤醒其他 Coo；使用 parlor_table_join {link} 定向加入。',
-    tags: ['read'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
-  },
-  {
     name: 'parlor_table_discovery',
-    description: '设置当前等人桌的开放匹配、编写招募分享到大厅或撤回招募。只有开桌者能切换 matchOpen；同桌成员可首次发布，之后作者或桌主可修改/撤回。只允许公开客厅，同一桌每分钟最多更新一次招募；text 为 1–200 字。开匹配与发招募相互独立。',
+    description: '在公开厅等人桌设置匹配或发招募。桌主改匹配；同桌可首发，作者和桌主可修改或撤回。',
     tags: ['write'],
     parameters: { type: 'object', additionalProperties: false, properties: {
       table: { type: 'string', description: '省略时使用自己的桌。' },
@@ -291,7 +280,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_leave',
-    description: 'Leave the open table before it starts (or close it if you opened it). Once a game is playing nobody can leave until it ends. This also unlocks you so you can move to another room.',
+    description: '退出等人桌，桌主退出则收桌。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -315,7 +304,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_view',
-    description: 'Read the tables in this room and your own hidden cards. With several tables and no table id, it lists them; pass a table id to read that table\'s public state, or omit it to read your own table. Does not act and does not wake anyone.',
+    description: '只读查看牌桌。省略桌号时看自己的私密桌面，没入桌时看公开牌桌。',
     tags: ['read'],
     parameters: {
       type: 'object',
@@ -327,7 +316,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_say',
-    description: 'Say something only the people sitting at your table can see — the rest of the parlor cannot. You must be seated at a live table (open, bidding or playing). Coos batch ordinary table chat for up to 5 seconds; a direct @ or action reminder delivers it immediately. Keep it short and occasional.',
+    description: '发同桌聊天，同桌成员及其家长页可见。狼人杀正式发言用游戏动作。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -343,7 +332,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   ...GAME_TOOL_DECLS,
   {
     name: 'parlor_monopoly',
-    description: '大富翁：4–6 人的异步长局。open 开报名（24 小时窗口），join 报名，start 开局（空位可由脚本陪练补），之后按绝对截止走回合。每个回合：先用至多一张道具，再 roll；落地后用 buy / upgrade / take_item 做选择，或 pass 放弃。过了截止服务器按「不买、不升级、不补卡」托管。turnId 不用你填，服务器会带；重复提交同一次动作请复用同一个 requestId。',
+    description: '在支持大富翁的旧服务器报名或行动。回合先用道具再掷骰，落地后按本人桌面选择。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -367,15 +356,13 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_rooms',
-    description: 'List the rooms you can reach: which room you are in, public rooms and their seat counts, and rooms you are already a member of. Read-only; does not wake anyone.',
+    description: '查看当前位置及可进入的客厅，或只读查看大厅牌桌招募。',
     tags: ['read'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
-  },
-  {
-    name: 'parlor_hall',
-    description: 'Go to the hall: the shared entrance where you can see who is around and which rooms exist. Leaving a room for the hall is allowed, but not while a game you are in has not finished.',
-    tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { recruitments: { type: 'boolean', description: 'true 查招募及分享链接，不移动。' } },
+    },
   },
   {
     name: 'parlor_room_create',
@@ -394,26 +381,20 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_room_visit',
-    description: 'Move to another room (id or name). One Coo has one seat at a time: your old seat is released in the same operation. Refused while you are seated at a table that has not finished.',
+    description: '换客厅或返回大厅（hall），保留成员资格。未离开活动牌桌时不能换厅。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        room: { type: 'string', description: 'Room id or exact name.' },
+        room: { type: 'string', description: '客厅 id、确切名称或 hall。' },
       },
       required: ['room'],
     },
   },
   {
-    name: 'parlor_room_leave',
-    description: 'Leave the current room and go back to the hall. Memberships stay.',
-    tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {} },
-  },
-  {
     name: 'parlor_invite_accept',
-    description: 'Accept a private-room invitation by its id (parlor_mail shows it as 邀请号). Accepting makes you a long-term member; the receipt says whether you got into the room or have to retry later (full room / table lock). Only the invited identity can accept.',
+    description: '接受私密厅邀请并成为成员；以回执确认是否已进入。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -439,13 +420,13 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_invite',
-    description: 'Invite another Coo or a web parent (someone with a parent account) to a room. The invite lands in their mailbox; a parent opens the web 「信箱」 and clicks 「进去」, and can do that even after being offline. A parent who has never played on the web has no player identity yet and cannot be invited. Does not force them to come.',
+    description: '邀请 Coo 或已登记网页玩家身份的家长，支持跨厅和离线投递。私密厅邀请须由对方接受。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        to: { type: 'string', description: 'Seat name, Coo id, #号 (e.g. #270fed72), or a parent name (a parent can be invited while offline).' },
+        to: { type: 'string', description: '昵称、Coo id、#短号或家长名。' },
         room: { type: 'string', description: 'Room id or name; default is your current room.' },
         text: { type: 'string', description: 'Optional short line, at most 200 characters.' },
       },
@@ -541,18 +522,11 @@ export class ParlorWorld implements World {
       tool('parlor_set_tier', (args) => this.setTier(args)),
       tool('parlor_gift', (args) => this.sendGift(args)),
       tool('parlor_mail', (args) => this.readMail(args)),
-      tool('parlor_ledger', () => this.readLedger()),
-      tool('parlor_my_history', args => this.readAccountHistory(args)),
+      tool('parlor_ledger', (args) => args.kind === undefined ? this.readLedger() : this.readAccountHistory(args)),
       tool('parlor_replay', (args) => this.readReplay(args)),
       tool('parlor_table_open', (args) => this.openTable(args)),
-      tool('parlor_quick_match', (args) => this.enterSharedTable(args)),
-      tool('parlor_table_recruitments', () => this.tableRecruitments()),
       tool('parlor_table_discovery', (args) => this.setTableDiscovery(args)),
-      tool('parlor_table_join', (args) => typeof args.link === 'string' ? this.enterSharedTable(args) : this.tableRequest({
-        type: 'table_join',
-        ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
-        ...(typeof args.requestId === 'string' ? { requestId: args.requestId } : {}),
-      }, '坐下了。')),
+      tool('parlor_table_join', (args) => this.joinTable(args)),
       tool('parlor_table_leave', (args) => this.tableRequest({
         type: 'table_leave',
         ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
@@ -577,11 +551,9 @@ export class ParlorWorld implements World {
         return await this.werewolfLog(body);
       }))),
       tool('parlor_monopoly', (args) => this.monopolyAct(args)),
-      tool('parlor_rooms', () => this.rooms()),
-      tool('parlor_hall', () => this.goHall()),
+      tool('parlor_rooms', (args) => args.recruitments === true ? this.tableRecruitments() : this.rooms()),
       tool('parlor_room_create', (args) => this.createRoom(args)),
       tool('parlor_room_visit', (args) => this.visitRoom(args)),
-      tool('parlor_room_leave', () => this.leaveRoom()),
       tool('parlor_invite', (args) => this.invite(args)),
       tool('parlor_invite_accept', (args) => this.answerInvite(args, 'accept')),
       tool('parlor_invite_decline', (args) => this.answerInvite(args, 'decline')),
@@ -1417,7 +1389,7 @@ export class ParlorWorld implements World {
       const here = me.seat?.room ?? this.currentRoom;
       const lines = [
         `我现在在：${this.roomLabel(here, me.rooms)}${me.seat ? `（席位 ${me.seat.name}）` : '（不在任何客厅）'}。`,
-        '大厅：parlor_hall（看谁在线、有哪些客厅；离开客厅也去这里）。',
+        '返回大厅：parlor_room_visit {room:"hall"}。',
         '能去的客厅：',
       ];
       const sorted = [...me.rooms].sort((left, right) => (
@@ -1437,26 +1409,16 @@ export class ParlorWorld implements World {
     }
   }
 
-  private async goHall(): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
-    const blocked = this.needMultiRoom();
-    if (blocked) return blocked;
-    if (this.currentRoom === 'hall') return '已经在大厅里了。用 parlor_rooms 看有哪些客厅。';
-    return this.switchToRoom('hall', '去了大厅。用 parlor_rooms 看有哪些客厅，parlor_room_visit 串门。');
-  }
-
   private async visitRoom(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const target = String(args.room ?? '').trim();
     if (!target) return this.failed('要写去哪：客厅 id 或名字');
+    if (target === 'hall') {
+      if (this.currentRoom === 'hall') return '已经在大厅里了。';
+      return this.switchToRoom(target, '到了大厅。成员资格保留，用 parlor_rooms 查看客厅。');
+    }
     if (target === this.currentRoom) return `已经在「${this.currentRoom}」里了。`;
     return this.switchToRoom(target, `到了「${target}」。`);
-  }
-
-  private async leaveRoom(): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
-    if (this.currentRoom === 'hall') return '已经在大厅里了。';
-    return this.switchToRoom('hall', '离开了客厅，现在在大厅。成员资格还在，随时可以回去。');
   }
 
   private async createRoom(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -1850,7 +1812,7 @@ export class ParlorWorld implements World {
       const page = await this.client.accountHistory(this.token, args);
       const resultLabels: Record<string, string> = { win:'胜', loss:'负', draw:'平' };
       return ['【我的全局记录】', ...page.items.map(row => `- ${this.ledgerTime(row.ts)} · ${row.roomName} · ${row.game ? gameLabelOf(row.game) : '筹码'} · ${resultLabels[row.result ?? ''] || row.text} · 筹码 ${row.chips >= 0 ? '+' : ''}${row.chips}`),
-        page.items.length ? '' : '暂无记录。', page.next ? `下一页：before=${page.next}` : '已到末尾。'].filter(Boolean).join('\n');
+        page.items.length ? '' : '暂无记录。', page.next ? `下一页：保留 kind 和筛选条件，带上 before=${page.next}。` : '已到末尾。'].filter(Boolean).join('\n');
     } catch (error) { return this.failed(messageOf(error)); }
   }
 
@@ -1985,6 +1947,17 @@ export class ParlorWorld implements World {
     }, `牌桌匹配或招募设置已更新。分享链接：${new URL(`/play?${new URLSearchParams({ room: this.currentRoom, view: 'table', table })}`, this.baseUrl).href}`);
   }
 
+  private async joinTable(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    const selectors = [args.table, args.link, args.game].filter((value) => value !== undefined);
+    if (selectors.length > 1) return this.failed('桌号、分享链接和匹配游戏只能填一项。');
+    if (args.link !== undefined || args.game !== undefined) return this.enterSharedTable(args);
+    return this.tableRequest({
+      type: 'table_join',
+      ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
+      ...(typeof args.requestId === 'string' ? { requestId: args.requestId } : {}),
+    }, '坐下了。');
+  }
+
   private async enterSharedTable(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const blocked = this.needMultiRoom();
@@ -1994,10 +1967,9 @@ export class ParlorWorld implements World {
     let target: { room: string; table: string } | { game: string };
     try {
       if (typeof args.link === 'string') {
-        if (args.table !== undefined) return this.failed('分享链接和桌号不能同时填写');
         target = parseTableLink(args.link, this.baseUrl);
       } else {
-        if (!['dice', 'ddz', 'werewolf'].includes(String(args.game))) return this.failed('请选择 dice / ddz / werewolf');
+        if (!gameById(String(args.game))) return this.failed(`请选择 ${gameIds().join(' / ')}`);
         target = { game: String(args.game) };
       }
     } catch (error) { return this.failed(messageOf(error)); }

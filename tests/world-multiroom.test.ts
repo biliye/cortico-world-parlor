@@ -106,14 +106,16 @@ describe('Coo 快速匹配与牌桌分享', () => {
     const room = (await friend.createRoom({ name: '公开匹配厅', visibility: 'public' }, friendToken)).room;
     const moved = await friend.switchTo(friendToken, 'hall', room.id);
     await friend.action(moved.token, { type: 'table_open', game: 'ddz', matchOpen: true, requestId: 'coo-match-open' }, room.id);
-    const result = await call('parlor_quick_match', { game: 'ddz', requestId: 'coo-match-join' });
+    expect(await call('parlor_table_join', { table: 't-x', game: 'ddz' })).toContain('只能填一项');
+    expect(await currentRoom()).toBe('hall');
+    const result = await call('parlor_table_join', { game: 'ddz', requestId: 'coo-match-join' });
     expect(result).toContain('并坐下');
     expect(await currentRoom()).toBe(room.id);
     const snap = await friend.snapshot(secrets.PARLOR_SEAT_TOKEN, 0, 1, room.id);
     expect(snap.tablePrivate?.tableId).toBe(snap.table?.id);
     await friend.action(moved.token, { type: 'table_say', text: '匹配后同桌消息' }, room.id);
     await until(() => pushedText(host).includes('匹配后同桌消息'), 8000);
-    expect(await call('parlor_quick_match', { game: 'ddz' })).toContain('已经在牌桌');
+    expect(await call('parlor_table_join', { game: 'ddz' })).toContain('已经在牌桌');
   });
 
   it('查看招募不移动，使用同一分享链接直接进入关闭匹配的桌', async () => {
@@ -122,7 +124,7 @@ describe('Coo 快速匹配与牌桌分享', () => {
     const moved = await friend.switchTo(friendToken, 'hall', room.id);
     const opened = await friend.action(moved.token, { type: 'table_open', game: 'ddz', requestId: 'coo-share-open' }, room.id);
     await friend.action(moved.token, { type: 'table_discovery', table: opened.tableId!, text: '来这张桌坐坐', requestId: 'coo-share-text' }, room.id);
-    expect(await call('parlor_table_recruitments')).toContain('来这张桌坐坐');
+    expect(await call('parlor_rooms', { recruitments: true })).toContain('来这张桌坐坐');
     expect(await currentRoom()).toBe('hall');
     const link = server!.url + '/play?' + new URLSearchParams({ room: room.id, view: 'table', table: opened.tableId! });
     expect(await call('parlor_table_join', { link, requestId: 'coo-share-join' })).toContain('并坐下');
@@ -321,7 +323,8 @@ describe('World 多客厅', () => {
       await ledger.record({kind:'game',room:'lobby',game,from:'room',participants:[row.coo_id],
         winners:result==='loss'?[]:[row.coo_id],data:{tie:result==='draw'},text:'回合结束',visibility:'room'});
     }
-    const history = await call('parlor_my_history');
+    expect(await call('parlor_ledger')).toContain('【账本】共 3 局');
+    const history = await call('parlor_ledger', { kind: 'games' });
     expect(history).toContain('斗地主 · 胜');
     expect(history).toContain('骰子 · 负');
     expect(history).toContain('狼人杀 · 平');
@@ -419,9 +422,9 @@ describe('World 多客厅', () => {
     expect(lobby.seats.some((seat) => seat.name === '小满')).toBe(false);
 
     expect(await call('parlor_rooms')).toContain('可可厅');
-    expect(await call('parlor_hall')).toContain('大厅');
+    expect(await call('parlor_room_visit', { room: 'hall' })).toContain('到了大厅');
     expect(await call('parlor_rooms')).toContain('我在这里');
-    expect(await call('parlor_room_leave')).toContain('已经在大厅');
+    expect(await call('parlor_room_visit', { room: 'hall' })).toContain('已经在大厅');
   });
 
   it('开客厅固定 30 席，兼容旧参数并拒绝越界输入', async () => {

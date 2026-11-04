@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
+import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
 
 it('随包 describe 的工具、事件和提示与源码一致，不再宣传已停用的承诺能力', () => {
   const shipped = JSON.parse(readFileSync(new URL('../describe.json',import.meta.url),'utf8'));
   expect(shipped.tools).toEqual(JSON.parse(JSON.stringify(PARLOR.describe!.tools)));
+  const world = PARLOR.create(fakeWorldContext(PARLOR, { scratchDir: '.' }));
+  expect(world.tools().map(tool => tool.name).sort()).toEqual(shipped.tools.map((tool: { name: string }) => tool.name).sort());
   expect(shipped.events).toEqual(JSON.parse(JSON.stringify(PARLOR.describe!.events)));
   // Windows checkouts may use CRLF; detect content drift, not Git's line ending conversion.
   expect(shipped.prompts.find((row:{role:string})=>row.role==='envPrompt').content.replace(/\r\n/g,'\n'))
