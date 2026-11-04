@@ -21,13 +21,18 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
   const form = el('form');
   const from = el('input'); from.type = 'datetime-local'; from.required = true; from.name = 'from';
   const until = el('input'); until.type = 'datetime-local'; until.required = true; until.name = 'until';
-  const room = el('select'); room.name = 'room'; room.append(el('option', '全部客厅'));
+  const room = el('select'); room.name = 'room';
+  const allRooms = el('option', '全部客厅'); allRooms.value = ''; room.append(allRooms);
   const direction = el('select'); direction.name = 'direction';
   for (const [value, text] of [['', '全部'], ['received', '孩子收到'], ['sent', '孩子发出']]) {
     const option = el('option', text); option.value = value; direction.append(option);
   }
+  const presence = el('select'); presence.name = 'presence';
+  for (const [value, text] of [['', '显示全部'], ['hide', '隐藏 Coo／家长进出']]) {
+    const option = el('option', text); option.value = value; presence.append(option);
+  }
   for (const [text, input] of [
-    ['开始（北京时间）', from], ['结束（不含此时刻）', until], ['客厅', room], ['收发', direction],
+    ['开始（北京时间）', from], ['结束（不含此时刻）', until], ['客厅', room], ['收发', direction], ['进出提示', presence],
   ] as const) {
     const label = el('label', text); label.append(input); form.append(label);
   }
@@ -44,13 +49,14 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
     el('p', '“收到”表示孩子有权接收，不代表模型逐条读过。局中或未连接时，私密牌桌通知暂不展示；连接后确认已结束可回看。'),
     form, info, status, messages, more);
   ctx.root.append(panel);
-  const controls = [from, until, room, direction, submit, download, more];
+  const controls = [from, until, room, direction, presence, submit, download, more];
   const objectUrls = new Set<string>();
   ctx.own({ dispose() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls.clear(); } });
   let active: HistoryQuery | null = null;
   let next: HistoryPage['next'] = null;
   let busy = false;
   let shown = 0;
+  const knownRooms = new Set<string>();
   const alive = () => !ctx.signal.aborted;
   function lock(value: boolean) { busy = value; for (const control of controls) control.disabled = value; }
   function note(message: string, error = false) {
@@ -63,7 +69,8 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
       throw new Error('请选择有效的起止时间，结束时间须晚于开始时间。');
     }
     return { from: start, until: end, ...(room.value ? { room: room.value } : {}),
-      ...(direction.value ? { direction: direction.value as HistoryQuery['direction'] } : {}) };
+      ...(direction.value ? { direction: direction.value as HistoryQuery['direction'] } : {}),
+      ...(presence.value === 'hide' ? { hidePresence: true } : {}) };
   }
   function append(items: HistoryMessage[]) {
     for (const item of items) {
@@ -72,6 +79,21 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
       const who = el('span', `${item.direction === 'sent' ? '发出' : '收到'} · ${item.sender} → ${item.recipient}`);
       header.append(el('time', time(item.ts)), who, el('span', `${item.room} · ${item.type}`));
       row.append(header, el('p', item.text)); messages.append(row);
+    }
+  }
+  async function refreshInfo() {
+    try {
+      const history = await ctx.invoke<HistoryInfo>('info');
+      if (!alive()) return;
+      info.textContent = `${history.name || '孩子'} · 档案总计 ${history.count} 条${history.first !== null ? ` · ${time(history.first)} 至 ${time(history.last!)}` : ''}${history.syncing ? ' · 正在补收历史' : ''}${history.privateHidden ? ' · 私密牌桌记录已隐藏' : ''}`;
+      for (const name of history.rooms) {
+        if (knownRooms.has(name)) continue;
+        const option = el('option', name); option.value = name; room.append(option);
+        knownRooms.add(name);
+      }
+      if (history.error) note(history.error, true);
+    } catch (error) {
+      if (alive()) info.textContent = `档案总览暂不可用（${(error as Error).message || error}）`;
     }
   }
   async function load(older = false) {
@@ -83,7 +105,8 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
       if (!alive()) return;
       if (!older) { messages.replaceChildren(); shown = 0; active = query; }
       append(page.messages); shown += page.messages.length; next = page.next; more.hidden = !next;
-      note(shown ? `已显示 ${shown} 条，按消息时间从新到旧排列。` : '这个时间范围没有已保存的消息。');
+      note(shown ? `本次筛选已显示 ${shown} 条，按消息时间从新到旧排列。` : '当前筛选条件下没有消息。');
+      if (!older) await refreshInfo();
     } catch (error) { if (alive()) note(String((error as Error).message || error), true); }
     finally { if (alive()) lock(false); }
   }
@@ -116,17 +139,7 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
   const today = time(Date.now()).slice(0, 10);
   from.value = today + 'T00:00';
   until.value = time(Date.parse(today + 'T00:00:00+08:00') + 86400_000).slice(0, 16).replace(' ', 'T');
-  lock(true);
-  let history: HistoryInfo;
-  try {
-    history = await ctx.invoke<HistoryInfo>('info');
-    if (!alive()) return;
-    info.textContent = `${history.name || '孩子'} · 已存 ${history.count} 条${history.first !== null ? ` · ${time(history.first)} 至 ${time(history.last!)}` : ''}${history.syncing ? ' · 正在补收历史' : ''}${history.privateHidden ? ' · 私密牌桌记录已隐藏' : ''}`;
-    for (const name of history.rooms) { const option = el('option', name); option.value = name; room.append(option); }
-  } catch (error) { if (alive()) note(String((error as Error).message || error), true); return; }
-  finally { if (alive()) lock(false); }
   await load();
-  if (alive() && history.error) note(history.error, true);
 }
 
 export default { panels: { history: { mount: mountHistory } } } satisfies WebUiClientBundle;

@@ -21,6 +21,7 @@
   <label>结束（不含此时刻）<input id="until" type="datetime-local" required></label>
   <label>客厅<select id="room"><option value="">全部客厅</option></select></label>
   <label>收发<select id="direction"><option value="">全部</option><option value="received">孩子收到</option><option value="sent">孩子发出</option></select></label>
+  <label>进出提示<select id="presence"><option value="">显示全部</option><option value="hide">隐藏 Coo／家长进出</option></select></label>
   <div class="actions"><button class="primary" type="submit">查询</button><button id="export" type="button">导出当前范围</button></div>
 </form>
 <p id="info"></p><p id="status" role="status" aria-live="polite"></p>

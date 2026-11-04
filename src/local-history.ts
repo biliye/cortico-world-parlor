@@ -23,6 +23,7 @@ export interface HistoryQuery {
   until?: number;
   room?: string;
   direction?: 'sent' | 'received';
+  hidePresence?: boolean;
   before?: { ts: number; id: string };
   limit?: number;
 }
@@ -94,6 +95,7 @@ export class LocalHistory {
       if (!cursor || !Number.isSafeInteger(cursor.ts) || typeof cursor.id !== 'string') throw new Error('翻页位置无效');
       clauses.push('(ts < ? OR (ts = ? AND id < ?))'); values.push(cursor.ts, cursor.ts, cursor.id);
     }
+    if (input.hidePresence === true) clauses.push("type NOT IN ('parlor.joined', 'parlor.left')");
     if (hidePrivate) clauses.push('private=0');
     const limit = Math.max(1, Math.min(200, Math.trunc(Number(input.limit)) || 100));
     const rows = this.open().prepare(`SELECT * FROM messages

@@ -6,6 +6,7 @@ let active = null;
 let next = null;
 let busy = false;
 let shown = 0;
+const knownRooms = new Set();
 
 async function api(method, arg) {
   const url = new URL(method, location.href);
@@ -21,7 +22,8 @@ function filters() {
   const until = Date.parse($('until').value + '+08:00');
   if (!Number.isFinite(from) || !Number.isFinite(until) || until <= from) throw new Error('请选择有效的起止时间，结束时间须晚于开始时间。');
   return { from, until, ...($('room').value ? { room: $('room').value } : {}),
-    ...($('direction').value ? { direction: $('direction').value } : {}) };
+    ...($('direction').value ? { direction: $('direction').value } : {}),
+    ...($('presence').value === 'hide' ? { hidePresence: true } : {}) };
 }
 
 function status(message, error = false) {
@@ -48,6 +50,19 @@ function append(messages) {
   }
 }
 
+async function refreshInfo() {
+  try {
+    const info = await api('info');
+    $('info').textContent = `${info.name || '孩子'} · 档案总计 ${info.count} 条${info.first !== null ? ` · ${time(info.first)} 至 ${time(info.last)}` : ''}${info.syncing ? ' · 正在补收历史' : ''}${info.privateHidden ? ' · 私密牌桌记录已隐藏' : ''}`;
+    for (const room of info.rooms) {
+      if (knownRooms.has(room)) continue;
+      const option = document.createElement('option'); option.value = room; option.textContent = room; $('room').append(option);
+      knownRooms.add(room);
+    }
+    if (info.error) status(info.error, true);
+  } catch (error) { $('info').textContent = `档案总览暂不可用（${error.message}）`; }
+}
+
 async function load(more = false) {
   if (busy) return;
   lock(true);
@@ -57,7 +72,8 @@ async function load(more = false) {
     if (!more) { $('messages').replaceChildren(); shown = 0; active = query; }
     append(page.messages); shown += page.messages.length; next = page.next;
     $('more').hidden = !next;
-    status(shown ? `已显示 ${shown} 条，按消息时间从新到旧排列。` : '这个时间范围没有已保存的消息。');
+    status(shown ? `本次筛选已显示 ${shown} 条，按消息时间从新到旧排列。` : '当前筛选条件下没有消息。');
+    if (!more) await refreshInfo();
   } catch (error) { status(error.message, true); }
   finally { lock(false); }
 }
@@ -92,14 +108,6 @@ async function boot() {
   const today = time(Date.now()).slice(0, 10);
   $('from').value = today + 'T00:00';
   $('until').value = time(Date.parse(today + 'T00:00:00+08:00') + 24 * 3600_000).slice(0, 16).replace(' ', 'T');
-  try {
-    const info = await api('info');
-    $('info').textContent = `${info.name || '孩子'} · 已存 ${info.count} 条${info.first !== null ? ` · ${time(info.first)} 至 ${time(info.last)}` : ''}${info.syncing ? ' · 正在补收历史' : ''}${info.privateHidden ? ' · 私密牌桌记录已隐藏' : ''}`;
-    for (const room of info.rooms) {
-      const option = document.createElement('option'); option.value = room; option.textContent = room; $('room').append(option);
-    }
-    await load();
-    if (info.error) status(info.error, true);
-  } catch (error) { status(error.message, true); }
+  await load();
 }
 void boot();

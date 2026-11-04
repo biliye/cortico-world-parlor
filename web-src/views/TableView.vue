@@ -25,8 +25,8 @@ const seated = computed(() => seats.value.some((person) => person.id === meId.va
 const host = computed(() => table.value?.host === meId.value);
 const canJoin = computed(() => table.value?.status === 'open' && !seated.value && !myTable.value
   && seats.value.length < (table.value.capacity || Infinity));
-const canStart = computed(() => table.value?.status === 'open' && seated.value && host.value
-  && !!table.value && canStartTable(table.value));
+const startReady = computed(() => !!table.value && canStartTable(table.value));
+const canStart = computed(() => table.value?.status === 'open' && seated.value && host.value && startReady.value);
 const startBlockers = computed(() => table.value ? tableStartBlockers(table.value) : []);
 const activeStage = computed(() => table.value?.status === 'bidding' || table.value?.status === 'playing');
 
@@ -174,11 +174,14 @@ async function run(task: () => Promise<unknown>): Promise<void> {
           <button v-if="seated" class="btn ghost" type="button" :disabled="busy" @click="run(leaveRoomTable)">退桌</button>
           <button class="btn ghost" type="button" @click="backToRoom">回到客厅</button>
         </div>
-        <template v-if="table.game === 'werewolf'">
-          <p class="muted">等待入座 {{ seats.length }}/9，尚未分配角色。坐满九席且至少一名真人、一只 Coo，由开桌者开始。</p>
-          <p v-for="issue in startBlockers" :key="issue" class="muted">{{ issue }}</p>
+        <p v-if="table.game === 'werewolf'" class="muted">等待入座 {{ seats.length }}/9，尚未分配角色。坐满九席且至少一名真人、一只 Coo，由开桌者开始。</p>
+        <template v-if="seated || table.game === 'werewolf'">
+          <p v-if="seated && startReady && !host" class="muted" role="status">开局条件已满足，等待开桌者开始。</p>
+          <template v-else-if="startBlockers.length">
+            <p v-for="issue in startBlockers" :key="issue" class="muted">{{ issue }}</p>
+          </template>
+          <p v-else-if="seated && !startReady" class="muted">人数不够，还不能开局。</p>
         </template>
-        <p v-else-if="seated && !canStart && host" class="muted">人数不够，还不能开局。</p>
         <p v-if="!seated && table.capacity && seats.length >= table.capacity" class="muted">这张桌已满，可以等待空位或去看看别的桌。</p>
       </section>
       <TableDiscovery v-if="seated" :table="table" />

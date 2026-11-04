@@ -58,4 +58,20 @@ describe('孩子本机持久消息档案', () => {
     expect(() => store.query({ room: "' OR 1=1 --" })).not.toThrow();
     expect(store.query({ room: "' OR 1=1 --" }).messages).toEqual([]);
   });
+
+  it('进出过滤使用旧档案已有的事件类型，并在分页前生效', () => {
+    store.append(message('joined', 104, { type: 'parlor.joined' }));
+    store.append(message('private', 103, { private: true }));
+    store.append(message('newer', 102, { room: 'hall' }));
+    store.append(message('left', 101, { type: 'parlor.left' }));
+    store.append(message('older', 100, { text: '我刚进了客厅' }));
+    expect(store.query().messages.map(item => item.id)).toEqual(['joined', 'private', 'newer', 'left', 'older']);
+    const query = { hidePresence: true, limit: 1 };
+    const first = store.query(query, true);
+    expect(first.messages.map(item => item.id)).toEqual(['newer']);
+    expect(first.next).toEqual({ ts: 102, id: 'newer' });
+    const second = store.query({ ...query, before: first.next! }, true);
+    expect(second.messages.map(item => item.id)).toEqual(['older']);
+    expect(second.next).toBeNull();
+  });
 });

@@ -27,13 +27,19 @@ const onlineIds = computed(() => new Set(snapshot.value?.online || []));
 const tableSeatIds = computed(() => {
   const ids = new Set<string>();
   for (const table of tableList()) {
-    for (const person of table.seats || []) ids.add(person.id);
+    for (const person of activeSeats(table)) ids.add(person.id);
   }
   return ids;
 });
 
+function activeSeats(table: TableSummary) {
+  // 已结束的牌桌保留参赛名单供回看。
+  const { status, seats } = table;
+  return status === 'open' || status === 'bidding' || status === 'playing' ? seats || [] : [];
+}
+
 function seatedAt(table: TableSummary): boolean {
-  return (table.seats || []).some((person) => person.id === meId.value);
+  return activeSeats(table).some((person) => person.id === meId.value);
 }
 
 function capacityOf(table: TableSummary): number {
