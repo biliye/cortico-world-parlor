@@ -22,7 +22,13 @@ let embedded: EmbeddedHandle | undefined;
 let dataDir: string | undefined;
 
 export async function setup(): Promise<void> {
-  const scratch = resolve('.task-tmp', 'pg-tests');
+  // 默认落在仓库内，但**必须**允许挪出去：本仓所在的 Windows 工作树上挂了
+  // `Everyone: Deny DeleteSubdirectoriesAndFiles`（向下继承到每个子目录），
+  // 而 PostgreSQL 运行时要 rename/unlink 数据目录里的文件、收尾要删整棵目录。
+  // 一旦 scratch 落在这棵树里，initdb 能建、PG 一起就 `Permission denied`，
+  // 而且 tmpdir() 被全局改写，二十多个用例的 mkdtemp 也会一起进去。
+  // 设 PARLOR_TEST_TMP 指向仓库外目录即可整包跑通。
+  const scratch = resolve(process.env.PARLOR_TEST_TMP ?? '.task-tmp/pg-tests');
   mkdirSync(scratch, {recursive:true});
   process.env.TEMP = process.env.TMP = process.env.TMPDIR = scratch;
   if (process.env.PARLOR_TEST_PG_URL) return;
