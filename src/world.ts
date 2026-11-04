@@ -1171,9 +1171,12 @@ export class ParlorWorld implements World {
     }
 
     // 大厅进出仍留在网页和主动查看的历史里，不进入 Coo 的即时消息或待发摘要。
-    // 在这里过滤，游标已推进；断线补发也会走同一条，普通客厅不受影响。
+    // 在这里过滤，游标已推进；断线补发也会走同一条。
     if (this.multiRoom && this.currentRoom === 'hall'
       && (event.type === 'parlor.joined' || event.type === 'parlor.left')) return;
+    // 普通客厅只投递限频后的进入提示；离开不进入即时消息或任何摘要。
+    if (event.type === 'parlor.left'
+      || (event.type === 'parlor.joined' && event.data?.presenceCoo === false)) return;
 
     // 牌桌事件会改桌面版本：合并刷新一次快照，免得下一次动作拿着旧版本被拒。
     if (event.type.startsWith('parlor.table.')) this.scheduleFocusRefresh();

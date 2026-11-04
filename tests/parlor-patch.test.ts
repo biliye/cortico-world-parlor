@@ -59,6 +59,25 @@ const roomCalls = () => mocks.api.mock.calls.filter(([path]) => path === '/v1/ro
 const tableCalls = () => mocks.api.mock.calls.filter(([path]) => path === '/v1/table');
 
 describe('E3：直接应用回执并合并牌桌 SSE', () => {
+  it('网页补历史与实时事件都隐藏被限频的进出，实时游标和成员刷新继续', async () => {
+    const visible = { seq: 10, type: 'parlor.joined', text: '进入一次', data: { presenceWeb: true } };
+    const hidden = { seq: 11, type: 'parlor.left', text: '重复离开', data: { presenceWeb: false } };
+    mocks.api.mockResolvedValueOnce({ events: [visible, hidden] });
+    await store.seedLog();
+    expect(store.log.value.map((event:any) => event.text)).toEqual(['进入一次']);
+    const chatPath = '../web-src/stores/chat.ts';
+    const chat = await import(chatPath);
+    chat.noteChatEvent.mockClear();
+    store.connect();
+    Stream.last.onmessage?.({ data: JSON.stringify({ ...hidden, seq: 12 }) });
+    expect(store.latest.value).toBe(12);
+    expect(chat.noteChatEvent).not.toHaveBeenCalled();
+    expect(store.log.value.map((event:any) => event.text)).toEqual(['进入一次']);
+    mocks.api.mockResolvedValue(snap());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(roomCalls().length).toBeGreaterThan(0);
+  });
+
   it('断流时不拉整厅快照，按退避重连', async () => {
     mocks.api.mockRejectedValue(new Error('offline'));
     store.connect();

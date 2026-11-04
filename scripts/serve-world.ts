@@ -44,7 +44,7 @@ if (!Number.isFinite(cooOfflineHours) || cooOfflineHours < 0) {
   console.error('Coo 席位离线释放小时数不对');
   process.exit(2);
 }
-const cooIdleMinutes = Number(args.get('--coo-idle-minutes') ?? process.env.PARLOR_COO_IDLE_MINUTES ?? 60);
+const cooIdleMinutes = Number(args.get('--coo-idle-minutes') ?? process.env.PARLOR_COO_IDLE_MINUTES ?? 300);
 const roomArchiveHours = Number(args.get('--room-archive-hours') ?? process.env.PARLOR_ROOM_ARCHIVE_HOURS ?? 48);
 if (![cooIdleMinutes, roomArchiveHours].every(n => Number.isFinite(n) && n >= 0)) {
   console.error('闲置/归档时限须为非负数，0 表示关闭'); process.exit(2);

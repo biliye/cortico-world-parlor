@@ -921,6 +921,7 @@ function isTableBucket(event) {
 }
 
 function pushLog(event, seed = false) {
+  if ((event.type === 'parlor.joined' || event.type === 'parlor.left') && event.data?.presenceWeb === false) return;
   if (typeof event.seq === 'number') {
     if (state.seen.has(event.seq)) return;
     state.seen.add(event.seq);

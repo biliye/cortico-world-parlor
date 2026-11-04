@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Db } from '../src/room/db.ts';
 import { EventDb } from '../src/room/event-db.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
+import { withTransaction } from '../src/room/db.ts';
 
 const A = 'coo-aaaaaaaa';
 const B = 'coo-bbbbbbbb';
@@ -42,6 +43,36 @@ const say = async (roomId: string, text: string, from = 's1') => events.append(r
 });
 
 describe('客厅事件流', () => {
+  it('进出共用网页20分钟额度；Coo只收进入，换席位/重建对象不重置，不同身份与厅独立', async () => {
+    const presence = (type: string, ts: number, seatId = 's1', room = 'lobby') => events.append(room, {
+      type, ts, from: 'system', scope: { kind: 'room' }, text: type, data: { seatId },
+    });
+    expect((await presence('parlor.joined', 1000)).data).toMatchObject({ presenceWeb: true, presenceCoo: true });
+    expect((await presence('parlor.left', 2000)).data).toMatchObject({ presenceWeb: false, presenceCoo: false });
+    await db.prepare("UPDATE room_seats SET released_at=2000 WHERE id='s1'").run();
+    await db.prepare(`INSERT INTO room_seats(room_id,id,coo_id,kind,name,tier,token_hash,joined_at,visible_from_seq)
+      VALUES ('lobby','s-new',?,'pet','改了名字','digest','new-token',2001,0)`).run(A);
+    events = new EventDb(db);
+    expect((await presence('parlor.joined', 3000, 's-new')).data).toMatchObject({ presenceWeb: false, presenceCoo: false });
+    expect((await presence('parlor.joined', 3001, 's2')).data).toMatchObject({ presenceWeb: true, presenceCoo: true });
+    await db.prepare("UPDATE room_seats SET released_at=3002 WHERE id='s-new'").run();
+    await db.prepare(`INSERT INTO room_seats(room_id,id,coo_id,kind,name,tier,token_hash,joined_at,visible_from_seq)
+      VALUES ('other','s-other',?,'pet','阿岚','digest','other-token',3002,0)`).run(A);
+    expect((await presence('parlor.joined', 3002, 's-other', 'other')).data).toMatchObject({ presenceWeb: true, presenceCoo: true });
+    await db.prepare("UPDATE room_seats SET released_at=3003 WHERE id='s-other'").run();
+    await db.prepare("UPDATE room_seats SET released_at=NULL WHERE id='s-new'").run();
+    expect((await presence('parlor.joined', 1000 + 20 * 60_000 - 1, 's-new')).data?.presenceCoo).toBe(false);
+    expect((await presence('parlor.left', 1000 + 20 * 60_000, 's-new')).data).toMatchObject({ presenceWeb: true, presenceCoo: false });
+    expect((await presence('parlor.joined', 1001 + 20 * 60_000, 's-new')).data).toMatchObject({ presenceWeb: false, presenceCoo: true });
+    expect(await events.count('lobby')).toBe(7); // 被限频的原始事件也保留。
+  });
+
+  it('回滚的进入不消耗通知额度', async () => {
+    const input = { type: 'parlor.joined', ts: 1000, from: 'system', scope: { kind: 'room' as const }, text: '进入', data: { seatId: 's1' } };
+    await expect(withTransaction(db, async () => { await events.append('lobby', input); throw new Error('rollback'); })).rejects.toThrow('rollback');
+    expect((await events.append('lobby', input)).data).toMatchObject({ presenceWeb: true, presenceCoo: true });
+  });
+
   it('append 递增本房 seq；两个客厅各自从 1 开始，不串号', async () => {
     expect(await events.latest('lobby')).toBe(0);
     expect((await say('lobby', '一')).seq).toBe(1);

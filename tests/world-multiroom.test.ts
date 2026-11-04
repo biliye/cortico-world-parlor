@@ -1,7 +1,7 @@
 /** 多客厅 World：开客厅、串门、回大厅、邀请，以及专注 B。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolCallContext } from 'cortico/core/types.ts';
@@ -180,6 +180,7 @@ describe('其他桌的牌局不自动推给 Coo', () => {
     const texts = await playOtherTable(friend, friendToken);
     const snapshot = await friend.snapshot(friendToken, 0, 1, 'lobby');
     await until(() => {
+      if (!existsSync(join(ctx.dataDir, 'parlor-cursor.json'))) return false;
       const cursor = JSON.parse(readFileSync(join(ctx.dataDir, 'parlor-cursor.json'), 'utf8'));
       return cursor.rooms.lobby >= snapshot.latest;
     });
@@ -236,6 +237,23 @@ describe('其他桌的牌局不自动推给 Coo', () => {
 });
 
 describe('大厅进出不主动推给 Coo', () => {
+  it('客厅重复进出只给Coo一次进入提示；离开及限频事件不被点名夹带，原始历史保留', async () => {
+    const { host, friend, friendToken } = await startWorld({ tier: 'digest' });
+    await visitAndLeave('lobby');
+    await friend.action(friendToken, { type: 'say', text: '@小满 第一次点名' }, 'lobby');
+    await until(() => pushedText(host).includes('第一次点名'));
+    expect(pushedText(host).match(/来访家长 进了/g)).toHaveLength(1);
+    await visitAndLeave('lobby');
+    await friend.action(friendToken, { type: 'say', text: '@小满 第二次点名' }, 'lobby');
+    await until(() => pushedText(host).includes('第二次点名'));
+    expect(pushedText(host).match(/来访家长 进了/g)).toHaveLength(1);
+    expect(pushedText(host)).not.toContain('来访家长 离开');
+    const history = await friend.history(friendToken, 0, 100, 'lobby');
+    const visits = history.events.filter(event => event.data?.name === '来访家长');
+    expect(visits).toHaveLength(4);
+    expect(visits.map(event => event.data?.presenceCoo)).toEqual([true, false, false, false]);
+  });
+
   it.each(['full', 'digest', 'quiet', 'off'] as const)('%s：大厅进出不进推送或摘要，游标仍推进', async (tier) => {
     const { host, friend, friendToken, ctx } = await startWorld({ room: 'hall', tier });
     const leftSeq = await visitAndLeave('hall');
@@ -267,13 +285,13 @@ describe('大厅进出不主动推给 Coo', () => {
     expect(await call('parlor_look', { limit: 50 })).toContain('来访家长');
   });
 
-  it.each(['full', 'digest', 'quiet'] as const)('%s：普通客厅仍按原挡位推送进出', async (tier) => {
+  it.each(['full', 'digest', 'quiet'] as const)('%s：普通客厅按原挡位推送进入，离开不投递', async (tier) => {
     const { host, friend, friendToken } = await startWorld({ tier });
     await visitAndLeave('lobby');
     await friend.action(friendToken, { type: 'say', text: '@小满 客厅点名' }, 'lobby');
     await until(() => pushedText(host).includes('客厅点名'));
     expect(pushedText(host)).toContain('来访家长 进了');
-    expect(pushedText(host)).toContain('来访家长 离开了');
+    expect(pushedText(host)).not.toContain('来访家长 离开了');
   });
 
   it('重启补发的大厅进出也不混进消息', async () => {

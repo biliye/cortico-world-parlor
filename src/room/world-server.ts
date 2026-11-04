@@ -294,7 +294,7 @@ export class WorldServer {
     // 启动恢复基准在 init() 里读；构造函数只落字段，不碰库。
     this.recovery = {};
     this.lifecycle = new RoomLifecycle(db, room => this.host(room), () => this.hallIdValue, this.defaultRoomId,
-      (options.cooIdleMinutes ?? 60) * 60_000, (options.roomArchiveHours ?? 48) * 3_600_000,
+      (options.cooIdleMinutes ?? 300) * 60_000, (options.roomArchiveHours ?? 48) * 3_600_000,
       cooId => [...this.sse.values()].every(clients => [...clients].every(client => client.cooId !== cooId || client.closed || client.locationCapable)));
   }
 

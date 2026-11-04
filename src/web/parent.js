@@ -275,6 +275,7 @@ function renderLog(view) {
     return;
   }
   for (const event of events.slice(-60)) {
+    if ((event.type === 'parlor.joined' || event.type === 'parlor.left') && event.data?.presenceWeb === false) continue;
     if (String(event.type).startsWith('parlor.table.') && event.type !== 'parlor.table.say') continue;
     const row = el('div', 'row');
     row.append(el('span', 'when', clock(event.ts)));

@@ -60,6 +60,7 @@ function seatKey(): string {
 
 /** 去重后追加；上限 300 条，和旧版一样只留最近的。 */
 function pushLog(event: ChatEvent): void {
+  if ((event.type === 'parlor.joined' || event.type === 'parlor.left') && event.data?.presenceWeb === false) return;
   if (typeof event.seq === 'number') {
     if (seen.has(event.seq)) return;
     seen.add(event.seq);
@@ -337,8 +338,8 @@ function handleEvent(event: ChatEvent): void {
   if (typeof event.seq !== 'number') return;
   latest.value = Math.max(latest.value, event.seq);
   pushLog(event);
-  noteChatEvent(event);
   const type = event.type || '';
+  if (!((type === 'parlor.joined' || type === 'parlor.left') && event.data?.presenceWeb === false)) noteChatEvent(event);
   if (type === 'parlor.whisper') {
     noteWhisper();
     // 私聊会改信箱未读；快照里带着 mailUnread，顶栏角标靠它更新。

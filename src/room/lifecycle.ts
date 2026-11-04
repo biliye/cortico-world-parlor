@@ -15,7 +15,7 @@ export class RoomLifecycle {
   private archiveMs: number;
   private allowIdleMove: (cooId: string) => boolean;
   constructor(db: Db, hostFor: HostFor, hall: () => string, defaultRoom: string,
-    idleMs = 60 * 60_000, archiveMs = 48 * 3_600_000, allowIdleMove: (cooId: string) => boolean = () => true) {
+    idleMs = 300 * 60_000, archiveMs = 48 * 3_600_000, allowIdleMove: (cooId: string) => boolean = () => true) {
     this.db = db; this.hostFor = hostFor; this.hall = hall; this.defaultRoom = defaultRoom;
     this.idleMs = idleMs; this.archiveMs = archiveMs;
     this.allowIdleMove = allowIdleMove;

@@ -125,6 +125,7 @@ export class EventDb {
       ).run(input.ts, input.ts, roomId);
       if (Number(updated.changes) === 0) throw new Error(`客厅不存在：${roomId}`);
       const seq = await this.latest(roomId);
+      const data = await this.presenceData(roomId, input);
 
       if (input.from !== 'system' && input.type !== 'parlor.left') {
         const actor = await this.db.prepare('SELECT coo_id FROM room_seats WHERE room_id=? AND id=? AND released_at IS NULL')
@@ -156,7 +157,7 @@ export class EventDb {
         scopeSeatsJson,
         input.text,
         input.mentions && input.mentions.length > 0 ? JSON.stringify(input.mentions) : null,
-        input.data === undefined ? null : JSON.stringify(input.data),
+        data === undefined ? null : JSON.stringify(data),
       );
 
       if (scope.kind === 'seat' || scope.kind === 'table') {
@@ -195,9 +196,30 @@ export class EventDb {
         scope,
         text: input.text,
         ...(input.mentions && input.mentions.length > 0 ? { mentions: input.mentions } : {}),
-        ...(input.data === undefined ? {} : { data: input.data }),
+        ...(data === undefined ? {} : { data }),
       };
     });
+  }
+
+  /** 房间行锁内判定通知额度；原始事件保留，换席位或重启不会重置20分钟窗口。 */
+  private async presenceData(roomId: string, input: AppendEventInput): Promise<AppendEventInput['data']> {
+    if (input.type !== 'parlor.joined' && input.type !== 'parlor.left') return input.data;
+    const seatId = input.data?.seatId;
+    if (typeof seatId !== 'string') return input.data;
+    const actor = await this.db.prepare('SELECT coo_id FROM room_seats WHERE room_id=? AND id=?')
+      .get(roomId, seatId) as { coo_id: string } | undefined;
+    if (!actor) return input.data;
+    const recent = await this.db.prepare(`SELECT e.type,e.data_json FROM events e
+      JOIN room_seats s ON s.room_id=e.room_id AND s.id=(e.data_json ->> 'seatId')
+      WHERE e.room_id=? AND e.ts>? AND s.coo_id=? AND e.type IN ('parlor.joined','parlor.left')`)
+      .all(roomId, input.ts - 20 * 60_000, actor.coo_id) as { type: string; data_json: unknown }[];
+    const flags = recent.map(row => ({ type: row.type, data: jsonObject<Record<string, unknown>>(row.data_json) }));
+    return {
+      ...input.data,
+      presenceWeb: !flags.some(row => row.data?.presenceWeb !== false),
+      presenceCoo: input.type === 'parlor.joined'
+        && !flags.some(row => row.type === 'parlor.joined' && row.data?.presenceCoo !== false),
+    };
   }
 
   /** 从旧到新，`since` 之后、可见区间内、该 coo 有权看的事件。 */

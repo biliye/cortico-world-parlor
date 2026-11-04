@@ -32,10 +32,10 @@ beforeEach(async () => {
 });
 afterEach(async () => { await app?.close(); });
 
-describe('60 分钟闲置、48 小时归档与全局账户', () => {
+describe('300 分钟闲置、48 小时归档与全局账户', () => {
   it('迁厅后再释放席位，旧地址重新入座只读一次请求体并保留入场码/名字/类型/挡位', async () => {
     const {url} = await app.listen();
-    now += HOUR;
+    now += 5 * HOUR;
     expect((await app.runLifecycle()).moved).toBe(1);
     const hall = await RoomHost.create(app.dbHandle, 'hall', { now:() => now });
     await hall.leave(A);
@@ -57,7 +57,7 @@ describe('60 分钟闲置、48 小时归档与全局账户', () => {
     try {
       await fetch(url + `/v1/rooms/r-life/stream?token=${token}&cap=seat-location-v1`,{signal:modern.signal});
       await fetch(url + `/v1/rooms/r-life/stream?token=${token}`,{signal:legacy.signal});
-      now += HOUR;
+      now += 5 * HOUR;
       expect((await app.runLifecycle()).moved).toBe(0);
       modern.abort();
       expect((await app.runLifecycle()).moved).toBe(0);
@@ -104,13 +104,13 @@ describe('60 分钟闲置、48 小时归档与全局账户', () => {
   });
   it('旧客户端未声明位置恢复能力时不强制闲置迁厅，升级后才启用', async () => {
     await app.dbHandle.prepare('UPDATE room_seats SET location_capable=0 WHERE coo_id=?').run(A);
-    now += HOUR;
+    now += 5 * HOUR;
     expect((await app.runLifecycle()).moved).toBe(0);
     await app.dbHandle.prepare('UPDATE room_seats SET location_capable=1 WHERE coo_id=?').run(A);
     expect((await app.runLifecycle()).moved).toBe(1);
   });
-  it('59 分钟不迁，60 分钟原子迁厅，原令牌仅在新席位有效，重复扫描幂等', async () => {
-    now += 59 * 60_000;
+  it('299 分钟不迁，300 分钟原子迁厅，原令牌仅在新席位有效，重复扫描幂等', async () => {
+    now += 299 * 60_000;
     expect((await app.runLifecycle()).moved).toBe(0);
     // Snapshot / background reads do not renew the business timestamp.
     await room.snapshot(A);
@@ -124,7 +124,7 @@ describe('60 分钟闲置、48 小时归档与全局账户', () => {
     expect(await new LedgerDb(app.dbHandle).balanceOf(A)).toBe(1000);
   });
   it('本人成功聊天续时，持续 SSE 不作为活动；满大厅时源席位完整保留', async () => {
-    now += 59 * 60_000;
+    now += 299 * 60_000;
     await room.say(A, '我还在这里');
     now += 2 * 60_000;
     expect((await app.runLifecycle()).moved).toBe(0);
@@ -135,7 +135,7 @@ describe('60 分钟闲置、48 小时归档与全局账户', () => {
     const coos = new CooAccountDb(app.dbHandle);
     expect(await coos.registerCoo('coo-lifecycle-c', 'test-secret-coo-c-0123456789', 'pet', '第三位')).toBe('ok');
     await hall.join('coo-lifecycle-c', { name:'第三位', kind:'pet' });
-    now += HOUR;
+    now += 5 * HOUR;
     expect((await app.runLifecycle()).moved).toBe(0);
     expect((await activeSeatForCoo(app.dbHandle, A))?.roomId).toBe('r-life');
     expect((await room.seatByToken(token)).cooId).toBe(A);
@@ -184,7 +184,7 @@ describe('60 分钟闲置、48 小时归档与全局账户', () => {
   });
   it('HTTP 位置查询跟随迁厅，旧厅拒绝访问；承诺新写入返回停用而不扣款', async () => {
     const {url} = await app.listen();
-    now += HOUR;
+    now += 5 * HOUR;
     await app.runLifecycle();
     const headers = { authorization:`Bearer ${token}` };
     const current = await fetch(url + '/v1/me/location', { headers });

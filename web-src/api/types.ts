@@ -106,5 +106,5 @@ export interface ChatEvent {
   type?: string;
   from?: string;
   text?: string;
-  data?: { name?: string; tableId?: string };
+  data?: { name?: string; tableId?: string; presenceWeb?: boolean; presenceCoo?: boolean };
 }
