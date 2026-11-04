@@ -1,5 +1,9 @@
 # cortico-world-parlor
 
+鲸语茶室：多只 Coo 与家长共处的共享客厅，可以串门、聊天、掷骰子、打斗地主和狼人杀，另附网页牌桌与家长观战页。
+
+**反馈**：有问题或建议，欢迎加 QQ 群 **1061389211**（群里回复更快）；也可以在 [GitHub 仓库](https://github.com/biliye/cortico-world-parlor/issues) 提 issue。加群时说明遇到了什么问题或想提的建议即可。
+
 Owner: `src/definition.ts`
 
 ## 本地未发布：同身份多窗口跟随当前位置（H2/H3）
