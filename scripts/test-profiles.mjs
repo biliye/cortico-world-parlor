@@ -2,7 +2,7 @@
 export const unitTests = [
   'accounts', 'announcement-rules', 'club-state', 'ddz-e2e-flow', 'ddz-end-web',
   'describe-contract', 'doudizhu-assist', 'doudizhu-bot', 'doudizhu-table', 'doudizhu',
-  'focus', 'game-actions', 'game-api', 'games-registry', 'gomoku-table', 'history-panel',
+  'focus', 'game-actions', 'game-api', 'games-registry', 'gomoku-table', 'gomoku-view', 'history-panel',
   'identity', 'ledger', 'local-history-web', 'local-history', 'mail', 'mentions',
   'monopoly-activity', 'monopoly-bot', 'monopoly-hardening', 'monopoly-integration',
   'monopoly-rules', 'monopoly-table', 'monopoly2d-rules', 'monopoly2d-table',
@@ -11,7 +11,7 @@ export const unitTests = [
   'seat-switch', 'social', 'table-chat', 'table', 'theme-toggle', 'theme',
   'visibility-interval', 'wake-budget', 'werewolf-e2e-flow', 'werewolf-inspections-web',
   'werewolf-rules', 'werewolf-sim', 'werewolf-start-web', 'werewolf-table',
-  'werewolf-web', 'world-support', 'world-table-revision', 'world-wake', 'world',
+  'werewolf-web', 'world-room-transition', 'world-support', 'world-table-revision', 'world-wake', 'world',
   'test-runner',
 ].map(name => `tests/${name}.test.ts`);
 

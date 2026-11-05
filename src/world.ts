@@ -494,6 +494,8 @@ export class ParlorWorld implements World {
   private focused = false;
   /** 我在哪张桌上、看到的是哪一版；多桌时动作靠这两个字段选桌与防迟到。 */
   private myTableId?: string;
+  /** 换厅期间先收掉旧流，再使用新身份建流；同时挡住另一笔换厅/匹配。 */
+  private switchingRoom = false;
   private myTableRevision?: number;
   /** 桌面版本对应的事件游标；慢快照和断线补发不能把它退回上一手。 */
   private tableStateCursor?: { room: string; seat: string; seq: number };
@@ -993,13 +995,20 @@ export class ParlorWorld implements World {
       await this.reportLink(text, true);
     };
     while (!signal.aborted && !this.stopped) {
+      const client = this.client;
+      const token = this.token;
+      const room = this.roomArg();
+      const seat = this.seat?.id;
+      const current = () => !signal.aborted && !this.stopped && this.client === client
+        && this.token === token && this.roomArg() === room && this.seat?.id === seat;
       let clean = false;
       try {
-        await this.client?.stream(
-          this.token, this.lastSeq, (event) => this.onRoomEvent(event), signal, this.roomArg(),
+        await client?.stream(
+          token, this.lastSeq, (event) => { if (current()) this.onRoomEvent(event); }, signal, room,
           // 连上了就说明上一次退避已经过期：别让「断过很久」留下的 60 秒等待
           // 拖到下一次掉线。下一次真的断了，从 1 秒重试开始。
           () => {
+            if (!current()) return;
             backoff = 1000;
             this.historySeats.add(this.seat!.id);
             this.historyRooms.add(this.currentRoom);
@@ -1017,8 +1026,11 @@ export class ParlorWorld implements World {
         clean = true;
       } catch (error) {
         if (signal.aborted || this.stopped) return;
+        if (!current()) continue;
         // 令牌失效 = 席位已经不在（离线清理/被请出去）：重新入座，别拿死令牌一直重试。
-        if (error instanceof ParlorHttpError && [401,403,404].includes(error.status) && await this.syncLocation()) continue;
+        if (error instanceof ParlorHttpError && [401,403,404].includes(error.status)) {
+          if (await this.syncLocation() || !current()) continue;
+        }
         if (error instanceof ParlorHttpError && error.status === 401 && await this.rejoinSeat()) {
           if (signal.aborted || this.stopped) return;
           backoff = 1000;
@@ -1029,6 +1041,7 @@ export class ParlorWorld implements World {
         }
       }
       if (signal.aborted || this.stopped) return;
+      if (!current()) continue;
       if (clean) {
         if (!disconnected) {
           await reportDisconnected('客厅连接已结束，会自动重新连接。');
@@ -1531,7 +1544,12 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const blocked = this.needMultiRoom();
     if (blocked) return blocked;
+    if (this.switchingRoom || this.enteringTable) return this.failed('正在换厅或加入牌桌，请等这次操作返回');
+    this.switchingRoom = true;
     try {
+      // 旧厅会立即撤销令牌。先等旧流及其重连处理退出，避免迟到的 401 重领新厅令牌。
+      this.abort?.abort();
+      await this.streamTask?.catch(() => {});
       // 传基础名而不是当前席位名：撞名时服务器会加「 2」这样的序号，
       // 拿序号名去串门会越加越长。
       const moved = await this.client.switchTo(this.token, this.currentRoom, target, this.baseSeatName());
@@ -1541,6 +1559,9 @@ export class ParlorWorld implements World {
       this.lastSeq = moved.joinSeq;
       this.clearPendingMessages();
       this.focused = false;
+      this.myTableId = undefined;
+      this.myTableRevision = undefined;
+      this.tableStateCursor = undefined;
       this.saveCursor();
       try {
         this.ctx.storeSecret(SEAT_SECRET, moved.token);
@@ -1555,6 +1576,9 @@ export class ParlorWorld implements World {
       }
     } catch (error) {
       return this.failed(messageOf(error));
+    } finally {
+      this.switchingRoom = false;
+      if (!this.stopped) this.streamTask = this.runStream();
     }
   }
 
@@ -2013,7 +2037,7 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const blocked = this.needMultiRoom();
     if (blocked) return blocked;
-    if (this.enteringTable) return this.failed('正在加入牌桌，请等这次操作返回');
+    if (this.enteringTable || this.switchingRoom) return this.failed('正在换厅或加入牌桌，请等这次操作返回');
     const requestId = typeof args.requestId === 'string' && args.requestId.trim() ? args.requestId.trim() : randomUUID();
     let target: { room: string; table: string } | { game: string };
     try {

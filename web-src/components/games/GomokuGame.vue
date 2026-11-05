@@ -35,7 +35,7 @@ const submitting = ref(false);
 const canPlay = computed(() => table.value.status === 'playing' && mine.value?.canAct === true);
 const ended = computed(() => table.value.status === 'ended');
 const mySeat = computed(() => table.value.seats?.find(seat => seat.id === props.view.me.id));
-const myColor = computed(() => mySeat.value?.color || 1);
+const myColor = computed(() => mySeat.value?.color ?? null);
 const moveCount = computed(() => table.value.board?.filter(cell => cell !== 0).length || 0);
 const actor = computed(() => table.value.seats?.find(seat => seat.id === table.value.turn)?.name);
 const winnerName = computed(() => table.value.seats?.find(seat => seat.id === table.value.winner)?.name);
@@ -47,11 +47,12 @@ const ghost = computed(() => {
 });
 const won = computed(() => !!table.value.winner && table.value.winner === props.view.me.id);
 const tie = computed(() => ended.value && !table.value.winner);
-const resultTitle = computed(() => (tie.value ? '和棋' : won.value ? '你赢了' : '你输了'));
+const resultTitle = computed(() => (tie.value ? '和棋' : !mySeat.value
+  ? `${winnerName.value || '一方'}获胜` : won.value ? '你赢了' : '你输了'));
 const resultLine = computed(() => {
   if (tie.value) return `棋盘已满，共 ${moveCount.value} 手`;
   const name = winnerName.value || '对手';
-  return won.value ? `连五 · 共 ${moveCount.value} 手` : `${name} 连五获胜 · 共 ${moveCount.value} 手`;
+  return won.value || !mySeat.value ? `连五 · 共 ${moveCount.value} 手` : `${name} 连五获胜 · 共 ${moveCount.value} 手`;
 });
 
 const position = (i: number): Point => ({ row: Math.floor(i / size.value), col: i % size.value });
@@ -95,7 +96,7 @@ async function play(): Promise<void> {
 
 <template>
   <section class="gomoku">
-    <div v-if="ended" class="gomoku-result" :class="tie ? 'tie' : won ? 'win' : 'lose'" role="status">
+    <div v-if="ended" class="gomoku-result" :class="tie || !mySeat ? 'tie' : won ? 'win' : 'lose'" role="status">
       <div class="gomoku-result-copy">
         <strong>{{ resultTitle }}</strong>
         <span>{{ resultLine }}</span>
@@ -129,7 +130,7 @@ async function play(): Promise<void> {
       <aside class="gomoku-side">
         <div class="gomoku-meta">
           <span class="gomoku-plies"><b>{{ moveCount }}</b> 手</span>
-          <span>{{ myColor === 1 ? '你执黑' : '你执白' }}</span>
+          <span>{{ myColor === null ? '观战' : myColor === 1 ? '你执黑' : '你执白' }}</span>
         </div>
         <ul class="gomoku-seats">
           <li v-for="seat in table.seats" :key="seat.id" :class="{ current: seat.id === table.turn }">
