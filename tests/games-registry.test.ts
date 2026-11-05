@@ -7,15 +7,15 @@ import {
   GAME_LIST, gameByActionType, gameById, gameIds, gameLabelOf,
 } from '../src/room/games/registry.ts';
 import { PARLOR_TOOL_DECLS } from '../src/world.ts';
+import { operationHelp } from '../src/tool-contract.ts';
 
 describe('牌桌注册表', () => {
   it('每个游戏一条登记，id / 动作类型 / 工具名不撞', () => {
     const ids = GAME_LIST.map((game) => game.id);
     const actions = GAME_LIST.map((game) => game.actionType);
-    const tools = GAME_LIST.flatMap((game) => game.legacyToolName ? [game.legacyToolName] : []);
     expect(new Set(ids).size).toBe(ids.length);
     expect(new Set(actions).size).toBe(actions.length);
-    expect(new Set(tools).size).toBe(tools.length);
+
     for (const game of GAME_LIST) {
       expect(game.label.length).toBeGreaterThan(0);
       expect(game.icon.length).toBeGreaterThan(0);
@@ -58,17 +58,10 @@ describe('牌桌注册表', () => {
     expect(() => dice.action.toBody({ action: 'nope' })).toThrow(/roll/);
   });
 
-  it('World 保留旧工具，通用开桌使用服务器目录而非本地游戏枚举', () => {
+  it('World 不注册专属工具，开桌参数按需发现且不写死游戏枚举', () => {
     const names = new Set(PARLOR_TOOL_DECLS.map((decl) => decl.name));
-    for (const game of GAME_LIST) if (game.legacyToolName) expect(names.has(game.legacyToolName)).toBe(true);
-    // 工具声明里的描述/参数就是注册表里的那一份（不再抄一遍）。
-    for (const game of GAME_LIST) {
-      if (!game.legacyToolName) continue;
-      const decl = PARLOR_TOOL_DECLS.find((entry) => entry.name === game.legacyToolName)!;
-      expect(decl.description).toBe(game.action.description);
-      expect(decl.parameters).toEqual(game.action.parameters);
-    }
-    const open = PARLOR_TOOL_DECLS.find((decl) => decl.name === 'parlor_table_open')!;
+    expect([...names].some(name => /_(ddz|werewolf|gomoku|monopoly2d)_action$/.test(name))).toBe(false);
+    const open = operationHelp('table').table.find(entry => entry.op === 'open')!;
     const game = (open.parameters as { properties?: { game?: { enum?: string[] } } }).properties?.game;
     expect(game?.enum).toBeUndefined();
     expect(names.has('parlor_game_info')).toBe(true);
@@ -79,7 +72,7 @@ describe('牌桌注册表', () => {
     const game = gameById('monopoly2d')!;
     expect(game).toBeTruthy();
     expect(game.actionType).toBe('monopoly2d_action');
-    expect(game.legacyToolName).toBe('parlor_monopoly2d_action');
+
     expect(game.revisionMode).toBe('strict');
     expect(game.allowsStake).toBe(false);
     expect(gameById('ddz')!.allowsStake).not.toBe(false);

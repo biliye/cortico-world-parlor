@@ -210,7 +210,7 @@ describe('给模型看的话', () => {
     const table = make();
     const text = table.privateText('a', NOW)!;
     expect(text).toContain('轮到你');
-    expect(text).toContain('parlor_monopoly');
+    expect(text).toContain('parlor_table {op:"legacy_monopoly"');
     expect(text).toContain('服务器时刻');
   });
 
@@ -227,7 +227,7 @@ describe('给模型看的话', () => {
     table.act('a', { type: 'buy' }, NOW);
     const text = table.privateText('a', NOW)!;
     expect(text).toContain('等 B');
-    expect(text).not.toContain('parlor_monopoly');
+    expect(text).not.toContain('parlor_table {op:"legacy_monopoly"');
   });
 });
 

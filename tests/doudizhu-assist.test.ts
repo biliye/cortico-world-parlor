@@ -200,7 +200,7 @@ describe('斗地主通知与旧存档记牌', () => {
     room.ddzAction(seat, { move: 'bid', call: true });
     const events = room.history(seat.id, 0, 100).filter((event) => event.type === 'parlor.table.turn');
     expect(events.at(-1)!.text).toContain('本局累计已出');
-    expect(events.at(-1)!.text).toContain('parlor_ddz_action {"move":"play"');
+    expect(events.at(-1)!.text).toContain('parlor_game_action {"action":"play","params":');
     expect(room.snapshot(seat.id, 0, 100).tablePrivate!.text).toContain('合法建议');
   });
 
@@ -214,7 +214,7 @@ describe('斗地主通知与旧存档记牌', () => {
     const text = table.privateText('a', 0)!;
     expect(text).toContain('本局累计已出：无');
     expect(text).toContain('其他两家合计未出');
-    expect(text).toContain('parlor_ddz_action {"move":"play"');
+    expect(text).toContain('parlor_game_action {"action":"play","params":');
     expect(text).toContain('下家 乙');
     expect(table.privateText('b', 0)).not.toContain('合法建议');
   });

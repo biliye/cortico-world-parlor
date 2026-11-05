@@ -296,7 +296,7 @@ export class DoudizhuTable implements TableEngine {
         ? `【斗地主·叫你当地主】你的 ${seat.hand.length} 张牌：${formatCards(seat.hand)}`
         : `【斗地主·等 ${turn?.name ?? '？'} 叫地主】你的 ${seat.hand.length} 张牌：${formatCards(seat.hand)}`);
       if (yourTurn) {
-        lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"bid", call:true} 叫地主；call:false 不叫。`);
+        lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"bid",params:{call:true}} 叫地主；call:false 不叫。`);
         lines.push('底牌 3 张会亮给所有人；叫的人拿走底牌并当地主。');
       } else {
         lines.push(`等 ${turn?.name ?? '？'} 决定。`);
@@ -311,9 +311,9 @@ export class DoudizhuTable implements TableEngine {
     if (this.lastPlay) {
       const owner = this.seats.find((entry) => entry.id === this.lastPlay!.seat);
       lines.push(`上一手：${owner?.name ?? '？'} 出了 ${formatCards(this.lastPlay.move.cards)}（${moveLabel(this.lastPlay.move)}）。`);
-      if (yourTurn) lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"play", cards:[…]} 压过它；出不了就 {move:"pass"}。`);
+      if (yourTurn) lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"play",params:{cards:[…]}} 压过它；出不了就 parlor_game_action {action:"pass",params:{}}。`);
     } else if (yourTurn) {
-      lines.push(`这一轮你先出，什么牌型都行。截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_ddz_action {move:"play", cards:[…]}。`);
+      lines.push(`这一轮你先出，什么牌型都行。截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"play",params:{cards:[…]}}。`);
     } else {
       lines.push('等上一手结算。');
     }
@@ -327,7 +327,10 @@ export class DoudizhuTable implements TableEngine {
       lines.push(`本局累计已出：${formatCounts(played)}。`);
       lines.push(`其他两家合计未出：${formatCounts(subtractCards(DECK, [...played, ...seat.hand]))}。未列点数为 0；两家合计不代表个人手牌，农民的两家中包含队友。`);
       lines.push('合法建议（规则排序，第一项为建议；不是全部出法，也不是胜率）：');
-      assist.suggestions.forEach((suggestion, index) => lines.push(`${index + 1}. ${suggestion.label}：${suggestion.reason}。parlor_ddz_action ${JSON.stringify(suggestion.action)}`));
+      assist.suggestions.forEach((suggestion, index) => {
+        const { move: action, ...params } = suggestion.action;
+        lines.push(`${index + 1}. ${suggestion.label}：${suggestion.reason}。parlor_game_action ${JSON.stringify({ action, params })}`);
+      });
       lines.push('可直接采用建议，也可另选合法出法；无需重新统计记牌。');
     }
     return lines.join('\n');

@@ -1,3 +1,8 @@
+## 未发布（Unreleased）
+
+- Coo 常驻工具 32 → 9：信息查询、消息、客厅/邀请及牌桌管理分别合并；游戏专属工具退出，统一使用游戏查询/动作。操作 Schema 按需由 query/help 返回，严格分开读取与写入，消息必须显式选择公开/同桌/私信范围。礼物、提醒设置和反馈提交独立保留。
+- 同步迁移行动通知、邀请消息、提示词与自描述。默认游戏行动使用本人当前桌及已收到的版本，state 查询同步版本；显式旧版本仍拒绝，不自动换版重放。旧 HTTP 路由、旧单厅骰子/斗地主及长局能力通过新入口保留。无数据库迁移，未发布、未重启。
+
 ## 0.36.8（2026-11-05）
 
 - 修复五子棋引擎让扩展在 Node 的类型剥离（`--experimental-strip-types`，strip-only）下无法加载：`GomokuTable` 的构造函数原来用了参数属性 `constructor(host, private readonly turnMs = 60_000)`，strip-only 抛出 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`，`serve-world` 一起进程就退出。改为先声明 `private readonly turnMs`，再在构造函数体内赋值，与原 `storage/sqlite.ts` 的写法一致。行为、超时数值与对外接口均未变。

@@ -622,7 +622,7 @@ export class MonopolyTable implements TableEngine {
     const state = this.engine.snapshot();
     const legal = this.engine.legal();
     if (phase === 'prepare') {
-      const options: string[] = ['parlor_monopoly {action:"roll"} 掷骰'];
+      const options: string[] = ['parlor_table {op:"legacy_monopoly",params:{action:"roll"}} 掷骰'];
       if (legal.items.includes('signpost')) options.push('{action:"use_item", item:"signpost", steps:1-6} 路标卡');
       if (legal.items.includes('pass')) options.push('{action:"use_item", item:"pass"} 通行卡');
       if (legal.items.includes('repair')) {

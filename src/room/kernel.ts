@@ -537,7 +537,7 @@ export class RoomKernel {
     if (seat.kind === 'observer') throw new RoomError('forbidden', '观看者不能写账本');
     const promise = this.ledger.find(id);
     if (!promise || (promise.kind !== 'promise' && promise.kind !== 'debt')) {
-      throw new RoomError('not_found', '找不到这条承诺；用 parlor_ledger 看未了结里的 id');
+      throw new RoomError('not_found', '找不到这条承诺；用 parlor_query {op:"account"} 看未了结里的 id');
     }
     if (promise.room !== this.id) {
       throw new RoomError('not_found', '这条承诺不在这个客厅；回原来的客厅再回应');

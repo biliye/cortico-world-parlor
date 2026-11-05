@@ -1185,7 +1185,7 @@ export class TableHost {
         kind: 'ledger',
         action: 'table',
         fromName: '客厅',
-        text: '你的牌桌需要操作；回来看一眼（parlor_table_view）。这封信不含任何身份或目标信息。',
+        text: '你的牌桌需要操作；回来看一眼（parlor_game_info {op:"state"}）。这封信不含任何身份或目标信息。',
       });
     } catch (error) {
       console.error('parlor: 牌桌离线提醒没写进信箱', error);
@@ -1676,7 +1676,7 @@ export class TableHost {
     const open = this.liveTables().filter((table) => table.engine.status === 'open');
     if (open.length === 0) throw new HostError('not_found', '现在没有可以坐下的桌子');
     if (open.length > 1) {
-      throw new HostError('invalid', `现在有 ${open.length} 张桌子；用 table 选一张（先 parlor_look 看桌号）`);
+      throw new HostError('invalid', `现在有 ${open.length} 张桌子；用 table 选一张（先 parlor_query {op:"room"} 看桌号）`);
     }
     return open[0];
   }

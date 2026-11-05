@@ -66,9 +66,8 @@ describe('狼人杀 · 网关与注册表', () => {
     const def = gameById('werewolf');
     expect(def?.revisionMode).toBe('window');
     expect(def?.actionType).toBe('werewolf_action');
-    expect(def?.legacyToolName).toBe('parlor_werewolf_action');
-    const logTool = def?.extraTools?.find((tool) => tool.name === 'parlor_werewolf_log');
-    expect(logTool).toBeDefined();
+    expect(def?.action.parameters).toMatchObject({ required: ['windowId', 'move'] });
+
     expect(() => def!.action.toBody({ move: 'speak' })).toThrow(/windowId/);
     expect(() => def!.action.toBody({ windowId: 'w1', move: ' dancing' })).toThrow(/move/);
     expect(() => def!.action.toBody({ windowId: 'w1', move: 'witch' })).toThrow(/choice/);

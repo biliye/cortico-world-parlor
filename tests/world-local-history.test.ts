@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,7 +39,7 @@ describe('World 本地消息档案端到端', () => {
     const file = join(ctx.dataDir, IDENTITY_FILE); mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify({ cooId: 'coo-history-old', cooSecret: 'bad' }));
     world = PARLOR.create(ctx); await world.start(new FakeHost());
-    await world.tools().find(tool => tool.name === 'parlor_say')!.handler({ text: '新身份的发言' }, {} as ToolCallContext);
+    await toolForOperation(world, 'parlor_say')!.handler({ text: '新身份的发言' }, {} as ToolCallContext);
     const identity = JSON.parse(readFileSync(file, 'utf8'));
     expect(identity.cooId).not.toBe('coo-history-old');
     const disk = new LocalHistory(ctx.dataDir, server.url, identity.cooId);
@@ -64,10 +65,10 @@ describe('World 本地消息档案端到端', () => {
     const host = new FakeHost(); world = PARLOR.create(ctx); await world.start(host);
     await until(async () => (await messages()).some(item => item.text === '先前已经读过的信'));
     await friend.action(peer.token, { type: 'say', text: '低提醒挡也要留住的公开话' }, 'lobby');
-    const say = world.tools().find(tool => tool.name === 'parlor_say')!;
+    const say = toolForOperation(world, 'parlor_say')!;
     await say.handler({ text: '孩子说的话' }, {} as ToolCallContext);
     await friend.switchTo(peer.token, 'lobby', 'hall');
-    const whisper = world.tools().find(tool => tool.name === 'parlor_whisper')!;
+    const whisper = toolForOperation(world, 'parlor_whisper')!;
     await whisper.handler({ to: '朋友', text: '孩子跨厅回复' }, {} as ToolCallContext);
     await until(async () => (await messages()).some(item => item.text === '低提醒挡也要留住的公开话'));
     expect((await messages()).filter(item => item.text === '孩子说的话')).toHaveLength(1);

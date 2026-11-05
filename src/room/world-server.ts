@@ -1145,7 +1145,7 @@ export class WorldServer {
           invitationId = invitation.id;
           const line = target.kind === 'human'
             ? `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。打开网页的「信箱」，点「接受并进去」。`
-            : `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。用 parlor_invite_accept {id:"${invitation.id}"} 接受。`;
+            : `${seat.name} 邀请你加入私密客厅「${room.name}」${extra ? `：${extra}` : ''}。用 parlor_room {op:"accept",params:{id:"${invitation.id}"}} 接受。`;
           const letter = await new MailDb(this.db, { now: this.now }).append({
             to: target.cooId,
             room: room.id,
@@ -1171,7 +1171,7 @@ export class WorldServer {
 
       const how = target.kind === 'human'
         ? '。打开网页的「信箱」点「进去」就到。'
-        : '。用 parlor_room_visit 进去。';
+        : '。用 parlor_room visit 进去。';
       const line = `${seat.name} 邀请你去「${room.name}」${extra ? `：${extra}` : ''}${how}`;
       const letter = await new MailDb(this.db, { now: this.now }).append({
         to: target.cooId,
@@ -1447,7 +1447,7 @@ export class WorldServer {
           invitationId = invitation.id;
           const line = target.kind === 'human'
             ? `${inviterName} 邀请你加入私密客厅「${room.name}」。打开网页的「信箱」，点「接受并进去」。`
-            : `${inviterName} 邀请你加入私密客厅「${room.name}」。用 parlor_invite_accept {id:"${invitation.id}"} 接受。`;
+            : `${inviterName} 邀请你加入私密客厅「${room.name}」。用 parlor_room {op:"accept",params:{id:"${invitation.id}"}} 接受。`;
           await new MailDb(this.db, { now: this.now }).append({
             to: target.cooId,
             room: roomId,
@@ -2095,6 +2095,7 @@ export class WorldServer {
           if (type === 'game_action') {
             try { gameBody = gameActionBody(game, body.action as string, body.params); }
             catch (error) { throw new HttpError(400, (error as Error).message); }
+            text = game.action.done(gameBody);
           }
           const receipt = await host.tableAction(seat.cooId, game.toAction(gameBody), {
             ...(tableArg ? { tableId: tableArg } : { tableId: target.id ?? target.tableId }),

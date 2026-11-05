@@ -193,7 +193,7 @@ export class GomokuTable implements TableEngine {
     if (!view) return null;
     if (!view.canAct) return this.publicText();
     const hints = view.hints.map(hint =>
-      `parlor_gomoku_action {"row":${hint.row},"col":${hint.col}}（${hint.reason}）`).join('；');
+      `parlor_game_action {action:"place",params:{"row":${hint.row},"col":${hint.col}}}（${hint.reason}）`).join('；');
     const rows = Array.from({ length: SIZE }, (_, row) =>
       this.board.slice(row * SIZE, (row + 1) * SIZE).map(cell => '.XO'[cell]).join(''));
     return `${this.publicText()} 你执${this.color === 1 ? '黑' : '白'}，行列从 0 开始（X 黑，O 白）。\n${rows.join('\n')}\n建议：${hints}`;

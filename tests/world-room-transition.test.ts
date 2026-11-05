@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,7 +23,7 @@ const snap = (room: string, seat: Seat): RoomSnapshot => ({
 });
 const moved: SwitchResponse = { ok: true, room: 'target', seat: newSeat, token: 'new-token', leaveSeq: 10, joinSeq: 10 };
 const call = async (name: string, args: Record<string, unknown>) => {
-  const result = await world.tools().find(tool => tool.name === name)!.handler(args, {} as ToolCallContext);
+  const result = await toolForOperation(world, name)!.handler(args, {} as ToolCallContext);
   return typeof result === 'string' ? result : result.text;
 };
 

@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 /**
  * 快局大富翁的联机验收：
  *
@@ -308,7 +309,7 @@ describe('快局大富翁：源码 World 工具走通两段动作', () => {
     await world.start(new FakeHost());
 
     const call = async (name: string, args: Record<string, unknown> = {}): Promise<string> => {
-      const tool = world!.tools().find((entry) => entry.name === name);
+      const tool = toolForOperation(world!, name);
       if (!tool) throw new Error(`没有工具 ${name}`);
       const result = await tool.handler(args, {} as ToolCallContext);
       return typeof result === 'string' ? result : result.text;

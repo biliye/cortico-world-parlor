@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +17,7 @@ let snapshot: RoomSnapshot;
 let seq: number;
 
 const call = async (name: string) => {
-  const result = await world.tools().find(tool => tool.name === name)!.handler(
+  const result = await toolForOperation(world, name)!.handler(
     name === 'parlor_ddz_action' ? { move: 'play', cards: ['3'] } : {}, {} as ToolCallContext,
   );
   return typeof result === 'string' ? result : result.text;
@@ -65,24 +66,34 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
     if (!('revision' in payload) || payload.revision !== revision) {
       throw new ParlorHttpError(409, '这一手已经过去了：你看到的是旧桌面，刷新后再来');
     }
-    return { ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' };
+    return { ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻', text: '出了牌。' };
   });
 
 describe('World 牌桌版本同步', () => {
+  it('通用 state 读到的新版本供省略桌号的下一次行动使用', async () => {
+    vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue({
+      seq: ++seq, at: '测试时刻', table: { ...snapshot.table!, revision: 8 },
+      tablePrivate: { ...snapshot.tablePrivate!, revision: 8 },
+    });
+    await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler({ op: 'state' }, {} as ToolCallContext);
+    const action = expectRevision(8);
+    await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler({ action: 'play', params: { cards: ['3'] } }, {} as ToolCallContext);
+    expect(action.mock.calls[0][1]).toMatchObject({ type: 'game_action', table: 't1', revision: 8 });
+  });
   it('通用工具直接使用服务器目录，支持本地尚未注册的游戏', async () => {
     const response = { ok: true, protocol: 'parlor.game.v1', game: { id: 'future' } };
     const query = vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue(response);
-    const info = await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler(
+    const info = await toolForOperation(world, 'parlor_game_info')!.handler(
       { op: 'describe', game: 'future' }, {} as ToolCallContext,
     );
     expect(JSON.parse(typeof info === 'string' ? info : info.text)).toEqual(response);
     expect(query.mock.calls[0][1]).toEqual({ op: 'describe', game: 'future' });
     const action = vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
     const args = { table: 'future-table', action: 'fly', params: { altitude: 3 }, revision: 1 };
-    const output = await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(args, {} as ToolCallContext);
+    const output = await toolForOperation(world, 'parlor_game_action')!.handler(args, {} as ToolCallContext);
     expect(JSON.parse(typeof output === 'string' ? output : output.text).ok).toBe(true);
     expect(action.mock.calls[0][1]).toMatchObject({ ...args, type: 'game_action', requestId: expect.any(String) });
-    await world.tools().find(tool => tool.name === 'parlor_table_open')!.handler({ game: 'future' }, {} as ToolCallContext);
+    await toolForOperation(world, 'parlor_table_open')!.handler({ game: 'future' }, {} as ToolCallContext);
     expect(action.mock.calls[1][1]).toMatchObject({ type: 'table_open', game: 'future' });
   });
 
@@ -90,7 +101,7 @@ describe('World 牌桌版本同步', () => {
     const action = vi.spyOn(ParlorClient.prototype, 'action')
       .mockRejectedValueOnce(new TypeError('fetch failed'))
       .mockResolvedValueOnce({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
-    const tool = world.tools().find(tool => tool.name === 'parlor_game_action')!;
+    const tool = toolForOperation(world, 'parlor_game_action')!;
     await tool.handler({ table: 't1', action: 'play', params: { cards: ['3'] }, revision: 2 }, {} as ToolCallContext);
     expect(action.mock.calls).toHaveLength(2);
     expect(action.mock.calls[0][1]).toEqual(action.mock.calls[1][1]);
@@ -108,7 +119,7 @@ describe('World 牌桌版本同步', () => {
       tablePrivate: { game: 'werewolf', seat: 'mine', tableId: 't1', canAct: false, text: result },
     };
     vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
-    const output = await world.tools().find(tool => tool.name === 'parlor_werewolf_action')!.handler(
+    const output = await toolForOperation(world, 'parlor_werewolf_action')!.handler(
       { windowId: 'w1', move: 'inspect', target: 3 }, {} as ToolCallContext,
     );
     expect(typeof output === 'string' ? output : output.text).toContain(result);

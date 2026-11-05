@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -84,14 +85,14 @@ describe('客厅 World', () => {
     const message = host.events.find((event) => event.type === 'parlor.message')!;
     expect(message.text).toContain('阿岚：@小满 你好');
 
-    const say = world.tools().find((tool) => tool.name === 'parlor_say')!;
+    const say = toolForOperation(world, 'parlor_say')!;
     const said = String(await say.handler({ text: '大家好' }, {} as ToolCallContext));
     expect(said).toContain('服务器已收下');
     expect(said).toMatch(/服务器时刻 UTC\+8/);
     const snapshot = await client.snapshot(friend.token, 0, 50);
     expect(snapshot.events.map((event) => event.text)).toContain('大家好');
 
-    const whisper = world.tools().find((tool) => tool.name === 'parlor_whisper')!;
+    const whisper = toolForOperation(world, 'parlor_whisper')!;
     const whispered = String(await whisper.handler({ to: '阿岚', text: '离线也看得到' }, {} as ToolCallContext));
     expect(whispered).toContain('服务器已收下');
     expect(whispered).toContain('已投递到');
@@ -105,12 +106,12 @@ describe('客厅 World', () => {
     }, {} as ToolCallContext));
     expect(byHandle).toContain('服务器已收下');
 
-    const replay = world.tools().find((tool) => tool.name === 'parlor_replay')!;
+    const replay = toolForOperation(world, 'parlor_replay')!;
     const replayText = String(await replay.handler({ limit: 50 }, {} as ToolCallContext));
     expect(replayText).toContain('【回放】最近 7 天');
     expect(replayText).toContain('大家好');
 
-    const look = world.tools().find((tool) => tool.name === 'parlor_look')!;
+    const look = toolForOperation(world, 'parlor_look')!;
     const looked = String(await look.handler({}, {} as ToolCallContext));
     expect(looked).toContain('阿岚');
     expect(looked).toContain('小满');
@@ -124,7 +125,7 @@ describe('客厅 World', () => {
     const tail = String(await look.handler({ limit: 1 }, {} as ToolCallContext));
     expect(tail).toContain('最后一条测试');
 
-    const setTier = world.tools().find((tool) => tool.name === 'parlor_set_tier')!;
+    const setTier = toolForOperation(world, 'parlor_set_tier')!;
     expect(String(await setTier.handler({ tier: 'quiet' }, {} as ToolCallContext))).toContain('只 @');
     const mine = await client.snapshot(secrets.PARLOR_SEAT_TOKEN!, 0, 1);
     expect(mine.seat.tier).toBe('quiet');
@@ -145,10 +146,10 @@ describe('客厅 World', () => {
     const friend = await client.join('inv', { name: '阿岚' });
     await until(() => server.onlineSeats().length >= 1);
 
-    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    const open = toolForOperation(world, 'parlor_table_open')!;
     expect(String(await open.handler({ game: 'ddz' }, {} as ToolCallContext))).toContain('服务器已收下');
     await client.action(friend.token, { type: 'table_join' });
-    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    const start = toolForOperation(world, 'parlor_table_start')!;
     await start.handler({}, {} as ToolCallContext);
 
     const before = host.events.length;
@@ -164,7 +165,7 @@ describe('客厅 World', () => {
       .not.toContain('这句只有桌上看得见');
 
     // World 自己也能只对同桌说一句。
-    const tableSay = world.tools().find((tool) => tool.name === 'parlor_table_say')!;
+    const tableSay = toolForOperation(world, 'parlor_table_say')!;
     expect(String(await tableSay.handler({ text: '我也说一句' }, {} as ToolCallContext))).toContain('服务器已收下');
     expect((await client.snapshot(friend.token, 0, 100)).events.map((event) => event.text)).toContain('我也说一句');
   });
@@ -230,10 +231,10 @@ describe('客厅 World', () => {
     const friend = await client.join('inv', { name: '阿岚' });
     await until(() => server.onlineSeats().length >= 1);
 
-    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    const open = toolForOperation(world, 'parlor_table_open')!;
     expect(String(await open.handler({}, {} as ToolCallContext))).toContain('骰子桌开了');
     await client.action(friend.token, { type: 'table_join' });
-    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    const start = toolForOperation(world, 'parlor_table_start')!;
     const started = String(await start.handler({}, {} as ToolCallContext));
     expect(started).toContain('开局时桌上（服务器现读）');
     expect(started).toContain('阿岚');
@@ -249,7 +250,7 @@ describe('客厅 World', () => {
     const friendSnap = await client.snapshot(friend.token, 0, 100);
     expect(friendSnap.events.some((event) => event.type === 'parlor.table.turn' && event.text.includes('你的点数'))).toBe(false);
 
-    const view = world.tools().find((tool) => tool.name === 'parlor_table_view')!;
+    const view = toolForOperation(world, 'parlor_table_view')!;
     expect(String(await view.handler({}, {} as ToolCallContext))).toContain('你的点数');
   });
 
@@ -264,9 +265,9 @@ describe('客厅 World', () => {
     const host = new FakeHost();
     await world.start(host);
 
-    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    const open = toolForOperation(world, 'parlor_table_open')!;
     expect(String(await open.handler({ game: 'ddz' }, {} as ToolCallContext))).toContain('斗地主桌开了');
-    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    const start = toolForOperation(world, 'parlor_table_start')!;
     const started = String(await start.handler({}, {} as ToolCallContext));
     expect(started).toContain('陪练甲（脚本）');
     expect(started).toContain('陪练乙（脚本）');
@@ -275,9 +276,9 @@ describe('客厅 World', () => {
     const turn = host.events.find((event) => event.type === 'parlor.message' && event.text.includes('叫你当地主'))!;
     expect(turn.text).toContain('你的 17 张牌');
 
-    const bid = world.tools().find((tool) => tool.name === 'parlor_ddz_action')!;
+    const bid = toolForOperation(world, 'parlor_ddz_action')!;
     expect(String(await bid.handler({ move: 'bid', call: true }, {} as ToolCallContext))).toContain('叫了地主');
-    const view = world.tools().find((tool) => tool.name === 'parlor_table_view')!;
+    const view = toolForOperation(world, 'parlor_table_view')!;
     const text = String(await view.handler({}, {} as ToolCallContext));
     expect(text).toContain('你的牌（20 张）');
     expect(text).toContain('你是地主');
@@ -298,14 +299,14 @@ describe('客厅 World', () => {
     const client = new ParlorClient(server.url);
     const friend = await client.join('inv', { name: '阿岚' });
 
-    const gift = world.tools().find((tool) => tool.name === 'parlor_gift')!;
+    const gift = toolForOperation(world, 'parlor_gift')!;
     expect(String(await gift.handler({ to: '阿岚', text: '一杯奶茶', chips: 30 }, {} as ToolCallContext)))
       .toContain('30 枚筹码');
 
     expect(world.tools().some(tool => ['parlor_promise','parlor_respond'].includes(tool.name))).toBe(false);
     const friendMail = await client.mail(friend.token, 10);
     expect(friendMail.items.some(item=>item.kind==='gift')).toBe(true);
-    const ledger=world.tools().find(tool=>tool.name==='parlor_ledger')!;
+    const ledger=toolForOperation(world, 'parlor_ledger')!;
     expect(String(await ledger.handler({},{} as ToolCallContext))).toContain('筹码：');
   });
 
@@ -323,18 +324,18 @@ describe('客厅 World', () => {
 
     const client = new ParlorClient(server.url);
     const friend = await client.join('inv', { name: '阿岚' });
-    const open = world.tools().find((tool) => tool.name === 'parlor_table_open')!;
+    const open = toolForOperation(world, 'parlor_table_open')!;
     expect(String(await open.handler({}, {} as ToolCallContext))).toContain('骰子桌开了');
     await client.action(friend.token, { type: 'table_join' });
-    const start = world.tools().find((tool) => tool.name === 'parlor_table_start')!;
+    const start = toolForOperation(world, 'parlor_table_start')!;
     expect(String(await start.handler({}, {} as ToolCallContext))).toContain('开始了');
 
-    const act = world.tools().find((tool) => tool.name === 'parlor_table_action')!;
-    await act.handler({ action: 'stand' }, {} as ToolCallContext);
+    const act = world.tools().find(tool => tool.name === 'parlor_game_action')!;
+    expect(String(await act.handler({ action: 'stand', params: {} }, {} as ToolCallContext))).toContain('停牌');
     await client.action(friend.token, { type: 'table_action', action: 'stand' });
     await until(() => server.kernel.tablePublic()?.status === 'ended');
 
-    const ledger = world.tools().find((tool) => tool.name === 'parlor_ledger')!;
+    const ledger = toolForOperation(world, 'parlor_ledger')!;
     const text = String(await ledger.handler({}, {} as ToolCallContext));
     expect(text).toContain('【账本】共 1 局');
     expect(text).toContain('按游戏：');
@@ -356,10 +357,10 @@ describe('客厅 World', () => {
     world = PARLOR.create(ctx);
     await world.start(new FakeHost());
 
-    const look = world.tools().find((tool) => tool.name === 'parlor_look')!;
+    const look = toolForOperation(world, 'parlor_look')!;
     expect(String(await look.handler({}, {} as ToolCallContext))).toContain('大富翁报名');
 
-    const monopoly = world.tools().find((tool) => tool.name === 'parlor_monopoly')!;
+    const monopoly = toolForOperation(world, 'parlor_monopoly')!;
     expect(String(await monopoly.handler({ action: 'join' }, {} as ToolCallContext))).toContain('报上了');
     expect(String(await look.handler({}, {} as ToolCallContext))).toContain('2/4');
 
@@ -371,7 +372,7 @@ describe('客厅 World', () => {
 
     expect(String(await monopoly.handler({ action: 'set_auto', on: true }, {} as ToolCallContext))).toContain('托管');
     const bad = await monopoly.handler({ action: 'nope' }, {} as ToolCallContext) as { text?: string };
-    expect(bad.text).toContain('action 只能是');
+    expect(bad.text).toContain('params.action');
   });
 });
 

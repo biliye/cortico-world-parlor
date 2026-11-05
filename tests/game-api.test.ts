@@ -6,7 +6,7 @@ import type { TableSummary } from '../src/room/table-engine.ts';
 describe('通用游戏协议', () => {
   it('新游戏不需要工具名，只用动作协议即可发现和转换参数', () => {
     const future: GameDefinition = {
-      ...gameById('gomoku')!, id: 'future', legacyToolName: undefined, singleAction: 'place',
+      ...gameById('gomoku')!, id: 'future', singleAction: 'place',
     };
     expect(gameActions(future).map(entry => entry.action)).toEqual(['place']);
     expect(gameActionBody(future, 'place', { row: 7, col: 8 })).toEqual({ type: 'gomoku_action', row: 7, col: 8 });

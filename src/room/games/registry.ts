@@ -6,7 +6,7 @@
  *   `actionType` / `toAction()` 把 `/v1/action` 的 body 变成引擎动作。
  * - 通用 HTTP/World：动作说明、参数 Schema 与转换放在 `action` 里，
  *   `availableActions()` 根据本人私视图提供当前动作。新游戏不再添加工具。
- *   `legacyToolName` / `extraTools` 仅兼容既有专属工具。
+ *   游戏目录与动作说明按需返回，不登记专属工具。
  * - 网页：`icon` 与 `label` 给牌桌栏/大厅卡片用（网页那份清单在
  *   `src/web/games/registry.js`，加游戏时同样登记一行——两个运行时不能共享模块）。
  *
@@ -40,7 +40,7 @@ export interface GameActionDecl {
   done(body: Record<string, unknown>): string;
 }
 
-export interface GameToolDecl extends GameActionDecl { name: string }
+
 
 export interface GameDefinition {
   id: string;
@@ -62,8 +62,6 @@ export interface GameDefinition {
   /** 多动作游戏的判别字段；单动作游戏不填，动作名用 singleAction。 */
   actionKey?: 'action' | 'move';
   singleAction?: string;
-  /** 只为已存在的工具保留兼容；新增游戏不填。 */
-  legacyToolName?: string;
   /** 从已按本人身份投影的私视图取得当前可用动作名。 */
   availableActions(view: Record<string, unknown>): string[];
   /**
@@ -83,15 +81,13 @@ export interface GameDefinition {
    * 一个动作之后紧接着要在同一回合里做下一步，不能让 Coo 干等下一次叫醒。
    */
   attachPrivateOnAct?: boolean;
-  /** 同一游戏除 `tool` 之外的查询工具（狼人杀的历史/复盘）。 */
-  extraTools?: GameToolDecl[];
 }
 
 const dice: GameDefinition = {
   id: 'dice',
   label: '骰子',
   icon: 'dice',
-  openHint: '等人坐下后用 parlor_table_start 开始。',
+  openHint: '等人坐下后用 parlor_table {op:"start"} 开始。',
   rules: ['每人两颗暗骰，回合中可重掷一颗或停牌，每人最多重掷两次。', '结束后揭晓骰子，点数和最高者获胜，同分并列；超时自动停牌。'],
   create: (ctx) => new DiceTable({
     host: ctx.host,
@@ -101,7 +97,6 @@ const dice: GameDefinition = {
   actionType: 'table_action',
   toAction: (body) => ({ type: String(body.action ?? ''), die: body.die }),
   revisionMode: 'strict',
-  legacyToolName: 'parlor_table_action',
   actionKey: 'action',
   availableActions: (view) => view.yourTurn === true
     ? (Number(view.rerollsLeft) > 0 ? ['roll', 'stand'] : ['stand']) : [],
@@ -131,13 +126,12 @@ const ddz: GameDefinition = {
   id: 'ddz',
   label: '斗地主',
   icon: 'cards',
-  openHint: '（3 席，空位由脚本陪练补）用 parlor_table_start 开始；叫地主时会叫你。',
+  openHint: '（3 席，空位由脚本陪练补）用 parlor_table {op:"start"} 开始；叫地主时会叫你。',
   rules: ['三席斗地主，先叫地主，再轮流出牌；地主独自对抗两名农民，先出完手牌的一方获胜。', '同型同长度比主牌，炸弹压普通牌，王炸最大；领出不能过牌。牌用点数表示，小王 SJ、大王 BJ。', '本人桌面提供手牌、可过判断及合法出牌建议，超时按服务端规则代打。'],
   create: (ctx) => new DoudizhuTable({ host: ctx.host, now: ctx.now }),
   actionType: 'ddz_action',
   toAction: (body) => ({ move: body.move, call: body.call, cards: body.cards }),
   revisionMode: 'strict',
-  legacyToolName: 'parlor_ddz_action',
   actionKey: 'move',
   availableActions: (view) => view.yourTurn !== true ? [] : view.status === 'bidding'
     ? ['bid'] : view.status === 'playing' ? (view.canPass === true ? ['play', 'pass'] : ['play']) : [],
@@ -180,7 +174,7 @@ const werewolf: GameDefinition = {
   id: 'werewolf',
   label: '狼人杀',
   icon: 'moon',
-  openHint: `开桌可选 6／9／12 席（默认 9），至少一只 Coo。坐满后用 parlor_table_start 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
+  openHint: `开桌可选 6／9／12 席（默认 9），至少一只 Coo。坐满后用 parlor_table {op:"start"} 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
   rules: ['六、九或十二席狼人杀，服务端分配身份；本人桌面只显示获准知道的身份、查验与队内消息。', '夜晚按角色操作，白天按顺序发言、投票放逐；操作只能使用当前窗口，已经提交的槽不能重复提交。', '发言与狼聊走游戏动作；目标用桌内座号。每个角色的技能、可用药与当前行动，以本人桌面为准。'],
   create: (ctx) => new WerewolfTable({
     host: ctx.host,
@@ -199,7 +193,6 @@ const werewolf: GameDefinition = {
   }),
   revisionMode: 'window',
   attachPrivateOnAct: true,
-  legacyToolName: 'parlor_werewolf_action',
   actionKey: 'move',
   availableActions: (view) => view.canAct !== true || typeof view.myMove !== 'string' ? []
     : view.myMove === 'speak' ? ['speak', 'pass_speech'] : [view.myMove],
@@ -225,7 +218,7 @@ const werewolf: GameDefinition = {
       const legal = ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'guard', 'witch', 'shoot'];
       if (!legal.includes(move)) throw new Error(`move 只能是 ${legal.join(' / ')}`);
       const windowId = String(args.windowId ?? '').trim();
-      if (!windowId) throw new Error('要带上桌面给你的 windowId（先 parlor_table_view 看一眼）');
+      if (!windowId) throw new Error('要带上桌面给你的 windowId（先 parlor_game_info {op:"state"} 看一眼）');
       const body: Record<string, unknown> = { type: 'werewolf_action', move, windowId };
       if (args.text !== undefined) {
         if (move !== 'speak' && move !== 'wolf_chat') throw new Error('text 只用于 speak 或 wolf_chat');
@@ -261,25 +254,7 @@ const werewolf: GameDefinition = {
       }
     },
   },
-  extraTools: [
-    {
-      name: 'parlor_werewolf_log',
-      description: '看狼人杀历史发言、票型和死亡记录。终局后参与者可查看夜间复盘。',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          table: { type: 'string', description: 'Table id; defaults to your current table.' },
-          day: { type: 'integer', description: 'Filter by day number.' },
-          seatNo: { type: 'integer', description: 'Filter by seat number.' },
-          limit: { type: 'integer', description: 'Max speeches to return (1-200, default 100).' },
-          review: { type: 'boolean', description: 'After the game ended: include the internal night record.' },
-        },
-      },
-      toBody: (args) => ({ type: 'werewolf_log', ...(args.table ? { table: String(args.table) } : {}), ...(args.day !== undefined ? { day: Number(args.day) } : {}), ...(args.seatNo !== undefined ? { seatNo: Number(args.seatNo) } : {}), ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}), ...(args.review === true ? { review: true } : {}) }),
-      done: () => '查完了。',
-    },
-  ],
+
 };
 
 const monopoly2d: GameDefinition = {
@@ -298,7 +273,6 @@ const monopoly2d: GameDefinition = {
   revisionMode: 'strict',
   allowsStake: false,
   attachPrivateOnAct: true,
-  legacyToolName: 'parlor_monopoly2d_action',
   actionKey: 'move',
   availableActions: (view) => view.canAct === true && Array.isArray(view.moves)
     ? view.moves.filter((move): move is string => typeof move === 'string'
@@ -348,11 +322,10 @@ const gomoku: GameDefinition = {
   revisionMode: 'strict',
   allowsStake: false,
   toAction: ({ row, col }) => ({ row, col }),
-  legacyToolName: 'parlor_gomoku_action',
   singleAction: 'place',
   availableActions: (view) => view.canAct === true ? ['place'] : [],
   action: {
-    description: '五子棋轮到你时落子，行列从 0 到 14。用 parlor_table_view 看棋盘和下一步建议。',
+    description: '五子棋轮到你时落子，行列从 0 到 14。用 parlor_game_info {op:"state"} 看棋盘和下一步建议。',
     parameters: {
       type: 'object',
       additionalProperties: false,

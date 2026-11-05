@@ -24,10 +24,12 @@ import {
   type ActionRequest, type ActionResponse, type HallView, type MeView,
   type RoomEvent, type RoomSnapshot, type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
-import { GAME_LIST, gameById, type GameDefinition } from './room/games/registry.ts';
-import { GAME_ACTION_SCHEMA, validateParameters, type GameQuery } from './room/game-api.ts';
+import { gameById, type GameDefinition } from './room/games/registry.ts';
+import { GAME_ACTION_SCHEMA, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
+import { PARLOR_TOOL_DECLS, OPERATION_DECLS, TOOL_OPERATIONS, operationHelp } from './tool-contract.ts';
+export { PARLOR_TOOL_DECLS } from './tool-contract.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
@@ -99,373 +101,6 @@ const KIND_LABELS: Readonly<Record<string, string>> = { pet: 'Coo', human: '人'
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** 只登记既有兼容工具（含 extraTools）；新游戏不填写 legacyToolName。 */
-const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.flatMap((game) => [
-  ...(game.legacyToolName ? [{
-    name: game.legacyToolName,
-    description: game.action.description,
-    tags: ['write' as const],
-    parameters: game.action.parameters,
-  }] : []),
-  ...(game.extraTools ?? []).map((decl) => ({
-    name: decl.name,
-    description: decl.description,
-    tags: ['read' as const],
-    parameters: decl.parameters,
-  })),
-]);
-
-/** 全部工具的声明；定义里的 describe 与 `tools()` 都取它。 */
-export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
-  {
-    name: 'parlor_game_info', tags: ['read'],
-    description: '通用游戏查询。list 查服务器游戏目录，describe 查规则和动作参数，state 查桌面、本人秘密及当前可用动作，history 查获准查看的游戏历史。',
-    parameters: {
-      type: 'object', additionalProperties: false,
-      properties: {
-        op: { type: 'string', enum: ['list', 'describe', 'state', 'history'], description: '默认 list。' },
-        game: { type: 'string', description: 'describe 时填写服务器目录里的游戏 id。' },
-        table: { type: 'string', description: 'state/history 的桌号，省略时查自己的桌。' },
-        day: { type: 'integer', minimum: 1 }, seatNo: { type: 'integer', minimum: 1 },
-        limit: { type: 'integer', minimum: 1, maximum: 200 }, review: { type: 'boolean' },
-      },
-    },
-  },
-  {
-    name: 'parlor_game_action', tags: ['write'],
-    description: '通用游戏行动。先用 parlor_game_info state 读取桌号、当前动作名及 params 格式；严格回合原样带 revision，窗口制在 params 带 windowId。失败先重查状态；重试同次操作沿用 requestId。',
-    parameters: {
-      type: 'object', additionalProperties: false,
-      properties: {
-        table: { type: 'string', minLength: 1 }, action: { type: 'string', minLength: 1 },
-        params: { type: 'object', description: '按服务器返回的动作 Schema 填写，不能放身份或路由字段。' },
-        revision: { type: 'integer', minimum: 0 },
-        requestId: { type: 'string', minLength: 1, maxLength: 100, description: '可省略，由工具生成；网络重试复用。' },
-      },
-      required: ['table', 'action', 'params'],
-    },
-  },
-  {
-    name: 'parlor_feedback', tags: ['write'],
-    description: '向运营者提交私密反馈，省略 text 时查看自己的反馈和回复。保存回执表示已收件，重试沿用 requestId。',
-    parameters: { type: 'object', properties: { text: { type: 'string', maxLength: 2000 }, requestId: { type: 'string', maxLength: 100 } } },
-  },
-  {
-    name: 'parlor_announcements', tags: ['read'],
-    description: '查看最新的全站运营公告。',
-    parameters: { type: 'object', properties: {} },
-  },
-  {
-    name: 'parlor_look',
-    description: '查看客厅席位、牌桌和可见消息，不唤醒也不标已读。',
-    tags: ['read'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        since: { type: 'integer', minimum: 0, description: 'Start after this event cursor. Omit to read the recent tail.' },
-        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'How many events to read, default 30.' },
-      },
-    },
-  },
-  {
-    name: 'parlor_say',
-    description: '向当前客厅公开发言，可用 @名字 或 @#短号 点名。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        text: { type: 'string', description: 'What to say, at most 400 characters.' },
-      },
-      required: ['text'],
-    },
-  },
-  {
-    name: 'parlor_whisper',
-    description: '发一对一私信，可跨厅或离线投递；对方及其家长页可见。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        to: { type: 'string', description: '昵称、席位 id、Coo id 或 #短号。' },
-        text: { type: 'string', description: 'What to say, at most 400 characters.' },
-      },
-      required: ['to', 'text'],
-    },
-  },
-  {
-    name: 'parlor_set_tier',
-    description: 'Change how much of the parlor wakes you. full = every chat, digest = mentions plus a periodic summary, quiet = only mentions or whispers, off = nothing.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        tier: { type: 'string', enum: ['full', 'digest', 'quiet', 'off'], description: 'The new wake tier.' },
-      },
-      required: ['tier'],
-    },
-  },
-  {
-    name: 'parlor_gift',
-    description: '送一份私密礼物，可附筹码。收件人及其家长页可见。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        to: { type: 'string', description: 'Seat name or id.' },
-        text: { type: 'string', description: 'What the gift is / what you say, at most 200 characters.' },
-        chips: { type: 'integer', minimum: 1, maximum: 1000000, description: 'Optional chips to transfer with the gift.' },
-      },
-      required: ['to', 'text'],
-    },
-  },
-  {
-    name: 'parlor_mail',
-    description: '从最旧的未读开始取私信、礼物、邀请和账本通知；默认标已读。',
-    tags: ['read'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many letters to take, default 10.' },
-        peek: { type: 'boolean', description: 'Only look; do not mark them read.' },
-      },
-    },
-  },
-  {
-    name: 'parlor_ledger',
-    description: '查看自己的全局余额与战绩。指定 kind 分页查本人跨厅对局或筹码流水。',
-    tags: ['read'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        kind: { type: 'string', enum: ['games', 'chips'], description: 'games 对局；chips 筹码流水。以下筛选仅用于历史。' },
-        game: { type: 'string', description: '游戏 id。' },
-        room: { type: 'string', description: '来源客厅 id。' },
-        from: { type: 'integer', minimum: 0, description: '起始 Unix 毫秒。' },
-        until: { type: 'integer', minimum: 0, description: '截止 Unix 毫秒，不含。' },
-        before: { type: 'integer', minimum: 1, description: '下一页游标。' },
-        limit: { type: 'integer', minimum: 1, maximum: 50, description: '默认 20 条。' },
-      },
-    },
-  },
-  {
-    name: 'parlor_replay',
-    description: '查看最近 7 天公开和本人私密事件，按时间从早到晚列出，带游标和服务器时刻。',
-    tags: ['read'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many events to read, default 30.' },
-        before: { type: 'integer', minimum: 1, description: '用本页首条 seq 往前翻。' },
-      },
-    },
-  },
-  {
-    name: 'parlor_table_open',
-    description: '在客厅开桌并坐下。斗地主可由脚本补位，狼人杀可选 6／9／12 席，坐满后开局。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        game: { type: 'string', description: '服务器游戏目录中的 id；用 parlor_game_info list 查询。默认 dice。' },
-        stake: { type: 'integer', minimum: 0, maximum: 1000000, description: '每位真人玩家押注额，默认 0。' },
-        matchOpen: { type: 'boolean', description: '在公开厅开放匹配，默认关闭。' },
-        seatCount: { type: 'integer', enum: [6, 9, 12], description: '仅用于狼人杀。开局人数，默认 9。' },
-        requireHuman: { type: 'boolean', description: '仅用于狼人杀。true 要求至少一名真人入座，默认允许全 Coo 局。' },
-      },
-    },
-  },
-  {
-    name: 'parlor_table_join',
-    description: '加入等人桌。table、link、game 三选一；当前客厅只有一张等人桌时可全省略。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        table: { type: 'string', description: '当前客厅的桌号。' },
-        link: { type: 'string', description: '本站分享链接，可跨厅入桌。' },
-        game: { type: 'string', description: '服务器目录中的游戏 id；快速匹配公开厅主动开放的无押注桌，无匹配时留在原厅。' },
-        requestId: { type: 'string', description: '重试同一次加入时沿用。' },
-      },
-    },
-  },
-  {
-    name: 'parlor_table_discovery',
-    description: '在公开厅等人桌设置匹配或发招募。桌主改匹配；同桌可首发，作者和桌主可修改或撤回。',
-    tags: ['write'],
-    parameters: { type: 'object', additionalProperties: false, properties: {
-      table: { type: 'string', description: '省略时使用自己的桌。' },
-      matchOpen: { type: 'boolean' },
-      text: { type: 'string', maxLength: 200 },
-      withdraw: { type: 'boolean', description: 'true 撤回招募，不能同时写 text。' },
-      requestId: { type: 'string', description: '重试沿用原编号。' },
-    } },
-  },
-  {
-    name: 'parlor_table_leave',
-    description: '退出等人桌，桌主退出则收桌。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        table: { type: 'string', description: 'Table id; omit for your current table.' },
-      },
-    },
-  },
-  {
-    name: 'parlor_table_start',
-    description: 'Start the table you opened. Dice needs at least two players; 斗地主 fills empty seats with script players.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        table: { type: 'string', description: 'Table id; omit for your current table.' },
-      },
-    },
-  },
-  {
-    name: 'parlor_table_view',
-    description: '只读查看牌桌。省略桌号时看自己的私密桌面，没入桌时看公开牌桌。',
-    tags: ['read'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        table: { type: 'string', description: 'Table id to read; omit for your own table / the list.' },
-      },
-    },
-  },
-  {
-    name: 'parlor_table_say',
-    description: '发同桌聊天，同桌成员及其家长页可见。狼人杀正式发言用游戏动作。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        text: { type: 'string', description: 'What to say, at most 400 characters.' },
-        table: { type: 'string', description: 'Table id; omit for your current table.' },
-      },
-      required: ['text'],
-    },
-  },
-  // 既有专属工具兼容层；新增游戏统一使用 parlor_game_info / parlor_game_action。
-  ...GAME_TOOL_DECLS,
-  {
-    name: 'parlor_monopoly',
-    description: '在支持大富翁的旧服务器报名或行动。回合先用道具再掷骰，落地后按本人桌面选择。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        action: {
-          type: 'string',
-          enum: ['open', 'join', 'leave', 'cancel', 'start', 'set_auto', 'roll', 'use_item', 'buy', 'upgrade', 'take_item', 'pass'],
-          description: 'open = 开报名；join/leave = 报名/退出；cancel = 发起人取消；start = 发起人开局；set_auto = 本人托管开关；其余是回合动作。',
-        },
-        size: { type: 'integer', enum: [4, 6], description: 'open 时的人座数，默认 4。' },
-        pace: { type: 'string', enum: ['standard', 'quick'], description: 'open 时的节奏：standard 30 分钟/回合，quick 5 分钟/回合。' },
-        bots: { type: 'integer', minimum: 0, maximum: 5, description: 'open/start 时补几个脚本陪练；默认补到人数够，最多 2 个。' },
-        on: { type: 'boolean', description: 'set_auto 用：true 托管，false 取消。' },
-        item: { type: 'string', enum: ['signpost', 'pass', 'repair'], description: 'use_item / take_item 用：signpost 路标卡、pass 通行卡、repair 修缮卡。' },
-        steps: { type: 'integer', minimum: 1, maximum: 6, description: 'use_item(signpost) 走几格，1–6。' },
-        target: { type: 'integer', description: 'use_item(repair) 修哪一块自己的地：格号。' },
-      },
-      required: ['action'],
-    },
-  },
-  {
-    name: 'parlor_rooms',
-    description: '查看当前位置及可进入的客厅，或只读查看大厅牌桌招募。',
-    tags: ['read'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: { recruitments: { type: 'boolean', description: 'true 查招募及分享链接，不移动。' } },
-    },
-  },
-  {
-    name: 'parlor_room_create',
-    description: 'Create a room: name (2–32 chars), visibility public/unlisted/private, a fixed capacity of 30 talking seats, and optional topic. You do not enter it automatically; use parlor_room_visit afterwards.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        name: { type: 'string', description: 'Room name, 2–32 characters.' },
-        visibility: { type: 'string', enum: ['public', 'unlisted', 'private'], description: 'public = listed in the directory; unlisted = reachable with the invite; private = invite only.' },
-        topic: { type: 'string', description: 'One line shown in the directory.' },
-      },
-      required: ['name'],
-    },
-  },
-  {
-    name: 'parlor_room_visit',
-    description: '换客厅或返回大厅（hall），保留成员资格。未离开活动牌桌时不能换厅。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        room: { type: 'string', description: '客厅 id、确切名称或 hall。' },
-      },
-      required: ['room'],
-    },
-  },
-  {
-    name: 'parlor_invite_accept',
-    description: '接受私密厅邀请并成为成员；以回执确认是否已进入。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'string', description: 'Invitation id from parlor_mail.' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'parlor_invite_decline',
-    description: 'Decline a private-room invitation by its id.',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'string', description: 'Invitation id from parlor_mail.' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'parlor_invite',
-    description: '邀请 Coo 或已登记网页玩家身份的家长，支持跨厅和离线投递。私密厅邀请须由对方接受。',
-    tags: ['write'],
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        to: { type: 'string', description: '昵称、Coo id、#短号或家长名。' },
-        room: { type: 'string', description: 'Room id or name; default is your current room.' },
-        text: { type: 'string', description: 'Optional short line, at most 200 characters.' },
-      },
-      required: ['to'],
-    },
-  },
-];
 
 export class ParlorWorld implements World {
   readonly id = 'parlor';
@@ -494,6 +129,7 @@ export class ParlorWorld implements World {
   private focused = false;
   /** 我在哪张桌上、看到的是哪一版；多桌时动作靠这两个字段选桌与防迟到。 */
   private myTableId?: string;
+  private myTableGame?: string;
   /** 换厅期间先收掉旧流，再使用新身份建流；同时挡住另一笔换厅/匹配。 */
   private switchingRoom = false;
   private myTableRevision?: number;
@@ -545,7 +181,48 @@ export class ParlorWorld implements World {
   }
 
   tools(): ToolDef[] {
-    const byName = new Map(PARLOR_TOOL_DECLS.map((decl) => [decl.name, decl]));
+    const handlers: Record<string, (args: Record<string, unknown>) => Promise<string | ToolOutcome> | string> = {
+      parlor_query: args => {
+        const op = args.op === undefined ? 'room' : String(args.op);
+        if (op === 'help') {
+          const params = (args.params ?? {}) as Record<string, unknown>;
+          validateParameters({ type: 'object', additionalProperties: false, properties: { topic: { type: 'string' } } }, params);
+          return JSON.stringify(operationHelp(params.topic as string | undefined));
+        }
+        return this.groupOperation('query', op, args.params);
+      },
+      parlor_room: args => this.groupOperation('room', String(args.op), args.params),
+      parlor_table: args => this.groupOperation('table', String(args.op), args.params),
+      parlor_message: args => {
+        const { scope, ...params } = args;
+        return this.groupOperation('message', String(scope), params);
+      },
+      parlor_game_info: args => this.gameInfo(args),
+      parlor_game_action: args => this.genericGameAct(args),
+      parlor_gift: args => this.sendGift(args),
+      parlor_set_tier: args => this.setTier(args),
+      parlor_feedback: args => this.supportRequest('feedback', args),
+    };
+    return PARLOR_TOOL_DECLS.map(decl => ({ ...decl, handler: async args => {
+      try {
+        validateParameters(decl.parameters, args);
+        return await handlers[decl.name](args);
+      } catch (error) { return this.failed(messageOf(error)); }
+    } }));
+  }
+
+  private async groupOperation(group: string, op: string, input: unknown): Promise<string | ToolOutcome> {
+    const operations = TOOL_OPERATIONS[group];
+    if (!operations || !Object.hasOwn(operations, op)) return this.failed('未知操作，请先用 parlor_query help 查询参数');
+    const operation = this.operationTools().find(tool => tool.name === operations[op])!;
+    const args = input === undefined ? {} : input;
+    if (group === 'query' && op === 'feedback') validateParameters({ type: 'object', additionalProperties: false }, args);
+    validateParameters(operation.parameters, args);
+    return operation.handler(args as Record<string, unknown>, {} as never);
+  }
+
+  private operationTools(): ToolDef[] {
+    const byName = new Map(OPERATION_DECLS.map((decl) => [decl.name, decl]));
     const tool = (name: string, handler: ToolDef['handler']): ToolDef => ({ ...byName.get(name)!, handler });
     return [
       tool('parlor_game_info', (args) => this.gameInfo(args)),
@@ -575,18 +252,6 @@ export class ParlorWorld implements World {
       }, '桌子开始了；轮到你时会被叫醒。')),
       tool('parlor_table_view', (args) => this.tableView(args)),
       tool('parlor_table_say', (args) => this.tableSay(args)),
-      ...GAME_LIST.flatMap((game) => game.legacyToolName
-        ? [tool(game.legacyToolName, (args) => this.gameAct(game, args))] : []),
-      // 同一游戏的查询工具（狼人杀的历史/复盘）：只有 werewolf 目前有。
-      ...GAME_LIST.flatMap((game) => (game.extraTools ?? []).map((decl) => tool(decl.name, async (args) => {
-        let body: Record<string, unknown>;
-        try {
-          body = decl.toBody(args);
-        } catch (error) {
-          return this.failed(messageOf(error));
-        }
-        return await this.werewolfLog(body);
-      }))),
       tool('parlor_monopoly', (args) => this.monopolyAct(args)),
       tool('parlor_rooms', (args) => args.recruitments === true ? this.tableRecruitments() : this.rooms()),
       tool('parlor_room_create', (args) => this.createRoom(args)),
@@ -695,7 +360,7 @@ export class ParlorWorld implements World {
       source: this.id,
       origin: 'internal',
       senderKey: this.id,
-      text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.seat?.handle ? ` #${this.seat.handle}` : ''}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_mail 看。` : ''}`,
+      text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.seat?.handle ? ` #${this.seat.handle}` : ''}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_query {op:"mail"} 看。` : ''}`,
       meta: { room: this.currentRoom, seat: this.seat?.id, address: this.baseUrl },
     }, { trigger: 'flush' });
   }
@@ -926,11 +591,14 @@ export class ParlorWorld implements World {
       && snapshot.table !== undefined && snapshot.table.status !== 'ended';
     this.mailUnread = snapshot.mailUnread ?? this.mailUnread;
     if (priv) {
+      const game = priv.game ?? snapshot.table?.game;
+      if (typeof game === 'string') this.myTableGame = game;
       if (typeof priv.tableId === 'string') this.myTableId = priv.tableId;
       if (typeof priv.revision === 'number') this.myTableRevision = priv.revision;
     } else {
       // 不在桌上：清掉旧桌号，免得动作打到上一局。
       this.myTableId = undefined;
+      this.myTableGame = undefined;
       this.myTableRevision = undefined;
     }
     if (wasFocused && !this.focused) void this.flushFocus();
@@ -1185,6 +853,7 @@ export class ParlorWorld implements World {
       if (table?.seat === this.seat.id && typeof tableId === 'string'
         && typeof table.revision === 'number' && this.acceptTableState(event.seq)) {
         this.myTableId = tableId;
+        if (typeof table.game === 'string') this.myTableGame = table.game;
         this.myTableRevision = table.revision;
         this.focused = table.status !== 'ended';
       }
@@ -1401,7 +1070,7 @@ export class ParlorWorld implements World {
         ? { text: args.text, requestId: typeof args.requestId === 'string' ? args.requestId : randomUUID() } : undefined;
       const result = await this.client.support(this.token, action, body);
       if (body && result.feedback && !Array.isArray(result.feedback)) {
-        return `反馈已保存，编号 ${result.feedback.id}。仅你和运营者可见；不代表运营者已读。用 parlor_feedback 查看回复。`;
+        return `反馈已保存，编号 ${result.feedback.id}。仅你和运营者可见；不代表运营者已读。用 parlor_query {op:"feedback"} 查看回复。`;
       }
       if (action === 'announcements') return result.announcements?.map(item => `【运营公告 ${item.id}】${item.text}`).join('\n\n') || '暂时没有运营公告。';
       return Array.isArray(result.feedback) ? result.feedback.map(item => `【${item.id} · ${item.status === 'closed' ? '已处理' : '待处理'}】${item.text}\n运营回复：${item.reply || '暂无'}`).join('\n\n') || '还没有提交反馈。' : '还没有提交反馈。';
@@ -1419,7 +1088,7 @@ export class ParlorWorld implements World {
       await this.host?.pushEvent({
         type: 'parlor.announcement', ts: nowIso(this.ctx.timezone), source: this.id, origin: 'external', senderKey: 'parlor-operator',
         text: unread.slice(0, 5).reverse().map(item => `【运营公告】${item.text}`).join('\n\n')
-          + (unread.length > 5 ? '\n更早的公告请用 parlor_announcements 查看。' : ''),
+          + (unread.length > 5 ? '\n更早的公告请用 parlor_query {op:"announcements"} 查看。' : ''),
         meta: { ids: unread.map(item => item.id) },
       }, { trigger: 'debounce' });
       this.seenAnnouncements = [...this.seenAnnouncements, ...unread.map(item => item.id)].slice(-100);
@@ -1437,14 +1106,14 @@ export class ParlorWorld implements World {
       const here = me.seat?.room ?? this.currentRoom;
       const lines = [
         `我现在在：${this.roomLabel(here, me.rooms)}${me.seat ? `（席位 ${me.seat.name}）` : '（不在任何客厅）'}。`,
-        '返回大厅：parlor_room_visit {room:"hall"}。',
+        '返回大厅：parlor_room {op:"visit",params:{room:"hall"}}。',
         '能去的客厅：',
       ];
       const sorted = [...me.rooms].sort((left, right) => (
         (right.id === here ? 1 : 0) - (left.id === here ? 1 : 0) || right.lastActiveAt - left.lastActiveAt
       ));
       if (here === 'hall') lines.push('- 大厅 · 我在这里');
-      if (sorted.length === 0) lines.push('- 暂时没有公开客厅；可以自己开一个（parlor_room_create）。');
+      if (sorted.length === 0) lines.push('- 暂时没有公开客厅；可以自己开一个（parlor_room create）。');
       for (const room of sorted) {
         lines.push(`- ${room.name}（${room.id}）· ${room.seats}/${room.capacity} 人`
           + ` · ${room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开' : '私密'}`
@@ -1463,7 +1132,7 @@ export class ParlorWorld implements World {
     if (!target) return this.failed('要写去哪：客厅 id 或名字');
     if (target === 'hall') {
       if (this.currentRoom === 'hall') return '已经在大厅里了。';
-      return this.switchToRoom(target, '到了大厅。成员资格保留，用 parlor_rooms 查看客厅。');
+      return this.switchToRoom(target, '到了大厅。成员资格保留，用 parlor_query {op:"rooms"} 查看客厅。');
     }
     if (target === this.currentRoom) return `已经在「${this.currentRoom}」里了。`;
     return this.switchToRoom(target, `到了「${target}」。`);
@@ -1492,7 +1161,7 @@ export class ParlorWorld implements World {
       const room = created.room;
       return `开好了：「${room.name}」（${room.id}）· ${room.capacity} 席 · `
         + `${room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开' : '私密'}。\n`
-        + `用 parlor_room_visit {room:"${room.id}"} 进去；用 parlor_invite 叫人。`;
+        + `用 parlor_room {op:"visit",params:{room:"${room.id}"}} 进去；用 parlor_room invite 叫人。`;
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -1524,7 +1193,7 @@ export class ParlorWorld implements World {
   private async answerInvite(args: Record<string, unknown>, action: 'accept' | 'decline'): Promise<string | ToolOutcome> {
     if (!this.client) return this.failed('还没连上客厅');
     const id = String(args.id ?? '').trim();
-    if (!id) return this.failed('要写邀请号（parlor_mail 里那串）');
+    if (!id) return this.failed('要写邀请号（parlor_query {op:"mail"} 里那串）');
     try {
       const result = await this.client.respondInvitation(this.token || undefined, id, action);
       if (action === 'decline') return '已经拒绝了这个邀请。';
@@ -1533,7 +1202,7 @@ export class ParlorWorld implements World {
       const moved = await this.switchToRoom(room, `接受了邀请，到了「${this.roomLabel(room)}」。`);
       if (typeof moved === 'string') return moved;
       return `接受了邀请，成员资格已经拿到；现在没进得去（可能满员或牌局锁着）。`
-        + `稍后用 parlor_room_visit {room:"${room}"}。`;
+        + `稍后用 parlor_room {op:"visit",params:{room:"${room}"}}。`;
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -1656,7 +1325,7 @@ export class ParlorWorld implements World {
       lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平${perGame ? `（${perGame}）` : ''}。`);
     }
     if (snapshot.ledger?.chips !== undefined) lines.push(`筹码：${snapshot.ledger.chips} 枚。`);
-    if ((snapshot.mailUnread ?? 0) > 0) lines.push(`信箱：${snapshot.mailUnread} 封未读（parlor_mail 看）。`);
+    if ((snapshot.mailUnread ?? 0) > 0) lines.push(`信箱：${snapshot.mailUnread} 封未读（parlor_query {op:"mail"} 看）。`);
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
     } else {
@@ -1760,7 +1429,7 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const id = String(args.id ?? '').trim();
     const action = String(args.action ?? '');
-    if (!id) return this.failed('要回应哪一条？用 parlor_ledger 看未了结里的 id');
+    if (!id) return this.failed('要回应哪一条？用 parlor_query {op:"account"} 看未了结里的 id');
     if (action !== 'accept' && action !== 'decline' && action !== 'done' && action !== 'cancel') {
       return this.failed('action 只能是 accept、decline、cancel 或 done');
     }
@@ -2086,15 +1755,47 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
       validateParameters(PARLOR_TOOL_DECLS.find(decl => decl.name === 'parlor_game_info')!.parameters, args);
-      return JSON.stringify(await this.client.games(this.token, args as GameQuery, this.roomArg()));
+      if (!this.multiRoom) {
+        if (args.op === 'state') return this.tableView(args);
+        if (args.op === 'describe') {
+          const game = gameById(String(args.game ?? ''));
+          return game && ['dice', 'ddz'].includes(game.id) ? JSON.stringify({ game: describeGame(game) }) : this.failed('旧单厅只支持 dice/ddz；长局用 parlor_table legacy_monopoly');
+        }
+        if (args.op === 'history') return this.failed('旧单厅游戏没有独立历史入口，请用 parlor_query history 查事件回放');
+        return JSON.stringify({ games: gameCatalog().filter(game => ['dice', 'ddz'].includes(game.id)) });
+      }
+      const token = this.token;
+      const room = this.currentRoom;
+      const result = await this.client.games(token, args as GameQuery, this.roomArg());
+      if (args.op === 'state' && this.seat && this.token === token && this.currentRoom === room
+        && Number.isSafeInteger(result.seq) && (!args.table || args.table === this.myTableId
+          || (result.tablePrivate as { seat?: string } | null)?.seat === this.seat.id)) {
+        this.applySnapshot({ ...(result as unknown as RoomSnapshot), id: room, seat: this.seat,
+          latest: result.seq as number, events: [], seats: [], maxSeats: 30, now: Date.now(), at: String(result.at ?? ''),
+        });
+      }
+      return JSON.stringify(result);
     } catch (error) { return this.failed(messageOf(error)); }
   }
 
   /** 不在客户端查游戏注册表，升级服务器即可让通用客户端操作新游戏。 */
   private async genericGameAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
+    if (!this.multiRoom) {
+      const game = gameById(String(args.game ?? this.myTableGame ?? ''));
+      if (!game || !['dice', 'ddz'].includes(game.id)) return this.failed('旧单厅游戏行动请指定 game: dice 或 ddz；长局用 parlor_table legacy_monopoly');
+      const decl = gameActions(game).find(entry => entry.action === args.action);
+      if (!decl) return this.failed('未知游戏动作');
+      validateParameters(decl.parameters, args.params);
+      return this.gameAct(game, { ...(args.params as Record<string, unknown>), ...(game.actionKey ? { [game.actionKey]: args.action } : {}),
+        ...(args.requestId !== undefined ? { requestId: args.requestId } : {}), ...(args.table !== undefined ? { table: args.table } : {}),
+      });
+    }
     const requestId = args.requestId === undefined ? randomUUID() : args.requestId;
-    const payload = { ...args, type: 'game_action', requestId };
+    const { game: _game, ...input } = args;
+    const table = args.table ?? this.myTableId;
+    const revision = args.revision ?? (table === this.myTableId ? this.myTableRevision : undefined);
+    const payload = { ...input, type: 'game_action', requestId, table, ...(revision !== undefined ? { revision } : {}) };
     try {
       validateParameters(GAME_ACTION_SCHEMA, payload, 'body');
       const send = () => this.client!.action(this.token, payload as Extract<ActionRequest, { type: 'game_action' }>, this.roomArg());
@@ -2110,8 +1811,9 @@ export class ParlorWorld implements World {
         type: 'parlor.table.werewolf.wolf_chat', direction: 'sent', sender: this.seat?.name || '孩子',
         recipient: '狼队', text: params.text as string, private: true,
       }));
-      await this.refreshFocus();
-      return JSON.stringify({ protocol: 'parlor.game.v1', ...result });
+      const snapshot = await this.refreshFocus();
+      const sameTable = snapshot?.table?.id === table || snapshot?.table?.tableId === table;
+      return JSON.stringify({ protocol: 'parlor.game.v1', ...(sameTable ? { tablePrivate: snapshot?.tablePrivate } : {}), ...result });
     } catch (error) {
       return this.failed(`${messageOf(error)}\n本次 requestId: ${String(requestId)}。结果不明时先查 state；重试同次操作沿用此编号。`);
     }
@@ -2122,6 +1824,7 @@ export class ParlorWorld implements World {
     let body: Record<string, unknown>;
     try {
       body = game.action.toBody(args);
+      for (const key of ['table', 'requestId', 'revision'] as const) if (args[key] !== undefined) body[key] = args[key];
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -2257,7 +1960,7 @@ export class ParlorWorld implements World {
       const lines = [`服务器时刻：${snapshot.at}（UTC+8）。`];
       if (wanted) {
         const table = (snapshot.tables ?? []).find((entry) => entry.id === wanted || entry.tableId === wanted);
-        if (!table) return `这个客厅里没有桌号「${wanted}」；用 parlor_table_view 不带参数看列表。`;
+        if (!table) return `这个客厅里没有桌号「${wanted}」；用 parlor_game_info {op:"state"} 不带参数看列表。`;
         lines.push(`【${table.label} ${table.id}】${table.status === 'open' ? '还没开局' : table.status === 'playing' ? '进行中' : table.status}`);
         lines.push(table.text);
         return lines.join('\n');
@@ -2281,81 +1984,6 @@ export class ParlorWorld implements World {
       for (const table of tables) {
         lines.push(`- ${table.id} · ${table.label} · ${table.status === 'open' ? '等人' : table.status === 'playing' ? '进行中' : table.status}`);
       }
-      return lines.join('\n');
-    } catch (error) {
-      return this.failed(messageOf(error));
-    }
-  }
-
-  /** 狼人杀历史：公开发言/票型/死亡；终局后参与者可带 review 读夜间复盘。 */
-  private async werewolfLog(body: Record<string, unknown>): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
-    try {
-      const response = await this.client.tableLog(this.token, {
-        ...(typeof body.table === 'string' && body.table ? { table: body.table } : {}),
-        ...(typeof body.day === 'number' ? { day: body.day } : {}),
-        ...(typeof body.seatNo === 'number' ? { seatNo: body.seatNo } : {}),
-        ...(typeof body.limit === 'number' ? { limit: body.limit } : {}),
-        ...(body.review === true ? { review: true } : {}),
-      }, this.roomArg());
-      const log = response.log as {
-        status?: string;
-        day?: number;
-        speeches?: Array<{ day: number; kind: string; seatNo: number; text: string; passed: boolean }>;
-        votes?: Array<{
-          day: number; variant: string;
-          entries: Array<{ seatNo: number; target: number | null; timeout: boolean }>;
-          exiled?: number; tie?: number[];
-        }>;
-        deaths?: Array<{ seatNo: number; day: number; phase: string; cause?: string }>;
-        nights?: Array<{
-          day: number; kill: number | null; saved: boolean; poison?: number;
-          wolfChats: Array<{ seatNo: number; name: string; text: string }>;
-          killVotes: Array<[number, number | null]>;
-          inspections: Array<{ target: number; result: string }>;
-          deaths: Array<{ seatNo: number; cause: string }>;
-        }>;
-        potionLog?: Array<{ day: number; choice: string; target: number }>;
-        result?: { outcome: string };
-      };
-      const kindLabel = (kind: string): string => (kind === 'lastwords' ? '遗言' : kind === 'pk' ? 'PK' : '发言');
-      const lines: string[] = [`狼人杀历史（服务器时刻 ${response.at}）：`];
-      if (log.result) {
-        lines.push(`终局：${log.result.outcome === 'good' ? '好人胜' : log.result.outcome === 'wolf' ? '狼人胜' : '平局'}。`);
-      }
-      for (const speech of log.speeches ?? []) {
-        lines.push(speech.passed
-          ? `第${speech.day}天·${kindLabel(speech.kind)} ${speech.seatNo}号：（过麦）`
-          : `第${speech.day}天·${kindLabel(speech.kind)} ${speech.seatNo}号：${speech.text}`);
-      }
-      for (const round of log.votes ?? []) {
-        const detail = round.entries
-          .map((entry) => `${entry.seatNo}号→${entry.target === null ? (entry.timeout ? '超时弃' : '弃') : `${entry.target}号`}`)
-          .join('，');
-        lines.push(`第${round.day}天${round.variant === 'pk' ? '复投' : '投票'}：${detail}${round.exiled !== undefined ? `。放逐 ${round.exiled}号` : round.tie ? `。平票 ${round.tie.join('/')}号` : '。无人放逐'}`);
-      }
-      for (const death of log.deaths ?? []) {
-        lines.push(`第${death.day}${death.phase === 'night' ? '夜' : '天'}：${death.seatNo}号出局${death.cause ? `（${death.cause === 'wolf' ? '被刀' : death.cause === 'poison' ? '被毒' : death.cause === 'wolf_poison' ? '刀毒同中' : death.cause === 'vote' ? '被放逐' : '被枪带走'}）` : ''}。`);
-      }
-      for (const night of log.nights ?? []) {
-        const parts = [`第${night.day}夜复盘：`];
-        parts.push(night.kill === null ? '空刀' : `刀口 ${night.kill}号${night.saved ? '（被救）' : ''}`);
-        if (night.poison !== undefined) parts.push(`毒 ${night.poison}号`);
-        if (night.inspections.length > 0) {
-          parts.push(night.inspections.map((entry) => `查验 ${entry.target}号=${entry.result}`).join('、'));
-        }
-        if (night.killVotes.length > 0) {
-          parts.push(`刀票：${night.killVotes.map(([voter, target]) => `${voter}号→${target === null ? '弃' : `${target}号`}`).join('，')}`);
-        }
-        for (const chat of night.wolfChats) {
-          parts.push(`${chat.name}（${chat.seatNo}号）狼聊：「${chat.text}」`);
-        }
-        if (night.deaths.length > 0) {
-          parts.push(`死亡：${night.deaths.map((entry) => `${entry.seatNo}号(${entry.cause})`).join('、')}`);
-        }
-        lines.push(parts.join(' '));
-      }
-      if (lines.length === 1) lines.push('还没有可看的记录。');
       return lines.join('\n');
     } catch (error) {
       return this.failed(messageOf(error));

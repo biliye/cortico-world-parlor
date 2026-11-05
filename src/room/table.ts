@@ -383,7 +383,7 @@ export function formatPrivate(view: TablePrivate, now: number): string {
   ];
   if (view.yourTurn) {
     const deadline = view.deadline ? serverClockLabel(view.deadline) : '（服务器还没给出截止时刻）';
-    lines.push(`截止 ${deadline}，还剩 ${secondsLeft(view.deadline, now)} 秒：parlor_table_action {action:"roll", die:0|1} 重掷一颗；或 {action:"stand"} 停牌。`);
+    lines.push(`截止 ${deadline}，还剩 ${secondsLeft(view.deadline, now)} 秒：parlor_game_action {action:"roll",params:{die:0|1}} 重掷一颗；或 parlor_game_action {action:"stand",params:{}} 停牌。`);
   } else {
     lines.push('等对方行动。');
   }

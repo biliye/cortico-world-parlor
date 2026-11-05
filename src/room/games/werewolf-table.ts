@@ -362,7 +362,7 @@ export class WerewolfTable implements TableEngine {
     const action = (input ?? {}) as { move?: unknown; windowId?: unknown; text?: unknown; target?: unknown };
     const move = typeof action.move === 'string' ? action.move : '';
     const windowId = typeof action.windowId === 'string' ? action.windowId : '';
-    if (!windowId) throw new WerewolfError('bad_action', '缺少 windowId：先看一眼桌面（parlor_table_view），动作要带上窗口号');
+    if (!windowId) throw new WerewolfError('bad_action', '缺少 windowId：先看一眼桌面（parlor_game_info {op:"state"}），动作要带上窗口号');
     if (windowId !== this.phase.windowId) {
       throw new WerewolfError('expired', '这个窗口已经结束了：桌面进入了新阶段，重新看一眼再提交');
     }
@@ -1381,10 +1381,10 @@ export class WerewolfTable implements TableEngine {
             lines.push(`夜晚行动（${clock(phase.deadline)}）：`);
             const night = this.night!;
             if (!night.wolfChatDone.has(seat.seatNo)) {
-              lines.push(`① 狼队交流（每夜一条、150 字内）：parlor_werewolf_action {move:"wolf_chat", windowId:"${phase.windowId}", text:"…"}`);
+              lines.push(`① 狼队交流（每夜一条、150 字内）：parlor_game_action {action:"wolf_chat",params:{windowId:"${phase.windowId}", text:"…"}}`);
             }
             if (!night.killVotes.has(seat.seatNo)) {
-              lines.push(`② 刀票（一人一票，不带 target = 弃刀）：parlor_werewolf_action {move:"wolf_kill", windowId:"${phase.windowId}", target:座号}`);
+              lines.push(`② 刀票（一人一票，不带 target = 弃刀）：parlor_game_action {action:"wolf_kill",params:{windowId:"${phase.windowId}", target:座号}}`);
             }
             if (night.wolfChats.length > 0) {
               lines.push(`本夜狼聊：${night.wolfChats.map((entry) => `${entry.seatNo}号「${entry.text}」`).join('；')}`);
@@ -1395,11 +1395,11 @@ export class WerewolfTable implements TableEngine {
             lines.push('两个动作都交完就不用再等；到点锁定刀口。');
           } else if (pending === 'guard') {
             const previous = this.nightLog.at(-1)?.guarded;
-            lines.push(`守卫时间（${clock(phase.deadline)}）：parlor_werewolf_action {move:"guard", windowId:"${phase.windowId}", target:座号}。可守自己，不带 target 为空守。`);
+            lines.push(`守卫时间（${clock(phase.deadline)}）：parlor_game_action {action:"guard",params:{windowId:"${phase.windowId}", target:座号}}。可守自己，不带 target 为空守。`);
             if (previous != null) lines.push(`昨夜守了 ${previous} 号，今夜不能再守此人。`);
           } else if (pending === 'inspect') {
-            lines.push(`查验（${clock(phase.deadline)}）：parlor_werewolf_action {move:"inspect", windowId:"${phase.windowId}", target:座号}；不带 target = 今夜不查验。`);
-            lines.push('结果提交后立即显示在本人私视图，之后用 parlor_table_view 随时回看。');
+            lines.push(`查验（${clock(phase.deadline)}）：parlor_game_action {action:"inspect",params:{windowId:"${phase.windowId}", target:座号}}；不带 target = 今夜不查验。`);
+            lines.push('结果提交后立即显示在本人私视图，之后用 parlor_game_info {op:"state"} 随时回看。');
           } else {
             lines.push('夜里有人在行动；你不需要做任何事，天亮会公布结果。');
           }
@@ -1414,7 +1414,7 @@ export class WerewolfTable implements TableEngine {
           if (this.potions.poison > 0) {
             options.push('{choice:"poison", target:座号} 毒一名其他存活玩家');
           }
-          lines.push(`女巫时间（${clock(phase.deadline)}），本夜只能选一项：parlor_werewolf_action {move:"witch", windowId:"${phase.windowId}", choice:…}`);
+          lines.push(`女巫时间（${clock(phase.deadline)}），本夜只能选一项：parlor_game_action {action:"witch",params:{windowId:"${phase.windowId}", choice:…}}`);
           lines.push(`可选项：${options.join('；')}。药量：解药 ${this.potions.antidote}、毒药 ${this.potions.poison}。`);
           if (this.potions.antidote > 0 && night.kill !== null) lines.push(`今夜刀口：${night.kill}号。`);
         } else {
@@ -1426,8 +1426,8 @@ export class WerewolfTable implements TableEngine {
         if (phase.stage === 'speak' && pending === 'speak') {
           const label = phase.speechKind === 'lastwords' ? '遗言' : phase.speechKind === 'pk' ? 'PK 发言' : '发言';
           lines.push(`轮到你${label}（${clock(phase.deadline)}）。只此一条、最多 300 字：`);
-          lines.push(`parlor_werewolf_action {move:"speak", windowId:"${phase.windowId}", text:"…"}`);
-          lines.push(`不想说：parlor_werewolf_action {move:"pass_speech", windowId:"${phase.windowId}"}`);
+          lines.push(`parlor_game_action {action:"speak",params:{windowId:"${phase.windowId}", text:"…"}}`);
+          lines.push(`不想说：parlor_game_action {action:"pass_speech",params:{windowId:"${phase.windowId}"}}`);
         } else {
           lines.push(phase.stage === 'read' ? '发言间隙，大家在阅读。' : '现在不是你的发言机会。');
         }
@@ -1436,7 +1436,7 @@ export class WerewolfTable implements TableEngine {
       case 'vote': {
         if (pending === 'vote') {
           const scope = phase.voteVariant === 'pk' ? '只能投给进入 PK 的席位' : '不能投自己';
-          lines.push(`投票（${clock(phase.deadline)}）：parlor_werewolf_action {move:"vote", windowId:"${phase.windowId}", target:座号}；不带 target = 弃票。${scope}，提交后不能改，到点统一揭晓。`);
+          lines.push(`投票（${clock(phase.deadline)}）：parlor_game_action {action:"vote",params:{windowId:"${phase.windowId}", target:座号}}；不带 target = 弃票。${scope}，提交后不能改，到点统一揭晓。`);
         } else {
           lines.push(this.ballots.has(seat.seatNo) ? '你的票已经交了；到点统一揭晓。' : '这一轮你没有投票权。');
         }
@@ -1445,7 +1445,7 @@ export class WerewolfTable implements TableEngine {
       case 'shoot': {
         if (pending === 'shoot') {
           lines.push(`你是猎人，可以开枪带走一名其他存活玩家（${clock(phase.deadline)}）：`);
-          lines.push(`parlor_werewolf_action {move:"shoot", windowId:"${phase.windowId}", target:座号}；不带 target = 放弃。`);
+          lines.push(`parlor_game_action {action:"shoot",params:{windowId:"${phase.windowId}", target:座号}}；不带 target = 放弃。`);
         } else {
           lines.push('猎人的开枪窗口进行中。');
         }
@@ -1469,7 +1469,7 @@ export class WerewolfTable implements TableEngine {
         + (last.exiled !== undefined ? `。放逐：${last.exiled}号` : last.tie ? `。平票：${last.tie.join('/')}号` : '。无人放逐'));
     }
     const more = this.speeches.filter((entry) => entry.day < this.day).length;
-    if (more > 0) lines.push(`此前各天的完整发言与票型用 parlor_werewolf_log 查（或 parlor_table_view 看最近一轮）。`);
+    if (more > 0) lines.push(`此前各天的完整发言与票型用 parlor_game_info {op:"history"} 查（或 parlor_game_info {op:"state"} 看最近一轮）。`);
     return lines.join('\n');
   }
 
@@ -1478,7 +1478,7 @@ export class WerewolfTable implements TableEngine {
     const verdict = outcome === 'good' ? '好人阵营胜利' : outcome === 'wolf' ? '狼人阵营胜利' : '平局';
     const mine = seat.role ? `你是 ${ROLE_CARD_LABELS[seat.role]}（${FACTION_LABELS[factionOf(seat.role)]}）。` : '';
     const roles = this.seats.map((entry) => `${entry.seatNo}号 ${entry.name}=${ROLE_LABELS[entry.role!]}${entry.alive ? '' : '（出局）'}`).join('，');
-    return `【狼人杀·终局】${verdict}。${mine}\n全部身份：${roles}。感谢参与；这局的夜间复盘用 parlor_werewolf_log {review:true} 看。`;
+    return `【狼人杀·终局】${verdict}。${mine}\n全部身份：${roles}。感谢参与；这局的夜间复盘用 parlor_game_info {op:"history",review:true} 看。`;
   }
 
   publicText(): string {

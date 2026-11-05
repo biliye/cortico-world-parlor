@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -97,7 +98,7 @@ describe('换服务器与启动时改名', () => {
     await start();
     const client = new ParlorClient(server.url);
     const { room } = await client.createRoom({ name: '串门厅', visibility: 'public' }, secrets.PARLOR_SEAT_TOKEN);
-    const tool = world!.tools().find(t => t.name === 'parlor_room_visit')!;
+    const tool = toolForOperation(world!, 'parlor_room_visit')!;
     await tool.handler({ room: room.id }, {} as ToolCallContext);
     const before = await snapshot();
     await world!.stop();

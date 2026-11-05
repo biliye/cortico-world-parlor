@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -64,7 +65,7 @@ describe('全局身份的入场与续席边界', () => {
     expect(secrets.PARLOR_SEAT_TOKEN).toBe(token);
     expect(JSON.parse(readFileSync(identityFile, 'utf8'))).toEqual(identity);
     const tool = async (name: string, args: Record<string, unknown> = {}) => {
-      const value = await resumed.tools().find(t => t.name === name)!.handler(args, {} as any);
+      const value = await toolForOperation(resumed, name)!.handler(args, {} as any);
       return typeof value === 'string' ? value : value.text;
     };
     expect(await tool('parlor_say', { text: '权威停机仍能说话' })).toContain('服务器已收下');

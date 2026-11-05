@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 /** 多客厅 World：开客厅、串门、回大厅、邀请，以及专注 B。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
@@ -52,7 +53,7 @@ const makeContext = (secrets: Record<string, string>): WorldContext<ParlorConfig
 };
 
 const call = async (name: string, args: Record<string, unknown> = {}): Promise<string> => {
-  const tool = world!.tools().find((entry) => entry.name === name);
+  const tool = toolForOperation(world!, name);
   if (!tool) throw new Error(`没有工具 ${name}`);
   const result = await tool.handler(args, {} as ToolCallContext);
   return typeof result === 'string' ? result : result.text;
@@ -447,15 +448,15 @@ describe('World 多客厅', () => {
     expect(await call('parlor_room_visit', { room: 'hall' })).toContain('已经在大厅');
   });
 
-  it('开客厅固定 30 席，兼容旧参数并拒绝越界输入', async () => {
+  it('开客厅固定 30 席，合并入口拒绝未声明的容量参数', async () => {
     await startWorld();
-    const created = await call('parlor_room_create', { name: '大礼堂', visibility: 'public', capacity: 30 });
+    const created = await call('parlor_room_create', { name: '大礼堂', visibility: 'public' });
     expect(created).toContain('30 席');
-    expect(await call('parlor_room_create', { name: '旧小容量厅', capacity: 8 })).toContain('30 席');
+    expect(await call('parlor_room_create', { name: '旧小容量厅', capacity: 8 })).toContain('capacity');
     expect(await call('parlor_room_create', { name: '默认人数厅' })).toContain('30 席');
-    expect(world!.tools().find(t => t.name === 'parlor_room_create')!.parameters.properties).not.toHaveProperty('capacity');
-    expect(await call('parlor_room_create', { name: '超编厅', capacity: 31 })).toContain('2–30');
-    expect(await call('parlor_room_create', { name: '坏数厅', capacity: 12.5 })).toContain('2–30');
+    expect(toolForOperation(world!, 'parlor_room_create')!.parameters.properties).not.toHaveProperty('capacity');
+    expect(await call('parlor_room_create', { name: '超编厅', capacity: 31 })).toContain('capacity');
+    expect(await call('parlor_room_create', { name: '坏数厅', capacity: 12.5 })).toContain('capacity');
   });
 
   it('邀请跨客厅送到：对方收到 invite 事件与信，能顺着换房', async () => {

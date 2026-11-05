@@ -12,7 +12,7 @@ export const unitTests = [
   'visibility-interval', 'wake-budget', 'werewolf-e2e-flow', 'werewolf-inspections-web',
   'werewolf-rules', 'werewolf-sim', 'werewolf-start-web', 'werewolf-table',
   'werewolf-web', 'world-room-transition', 'world-support', 'world-table-revision', 'world-wake', 'world',
-  'test-runner',
+  'test-runner', 'tool-contract',
 ].map(name => `tests/${name}.test.ts`);
 
 export const pgSmokeTests = [

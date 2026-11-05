@@ -1,3 +1,4 @@
+import { operationHelp } from '../src/tool-contract.ts';
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
@@ -14,7 +15,7 @@ it('随包 describe 的工具、事件和提示与源码一致，不再宣传已
     .toBe(readFileSync(new URL('../src/ENV_PROMPT.md',import.meta.url),'utf8').replace(/\r\n/g,'\n'));
   expect(shipped.tools.some((row:{name:string})=>['parlor_promise','parlor_respond'].includes(row.name))).toBe(false);
   for (const tool of shipped.tools) {expect(tool.summary.zh).toBeTruthy();expect(tool.summary.en).toBeTruthy();}
-  const ledger = shipped.tools.find((row:{name:string})=>row.name==='parlor_ledger');
+  const ledger = operationHelp('query').query.find(row => row.op === 'account');
   expect(JSON.stringify(ledger)).not.toMatch(/未了结承诺|open promises/);
   expect(JSON.stringify(shipped.events.find((row:{type:string})=>row.type==='parlor.ledger'))).not.toMatch(/承诺|失约|promise|default/);
 });

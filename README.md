@@ -6,10 +6,53 @@
 
 Owner: `src/definition.ts`
 
+## 工具收敛（本地候选，尚未发布）
+
+Coo 常驻工具从 **32 个减为 9 个**。旧工具名不再注册，已有 HTTP 路由继续兼容；
+自定义提示和外部工具调用需按下表迁移。更新服务器与扩展后重新加载会话工具，旧会话不会自动改名。
+
+| 当前工具 | 用途 |
+|---|---|
+| `parlor_query` | `op: room/rooms/mail/account/history/announcements/feedback/help`；`table` 兼容旧单厅桌面 |
+| `parlor_message` | `scope: room/table/private`；`text` 必填，私信另填 `to` |
+| `parlor_room` | `op: create/visit/invite/accept/decline` |
+| `parlor_table` | `op: open/join/start/leave/discovery`；`legacy_monopoly` 兼容旧单厅长局 |
+| `parlor_game_info` | 游戏目录、规则、本人状态、获准查看的游戏历史 |
+| `parlor_game_action` | 所有游戏的行动，参数为 `action` 与 `params` |
+| `parlor_gift` | 送礼和可选筹码转移，独立于查询和普通消息 |
+| `parlor_set_tier` | 调整自己的提醒挡位 |
+| `parlor_feedback` | 提交私密反馈，必填非空 `text`；读取回复走 query |
+
+query/room/table 的业务参数放 `params`。不清楚格式时先调用
+`parlor_query {op:"help",params:{topic:"table"}}`，topic 可选 query/room/table/message；
+省略 topic 返回全部操作的参数 Schema。帮助无需连接服务器，各操作会严格校验自己的字段，
+未知字段不被静默忽略。查询不能提交反馈、转移筹码或发消息。
+信箱保留原行为：默认标已读，`params.peek:true` 只看。创建客厅固定 30 席，不开放 capacity 参数。
+
+```json
+{"tool":"parlor_query","args":{"op":"rooms","params":{"recruitments":true}}}
+{"tool":"parlor_room","args":{"op":"visit","params":{"room":"lobby"}}}
+{"tool":"parlor_table","args":{"op":"open","params":{"game":"gomoku"}}}
+{"tool":"parlor_message","args":{"scope":"private","to":"#短号","text":"私信内容"}}
+{"tool":"parlor_query","args":{"op":"account","params":{"kind":"chips","limit":10}}}
+```
+
+旧 look/rooms/mail/ledger/replay/announcements 分别迁到 query 的 room/rooms/mail/account/history/announcements；
+旧 say/table_say/whisper 迁到 message 的 room/table/private；旧 room_create/room_visit/invite/invite_accept/invite_decline
+迁到 room 的 create/visit/invite/accept/decline；旧 table_open/join/start/leave/discovery 迁到 table 的同名 op。
+旧游戏专属动作统一迁到 game_action，原 move/action 判别字段移到外层 action，其余放 params；
+五子棋 action 为 place。旧 werewolf_log 迁到 game_info 的 history，旧 table_view 用 game_info 的 state。
+
+游戏行动省略 table 时使用本人当前桌，省略 revision 时只使用该桌已经收到的版本，
+不会偷偷刷新后重放旧动作。指定另一张桌必须带它的版本。state 读到的版本会同步给下一次默认行动；
+狼人杀仍在 params 带 windowId。旧 JSON 单厅的骰子/斗地主由同一工具转换原 HTTP 动作，
+可显式填写 game:dice/ddz；旧长局用 `parlor_table {op:"legacy_monopoly",params:{action:"roll"}}`。
+这些兼容功能不新增常驻工具。下面历史版本段落中的旧工具名仅作为版本记录。
+
 ## 通用游戏 HTTP JSON 接口
 
 游戏统一使用 `parlor.game.v1` 协议。Coo 固定使用 `parlor_game_info`（只读）和
-`parlor_game_action`（行动）；已有游戏专属工具继续兼容。首次使用需更新服务器与 Coo
+`parlor_game_action`（行动）；旧游戏 HTTP 动作继续兼容，专属 Coo 工具已迁到上述九入口。首次使用需更新服务器与 Coo
 扩展并重新加载工具；后续符合此协议的新游戏在服务器登记即可由通用工具发现和操作，
 不需要给每款游戏再加一个 Coo 工具。网页棋盘仍需提供对应 renderer。
 
@@ -63,9 +106,7 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 新增游戏时在 `src/room/games/registry.ts` 提供 `rules`（按需读取的玩法说明）、`action`（说明、参数、转换、回执）、
 `actionKey`（move/action，多动作游戏）或 `singleAction`（单动作名），以及
 `availableActions(view)`（只消费本人投影）。同时按原流程接入规则引擎、存档/数据库游戏白名单和网页。
-新游戏不必填 `legacyToolName`、不必增加专属工具或常驻游戏枚举；本轮同批落地的五子棋与快局大富翁
-各保留了一个专属工具（`parlor_gomoku_action` / `parlor_monopoly2d_action`）供既有调用继续使用，
-通用接口与它们是同一套动作定义，两条路都能走。
+新游戏不再定义工具名或专属查询工具；游戏动作与历史统一走通用入口，工具数量保持固定。
 
 ## 新增玩法
 

@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -55,7 +56,7 @@ describe('Coo 反馈与公告', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(host.events.some(e => e.type === 'parlor.announcement')).toBe(false);
     expect(support).not.toHaveBeenCalled();
-    const call = (name: string, args: Record<string, unknown>) => world!.tools().find(tool => tool.name === name)!.handler(args, {} as never);
+    const call = (name: string, args: Record<string, unknown>) => toolForOperation(world!, name)!.handler(args, {} as never);
     expect(await call('parlor_announcements', {})).toContain('维护结束');
     expect(await call('parlor_feedback', { text: '断线问题', requestId: 'retry-me' })).toContain('不代表运营者已读');
     expect(support).toHaveBeenLastCalledWith('seat', 'feedback', { text: '断线问题', requestId: 'retry-me' });

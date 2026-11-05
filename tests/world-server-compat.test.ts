@@ -1,3 +1,4 @@
+import { toolForOperation } from './helpers/tool-operations.ts';
 /**
  * 旧版 World（0.13.x 的 18 个工具）打新多客厅服务器：
  * 这是「新服务器可以替代旧服务器」的第一道证据，和牌桌/社交的 HTTP 测试互补。
@@ -51,7 +52,7 @@ const makeContext = (secrets: Record<string, string>): WorldContext<ParlorConfig
 };
 
 const tool = (name: string) => {
-  const found = world!.tools().find((entry) => entry.name === name);
+  const found = toolForOperation(world!, name);
   if (!found) throw new Error(`没有工具 ${name}`);
   return found;
 };
