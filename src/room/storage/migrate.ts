@@ -76,7 +76,7 @@ const rebuildRooms = (db: SqliteDb): void => {
 };
 
 /** 老库的 tables.game CHECK 还不含这些游戏；含了就不用重建（看实际 DDL，不靠版本号）。 */
-const GAME_CHECK_MIN_GAMES = ['werewolf', 'monopoly2d', 'gomoku'];
+const GAME_CHECK_MIN_GAMES = ['werewolf', 'monopoly2d'];
 
 const tablesGameCheckMissing = (db: SqliteDb): boolean => {
   const row = db.raw.prepare(
@@ -192,7 +192,7 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   // 用实际 DDL 判断（而不是只看版本号），新库与已升级的库都不会白重建一次。
   if (roomsCapacityMax(db) !== DB_MAX_ROOM_CAPACITY) rebuildRooms(db);
 
-  // tables.game 的 CHECK 加了新游戏（狼人杀、快局大富翁、五子棋）；老库照 rooms 的先例整表重建。
+  // tables.game 的 CHECK 加了新游戏（狼人杀、快局大富翁）；老库照 rooms 的先例整表重建。
   if (tablesGameCheckMissing(db)) rebuildTables(db);
 
   // 大厅最初写死 32；只抬这个默认值，手工改过的不动。

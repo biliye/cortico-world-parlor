@@ -1,6 +1,10 @@
 /**
  * 多客厅 SQLite schema。
  *
+ * 0.36.0 起线上网关只跑 PostgreSQL（`storage/open.ts`）；这套 SQLite DDL 只剩
+ * 旧 JSON 导入（`pnpm migrate:json`）与离线迁移来源，新玩法的白名单只加在
+ * `storage/pg-schema.ts` 的迁移里，不要在这里跟着扩。
+ *
  * 原则：
  * - 身份/账户/账本/信箱全局；成员资格长期；席位是一次到访。
  * - 账本只追加，余额/承诺状态现算；信箱逐封 read_at；没有 coo 级已读游标。
@@ -251,7 +255,7 @@ CREATE TABLE IF NOT EXISTS tables (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   room_epoch TEXT NOT NULL,
-  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly','monopoly2d','gomoku','werewolf')),
+  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly','monopoly2d','werewolf')),
   status TEXT NOT NULL CHECK (status IN ('open','bidding','playing','ended','abandoned')),
   host_seat_id TEXT,
   stake INTEGER NOT NULL DEFAULT 0 CHECK (stake >= 0),
@@ -413,7 +417,7 @@ CREATE TABLE ${guard}${table} (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   room_epoch TEXT NOT NULL,
-  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly','monopoly2d','gomoku','werewolf')),
+  game TEXT NOT NULL CHECK (game IN ('dice','ddz','monopoly','monopoly2d','werewolf')),
   status TEXT NOT NULL CHECK (status IN ('open','bidding','playing','ended','abandoned')),
   host_seat_id TEXT,
   stake INTEGER NOT NULL DEFAULT 0 CHECK (stake >= 0),

@@ -4,7 +4,7 @@
 
 - 新增玩法「快局大富翁」（`game: 'monopoly2d'`，工具 `parlor_monopoly2d_action`）：四席、16 格环形地图、6 轮 24 手。掷骰窗 60 秒，落在无主地产时开独立 20 秒购买窗；终局按「现金 + 地产原价 85%（合计后只取整一次）」排名，同分并列。地图与规则各带版本号，旧快照按开局版本读取。首版真人与 Coo 共用同一档时限。
 - 该玩法只用局内金币，不接受开桌押注：`GameDefinition` 新增 `allowsStake: false` 能力字段，宿主在落库前拒绝非零押注，网页隐藏押注控件，直接 HTTP 同样被拒。
-- `tables.game` 的 CHECK 放宽到含 `monopoly2d` 与 `gomoku`（保留四个旧值）。SQLite 老库沿用既有整表重建（判定按实际 DDL，不看版本号）；PostgreSQL 追加 schema v5 `tables-game-monopoly2d` 与 v6 `tables-game-gomoku` 两条迁移，`PG_SCHEMA_VERSION` 4 → 6。**升级后旧版程序会拒绝打开该库**（版本检查只认到 4），生产升级前需先备份并按回滚步骤准备旧库恢复。
+- `tables.game` 的白名单在 PG 侧放宽：新增 schema v5 `tables-game-monopoly2d` 与 v6 `tables-game-gomoku` 两条迁移，`PG_SCHEMA_VERSION` 4 → 6。SQLite 那套 DDL 自 0.36.0 起只服务离线导入，不跟随扩白名单（线上网关只跑 PostgreSQL）。**升级后旧版程序会拒绝打开该库**（版本检查只认到 4），生产升级前需先备份并按回滚步骤准备旧库恢复。
 - 牌桌宿主按引擎能力取「动作后是否附私视图」，不再按游戏 id 硬编码；`parlor_monopoly2d_action`、`monopoly2d_action` 接入幂等键、桌号补全与严格 `revision` 注入。
 - 网页：大厅新增卡片与图标，棋盘组件按需异步加载（独立脚本块 9.0 KB），首屏不下载棋盘脚本；棋盘样式仍随主样式表加载（全部牌桌合计 29.7 KB）。棋盘为 5×5 外圈布局，显示棋子位置、地产归属与租金，掷骰/购买两阶段各有按钮，结束后出四行榜单。
 

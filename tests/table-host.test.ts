@@ -535,13 +535,13 @@ describe('客厅牌桌（快局大富翁）', () => {
 });
 
 describe('客厅牌桌（五子棋）', () => {
-  it('本地库能落一张五子棋桌，重启后接着下且旧版本被拒', async () => {
+  it('五子棋桌落库后重启能接着下，旧版本被拒', async () => {
     fixture = await setup();
     const { host, clock, db } = fixture;
     await enter(host, A, '阿岚');
     await enter(host, B, '小满');
 
-    // SQLite 的 tables.game CHECK 是硬约束：漏登记新游戏时这里就插不进去。
+    // 开桌写的是与线上同一条存储路径：桌号、游戏和最后一手都要能原样读回。
     const opened = await host.openTable(A, { game: 'gomoku' });
     await host.joinTable(B);
     const started = await host.startTable(A);

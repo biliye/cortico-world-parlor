@@ -444,7 +444,7 @@ World 启动先读取目标服务器能力并尝试续用已有席位；有效�
 同一个进程里可以有多个持久客厅，外加一个「大厅」；身份/账本/信箱是全局的，席位/事件/牌桌跟着客厅走。
 
 - **两种服务器**：旧单客厅 `scripts/serve.ts`（JSON，0.13.x 那套）仍在；
-  新的多客厅网关是 `scripts/serve-world.ts`（SQLite，Node >= 22.13）。
+  新的多客厅网关是 `scripts/serve-world.ts`（当时是 SQLite，**0.36.0 起改为仅 PostgreSQL**）。
 - **大厅**：`kind='hall'` 的特殊客厅，400 席、不进目录；`parlor_hall` / `parlor_room_leave` 都去那里。
 - **客厅**：目录/建房/进厅/离厅/原子换房；一个 Coo 全局一个活跃席位，成员资格长期保留；
   入厅前看不到公开历史，离厅后看不到之后，断线续连沿用区间。
@@ -481,15 +481,20 @@ World 启动先读取目标服务器能力并尝试续用已有席位；有效�
   （`--abandon-monopoly` 才作废留档）；`--dry-run` 在内存库演练。
 - **事件**：`events` 每小时清一次「早于 7 天且不在最后 500 条」，回放仍 7 天。
 
-## 存储：SQLite 与 PostgreSQL
+## 存储：仅 PostgreSQL（0.36.0 起）
 
-默认还是 SQLite（`--db ./parlor.db`），老部署不用改。要换 PostgreSQL：
+服务端只认 PostgreSQL：`src/room/storage/open.ts` 只接受 `postgres`，缺 `PARLOR_DATABASE_URL` 直接报错，
+不会退回 SQLite、也不会建空库。启动：
 
 ```bash
 PARLOR_STORAGE=postgres \\
 PARLOR_DATABASE_URL='postgres://用户:密码@主机:5432/parlor' \\
 node --experimental-strip-types scripts/serve-world.ts --host 0.0.0.0 --port 8790 --invite <邀请码>
 ```
+
+SQLite 现在只剩三处，都不在业务后端：Coo 本机的「消息档案」（`local-history.ts`）、
+离线迁移的**来源**（读旧库）与 `pnpm migrate:json`（旧单间 JSON 落成 SQLite 再搬 PG）。
+`src/room/schema.ts` 那套 SQLite DDL 只为这两条离线路径保留，新玩法的白名单只加在 `pg-schema.ts`。
 
 - `--db` 只属于 SQLite；和 `--storage postgres` 同时给会直接报错。缺 `PARLOR_DATABASE_URL`
   也一样——不会悄悄退回 SQLite，也不会建空库。
@@ -498,8 +503,8 @@ node --experimental-strip-types scripts/serve-world.ts --host 0.0.0.0 --port 879
 - 运行时会多一个依赖 `pg`（纯 JS）。服务端部署如果之前没有 `node_modules`，需要
   `pnpm install --prod` 或把 `pg` 一起带上。
 - PostgreSQL 的库结构按版本号迁移（启动时自动建表/升级，advisory lock 防并发建库）。
-- 测试：`pnpm test`（SQLite）；`PARLOR_TEST_PG=1 pnpm test:pg` 会起工位内嵌入式 PostgreSQL
-  跑同一套测试，或用 `PARLOR_TEST_PG_URL` 指向外部库。
+- 测试：`pnpm test` 跑不碰数据库的快测；`pnpm test:pg` 起工位内嵌入式 PostgreSQL 跑核心五文件，
+  也可指定文件；数据库夹具已统一走 PG（`tests/helpers/test-db.ts`），不再有 SQLite 内存库分支。
 
 ### 把现有库从 SQLite 搬过去
 
