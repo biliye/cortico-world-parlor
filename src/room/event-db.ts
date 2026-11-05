@@ -253,6 +253,20 @@ export class EventDb {
    * `before` 之前的最后 N 条，按旧到新返回。
    */
   async replay(roomId: string, query: { cooId: string; before?: number; limit?: number }): Promise<{ events: RoomEvent[]; older: boolean }> {
+    const page = await this.visiblePage(roomId, query, false);
+    return { events: page.events.reverse(), older: page.more };
+  }
+
+  /** 本机补档：只读 after 后的可见事件，正序分页，与回放共用到访区间/收件人授权。 */
+  archive(roomId: string, query: { cooId: string; after: number; limit?: number }): Promise<{ events: RoomEvent[]; more: boolean }> {
+    return this.visiblePage(roomId, query, true);
+  }
+
+  private async visiblePage(
+    roomId: string,
+    query: { cooId: string; before?: number; after?: number; limit?: number },
+    forward: boolean,
+  ): Promise<{ events: RoomEvent[]; more: boolean }> {
     const limit = clampLimit(query.limit, 50);
     const before = query.before && query.before > 0 ? query.before : null;
     const rows = await this.db.prepare(
@@ -261,6 +275,7 @@ export class EventDb {
          ON a.room_id = e.room_id AND a.seq = e.seq AND a.coo_id = ?
        WHERE e.room_id = ?
          AND (e.seq < COALESCE(?, 2147483647))
+         AND e.seq > ?
          AND (
            (e.scope_kind IN ('room','hall') AND EXISTS (
              SELECT 1 FROM room_seats s
@@ -270,12 +285,10 @@ export class EventDb {
            ))
            OR (e.scope_kind NOT IN ('room','hall') AND a.coo_id IS NOT NULL)
          )
-       ORDER BY e.seq DESC
+       ORDER BY e.seq ${forward ? 'ASC' : 'DESC'}
        LIMIT ?`,
-    ).all(query.cooId, roomId, before, query.cooId, limit + 1) as unknown as EventRow[];
-    const older = rows.length > limit;
-    const events = rows.slice(0, limit).map(eventOf).reverse();
-    return { events, older };
+    ).all(query.cooId, roomId, before, query.after ?? 0, query.cooId, limit + 1) as unknown as EventRow[];
+    return { events: rows.slice(0, limit).map(eventOf), more: rows.length > limit };
   }
 
   private async select(roomId: string, query: EventQuery, order: 'ASC' | 'DESC'): Promise<RoomEvent[]> {

@@ -2,6 +2,7 @@ import { touchActivity } from './activity.ts';
 import { RoomLifecycle } from './lifecycle.ts';
 import { personalHistory } from './personal-account.ts';
 import { EventDb } from './event-db.ts';
+import { historySyncEvent } from './history-sync.ts';
 /**
  * 多客厅 HTTP 网关（聊天切片）。
  *
@@ -12,6 +13,7 @@ import { EventDb } from './event-db.ts';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
@@ -39,7 +41,7 @@ import {
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
-import { sendWebAsset } from './web-assets.ts';
+import { acceptsGzip, sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 
@@ -109,11 +111,16 @@ class HttpError extends Error {
   }
 }
 
-const json = (res: ServerResponse, status: number, body: unknown): void => {
-  const data = JSON.stringify(body);
+const json = (res: ServerResponse, status: number, body: unknown, req?: IncomingMessage): void => {
+  const raw = Buffer.from(JSON.stringify(body));
+  // 回放/补档的大段文本可压缩；未接受 gzip 的旧客户端仍收到普通 JSON。
+  const gzip = req && raw.length >= 1024 && acceptsGzip(req.headers['accept-encoding']);
+  const data = gzip ? gzipSync(raw) : raw;
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(data),
+    'content-length': data.length,
+    ...(req ? { vary: 'accept-encoding' } : {}),
+    ...(gzip ? { 'content-encoding': 'gzip' } : {}),
   });
   res.end(data);
 };
@@ -1027,6 +1034,19 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'GET' && url.pathname === '/v1/me/history-sync') {
+      const cooId = await this.cooOrSeat(req);
+      const room = url.searchParams.get('room') ?? '';
+      if (!room || !(await getRoom(this.db, room))) throw new HttpError(404, '客厅不存在');
+      const after = Number(url.searchParams.get('after') ?? 0);
+      const limit = Number(url.searchParams.get('limit') ?? 200);
+      if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '历史游标须为非负整数');
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new HttpError(400, '补档每页须为 1–200 条');
+      const page = await (await this.host(room)).archive(cooId, after, limit);
+      json(res, 200, { events: page.events.map(historySyncEvent), more: page.more }, req);
+      return;
+    }
+
     if (method === 'GET' && url.pathname === '/v1/me/replay') {
       const cooId = await this.cooOrSeat(req);
       const room = url.searchParams.get('room') ?? '';
@@ -1051,7 +1071,7 @@ export class WorldServer {
           ...(event.data ? { data: event.data } : {}),
         })),
         older: page.older,
-      });
+      }, req);
       return;
     }
 
@@ -2188,7 +2208,7 @@ export class WorldServer {
           ...(event.data ? { data: event.data } : {}),
         })),
         older: page.older,
-      });
+      }, req);
       return;
     }
 

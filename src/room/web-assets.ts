@@ -60,16 +60,19 @@ function loadAsset(rel: string): Asset {
 }
 
 /** `gzip;q=0` 是不想要；`*` 也算接受。 */
-function acceptsGzip(header: string | string[] | undefined): boolean {
+export function acceptsGzip(header: string | string[] | undefined): boolean {
   const raw = Array.isArray(header) ? header.join(',') : (header || '');
+  let wildcard = false;
   for (const part of raw.split(',')) {
     const [name, ...params] = part.trim().toLowerCase().split(';');
     if (name !== 'gzip' && name !== '*') continue;
     const q = params.map((piece) => piece.trim()).find((piece) => piece.startsWith('q='));
-    if (!q) return true;
-    if (Number.parseFloat(q.slice(2)) > 0) return true;
+    const accepted = !q || Number(q.slice(2)) > 0;
+    // 明确 gzip;q=0 优先于通配符，不能把客户端拒绝的编码发回去。
+    if (name === 'gzip') return accepted;
+    wildcard = accepted;
   }
-  return false;
+  return wildcard;
 }
 
 function etagMatches(header: string, etag: string): boolean {

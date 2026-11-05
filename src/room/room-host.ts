@@ -559,6 +559,11 @@ export class RoomHost {
     });
   }
 
+  async archive(cooId: string, after: number, limit = 200): Promise<{ events: RoomEvent[]; more: boolean }> {
+    await this.requireRoom();
+    return this.events.archive(this.roomId, { cooId, after, limit });
+  }
+
   async snapshot(cooId: string, options: { since?: number; limit?: number } = {}): Promise<RoomSnapshot> {
     const seat = await this.requireSeat(cooId);
     const interval = { visibleFromSeq: seat.visibleFromSeq, visibleUntilSeq: seat.visibleToSeq };

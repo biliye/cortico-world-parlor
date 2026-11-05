@@ -141,9 +141,7 @@ describe('换服务器与启动时改名', () => {
     await start();
     await world!.stop();
     // 补档本来就需要身份通行证；这里隔离它，只检验续席与改名本身。
-    vi.spyOn(ParlorClient.prototype, 'replayAsIdentity').mockResolvedValue({
-      room: 'hall', latest: 0, now: Date.now(), at: '', retentionDays: 7, events: [], older: false,
-    });
+    vi.spyOn(ParlorClient.prototype, 'historySync').mockResolvedValue({ events: [], more: false });
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       if (String(input).includes('/v1/identity/')) throw new Error('身份服务已离线');

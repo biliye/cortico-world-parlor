@@ -4,6 +4,7 @@ import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
 import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } from './global-identity.ts';
 import type { MailPage } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
+import type { HistorySyncPage } from './history-sync.ts';
 import type { Announcement, Feedback } from './support-db.ts';
 import type { ParentMailView } from './mail-db.ts';
 import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
@@ -213,6 +214,16 @@ export class ParlorClient {
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<ReplayResponse>(response);
+  }
+
+  /** 本机补档只拉已落盘游标之后的新正文，不下载回放里的完整游戏数据。 */
+  async historySync(roomId: string, after = 0, limit = 200): Promise<HistorySyncPage> {
+    const query = new URLSearchParams({ room: roomId, after: String(after), limit: String(limit) });
+    const response = await fetch(`${this.url('/v1/me/history-sync')}?${query}`, {
+      headers: await this.headers({}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<HistorySyncPage>(response);
   }
 
   /** 接受/拒绝私密厅邀请；有席位令牌就带，没有也能用身份头。 */

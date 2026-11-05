@@ -155,6 +155,7 @@ export class ParlorWorld implements World {
   private historyTimer?: NodeJS.Timeout;
   private cursorTimer?: NodeJS.Timeout;
   private historyTask?: Promise<void>;
+  private historySyncUnsupported = false;
   private historyError = '';
   private readonly historySeats = new Set<string>();
   private readonly historyRooms = new Set<string>();
@@ -337,6 +338,7 @@ export class ParlorWorld implements World {
     this.host = host;
     this.history?.close(); this.history = undefined;
     this.historySeats.clear(); this.historyRooms.clear(); this.historyError = '';
+    this.historySyncUnsupported = false;
     await this.connect();
     // connect 可能修复/重建身份；写入必须使用连接后实际的孩子身份。
     this.history = new LocalHistory(this.ctx.dataDir,
@@ -819,6 +821,8 @@ export class ParlorWorld implements World {
     }
     for (const room of [...this.historyRooms]) {
       if (this.stopped) return;
+      if (this.multiRoom && await this.syncRoomHistory(room)) continue;
+      // 旧网关/旧单间保留回放兼容，不能把未知的新参数误当作已支持的增量协议。
       const previous = history.progress(`room:${room}`);
       let high = previous;
       let before: number | undefined;
@@ -837,6 +841,33 @@ export class ParlorWorld implements World {
       history.advance(`room:${room}`, high);
     }
     if (!unsupported) this.historyError = '';
+  }
+
+  /** 正序补齐缺口；一页成功落盘才推进，不让后续页失败跳过尚未保存的消息。 */
+  private async syncRoomHistory(room: string): Promise<boolean> {
+    if (this.historySyncUnsupported) return false;
+    const history = this.history!;
+    let after = history.progress(`room:${room}`);
+    while (!this.stopped) {
+      let page;
+      try { page = await this.client!.historySync(room, after); }
+      catch (error) {
+        if (!(error instanceof ParlorHttpError) || error.status !== 404) throw error;
+        this.historySyncUnsupported = true;
+        return false;
+      }
+      const previous = after;
+      for (const event of page.events) {
+        if (!Number.isSafeInteger(event.seq) || event.seq <= after) throw new Error('补档返回了无效的历史游标');
+        this.recordHistoryEvent(event, room, true);
+        after = event.seq;
+      }
+      if (this.stopped) return true;
+      history.advance(`room:${room}`, after);
+      if (!page.more) return true;
+      if (after === previous) throw new Error('补档分页没有前进');
+    }
+    return true;
   }
 
   private onRoomEvent(event: RoomEvent): void {
