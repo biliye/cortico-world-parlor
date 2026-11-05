@@ -173,19 +173,23 @@
           },
           "day": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "history：按游戏天数筛选狼人杀记录，从第 1 天开始。"
           },
           "seatNo": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "history：按座号筛选狼人杀发言与出局记录，从 1 开始。"
           },
           "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 200
+            "maximum": 200,
+            "description": "history：最多返回多少条狼人杀发言，默认 100，上限 200。"
           },
           "review": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "history：请求狼人杀复盘；仅终局后的参赛者可见夜间记录与完整死因。"
           }
         }
       },

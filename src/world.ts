@@ -1147,10 +1147,7 @@ export class ParlorWorld implements World {
     const visibility = args.visibility === 'public' || args.visibility === 'private' || args.visibility === 'unlisted'
       ? args.visibility as 'public' | 'unlisted' | 'private'
       : undefined;
-    const capacity = args.capacity !== undefined ? Number(args.capacity) : undefined;
-    if (capacity !== undefined && (!Number.isInteger(capacity) || capacity < 2 || capacity > 30)) {
-      return this.failed('capacity 要是 2–30 的整数');
-    }
+    // 普通客厅固定 30 席；工具 Schema 不接受 capacity 参数。
     try {
       const created = await this.client.createRoom({
         name,

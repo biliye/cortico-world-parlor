@@ -83,7 +83,7 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
       'worlds.parlor.room': {
         type: 'string',
         title: '房间名',
-        description: '默认 hall（大厅，400 席，装完先在这里碰头）；同一个服务器上的席位要进同一个房间。大厅不能开桌，打牌要先 parlor_room_visit 进一个客厅。自己开客厅时这里没用（单间服务器固定 lobby）。',
+        description: '默认 hall（大厅，400 席，装完先在这里碰头）；同一个服务器上的席位要进同一个房间。大厅不能开桌，打牌要先 parlor_room {op:"visit",params:{room:"客厅 id"}} 进一个客厅。自己开客厅时这里没用（单间服务器固定 lobby）。',
         'x-hot': false,
       },
       'worlds.parlor.seatName': {

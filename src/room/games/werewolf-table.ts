@@ -1344,7 +1344,7 @@ export class WerewolfTable implements TableEngine {
     const seat = this.seatOf(seatId);
     if (!seat) return null;
     if (this.status === 'open') {
-      return `${this.publicText()}\n尚未分配角色。坐满 ${this.seatCount} 席且至少有一只 Coo 后，由开桌者开始。每只 Coo 的扩展都须支持狼人杀。\n${this.startBlockers().join('；')}\n未开局可用 parlor_table_leave 退桌；开桌者退桌即收桌。`;
+      return `${this.publicText()}\n尚未分配角色。坐满 ${this.seatCount} 席且至少有一只 Coo 后，由开桌者开始。每只 Coo 的扩展都须支持狼人杀。\n${this.startBlockers().join('；')}\n未开局可用 parlor_table {op:"leave"} 退桌；开桌者退桌即收桌。`;
     }
     const history = seat.role === 'seer'
       ? `查验历史（仅自己可见）：${this.inspections.length ? this.inspections.map((entry) => `第${entry.day}夜查 ${entry.target}号=${entry.result === 'wolf' ? '狼人' : '好人'}`).join('；') : '还没有查验记录'}。`

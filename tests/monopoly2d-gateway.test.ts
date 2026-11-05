@@ -282,8 +282,10 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
       // 结算口径：现金 + 地产按 85% 折价，合计后只取整一次。
       expect(row.total).toBe(row.cash + row.estate);
     }
-    expect(ranking.map((row) => row.rank).sort()).toEqual([1, 2, 3, 4]);
-    expect(ranking[0].total).toBeGreaterThanOrEqual(ranking[ranking.length - 1].total);
+    const totals = ranking.map((row) => row.total);
+    expect(totals).toEqual([...totals].sort((a, b) => b - a));
+    // 竞赛排名：同分并列，占用的名次仍计入后续名次（如 1、2、2、4）。
+    expect(ranking.map((row) => row.rank)).toEqual(totals.map(total => totals.indexOf(total) + 1));
 
     // 给验收报告留一条可引用的实测：24 手全走 HTTP，含每次快照。
     expect(elapsedMs).toBeLessThan(60_000);

@@ -333,7 +333,7 @@ export class Monopoly2dTable implements TableEngine {
       const cell = cellAt(this.pending);
       const price = cell.price ?? 0;
       lines.push(`你落在「${cell.name}」：售价 ${price}，租金 ${cell.rent ?? 0}。买下后剩 ${seat.cash - price} 金币。`);
-      lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"buy",params:{turnNo:${this.turnNo}}} 买下，或 {move:"pass", turnNo:${this.turnNo}} 放弃。`);
+      lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"buy",params:{turnNo:${this.turnNo}}} 买下，或 parlor_game_action {action:"pass",params:{turnNo:${this.turnNo}}} 放弃。`);
       return lines.join('\n');
     }
     lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"roll",params:{turnNo:${this.turnNo}}} 掷骰。`);

@@ -12,8 +12,10 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
         op: { type: 'string', enum: ['list', 'describe', 'state', 'history'], description: '默认 list。' },
         game: { type: 'string', description: 'describe 时填写服务器目录里的游戏 id。' },
         table: { type: 'string', description: 'state/history 的桌号，省略时查自己的桌。' },
-        day: { type: 'integer', minimum: 1 }, seatNo: { type: 'integer', minimum: 1 },
-        limit: { type: 'integer', minimum: 1, maximum: 200 }, review: { type: 'boolean' },
+        day: { type: 'integer', minimum: 1, description: 'history：按游戏天数筛选狼人杀记录，从第 1 天开始。' },
+        seatNo: { type: 'integer', minimum: 1, description: 'history：按座号筛选狼人杀发言与出局记录，从 1 开始。' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'history：最多返回多少条狼人杀发言，默认 100，上限 200。' },
+        review: { type: 'boolean', description: 'history：请求狼人杀复盘；仅终局后的参赛者可见夜间记录与完整死因。' },
       },
     },
   },
@@ -284,7 +286,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_room_create',
-    description: 'Create a room: name (2–32 chars), visibility public/unlisted/private, a fixed capacity of 30 talking seats, and optional topic. You do not enter it automatically; use parlor_room_visit afterwards.',
+    description: '创建固定 30 席的客厅：name 为 2–32 字符，visibility 为 public/unlisted/private，topic 可选。创建后不会自动进入；用 parlor_room {op:"visit",params:{room:"客厅 id"}} 进入。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -318,7 +320,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string', description: 'Invitation id from parlor_mail.' },
+        id: { type: 'string', description: '邀请 id，用 parlor_query {op:"mail"} 查看。' },
       },
       required: ['id'],
     },
@@ -331,7 +333,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string', description: 'Invitation id from parlor_mail.' },
+        id: { type: 'string', description: '邀请 id，用 parlor_query {op:"mail"} 查看。' },
       },
       required: ['id'],
     },
@@ -393,10 +395,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
 ];
 export function operationHelp(topic?: string) {
   if (topic !== undefined && !Object.hasOwn(TOOL_OPERATIONS, topic)) throw new Error('topic 只能是 query / room / table / message');
-  const result = Object.fromEntries(Object.entries(TOOL_OPERATIONS).filter(([group]) => !topic || group === topic).map(([group, operations]) => [group,
+  return Object.fromEntries(Object.entries(TOOL_OPERATIONS).filter(([group]) => !topic || group === topic).map(([group, operations]) => [group,
     Object.entries(operations).map(([op, name]) => ({ op, selector: group === 'message' ? 'scope' : 'op', description: group === 'query' && op === 'feedback' ? '查看本人反馈与运营者回复。' : declared(name).description, parameters: group === 'query' && op === 'feedback' ? { type: 'object', additionalProperties: false, properties: {} } : declared(name).parameters })),
   ]));
-  const refs: Record<string, string> = { parlor_room_visit: 'parlor_room visit', parlor_mail: 'parlor_query mail' };
-  return JSON.parse(JSON.stringify(result, (key, value) => key === 'description' && typeof value === 'string'
-    ? value.replace(/\bparlor_(?:room_visit|mail)\b/g, name => refs[name]) : value)) as typeof result;
 }
