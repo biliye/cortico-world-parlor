@@ -1,5 +1,5 @@
 /** 公告入口独立刷新，避免打断牌桌和聊天草稿。取数在 announcements.js，首屏横幅用的是同一份。 */
-import { onAnnouncements } from './announcements.js?v=0.36.6';
+import { onAnnouncements } from './announcements.js?v=0.36.7';
 
 export function supportLink(getToken) {
   const link = document.createElement('a');
