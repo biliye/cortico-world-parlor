@@ -92,7 +92,7 @@ describe('WorldServer 牌桌网关', () => {
       tokens.push(await enter(app, `coo-werewolf-${index}`, `Coo ${index + 1}`));
     }
     const [host, ...others] = tokens;
-    const headers = { 'x-parlor-client': '0.36.8' };
+    const headers = { 'x-parlor-client': '0.36.9' };
     const open = { type: 'table_open', game: 'werewolf' };
     expect((await act(app, host, { ...open, requireHuman: 'false' }, headers)).status).toBe(400);
 
