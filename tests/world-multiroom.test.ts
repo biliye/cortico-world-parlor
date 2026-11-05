@@ -101,6 +101,26 @@ const pushedText = (host: FakeHost): string => host.events
 const currentRoom = async () => (await world!.envPromptVars() as Record<string,string> | null)?.['parlor.room'];
 
 describe('Coo 快速匹配与牌桌分享', () => {
+  it('Coo 通过固定通用工具完成真实HTTP/PG五子棋落子，旧开桌和入桌工具继续兼容', async () => {
+    const { friend, friendToken } = await startWorld();
+    const catalog = JSON.parse(await call('parlor_game_info'));
+    expect(catalog.games).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'gomoku' })]));
+    expect(await call('parlor_table_open', { game: 'gomoku' })).toContain('五子棋');
+    const initial = JSON.parse(await call('parlor_game_info', { op: 'state' }));
+    const table = initial.table.id;
+    await friend.action(friendToken, { type: 'table_join', table, requestId: 'generic-friend-join' }, 'lobby');
+    await call('parlor_table_start', { table });
+    const state = JSON.parse(await call('parlor_game_info', { op: 'state', table }));
+    expect(state.availableActions).toMatchObject([{ action: 'place' }]);
+    const args = { table, action: 'place', params: { row: 7, col: 7 }, revision: state.table.revision, requestId: 'generic-coo-place' };
+    const result = JSON.parse(await call('parlor_game_action', args));
+    expect(result).toMatchObject({ ok: true, protocol: 'parlor.game.v1', revision: state.table.revision + 1 });
+    expect(JSON.parse(await call('parlor_game_action', args)).revision).toBe(result.revision);
+    const next = await friend.games(friendToken, { op: 'state', table }, 'lobby') as Record<string, any>;
+    expect(next.availableActions).toMatchObject([{ action: 'place' }]);
+    expect(next.table.revision).toBe(result.revision);
+  });
+
   it('工具快速匹配后持久化新厅和令牌，重连到本桌，能继续接收桌聊', async () => {
     const { friend, friendToken, secrets, host } = await startWorld({ room: 'hall' });
     const room = (await friend.createRoom({ name: '公开匹配厅', visibility: 'public' }, friendToken)).room;

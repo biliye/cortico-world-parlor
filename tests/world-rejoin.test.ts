@@ -39,7 +39,9 @@ afterEach(async () => {
 
 describe('席位被释放后的自动重入', () => {
   it('服务器闲置迁厅后保留凭据回大厅，重启后不会回到旧配置客厅', async () => {
-    server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), inviteCode:'inv' });
+    // 0.36.3 起 Coo 闲置迁厅默认 300 分钟；这条用例只验迁厅机制，
+    // 所以显式把宽限设回 60 分钟，免得把下面的 1 小时老化变成「没到期」。
+    server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), inviteCode:'inv', cooIdleMinutes: 60 });
     await server.listen();
     const secrets:Record<string,string>={ PARLOR_INVITE_CODE:'inv' };
     const base=fakeWorldContext(PARLOR,{scratchDir});

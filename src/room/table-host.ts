@@ -35,6 +35,7 @@ import {
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 import { tableCapacity } from './table-discovery-db.ts';
+import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
 
 const OPEN_MS = 30 * 60_000;
 /** 托管席位（Coo 掉线/被移出）由脚本代打的节拍：一秒一拍，与旧的每秒 tick 一致。 */
@@ -435,7 +436,7 @@ export class TableHost {
     } finally { release(); }
   }
 
-  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean } = {}, requestId?: string): Promise<TableOpenResult> {
+  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean; seatCount?: unknown } = {}, requestId?: string): Promise<TableOpenResult> {
     // 开桌还没有 tableId，用房间级键；开桌与「数桌上限」要串行。
     const releaseOpen = await this.lockTable('#room');
     try {
@@ -454,7 +455,15 @@ export class TableHost {
     if (input.requireHuman !== undefined && id !== 'werewolf') {
       throw new HostError('invalid', 'requireHuman 仅适用于狼人杀');
     }
+    const seatCount = input.seatCount;
+    if (seatCount !== undefined && (id !== 'werewolf' || !isWerewolfSeatCount(seatCount))) {
+      throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
+    }
     const stake = stakeOf(input.stake);
+    // 无押注玩法：网页、Coo 工具和直接 HTTP 都在这里被同一道检查挡住。
+    if (stake > 0 && def.allowsStake === false) {
+      throw new HostError('invalid', `${def.label}只用局内金币，不能押筹码`);
+    }
     if (stake > 0) {
       const balance = await this.ledger.balanceOf(cooId);
       if (balance < stake) {
@@ -465,6 +474,7 @@ export class TableHost {
       type: 'table_open', game: id, stake,
       ...(input.matchOpen ? { matchOpen: true } : {}),
       ...(input.requireHuman ? { requireHuman: true } : {}),
+      ...(seatCount !== undefined && seatCount !== WEREWOLF_SEAT_COUNT ? { seatCount } : {}),
     };
     const replay = await this.replayReceipt(cooId, requestId, openKey);
     if (replay) {
@@ -493,6 +503,7 @@ export class TableHost {
       },
       now,
       requireHuman: input.requireHuman,
+      seatCount,
       ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
     });
     const stateJson = JSON.stringify(engine.exportState());
@@ -1597,6 +1608,7 @@ export class TableHost {
     const engine = await this.withCurrentNames(table.engine);
     const discovery = await this.db.prepare('SELECT match_open, recruit_text, author_coo_id FROM table_discovery WHERE table_id = ?').get(table.id) as { match_open: number; recruit_text: string; author_coo_id: string | null } | undefined;
     return {
+      capacity: tableCapacity(table.game),
       ...(engine.public() as Record<string, unknown>),
       id: table.id,
       tableId: table.id,
@@ -1605,7 +1617,6 @@ export class TableHost {
       status: engine.status,
       host: engine.host,
       revision,
-      capacity: tableCapacity(table.game),
       matchOpen: discovery?.match_open === 1,
       recruitText: discovery?.recruit_text ?? '',
       recruitAuthor: discovery?.author_coo_id ?? '',

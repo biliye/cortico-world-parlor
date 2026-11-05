@@ -56,6 +56,25 @@ const enter = (actor: Actor, target: Json = { game: 'ddz' }, requestId = randomU
 const recruit = async (viewer: Actor) => (await call('/v1/hall', viewer)).body.recruitments as Json[];
 
 describe('快速匹配、牌桌招募与链接', () => {
+  it('狼人杀快速匹配跳过满六席桌，允许加入已有九席的十二人桌', async () => {
+    await start();
+    const small = await person('六人桌主');
+    const large = await person('十二人桌主');
+    await room(small);
+    await room(large);
+    const six = await table(small, { game: 'werewolf', seatCount: 6, matchOpen: true });
+    const twelve = await table(large, { game: 'werewolf', seatCount: 12, matchOpen: true });
+    for (const [id, roomId, seats] of [[six, small.room, 5], [twelve, large.room, 8]] as const) {
+      for (let i = 0; i < seats; i += 1) {
+        const player = await person(`玩家${i}`, 'human', roomId);
+        expect((await act(player, { type: 'table_join', table: id })).status).toBe(200);
+      }
+    }
+    expect((await act(small, { type: 'table_discovery', table: six, text: '六人局' })).status).toBe(200);
+    expect((await recruit(large)).find((item) => item.tableId === six)).toMatchObject({ capacity: 6, seats: 6, full: true });
+    const guest = await person('匹配玩家', 'human');
+    expect((await enter(guest, { game: 'werewolf' })).body).toMatchObject({ matched: true, tableId: twelve });
+  });
   it('默认不开匹配；桌主可开放，跨厅匹配与入桌一并成功，原令牌失效', async () => {
     await start();
     const a = await person('桌主'); const b = await person('客人', 'human', 'hall');

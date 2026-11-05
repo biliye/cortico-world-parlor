@@ -37,7 +37,7 @@ export class TableDiscovery {
     const result: TableRecruitment[] = [];
     for (const row of rows) {
       const table = await (await this.host(row.room_id)).tablePublic(row.id);
-      const capacity = tableCapacity(row.game);
+      const capacity = Number(table?.capacity ?? tableCapacity(row.game));
       if (!table || table.status !== 'open' || table.frozen || !capacity || Number(table.openDeadline) <= this.now()) continue;
       const seats = Array.isArray(table.seats) ? table.seats.length : 0;
       result.push({ tableId: row.id, room: row.room_id, roomName: row.room_name, game: row.game,
@@ -130,17 +130,20 @@ export class TableDiscovery {
   }
 
   private async candidates(input: TableEntryInput, sourceRoom: string): Promise<Candidate[]> {
-    const rows = await this.db.prepare(
+    const capacity = input.game === 'werewolf'
+      ? "CASE CAST(t.state_json->>'seatCount' AS TEXT) WHEN '6' THEN 6 WHEN '12' THEN 12 ELSE 9 END"
+      : '?';
+    return await this.db.prepare(
       `SELECT t.id, t.room_id, r.name AS room_name, t.game, t.stake, t.created_at,
               (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL) AS n
          FROM tables t JOIN rooms r ON r.id=t.room_id LEFT JOIN table_discovery d ON d.table_id=t.id
         WHERE t.status='open' AND t.frozen_at IS NULL AND t.deadline_at>? AND r.archived_at IS NULL
           AND ${input.table ? 't.id=? AND t.room_id=?' : `d.match_open=1 AND t.game=? AND t.stake=0 AND r.visibility='public'
-            AND (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL)<?
+            AND (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL)<${capacity}
             AND (r.id=? OR (SELECT COUNT(*) FROM room_seats rs WHERE rs.room_id=r.id AND rs.released_at IS NULL AND rs.kind<>'observer')<r.capacity)`}
         ORDER BY n DESC, t.created_at, t.id LIMIT 30`,
-    ).all(this.now(), ...(input.table ? [input.table, input.room!] : [input.game!, tableCapacity(input.game!), sourceRoom])) as Candidate[];
-    return input.table ? rows : rows.filter((row) => Number(row.n) < tableCapacity(row.game));
+    ).all(this.now(), ...(input.table ? [input.table, input.room!] : [input.game!,
+      ...(input.game === 'werewolf' ? [] : [tableCapacity(input.game!)]), sourceRoom])) as Candidate[];
   }
 
   private entryToken(source: string, requestId: string): string {

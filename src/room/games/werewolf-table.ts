@@ -1,10 +1,10 @@
 /**
- * 狼人杀引擎：九人局、真人与 Coo 同桌、窗口制多人行动。
+ * 狼人杀引擎：6／9／12 人局、真人与 Coo 同桌、窗口制多人行动。
  *
  * 与骰子/斗地主的单回合模型不同，这里有三种节奏：
  * - 顺序发言（白天/PK/遗言）：一次一个人，就是传统的 turn；
  * - 同时窗口（投票、夜间、开枪）：多人各有各的动作槽，谁交了都不顶别人；
- * - 固定时长的夜间两段（狼队+预言家 → 女巫）：对外只显示一个完整的夜晚。
+ * - 固定时长的夜间两段（狼队、预言家与守卫 → 女巫）：对外只显示一个完整的夜晚。
  *
  * 对外可见性（设计稿第 6 节）：
  * - 秘密（身份/查验/狼聊/刀票/用药）只走 `view()`/`privateText()`，
@@ -24,8 +24,8 @@ import {
 } from '../table-engine.ts';
 import {
   FACTION_LABELS, ROLE_CARD_LABELS, ROLE_LABELS, ROLE_SKILLS, WEREWOLF_MAX_DAYS, WEREWOLF_SEAT_COUNT,
-  cleanSpeech, dealRoles, factionOf, judgeOutcome, tallyVotes, versionAtLeast,
-  type WerewolfFaction, type WerewolfRole,
+  cleanSpeech, dealRoles, factionOf, isWerewolfSeatCount, judgeOutcome, tallyVotes, versionAtLeast,
+  type WerewolfFaction, type WerewolfRole, type WerewolfSeatCount,
 } from './werewolf.ts';
 
 /** 狼人杀要每只 Coo 的 World 都带动作能力；旧版坐得上桌但开不了局。 */
@@ -97,6 +97,7 @@ interface NightRecord {
   day: number;
   kill: number | null;
   saved: boolean;
+  guarded?: number | null;
   poison?: number;
   wolfChats: Array<{ seatNo: number; text: string }>;
   killVotes: Array<[number, number | null]>;
@@ -114,6 +115,7 @@ interface WorkingNight {
   /** A 段锁定；B 段据此给女巫刀口。null = 空刀。 */
   kill: number | null;
   saved: boolean;
+  guarded?: number | null;
   poison?: number;
   witchDone: boolean;
 }
@@ -156,6 +158,7 @@ export interface WerewolfTableOptions {
   host: { id: string; name: string; kind?: 'pet' | 'human'; clientVersion?: string };
   now: number;
   requireHuman?: boolean;
+  seatCount?: WerewolfSeatCount;
   /** 测试基准时长；不传用正式默认（真人 180 秒 / Coo 60 秒 / 阅读 20 秒）。 */
   turnMs?: number;
   rng?: () => number;
@@ -171,6 +174,7 @@ export class WerewolfTable implements TableEngine {
   private readonly rng: () => number;
   private readonly durations: Durations;
   private requireHuman: boolean;
+  private seatCount: WerewolfSeatCount;
   private readonly seats: WSeat[] = [];
   private phase: Phase = { kind: 'reveal', queue: [], index: 0, stage: 'act', deadline: 0, readUntil: 0, windowId: 'w0' };
   private day = 0;
@@ -197,6 +201,7 @@ export class WerewolfTable implements TableEngine {
   constructor(options: WerewolfTableOptions) {
     this.host = options.host.id;
     this.requireHuman = options.requireHuman === true;
+    this.seatCount = options.seatCount ?? WEREWOLF_SEAT_COUNT;
     this.rng = options.rng ?? ((): number => randomInt(0, 0x7fffffff) / 0x7fffffff);
     this.durations = options.turnMs ? scaledDurations(options.turnMs) : DEFAULT_DURATIONS;
     this.seats.push({
@@ -250,8 +255,8 @@ export class WerewolfTable implements TableEngine {
 
   private startBlockers(): string[] {
     const issues: string[] = [];
-    if (this.seats.length !== WEREWOLF_SEAT_COUNT) {
-      issues.push(`狼人杀要正好 ${WEREWOLF_SEAT_COUNT} 个人，现在 ${this.seats.length} 个`);
+    if (this.seats.length !== this.seatCount) {
+      issues.push(`狼人杀要正好 ${this.seatCount} 个人，现在 ${this.seats.length} 个`);
     }
     const pets = this.seats.filter((seat) => seat.kind === 'pet');
     if (this.requireHuman && !this.seats.some((seat) => seat.kind === 'human')) {
@@ -268,8 +273,8 @@ export class WerewolfTable implements TableEngine {
   join(seat: TableSeat): TableEvent {
     if (this.status !== 'open') throw new WerewolfError('not_open', '这张桌子已经开始了');
     if (this.has(seat.id)) throw new WerewolfError('seated', '你已经在桌上了');
-    if (this.seats.length >= WEREWOLF_SEAT_COUNT) {
-      throw new WerewolfError('full', `狼人杀固定 ${WEREWOLF_SEAT_COUNT} 席，已经坐满了`);
+    if (this.seats.length >= this.seatCount) {
+      throw new WerewolfError('full', `狼人杀固定 ${this.seatCount} 席，已经坐满了`);
     }
     const kind = seat.kind === 'human' ? 'human' : 'pet';
     const used = new Set(this.seats.map((entry) => entry.seatNo));
@@ -314,10 +319,10 @@ export class WerewolfTable implements TableEngine {
     const blocked = this.startBlockers()[0];
     if (blocked) throw new WerewolfError('not_open', blocked);
     this.status = 'playing';
-    const roles = dealRoles(this.rng);
+    const roles = dealRoles(this.rng, this.seatCount);
     this.seats.forEach((seat, index) => { seat.role = roles[index]; });
     this.day = 1;
-    this.dayStart = 1 + Math.floor(this.rng() * WEREWOLF_SEAT_COUNT);
+    this.dayStart = 1 + Math.floor(this.rng() * this.seatCount);
     const names = this.seats.map((seat) => `${seat.seatNo}号 ${seat.name}`).join('、');
     const events: TableEvent[] = [
       {
@@ -390,7 +395,7 @@ export class WerewolfTable implements TableEngine {
   private parseTarget(target: unknown): number | undefined {
     if (target === undefined || target === null) return undefined;
     const value = Number(target);
-    if (!Number.isSafeInteger(value)) throw new WerewolfError('bad_action', '目标要用座号（1～9 的整数）');
+    if (!Number.isSafeInteger(value)) throw new WerewolfError('bad_action', `目标要用座号（1～${this.seatCount} 的整数）`);
     return value;
   }
 
@@ -430,6 +435,20 @@ export class WerewolfTable implements TableEngine {
         this.lastAction = { seatNo: seat.seatNo, kind: move };
         return this.nightRefresh([seat.seatNo], this.aliveSeats().filter((entry) => entry.role === 'wolf').map((entry) => entry.seatNo));
       }
+      if (move === 'guard') {
+        if (role !== 'guard') throw new WerewolfError('not_turn', '这个动作只有守卫能做');
+        this.requireWindowNotDone(seat, this.night!.guarded !== undefined);
+        const target = this.parseTarget(action.target);
+        if (target !== undefined) {
+          if (!this.seatByNo(target)?.alive) throw new WerewolfError('bad_action', '只能守护还存活的玩家');
+          if (target === this.nightLog.at(-1)?.guarded) {
+            throw new WerewolfError('bad_action', '不能连续两晚守护同一人');
+          }
+        }
+        this.night!.guarded = target ?? null;
+        this.lastAction = { seatNo: seat.seatNo, kind: move };
+        return this.nightRefresh([seat.seatNo], []);
+      }
       if (move === 'inspect') {
         if (role !== 'seer') throw new WerewolfError('not_turn', '这个动作只有预言家能做');
         this.requireWindowNotDone(seat, this.night!.inspectDone);
@@ -449,7 +468,7 @@ export class WerewolfTable implements TableEngine {
         this.lastAction = { seatNo: seat.seatNo, kind: move };
         return this.nightRefresh([seat.seatNo], []);
       }
-      throw new WerewolfError('bad_action', '夜晚阶段能做的动作：狼人 wolf_chat / wolf_kill，预言家 inspect');
+      throw new WerewolfError('bad_action', '夜晚阶段能做的动作：狼人 wolf_chat / wolf_kill，预言家 inspect，守卫 guard');
     }
     // —— B 段：女巫 ——
     if (move !== 'witch') throw new WerewolfError('bad_action', '这个阶段只有女巫能用药（move: witch）');
@@ -566,15 +585,18 @@ export class WerewolfTable implements TableEngine {
   private resolveNight(now: number): TableStep {
     const night = this.night!;
     const events: TableEvent[] = [];
+    // 单独守护或救治能挡住狼刀，同时生效则仍然中刀。
+    const protectedByGuard = night.kill !== null && night.guarded === night.kill;
+    const wolfKilled = night.kill !== null && night.saved === protectedByGuard;
     const causeOf = (seatNo: number): DeathRecord['cause'] => {
-      const killed = night.kill === seatNo && !night.saved;
+      const killed = night.kill === seatNo && wolfKilled;
       const poisoned = night.poison === seatNo;
       if (killed && poisoned) return 'wolf_poison';
       if (killed) return 'wolf';
       return 'poison';
     };
     const dead: number[] = [];
-    if (night.kill !== null && !night.saved) dead.push(night.kill);
+    if (night.kill !== null && wolfKilled) dead.push(night.kill);
     if (night.poison !== undefined && !dead.includes(night.poison)) dead.push(night.poison);
     // 刀毒同中时只有一个死条目，cause 合并成 wolf_poison（见 causeOf）。
     for (const seatNo of dead) {
@@ -586,6 +608,7 @@ export class WerewolfTable implements TableEngine {
       day: night.day,
       kill: night.kill,
       saved: night.saved,
+      ...(night.guarded !== undefined ? { guarded: night.guarded } : {}),
       ...(night.poison !== undefined ? { poison: night.poison } : {}),
       wolfChats: night.wolfChats.map((entry) => ({ ...entry })),
       killVotes: [...night.killVotes.entries()],
@@ -687,10 +710,10 @@ export class WerewolfTable implements TableEngine {
 
   private beginDaySpeech(now: number, events: TableEvent[]): TableStep {
     // 每天起点向后一位，跳过已出局。
-    const start = ((this.dayStart - 1 + (this.day - 1)) % WEREWOLF_SEAT_COUNT) + 1;
+    const start = ((this.dayStart - 1 + (this.day - 1)) % this.seatCount) + 1;
     const queue: number[] = [];
-    for (let offset = 0; offset < WEREWOLF_SEAT_COUNT; offset++) {
-      const seatNo = ((start - 1 + offset) % WEREWOLF_SEAT_COUNT) + 1;
+    for (let offset = 0; offset < this.seatCount; offset++) {
+      const seatNo = ((start - 1 + offset) % this.seatCount) + 1;
       const seat = this.seatByNo(seatNo)!;
       if (seat.alive) queue.push(seatNo);
     }
@@ -885,7 +908,7 @@ export class WerewolfTable implements TableEngine {
       data: { game: this.game, day },
     });
     const actors = this.aliveSeats()
-      .filter((seat) => seat.role === 'wolf' || seat.role === 'seer')
+      .filter((seat) => seat.role === 'wolf' || seat.role === 'seer' || seat.role === 'guard')
       .map((seat) => seat.seatNo);
     return { events, views: this.seatIdsByNo(actors), refreshViews: this.allSeatIds() };
   }
@@ -1097,6 +1120,7 @@ export class WerewolfTable implements TableEngine {
           return null;
         }
         if (seat.role === 'seer' && seat.alive && !this.night!.inspectDone) return 'inspect';
+        if (seat.role === 'guard' && seat.alive && this.night!.guarded === undefined) return 'guard';
         return null;
       }
       if (phase.half === 'b' && seat.role === 'witch' && seat.alive && !this.night!.witchDone) {
@@ -1119,7 +1143,7 @@ export class WerewolfTable implements TableEngine {
     const myWindowId = pending ? phase.windowId : undefined;
     const deadline = this.myDeadline(seat);
     const fresh = this.lastAction?.seatNo === seat.seatNo
-      && (this.lastAction.kind === 'inspect' || this.lastAction.kind === 'witch' || this.lastAction.kind === 'wolf_chat' || this.lastAction.kind === 'wolf_kill');
+      && (this.lastAction.kind === 'inspect' || this.lastAction.kind === 'guard' || this.lastAction.kind === 'witch' || this.lastAction.kind === 'wolf_chat' || this.lastAction.kind === 'wolf_kill');
     return {
       game: this.game,
       seat: seat.id,
@@ -1131,6 +1155,7 @@ export class WerewolfTable implements TableEngine {
       day: this.day,
       phase: this.status === 'open' ? 'waiting' : phase.kind,
       phaseLabel: this.phaseLabel(),
+      capacity: this.seatCount,
       ...(this.status === 'open' ? { requireHuman: this.requireHuman, startBlockers: this.startBlockers() } : {}),
       ...(phase.kind === 'speech' ? { stage: phase.stage, speechKind: phase.speechKind } : {}),
       ...(phase.kind === 'vote' && phase.voteVariant ? { voteVariant: phase.voteVariant } : {}),
@@ -1159,6 +1184,7 @@ export class WerewolfTable implements TableEngine {
         } : {}),
       } : {}),
       ...(seat.role === 'seer' ? { inspections: this.inspections.map((entry) => ({ ...entry })) } : {}),
+      ...(seat.role === 'guard' ? { previousGuard: this.nightLog.at(-1)?.guarded ?? null } : {}),
       ...(seat.role === 'witch' ? {
         potions: { ...this.potions },
         potionLog: this.potionLog.map((entry) => ({ ...entry })),
@@ -1215,6 +1241,7 @@ export class WerewolfTable implements TableEngine {
       if (night.wolfChatDone.has(seat.seatNo)) done.push('wolf_chat');
       if (night.killVotes.has(seat.seatNo)) done.push('wolf_kill');
       if (night.inspectDone && seat.role === 'seer') done.push('inspect');
+      if (night.guarded !== undefined && seat.role === 'guard') done.push('guard');
       if (night.witchDone && seat.role === 'witch') done.push('witch');
     }
     if (phase.kind === 'vote' && this.ballots.has(seat.seatNo)) done.push('vote');
@@ -1235,6 +1262,7 @@ export class WerewolfTable implements TableEngine {
       day: this.day,
       phase: this.status === 'open' ? 'waiting' : phase.kind,
       phaseLabel: this.phaseLabel(),
+      capacity: this.seatCount,
       ...(this.status === 'open' ? { requireHuman: this.requireHuman, startBlockers: this.startBlockers() } : {}),
       ...(turn ? { turn } : {}),
       deadline: this.publicDeadline(),
@@ -1316,7 +1344,7 @@ export class WerewolfTable implements TableEngine {
     const seat = this.seatOf(seatId);
     if (!seat) return null;
     if (this.status === 'open') {
-      return `${this.publicText()}\n尚未分配角色。坐满九席且至少有一只 Coo 后，由开桌者开始。每只 Coo 的扩展都须支持狼人杀。\n${this.startBlockers().join('；')}\n未开局可用 parlor_table_leave 退桌；开桌者退桌即收桌。`;
+      return `${this.publicText()}\n尚未分配角色。坐满 ${this.seatCount} 席且至少有一只 Coo 后，由开桌者开始。每只 Coo 的扩展都须支持狼人杀。\n${this.startBlockers().join('；')}\n未开局可用 parlor_table_leave 退桌；开桌者退桌即收桌。`;
     }
     const history = seat.role === 'seer'
       ? `查验历史（仅自己可见）：${this.inspections.length ? this.inspections.map((entry) => `第${entry.day}夜查 ${entry.target}号=${entry.result === 'wolf' ? '狼人' : '好人'}`).join('；') : '还没有查验记录'}。`
@@ -1365,6 +1393,10 @@ export class WerewolfTable implements TableEngine {
               lines.push(`已交刀票：${[...night.killVotes.entries()].map(([voter, target]) => `${voter}号→${target === null ? '弃刀' : `${target}号`}`).join('，')}`);
             }
             lines.push('两个动作都交完就不用再等；到点锁定刀口。');
+          } else if (pending === 'guard') {
+            const previous = this.nightLog.at(-1)?.guarded;
+            lines.push(`守卫时间（${clock(phase.deadline)}）：parlor_werewolf_action {move:"guard", windowId:"${phase.windowId}", target:座号}。可守自己，不带 target 为空守。`);
+            if (previous != null) lines.push(`昨夜守了 ${previous} 号，今夜不能再守此人。`);
           } else if (pending === 'inspect') {
             lines.push(`查验（${clock(phase.deadline)}）：parlor_werewolf_action {move:"inspect", windowId:"${phase.windowId}", target:座号}；不带 target = 今夜不查验。`);
             lines.push('结果提交后立即显示在本人私视图，之后用 parlor_table_view 随时回看。');
@@ -1452,7 +1484,7 @@ export class WerewolfTable implements TableEngine {
   publicText(): string {
     if (this.status === 'open') {
       const rule = this.requireHuman ? '本桌要求至少一名真人入座。' : '本桌允许全 Coo 局。';
-      return `【狼人杀桌·等待入座】${this.seats.length}/${WEREWOLF_SEAT_COUNT} 席：${this.seats.map((seat) => `${seat.seatNo}号 ${seat.name}`).join('、')}。${rule}`;
+      return `【狼人杀桌·等待入座】${this.seats.length}/${this.seatCount} 席：${this.seats.map((seat) => `${seat.seatNo}号 ${seat.name}`).join('、')}。${rule}`;
     }
     if (this.status === 'playing') {
       const alive = this.aliveSeats();
@@ -1471,6 +1503,7 @@ export class WerewolfTable implements TableEngine {
       status: this.status,
       host: this.host,
       requireHuman: this.requireHuman,
+      seatCount: this.seatCount,
       day: this.day,
       dayStart: this.dayStart,
       windowSeq: this.windowSeq,
@@ -1507,13 +1540,15 @@ export class WerewolfTable implements TableEngine {
     if (raw.status !== 'open' && raw.status !== 'playing' && raw.status !== 'ended') {
       throw new Error(`狼人杀存档的状态不对：${String(raw.status)}`);
     }
+    const seatCount = raw.seatCount === undefined ? WEREWOLF_SEAT_COUNT : raw.seatCount;
+    if (!isWerewolfSeatCount(seatCount)) throw new Error('狼人杀存档的开局人数不对');
     const seats = raw.seats as Array<Record<string, unknown>> | undefined;
-    if (!Array.isArray(seats) || seats.length === 0 || seats.length > WEREWOLF_SEAT_COUNT) {
+    if (!Array.isArray(seats) || seats.length === 0 || seats.length > seatCount) {
       throw new Error('狼人杀存档缺席位或席位数量不对');
     }
     const parsed: WSeat[] = seats.map((entry) => {
       const seatNo = Number(entry.seatNo);
-      if (!Number.isSafeInteger(seatNo) || seatNo < 1 || seatNo > WEREWOLF_SEAT_COUNT) throw new Error('狼人杀存档的座号不对');
+      if (!Number.isSafeInteger(seatNo) || seatNo < 1 || seatNo > seatCount) throw new Error('狼人杀存档的座号不对');
       if (typeof entry.id !== 'string' || typeof entry.name !== 'string') throw new Error('狼人杀存档的席位形状不对');
       const role = entry.role === undefined ? undefined : entry.role as WerewolfRole;
       if (role !== undefined && !(role in ROLE_LABELS)) throw new Error(`狼人杀存档的角色不对：${String(entry.role)}`);
@@ -1538,6 +1573,7 @@ export class WerewolfTable implements TableEngine {
     this.status = raw.status as TableStatus;
     // 旧存档开桌时采用的是必须有真人的规则。
     this.requireHuman = raw.requireHuman !== false;
+    this.seatCount = seatCount;
     this.day = Number(raw.day);
     this.dayStart = Number(raw.dayStart);
     this.windowSeq = Number(raw.windowSeq);
@@ -1609,6 +1645,7 @@ export class WerewolfTable implements TableEngine {
           ? null
           : Number((raw.night as Record<string, unknown>).kill),
         saved: (raw.night as Record<string, unknown>).saved === true,
+        guarded: (raw.night as WorkingNight).guarded,
         poison: Number.isSafeInteger((raw.night as Record<string, unknown>).poison)
           ? Number((raw.night as Record<string, unknown>).poison)
           : undefined,

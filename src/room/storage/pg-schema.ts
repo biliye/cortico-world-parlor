@@ -15,7 +15,7 @@
 import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 4;
+export const PG_SCHEMA_VERSION = 6;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -432,5 +432,17 @@ export const PG_MIGRATIONS: PgMigration[] = [
     CREATE INDEX ix_rooms_idle_due ON rooms(business_active_at) WHERE archived_at IS NULL AND kind = 'room';
     CREATE INDEX ix_seats_idle_due ON room_seats(business_active_at) WHERE released_at IS NULL AND kind = 'pet';
     INSERT INTO meta(key,value) VALUES ('promises_disabled','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+  ` },
+  // tables.game 的 CHECK 是 v1 写死的四个游戏；快局大富翁要落库就得放宽这一条。
+  // 只加值、不删旧值：v4 及更早的桌仍然合法，老程序的读取路径不受影响。
+  { version: 5, name: 'tables-game-monopoly2d', sql: `
+    ALTER TABLE tables DROP CONSTRAINT IF EXISTS tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d'));
+  ` },
+  { version: 6, name: 'tables-game-gomoku', sql: `
+    ALTER TABLE tables DROP CONSTRAINT tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku'));
   ` },
 ];

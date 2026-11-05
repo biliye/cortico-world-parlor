@@ -66,13 +66,13 @@ describe('狼人杀 · 网关与注册表', () => {
     const def = gameById('werewolf');
     expect(def?.revisionMode).toBe('window');
     expect(def?.actionType).toBe('werewolf_action');
-    expect(def?.tool.name).toBe('parlor_werewolf_action');
+    expect(def?.legacyToolName).toBe('parlor_werewolf_action');
     const logTool = def?.extraTools?.find((tool) => tool.name === 'parlor_werewolf_log');
     expect(logTool).toBeDefined();
-    expect(() => def!.tool.toBody({ move: 'speak' })).toThrow(/windowId/);
-    expect(() => def!.tool.toBody({ windowId: 'w1', move: ' dancing' })).toThrow(/move/);
-    expect(() => def!.tool.toBody({ windowId: 'w1', move: 'witch' })).toThrow(/choice/);
-    const body = def!.tool.toBody({ windowId: 'w9', move: 'vote', target: 5 });
+    expect(() => def!.action.toBody({ move: 'speak' })).toThrow(/windowId/);
+    expect(() => def!.action.toBody({ windowId: 'w1', move: ' dancing' })).toThrow(/move/);
+    expect(() => def!.action.toBody({ windowId: 'w1', move: 'witch' })).toThrow(/choice/);
+    const body = def!.action.toBody({ windowId: 'w9', move: 'vote', target: 5 });
     expect(body).toMatchObject({ type: 'werewolf_action', move: 'vote', windowId: 'w9', target: 5 });
     // 协议版本常量要 ≥ 狼人杀门槛（自家客户端必须能玩自家游戏）。
     const atLeast = (a: string, b: string): boolean => {

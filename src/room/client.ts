@@ -7,6 +7,7 @@ import type { ReplayEventView } from './replay.ts';
 import type { Announcement, Feedback } from './support-db.ts';
 import type { ParentMailView } from './mail-db.ts';
 import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
+import type { GameQuery } from './game-api.ts';
 import type {
   ActionRequest, ActionResponse, HallView, InviteResponse, JoinRequest, JoinResponse, MeView,
   RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
@@ -240,6 +241,18 @@ export class ParlorClient {
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<ReplayResponse>(response);
+  }
+
+  async games(token: string, query: GameQuery = {}, roomId?: string): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    const response = await fetch(`${this.path('games', roomId)}?${params}`, {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
   }
 
   async action(token: string, body: ActionRequest, roomId?: string): Promise<ActionResponse> {

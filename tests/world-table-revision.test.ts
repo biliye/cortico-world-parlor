@@ -69,6 +69,38 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
   });
 
 describe('World 牌桌版本同步', () => {
+  it('通用工具直接使用服务器目录，支持本地尚未注册的游戏', async () => {
+    const response = { ok: true, protocol: 'parlor.game.v1', game: { id: 'future' } };
+    const query = vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue(response);
+    const info = await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler(
+      { op: 'describe', game: 'future' }, {} as ToolCallContext,
+    );
+    expect(JSON.parse(typeof info === 'string' ? info : info.text)).toEqual(response);
+    expect(query.mock.calls[0][1]).toEqual({ op: 'describe', game: 'future' });
+    const action = vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
+    const args = { table: 'future-table', action: 'fly', params: { altitude: 3 }, revision: 1 };
+    const output = await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(args, {} as ToolCallContext);
+    expect(JSON.parse(typeof output === 'string' ? output : output.text).ok).toBe(true);
+    expect(action.mock.calls[0][1]).toMatchObject({ ...args, type: 'game_action', requestId: expect.any(String) });
+    await world.tools().find(tool => tool.name === 'parlor_table_open')!.handler({ game: 'future' }, {} as ToolCallContext);
+    expect(action.mock.calls[1][1]).toMatchObject({ type: 'table_open', game: 'future' });
+  });
+
+  it('通用动作只在网络失败时沿用幂等键重试，不替换显式版本', async () => {
+    const action = vi.spyOn(ParlorClient.prototype, 'action')
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
+    const tool = world.tools().find(tool => tool.name === 'parlor_game_action')!;
+    await tool.handler({ table: 't1', action: 'play', params: { cards: ['3'] }, revision: 2 }, {} as ToolCallContext);
+    expect(action.mock.calls).toHaveLength(2);
+    expect(action.mock.calls[0][1]).toEqual(action.mock.calls[1][1]);
+    expect(action.mock.calls[0][1]).toMatchObject({ revision: 2 });
+    action.mockClear().mockRejectedValue(new ParlorHttpError(409, '旧桌面'));
+    const result = await tool.handler({ table: 't1', action: 'play', params: {}, revision: 2, requestId: 'retry-id' }, {} as ToolCallContext);
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(typeof result === 'string' ? result : result.text).toContain('retry-id');
+  });
+
   it('查验动作回执直接附本人结论，即使已提交后 canAct/freshResult 不再存在', async () => {
     const result = '查验历史（仅自己可见）：第1夜查 3号=狼人。';
     snapshot = { ...snapshot,

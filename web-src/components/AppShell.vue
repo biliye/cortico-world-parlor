@@ -23,6 +23,8 @@ import { view } from '../stores/view.ts';
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
+const boardChatInToolbar = computed(() => view.value === 'table'
+  && (activeTable.value?.game === 'monopoly2d' || activeTable.value?.game === 'gomoku'));
 const switcherOpen = ref(false);
 const accountOpen = ref(false);
 
@@ -133,7 +135,8 @@ onMounted(() => {
             <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
           </button>
           <ThemePicker />
-          <button class="tool dock" type="button" :aria-expanded="chatExpanded()" @click="toggleChat()">
+          <button class="tool dock" :class="{ 'board-chat-tool': boardChatInToolbar }" type="button"
+            :aria-expanded="chatExpanded()" aria-label="有话慢慢聊" @click="toggleChat()">
             <Icon name="chat" /><span class="tool-label">{{ chatExpanded() ? '收起聊天' : '有话慢慢聊' }}</span>
           </button>
         </div>
@@ -149,7 +152,7 @@ onMounted(() => {
     <RoomSwitcher v-model:open="switcherOpen" />
     <AccountPanel v-model:open="accountOpen" />
     <div class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
-    <button v-if="!chatExpanded()" class="chat-fab" type="button" @click="toggleChat(true)">
+    <button v-if="!chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleChat(true)">
       <Icon name="chat" />有话慢慢聊
     </button>
     <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>
@@ -157,6 +160,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.tool.board-chat-tool { display: inline-flex; }
 .shell.on-werewolf > .chat-fab {
   border: 1px solid var(--line-2);
   background: var(--panel-2);

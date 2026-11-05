@@ -12,7 +12,7 @@ describe('牌桌注册表', () => {
   it('每个游戏一条登记，id / 动作类型 / 工具名不撞', () => {
     const ids = GAME_LIST.map((game) => game.id);
     const actions = GAME_LIST.map((game) => game.actionType);
-    const tools = GAME_LIST.map((game) => game.tool.name);
+    const tools = GAME_LIST.flatMap((game) => game.legacyToolName ? [game.legacyToolName] : []);
     expect(new Set(ids).size).toBe(ids.length);
     expect(new Set(actions).size).toBe(actions.length);
     expect(new Set(tools).size).toBe(tools.length);
@@ -20,7 +20,7 @@ describe('牌桌注册表', () => {
       expect(game.label.length).toBeGreaterThan(0);
       expect(game.icon.length).toBeGreaterThan(0);
       expect(game.openHint.length).toBeGreaterThan(0);
-      expect(game.tool.parameters.type).toBe('object');
+      expect(game.action.parameters.type).toBe('object');
     }
   });
 
@@ -44,31 +44,51 @@ describe('牌桌注册表', () => {
     expect(gameByActionType('table_action')?.id).toBe('dice');
 
     const ddz = gameById('ddz')!;
-    expect(ddz.tool.toBody({ move: 'bid', call: true }))
+    expect(ddz.action.toBody({ move: 'bid', call: true }))
       .toEqual({ type: 'ddz_action', move: 'bid', call: true });
-    expect(ddz.tool.toBody({ move: 'play', cards: ['3', '3'] }))
+    expect(ddz.action.toBody({ move: 'play', cards: ['3', '3'] }))
       .toEqual({ type: 'ddz_action', move: 'play', cards: ['3', '3'] });
-    expect(ddz.tool.done({ move: 'bid', call: true })).toContain('地主');
-    expect(() => ddz.tool.toBody({ move: 'play', cards: [] })).toThrow(/cards/);
+    expect(ddz.action.done({ move: 'bid', call: true })).toContain('地主');
+    expect(() => ddz.action.toBody({ move: 'play', cards: [] })).toThrow(/cards/);
 
     const dice = gameById('dice')!;
-    expect(dice.tool.toBody({ action: 'roll', die: 1 }))
+    expect(dice.action.toBody({ action: 'roll', die: 1 }))
       .toEqual({ type: 'table_action', action: 'roll', die: 1 });
-    expect(dice.tool.done({ action: 'stand' })).toContain('停牌');
-    expect(() => dice.tool.toBody({ action: 'nope' })).toThrow(/roll/);
+    expect(dice.action.done({ action: 'stand' })).toContain('停牌');
+    expect(() => dice.action.toBody({ action: 'nope' })).toThrow(/roll/);
   });
 
-  it('World 的工具声明与开桌枚举都来自注册表', () => {
+  it('World 保留旧工具，通用开桌使用服务器目录而非本地游戏枚举', () => {
     const names = new Set(PARLOR_TOOL_DECLS.map((decl) => decl.name));
-    for (const game of GAME_LIST) expect(names.has(game.tool.name)).toBe(true);
+    for (const game of GAME_LIST) if (game.legacyToolName) expect(names.has(game.legacyToolName)).toBe(true);
     // 工具声明里的描述/参数就是注册表里的那一份（不再抄一遍）。
     for (const game of GAME_LIST) {
-      const decl = PARLOR_TOOL_DECLS.find((entry) => entry.name === game.tool.name)!;
-      expect(decl.description).toBe(game.tool.description);
-      expect(decl.parameters).toEqual(game.tool.parameters);
+      if (!game.legacyToolName) continue;
+      const decl = PARLOR_TOOL_DECLS.find((entry) => entry.name === game.legacyToolName)!;
+      expect(decl.description).toBe(game.action.description);
+      expect(decl.parameters).toEqual(game.action.parameters);
     }
     const open = PARLOR_TOOL_DECLS.find((decl) => decl.name === 'parlor_table_open')!;
     const game = (open.parameters as { properties?: { game?: { enum?: string[] } } }).properties?.game;
-    expect(game?.enum).toEqual(gameIds());
+    expect(game?.enum).toBeUndefined();
+    expect(names.has('parlor_game_info')).toBe(true);
+    expect(names.has('parlor_game_action')).toBe(true);
+  });
+
+  it('快局大富翁：无押注、严格版本、动作参数只认 roll/buy/pass 与回合号', () => {
+    const game = gameById('monopoly2d')!;
+    expect(game).toBeTruthy();
+    expect(game.actionType).toBe('monopoly2d_action');
+    expect(game.legacyToolName).toBe('parlor_monopoly2d_action');
+    expect(game.revisionMode).toBe('strict');
+    expect(game.allowsStake).toBe(false);
+    expect(gameById('ddz')!.allowsStake).not.toBe(false);
+
+    expect(game.action.toBody({ move: 'roll', turnNo: 3 }))
+      .toEqual({ type: 'monopoly2d_action', move: 'roll', turnNo: 3 });
+    expect(() => game.action.toBody({ move: 'upgrade', turnNo: 3 })).toThrow(/roll/);
+    expect(() => game.action.toBody({ move: 'roll' })).toThrow(/turnNo/);
+    expect(() => game.action.toBody({ move: 'roll', turnNo: 0 })).toThrow(/turnNo/);
+    expect(game.action.done({ move: 'buy' })).toContain('买下');
   });
 });

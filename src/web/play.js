@@ -1322,7 +1322,7 @@ function buildShell() {
     el('p', '', '同一个客厅，不同的好时光。想玩就入座，想聊就坐一会儿。'), clubScene('ddz'));
   const roomTables = el('div', 'club-table-grid');
   const tableSectionHead = el('div', 'club-section-head');
-  tableSectionHead.append(el('h2', '', '挑张桌，坐下来'), el('span', 'muted', '斗地主 3 席 · 狼人杀 9 席'));
+  tableSectionHead.append(el('h2', '', '挑张桌，坐下来'), el('span', 'muted', '斗地主 3 席 · 狼人杀 6／9／12 席'));
   const stay = el('div', 'club-stay');
   stay.append(el('strong', '', '✳  不玩游戏，也欢迎留下来。'), el('p', '', '打开聊天，和这个客厅里的朋友说两句。'));
   viewLobby.append(roomNavigation, lobbyHead, roomWelcome, members, tableSectionHead, roomTables, gameGrid, lobbyNotice, stay, guide);
@@ -2233,7 +2233,7 @@ function openTableCard(table) {
     actions.append(btn('坐下', () => actAndGo({ type: 'table_join', ...(target ? { table: target } : {}) }), { primary: true }));
   } else if (host) {
     const count = (table.seats || []).length;
-    const enough = count >= (def ? def.minPlayers : 2) || !!(def && def.botFill);
+    const enough = count >= (table.game === 'werewolf' ? table.capacity ?? 9 : def?.minPlayers ?? 2) || !!def?.botFill;
     const blockers = table.startBlockers || [];
     actions.append(btn('开始', () => actAndGo({ type: 'table_start' }), {
       primary: true,
@@ -2568,7 +2568,7 @@ function clubTableCard(table) {
   const id = tableIdOf(table);
   const card = el('article', 'club-table-card' + (table.game === 'werewolf' ? ' is-night' : ''));
   const seats = table.seats || [];
-  const capacity = table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : 4;
+  const capacity = table.capacity ?? (table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : 4);
   const header = el('div', 'club-section-head');
   header.append(el('span', '', gameLabel(table.game)), el('span', 'muted', `${seats.length} / ${capacity} 席`));
   const scene = clubScene(table.game);
@@ -2635,14 +2635,27 @@ function lobbyCard(game) {
       () => actAndGo({ type: 'table_leave' }, 'lobby'), { ghost: true, small: true }));
   } else {
     const requireHuman = el('input');
+    const seatCount = el('select');
     if (game === 'werewolf') {
+      seatCount.disabled = occupied;
+      for (const size of [6, 9, 12]) {
+        const option = el('option', '', size === 12 ? '12 人（含守卫）' : `${size} 人`);
+        option.value = String(size);
+        seatCount.append(option);
+      }
+      seatCount.value = '9';
+      const sizeLabel = el('label', 'muted', '开局人数 ');
+      sizeLabel.append(seatCount);
+      body.append(sizeLabel);
       requireHuman.type = 'checkbox';
       requireHuman.disabled = occupied;
       const label = el('label', 'muted');
       label.append(requireHuman, ' 开局须至少一名真人入座');
       body.append(label);
     }
-    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game, ...(requireHuman.checked ? { requireHuman: true } : {}) }), {
+    foot.append(btn('开一桌', () => actAndGo({ type: 'table_open', game, ...(requireHuman.checked ? { requireHuman: true } : {}),
+      ...(game === 'werewolf' ? { seatCount: Number(seatCount.value) } : {}),
+    }), {
       primary: true, small: true, disabled: occupied,
       title: occupied ? '先结束或离开自己的牌桌' : '',
     }));

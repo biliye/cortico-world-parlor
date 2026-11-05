@@ -175,7 +175,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
           <button class="btn ghost" type="button" @click="backToRoom">回到客厅</button>
         </div>
         <p v-if="table.game === 'werewolf'" class="muted">
-          等待入座 {{ seats.length }}/9，尚未分配角色。坐满且至少有一只 Coo 后，由开桌者开始。
+          等待入座 {{ seats.length }}/{{ table.capacity ?? 9 }}，尚未分配角色。坐满且至少有一只 Coo 后，由开桌者开始。
           {{ table.requireHuman === false ? '本桌允许全 Coo 局。' : '本桌要求至少一名真人入座。' }}
         </p>
         <template v-if="seated || table.game === 'werewolf'">

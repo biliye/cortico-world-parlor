@@ -3,16 +3,17 @@
 import { computed, ref, watch } from 'vue';
 
 const ROLE_NAMES: Record<string, string> = {
-  wolf: '狼人', villager: '平民', seer: '预言家', witch: '女巫', hunter: '猎人',
+  wolf: '狼人', villager: '平民', seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫',
 };
 const ROLE_FACTIONS: Record<string, string> = {
-  wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营',
+  wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营', guard: '好人阵营',
 };
 const ROLE_SKILLS: Record<string, string> = {
   wolf: '每晚与同伴交流并交一张刀票；最高票且唯一的存活非狼人出局，平票或弃刀则空刀。',
   villager: '没有夜间技能，靠白天发言与投票找出狼人。',
   seer: '每晚最多查验一名其他存活玩家，只得到「狼人 / 好人」。',
   witch: '各一瓶解药与毒药，每夜最多用一瓶；解药尚在才得知刀口；首夜可自救，不能自毒。',
+  guard: '每晚可守一名存活玩家，可自守或空守。不能连守同一人；守护挡狼刀，不挡毒药，同守同救仍出局。',
   hunter: '被狼刀或白天投票出局可开枪带走一名其他存活玩家；中毒不能开枪。',
 };
 

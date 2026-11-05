@@ -442,3 +442,128 @@ describe('重启与持久化', () => {
     expect(Array.isArray(snapshot.ledgerRoom)).toBe(true);
   });
 });
+
+describe('客厅牌桌（快局大富翁）', () => {
+  const D = 'coo-dddddddd';
+
+  it('拒绝押注，四人开局后能落库一手并拒绝旧版本', async () => {
+    fixture = await setup();
+    const { host, clock, db } = fixture;
+    await db.prepare(
+      'INSERT INTO coos(id, kind, display_name, secret_hash, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+    ).run(D, 'pet', '小禾', null, clock.now);
+
+    await enter(host, A, '阿岚');
+    await enter(host, B, '小满');
+    await enter(host, C, '小柚');
+    await enter(host, D, '小禾');
+
+    // 无押注玩法：直接 HTTP 或工具都走这一道检查。
+    await expect(host.openTable(A, { game: 'monopoly2d', stake: 5 }, 'm2d-stake'))
+      .rejects.toThrow(/局内金币/);
+
+    const opened = await host.openTable(A, { game: 'monopoly2d' }, 'm2d-open');
+    await host.joinTable(B);
+    await host.joinTable(C);
+    await host.joinTable(D);
+    const started = await host.startTable(A);
+
+    // 先手是服务端抽的：从四份私视图里找出当前席位。
+    let actor = '';
+    let turnNo = 0;
+    for (const id of [A, B, C, D]) {
+      const snapshot = await host.snapshot(id, { limit: 1 });
+      const priv = snapshot.tablePrivate as { canAct?: boolean; turnNo?: number } | null | undefined;
+      if (priv?.canAct === true) {
+        actor = id;
+        turnNo = Number(priv.turnNo);
+        break;
+      }
+    }
+    expect(actor).not.toBe('');
+    expect(turnNo).toBe(1);
+
+    const rolled = await act(host, actor, { type: 'monopoly2d_action', move: 'roll', turnNo }, 'm2d-roll-1');
+    expect(rolled.revision).toBeGreaterThan(started.revision);
+
+    // 旧版本一律拒：这一手已经过去了。
+    await expect(host.tableAction(actor, { type: 'monopoly2d_action', move: 'roll', turnNo }, {
+      revision: started.revision,
+      requestId: 'm2d-stale',
+    })).rejects.toThrow(/旧桌面|过去的/);
+
+    // 落库的状态能再读出来：桌号、阶段与公开金币都在。
+    const snapshot = await host.snapshot(A, {});
+    expect(snapshot.table?.game).toBe('monopoly2d');
+    expect(['await_roll', 'await_buy']).toContain(String((snapshot.table as { phase?: string } | null)?.phase));
+    expect(Array.isArray((snapshot.table as { cells?: unknown[] } | null)?.cells)).toBe(true);
+  });
+
+  it('重启宿主后从落库快照恢复，不重掷', async () => {
+    fixture = await setup();
+    const { host, clock, db } = fixture;
+    await db.prepare(
+      'INSERT INTO coos(id, kind, display_name, secret_hash, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+    ).run(D, 'pet', '小禾', null, clock.now);
+    for (const [id, name] of [[A, '阿岚'], [B, '小满'], [C, '小柚'], [D, '小禾']] as const) {
+      await enter(host, id, name);
+    }
+    const opened = await host.openTable(A, { game: 'monopoly2d' });
+    await host.joinTable(B);
+    await host.joinTable(C);
+    await host.joinTable(D);
+    await host.startTable(A);
+
+    let actor = '';
+    let turnNo = 0;
+    for (const id of [A, B, C, D]) {
+      const snapshot = await host.snapshot(id, { limit: 1 });
+      const priv = snapshot.tablePrivate as { canAct?: boolean; turnNo?: number } | null | undefined;
+      if (priv?.canAct === true) { actor = id; turnNo = Number(priv.turnNo); break; }
+    }
+    await act(host, actor, { type: 'monopoly2d_action', move: 'roll', turnNo }, 'm2d-roll-2');
+    const before = await host.snapshot(A, {});
+    const beforeTable = before.table as { seats?: Array<{ pos: number; cash: number }>; turnNo?: number } | null;
+
+    const restarted = await RoomHost.create(db, 'lobby', { now: () => clock.now + 1_000 });
+    const after = await restarted.snapshot(A, {});
+    const afterTable = after.table as { seats?: Array<{ pos: number; cash: number }>; turnNo?: number } | null;
+    expect(afterTable?.turnNo).toBe(beforeTable?.turnNo);
+    expect(afterTable?.seats?.map((seat) => seat.pos)).toEqual(beforeTable?.seats?.map((seat) => seat.pos));
+    expect(opened.tableId).toBeTruthy();
+  });
+});
+
+describe('客厅牌桌（五子棋）', () => {
+  it('本地库能落一张五子棋桌，重启后接着下且旧版本被拒', async () => {
+    fixture = await setup();
+    const { host, clock, db } = fixture;
+    await enter(host, A, '阿岚');
+    await enter(host, B, '小满');
+
+    // SQLite 的 tables.game CHECK 是硬约束：漏登记新游戏时这里就插不进去。
+    const opened = await host.openTable(A, { game: 'gomoku' });
+    await host.joinTable(B);
+    const started = await host.startTable(A);
+
+    const before = await host.snapshot(A, { limit: 1 });
+    const priv = before.tablePrivate as { canAct?: boolean } | null | undefined;
+    expect(priv?.canAct).toBe(true);
+    await host.tableAction(A, { type: 'gomoku_action', row: 7, col: 7 }, {
+      revision: started.revision,
+      requestId: 'gomoku-black-1',
+    });
+    await expect(host.tableAction(A, { type: 'gomoku_action', row: 8, col: 8 }, {
+      revision: started.revision,
+      requestId: 'gomoku-stale',
+    })).rejects.toThrow(/旧桌面|过去的/);
+
+    // 落库的状态能再读出来：桌号、游戏与已下的那一手都在。
+    const restarted = await RoomHost.create(db, 'lobby', { now: () => clock.now + 1_000 });
+    const after = await restarted.snapshot(A, {});
+    const table = after.table as { id?: string; game?: string; last?: { row: number; col: number } } | null;
+    expect(table?.id).toBe(opened.tableId);
+    expect(table?.game).toBe('gomoku');
+    expect(table?.last).toEqual(expect.objectContaining({ row: 7, col: 7 }));
+  });
+});

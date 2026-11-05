@@ -1,4 +1,4 @@
-/** 狼人杀（真人与 Coo 同桌）：会馆里的固定九席圆桌。
+/** 狼人杀（真人与 Coo 同桌）：会馆里的 6／9／12 席圆桌。
  *  座号方向所有端一致（不为自己旋转）；发言/票型/历史都在右侧文字区；
  *  秘密（身份牌、查验、狼聊、药）只渲染本人私视图给的东西。
  *  规则、窗口、时限全在服务器；这里只摆座位、卡片、草稿与按钮。 */
@@ -6,14 +6,15 @@ import {
   el, clear, btn, fmtClock, clockSpan, icon, initialOf, readable,
 } from '../common.js';
 
-const ROLES = ['wolf', 'villager', 'seer', 'witch', 'hunter'];
-const ROLE_NAMES = { wolf: '狼人', villager: '平民', seer: '预言家', witch: '女巫', hunter: '猎人' };
-const ROLE_FACTIONS = { wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营' };
+const ROLES = ['wolf', 'villager', 'seer', 'witch', 'hunter', 'guard'];
+const ROLE_NAMES = { wolf: '狼人', villager: '平民', seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫' };
+const ROLE_FACTIONS = { wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营', guard: '好人阵营' };
 const ROLE_SKILLS = {
   wolf: '每晚与同伴交流并交一张刀票；最高票且唯一的存活非狼人出局，平票或弃刀则空刀。',
   villager: '没有夜间技能，靠白天发言与投票找出狼人。',
   seer: '每晚最多查验一名其他存活玩家，只得到「狼人 / 好人」。',
   witch: '各一瓶解药与毒药，每夜最多用一瓶；解药尚在才得知刀口；首夜可自救，不能自毒。',
+  guard: '每晚可守一名存活玩家，可自守或空守。不能连守同一人；守护挡狼刀，不挡毒药，同守同救仍出局。',
   hunter: '被狼刀或白天投票出局可开枪带走一名其他存活玩家；中毒不能开枪。',
 };
 const KIND_LABEL = { human: '人', pet: 'Coo' };
@@ -39,6 +40,7 @@ export function mountWerewolf(root, ctx) {
   let playerFilter = 0;         // 按玩家回看的座号
   let votePick = null;          // {target: number|null} 已选未提交
   let inspectPick = null;
+  let guardPick = null;
   let poisonPick = null;
   let shootPick = null;
   let wolfKillPick = null;
@@ -60,7 +62,7 @@ export function mountWerewolf(root, ctx) {
     } catch { /* 存不进去就只留在输入框里 */ }
   };
 
-  // 图片库公开、集合一致：挂桌就预载五种角色牌（不代表谁是什么）。
+  // 图片库公开、集合一致：挂桌就预载所有角色牌（不代表谁是什么）。
   for (const role of ROLES) {
     const img = new Image();
     img.src = roleArtUrl(role);
@@ -166,6 +168,7 @@ export function mountWerewolf(root, ctx) {
     else if (mine === 'vote') text = '轮到你投票';
     else if (mine === 'wolf_chat' || mine === 'wolf_kill') text = '狼人时间';
     else if (mine === 'inspect') text = '预言家时间';
+    else if (mine === 'guard') text = '守卫时间';
     else if (mine === 'witch') text = '女巫时间';
     else if (mine === 'shoot') text = '你可以开枪';
     pill.append(document.createTextNode(text));
@@ -176,11 +179,12 @@ export function mountWerewolf(root, ctx) {
     return pill;
   }
 
-  /* —— 九席环 —— */
+  /* —— 牌桌座位 —— */
 
   function ringArea(table, priv) {
     const wrap = el('div', 'wf-ring-wrap');
-    const ring = el('div', 'wf-ring');
+    const capacity = table.capacity ?? 9;
+    const ring = el('div', `wf-ring seats-${capacity}`);
     const tableCore = el('div', 'wf-table-core');
     const coreDay = el('div', 'wf-core-day');
     coreDay.append(document.createTextNode(table.day ? `第 ${table.day} ${table.phase === 'night' ? '夜' : '天'}` : '狼人杀'));
@@ -192,7 +196,10 @@ export function mountWerewolf(root, ctx) {
     }
     ring.append(tableCore);
     const seatByNo = new Map((table.seats ?? []).map((seat) => [seat.seatNo, seat]));
-    for (const slot of RING_SLOTS) {
+    const slots = capacity === 9 ? RING_SLOTS : Array.from({ length: capacity }, (_, index) => ({
+      seatNo: index + 1, area: `a${index + 1}`,
+    }));
+    for (const slot of slots) {
       const seat = seatByNo.get(slot.seatNo);
       ring.append(seatNode(seat, slot.area, table));
     }
@@ -252,6 +259,7 @@ export function mountWerewolf(root, ctx) {
     const move = myMove();
     const priv = view.priv;
     if (!move || !priv) return false;
+    if (move === 'guard') return aliveOf(seatNo) && seatNo !== priv.previousGuard;
     if (seatNo === mySeatNo) return false;
     if (move === 'vote') {
       if (priv.voteVariant === 'pk') return (priv.pkSeats ?? []).includes(seatNo);
@@ -270,6 +278,7 @@ export function mountWerewolf(root, ctx) {
   function pickTarget(seatNo) {
     const move = myMove();
     if (move === 'vote') votePick = { target: votePick?.target === seatNo ? null : seatNo };
+    else if (move === 'guard') guardPick = guardPick === seatNo ? null : seatNo;
     else if (move === 'inspect') inspectPick = inspectPick === seatNo ? null : seatNo;
     else if (move === 'wolf_kill') wolfKillPick = wolfKillPick === seatNo ? null : seatNo;
     if (move === 'witch') poisonPick = poisonPick === seatNo ? null : seatNo;
@@ -300,7 +309,7 @@ export function mountWerewolf(root, ctx) {
     const last = speeches[speeches.length - 1];
     if (table.status === 'open') {
       const rule = table.requireHuman === false ? '本桌允许全 Coo 局。' : '本桌要求至少一名真人入座。';
-      panel.append(el('p', 'wf-hint', `等待入座 ${(table.seats || []).length}/9，尚未分配角色。坐满且至少有一只 Coo 后，由开桌者开始。${rule}`));
+      panel.append(el('p', 'wf-hint', `等待入座 ${(table.seats || []).length}/${table.capacity ?? 9}，尚未分配角色。坐满且至少有一只 Coo 后，由开桌者开始。${rule}`));
     } else if (table.phase === 'reveal') {
       panel.append(el('p', 'wf-hint', '大家在看身份牌，马上入夜。'));
     } else if (table.phase === 'night') {
@@ -457,6 +466,7 @@ export function mountWerewolf(root, ctx) {
     else if (move === 'vote') actions.append(voteComposer(priv));
     else if (move === 'wolf_chat' || move === 'wolf_kill') actions.append(wolfComposer(priv, move));
     else if (move === 'inspect') actions.append(inspectComposer(priv));
+    else if (move === 'guard') actions.append(guardComposer(priv));
     else if (move === 'witch') actions.append(witchComposer(priv));
     else if (move === 'shoot') actions.append(shootComposer(priv));
     else if (priv?.role) actions.append(waitNote(table, priv));
@@ -653,6 +663,23 @@ export function mountWerewolf(root, ctx) {
     return composer;
   }
 
+  function guardComposer(priv) {
+    const composer = el('div', 'wf-composer');
+    composer.append(el('p', 'wf-composer-hint', '守一名存活玩家，可以自守或空守。'));
+    if (priv.previousGuard) {
+      composer.append(el('p', 'wf-composer-note', `昨夜守了 ${seatLabel(priv.previousGuard)}，今夜不能连守。`));
+    }
+    const targets = (view.table?.seats ?? []).map((seat) => seat.seatNo).filter(canTarget);
+    composer.append(targetChips(targets, guardPick, (no) => { guardPick = no; }));
+    const row = el('div', 'wf-confirm');
+    if (guardPick !== null) row.append(btn(`守护 ${seatLabel(guardPick)}`, () => {
+      void act({ move: 'guard', target: guardPick }, () => { guardPick = null; });
+    }, { primary: true }));
+    row.append(btn('今夜空守', () => { void act({ move: 'guard' }); }, { ghost: true }));
+    composer.append(row);
+    return composer;
+  }
+
   function witchComposer(priv) {
     const composer = el('div', 'wf-composer');
     const potions = priv.potions ?? { antidote: 0, poison: 0 };
@@ -771,7 +798,7 @@ export function mountWerewolf(root, ctx) {
       ]);
       if (nextContext !== selectionContext) {
         selectionContext = nextContext;
-        votePick = inspectPick = poisonPick = shootPick = wolfKillPick = null;
+        votePick = inspectPick = guardPick = poisonPick = shootPick = wolfKillPick = null;
       }
       view = next;
       const nextTableId = next.table?.tableId || next.table?.id || '';

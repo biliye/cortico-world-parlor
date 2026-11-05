@@ -58,8 +58,8 @@ export interface TableEntryResult {
 
 export type TableEntryResponse = TableEntryResult | { ok: true; matched: false };
 
-/** 当前多客厅注册表中的三种桌；旧大富翁报名不混入快速匹配。 */
-export const tableCapacity = (game: string): number => ({ dice: 4, ddz: 3, werewolf: 9 }[game] ?? 0);
+/** 当前多客厅注册表中的四种桌；旧大富翁报名不混入快速匹配。 */
+export const tableCapacity = (game: string): number => ({ dice: 4, ddz: 3, werewolf: 9, monopoly2d: 4, gomoku: 2 }[game] ?? 0);
 
 /** 同一链接供网页与 Coo 使用；拒绝跨服务器、凭证及非牌桌路径。 */
 export function parseTableLink(link: string, baseUrl: string): { room: string; table: string } {

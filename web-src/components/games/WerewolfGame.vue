@@ -13,12 +13,12 @@ import WerewolfSpeech from './WerewolfSpeech.vue';
 const props = defineProps<{ view: GameView; ctx: GameCtx }>();
 
 const ROLE_NAMES: Record<string, string> = {
-  wolf: '狼人', villager: '平民', seer: '预言家', witch: '女巫', hunter: '猎人',
+  wolf: '狼人', villager: '平民', seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫',
 };
 const ROLE_FACTIONS: Record<string, string> = {
-  wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营',
+  wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营', guard: '好人阵营',
 };
-const ROLES = ['wolf', 'villager', 'seer', 'witch', 'hunter'];
+const ROLES = ['wolf', 'villager', 'seer', 'witch', 'hunter', 'guard'];
 const KIND_LABEL: Record<string, string> = { human: '人', pet: 'Coo' };
 const RING_SLOTS = [
   { seatNo: 1, area: 'a1' }, { seatNo: 2, area: 'a2' }, { seatNo: 3, area: 'a3' },
@@ -35,7 +35,7 @@ interface WDeath { seatNo?: number; day?: number; phase?: string }
 interface WVoteEntry { seatNo?: number; target?: number | null; timeout?: boolean }
 interface WVoteRound { day?: number; variant?: string; entries?: WVoteEntry[]; exiled?: number; tie?: number[] }
 interface WTable {
-  status?: string; phase?: string; phaseLabel?: string; day?: number; seats?: WSeat[]; turn?: string;
+  capacity?: number; status?: string; phase?: string; phaseLabel?: string; day?: number; seats?: WSeat[]; turn?: string;
   deadline?: number; speeches?: WSpeech[]; votes?: WVoteRound[]; deaths?: WDeath[];
   revealed?: Array<{ seatNo: number; name: string; role: string; alive?: boolean }>;
   result?: { outcome?: string; winners?: string[] }; tableId?: string; id?: string;
@@ -44,6 +44,7 @@ interface WPriv {
   role?: string; seatNo?: number; alive?: boolean; canAct?: boolean; myMove?: string; windowId?: string;
   deadline?: number; teammates?: Array<{ seatNo: number; name: string }>; voteVariant?: string;
   pkSeats?: number[]; myVote?: number | null; submitted?: string[]; potions?: { antidote: number; poison: number };
+  previousGuard?: number | null;
   knownKill?: number | null; inspections?: Array<{ day: number; target: number; result: string }>;
   speechKind?: string; killVotes?: Array<{ seatNo: number; target: number | null }>;
   wolfChat?: Array<{ seatNo: number; name: string; text: string }>;
@@ -51,6 +52,14 @@ interface WPriv {
 }
 
 const table = computed(() => props.view.table as unknown as WTable);
+const capacity = computed(() => table.value.capacity ?? 9);
+const ringSlots = computed(() => capacity.value === 9 ? RING_SLOTS
+  : Array.from({ length: capacity.value }, (_, index) => ({ seatNo: index + 1, area: `a${index + 1}` })));
+const roleLine = computed(() => ({
+  6: '2 狼 · 2 民 · 预言家 / 女巫',
+  9: '3 狼 · 3 民 · 预言家 / 女巫 / 猎人',
+  12: '4 狼 · 4 民 · 预言家 / 女巫 / 猎人 / 守卫',
+}[capacity.value] ?? ''));
 const priv = computed(() => props.view.priv as unknown as WPriv | null);
 const ended = computed(() => table.value.status === 'ended');
 const isNight = computed(() => table.value.phase === 'night');
@@ -91,6 +100,7 @@ function canTarget(seatNo: number): boolean {
   const move = myMove.value;
   const own = priv.value;
   if (!move || !own) return false;
+  if (move === 'guard') return aliveOf(seatNo) && seatNo !== own.previousGuard;
   if (seatNo === mySeatNo.value) return false;
   if (move === 'vote') {
     if (own.voteVariant === 'pk') return (own.pkSeats ?? []).includes(seatNo);
@@ -140,6 +150,7 @@ const tab = ref<'today' | 'byPlayer' | 'votes'>('today');
 const playerFilter = ref(0);
 const votePick = ref<{ target: number | null } | null>(null);
 const inspectPick = ref<number | null>(null);
+const guardPick = ref<number | null>(null);
 const poisonPick = ref<number | null>(null);
 const shootPick = ref<number | null>(null);
 const wolfKillPick = ref<number | null>(null);
@@ -147,6 +158,7 @@ const pickedNo = computed(() => {
   switch (myMove.value) {
     case 'vote': return votePick.value?.target;
     case 'inspect': return inspectPick.value;
+    case 'guard': return guardPick.value;
     case 'witch': return poisonPick.value;
     case 'shoot': return shootPick.value;
     case 'wolf_kill': return wolfKillPick.value;
@@ -170,6 +182,7 @@ const endMissing = reactive<Record<number, boolean>>({});
 function pickTarget(seatNo: number): void {
   const move = myMove.value;
   if (move === 'vote') votePick.value = { target: votePick.value?.target === seatNo ? null : seatNo };
+  else if (move === 'guard') guardPick.value = guardPick.value === seatNo ? null : seatNo;
   else if (move === 'inspect') inspectPick.value = inspectPick.value === seatNo ? null : seatNo;
   else if (move === 'wolf_kill') wolfKillPick.value = wolfKillPick.value === seatNo ? null : seatNo;
   if (move === 'witch') poisonPick.value = poisonPick.value === seatNo ? null : seatNo;
@@ -189,6 +202,7 @@ watch([
 ], () => {
   votePick.value = null;
   inspectPick.value = null;
+  guardPick.value = null;
   poisonPick.value = null;
   shootPick.value = null;
   wolfKillPick.value = null;
@@ -280,6 +294,9 @@ function submitInspect(): void {
 function skipInspect(): void {
   void act({ move: 'inspect' });
 }
+function submitGuard(target: number | null): void {
+  void act({ move: 'guard', ...(target === null ? {} : { target }) }, () => { guardPick.value = null; });
+}
 function witchSave(): void {
   const known = priv.value?.knownKill;
   if (known === null || known === undefined) return;
@@ -319,6 +336,7 @@ const phaseText = computed(() => {
   else if (move === 'vote') text = '轮到你投票';
   else if (move === 'wolf_chat' || move === 'wolf_kill') text = '狼人时间';
   else if (move === 'inspect') text = '预言家时间';
+  else if (move === 'guard') text = '守卫时间';
   else if (move === 'witch') text = '女巫时间';
   else if (move === 'shoot') text = '你可以开枪';
   if (table.value.phase === 'speech' && table.value.turn) {
@@ -539,8 +557,8 @@ onBeforeUnmount(() => {
           </button>
           <div id="wf-room-content" class="wf-room-content">
             <section class="wf-panel wf-room-summary">
-              <h3>9 人标准局</h3>
-              <p>3 狼 · 3 民 · 预言家 / 女巫 / 猎人</p>
+              <h3>{{ capacity }} 人局</h3>
+              <p>{{ roleLine }}</p>
               <p v-if="tableIdValue()" class="wf-table-id">桌号 {{ tableIdValue() }}</p>
             </section>
             <div class="wf-mebar">
@@ -590,14 +608,14 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <div class="wf-ring-wrap">
-            <div class="wf-ring">
+            <div class="wf-ring" :class="'seats-' + capacity">
               <span class="wf-felt-mark" aria-hidden="true">WEREWOLF</span>
               <div class="wf-table-core">
                 <div v-if="table.phaseLabel && table.phaseLabel !== phaseText" class="wf-core-day">{{ table.phaseLabel }}</div>
                 <div class="wf-core-phase">{{ phaseText }}</div>
                 <div v-if="coreSubText" class="wf-core-sub" :class="{ 'is-picked': pickedNo != null }">{{ coreSubText }}</div>
               </div>
-              <template v-for="slot in RING_SLOTS" :key="'ring-' + slot.area">
+              <template v-for="slot in ringSlots" :key="'ring-' + slot.area">
                 <button
                   v-if="seatAt(slot.seatNo)"
                   type="button"
@@ -707,6 +725,28 @@ onBeforeUnmount(() => {
               </template>
             </div>
 
+            <div v-else-if="myMove === 'guard'" class="wf-composer">
+              <p class="wf-composer-hint">守一名存活玩家，可以自守或空守。</p>
+              <p v-if="priv?.previousGuard" class="wf-composer-note">
+                昨夜守了 {{ seatLabel(priv.previousGuard) }}，今夜不能连守。
+              </p>
+              <div class="wf-targets">
+                <button
+                  v-for="seat in seats.filter((entry) => entry.seatNo && canTarget(entry.seatNo))"
+                  :key="seat.seatNo"
+                  class="wf-chip"
+                  :class="{ 'is-active': guardPick === seat.seatNo }"
+                  type="button"
+                  @click="guardPick = seat.seatNo!"
+                >{{ seatLabel(seat.seatNo!) }}</button>
+              </div>
+              <div class="wf-confirm">
+                <button v-if="guardPick !== null" class="btn primary" type="button" @click="submitGuard(guardPick)">
+                  守护 {{ seatLabel(guardPick) }}
+                </button>
+                <button class="btn ghost" type="button" @click="submitGuard(null)">今夜空守</button>
+              </div>
+            </div>
             <div v-else-if="myMove === 'witch'" class="wf-composer">
               <p class="wf-composer-hint">{{ witchHint }}</p>
               <div v-if="potions.poison > 0" class="wf-targets">
@@ -1080,6 +1120,26 @@ onBeforeUnmount(() => {
 .wf-seat.a7 { --seat-x: 85%; --seat-y: 36%; }
 .wf-seat.a8 { --seat-x: 87%; --seat-y: 60%; }
 .wf-seat.a9 { --seat-x: 74%; --seat-y: 79%; }
+.wf-ring.seats-6 .a1 { --seat-x: 50%; --seat-y: 86%; }
+.wf-ring.seats-6 .a2 { --seat-x: 19%; --seat-y: 69%; }
+.wf-ring.seats-6 .a3 { --seat-x: 19%; --seat-y: 31%; }
+.wf-ring.seats-6 .a4 { --seat-x: 50%; --seat-y: 14%; }
+.wf-ring.seats-6 .a5 { --seat-x: 81%; --seat-y: 31%; }
+.wf-ring.seats-6 .a6 { --seat-x: 81%; --seat-y: 69%; }
+.wf-ring.seats-12 .a1 { --seat-x: 50%; --seat-y: 88%; }
+.wf-ring.seats-12 .a2 { --seat-x: 31%; --seat-y: 84%; }
+.wf-ring.seats-12 .a3 { --seat-x: 17%; --seat-y: 70%; }
+.wf-ring.seats-12 .a4 { --seat-x: 13%; --seat-y: 50%; }
+.wf-ring.seats-12 .a5 { --seat-x: 17%; --seat-y: 30%; }
+.wf-ring.seats-12 .a6 { --seat-x: 31%; --seat-y: 16%; }
+.wf-ring.seats-12 .a7 { --seat-x: 50%; --seat-y: 12%; }
+.wf-ring.seats-12 .a8 { --seat-x: 69%; --seat-y: 16%; }
+.wf-ring.seats-12 .a9 { --seat-x: 83%; --seat-y: 30%; }
+.wf-ring.seats-12 .a10 { --seat-x: 87%; --seat-y: 50%; }
+.wf-ring.seats-12 .a11 { --seat-x: 83%; --seat-y: 70%; }
+.wf-ring.seats-12 .a12 { --seat-x: 69%; --seat-y: 84%; }
+.wf-ring.seats-12 .wf-seat { width: min(17%, 86px); }
+.wf-ring.seats-12 .wf-seat-medallion { width: clamp(26px, 3vw, 44px); }
 .wf-seat-empty { display: none; }
 .wf-seat-medallion {
   display: grid;

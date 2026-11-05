@@ -4,8 +4,9 @@
  * 一份定义同时管三件事，三处都从这里取，不再各写一份 if：
  * - 服务器：`TableHost` 用 `create()` 造引擎、用 `label` 写回执；`WorldServer` 用
  *   `actionType` / `toAction()` 把 `/v1/action` 的 body 变成引擎动作。
- * - World：工具声明（名字/描述/JSON Schema）与「参数 → body」的校验都在 `tool` 里，
- *   `world.ts` 只负责把它们登记出去（`extraTools` 一并登记）。
+ * - 通用 HTTP/World：动作说明、参数 Schema 与转换放在 `action` 里，
+ *   `availableActions()` 根据本人私视图提供当前动作。新游戏不再添加工具。
+ *   `legacyToolName` / `extraTools` 仅兼容既有专属工具。
  * - 网页：`icon` 与 `label` 给牌桌栏/大厅卡片用（网页那份清单在
  *   `src/web/games/registry.js`，加游戏时同样登记一行——两个运行时不能共享模块）。
  *
@@ -15,27 +16,31 @@ import type { TableEngine, TableLogQuery } from '../table-engine.ts';
 import { DiceTable } from '../table.ts';
 import { RANKS } from './doudizhu.ts';
 import { DoudizhuTable } from './doudizhu-table.ts';
+import { Monopoly2dTable } from './monopoly2d-table.ts';
+import { GOMOKU_SIZE, GomokuTable } from './gomoku-table.ts';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from './werewolf-table.ts';
+import type { WerewolfSeatCount } from './werewolf.ts';
 
 export interface GameCreateContext {
   /** 开桌者：id/name 之外带服务端席位类型与客户端能力版本（狼人杀开局校验用）。 */
   host: { id: string; name: string; kind?: 'pet' | 'human'; clientVersion?: string };
   now: number;
   requireHuman?: boolean;
+  seatCount?: WerewolfSeatCount;
   /** 开桌时给的「每回合多久」（测试里调短）；只有用得上它的游戏才读。 */
   turnMs?: number;
 }
 
-export interface GameToolDecl {
-  /** World 里这张桌子的动作工具名。 */
-  name: string;
+export interface GameActionDecl {
   description: string;
   parameters: Record<string, unknown>;
-  /** 工具参数 → `/v1/action` body（含 type）。参数不对时抛 Error，World 原样转成失败回执。 */
+  /** 游戏协议参数 → 兼容动作 body（含 type）；不对时抛 Error，由网关或 World 返回失败。 */
   toBody(args: Record<string, unknown>): Record<string, unknown>;
   /** 回执里那句「做了什么」。 */
   done(body: Record<string, unknown>): string;
 }
+
+export interface GameToolDecl extends GameActionDecl { name: string }
 
 export interface GameDefinition {
   id: string;
@@ -45,12 +50,22 @@ export interface GameDefinition {
   icon: string;
   /** 开桌回执里的补充说明。 */
   openHint: string;
+  /** 按需查询的玩法说明，不加入常驻工具描述。 */
+  rules: string[];
   create(ctx: GameCreateContext): TableEngine;
   /** `/v1/action` 的动作类型；旧 World 也按这个名字发。 */
   actionType: string;
   /** `/v1/action` body → 引擎动作。 */
   toAction(body: Record<string, unknown>): unknown;
-  tool: GameToolDecl;
+  /** 游戏协议，不依赖 Coo 工具名；新游戏只实现这一份定义。 */
+  action: GameActionDecl;
+  /** 多动作游戏的判别字段；单动作游戏不填，动作名用 singleAction。 */
+  actionKey?: 'action' | 'move';
+  singleAction?: string;
+  /** 只为已存在的工具保留兼容；新增游戏不填。 */
+  legacyToolName?: string;
+  /** 从已按本人身份投影的私视图取得当前可用动作名。 */
+  availableActions(view: Record<string, unknown>): string[];
   /**
    * 动作并发策略：
    * - `strict`（骰子/斗地主）：整桌 revision 乐观锁，旧视图一律打不进新回合；
@@ -58,6 +73,16 @@ export interface GameDefinition {
    *   引擎在事务里用最新快照校验 windowId 与槽位。
    */
   revisionMode: 'strict' | 'window';
+  /**
+   * 这张桌子能不能押筹码。缺省 true（沿用原有游戏语义）；
+   * `false` 的游戏在开桌校验里直接拒绝非零押注，网页也不显示押注控件。
+   */
+  allowsStake?: boolean;
+  /**
+   * 动作回执是否附上本人的最新私视图。狼人杀与快局大富翁需要：
+   * 一个动作之后紧接着要在同一回合里做下一步，不能让 Coo 干等下一次叫醒。
+   */
+  attachPrivateOnAct?: boolean;
   /** 同一游戏除 `tool` 之外的查询工具（狼人杀的历史/复盘）。 */
   extraTools?: GameToolDecl[];
 }
@@ -67,6 +92,7 @@ const dice: GameDefinition = {
   label: '骰子',
   icon: 'dice',
   openHint: '等人坐下后用 parlor_table_start 开始。',
+  rules: ['每人两颗暗骰，回合中可重掷一颗或停牌，每人最多重掷两次。', '结束后揭晓骰子，点数和最高者获胜，同分并列；超时自动停牌。'],
   create: (ctx) => new DiceTable({
     host: ctx.host,
     now: ctx.now,
@@ -75,8 +101,11 @@ const dice: GameDefinition = {
   actionType: 'table_action',
   toAction: (body) => ({ type: String(body.action ?? ''), die: body.die }),
   revisionMode: 'strict',
-  tool: {
-    name: 'parlor_table_action',
+  legacyToolName: 'parlor_table_action',
+  actionKey: 'action',
+  availableActions: (view) => view.yourTurn === true
+    ? (Number(view.rerollsLeft) > 0 ? ['roll', 'stand'] : ['stand']) : [],
+  action: {
     description: '骰子桌轮到你时，重掷一颗骰子或停牌。',
     parameters: {
       type: 'object',
@@ -103,12 +132,16 @@ const ddz: GameDefinition = {
   label: '斗地主',
   icon: 'cards',
   openHint: '（3 席，空位由脚本陪练补）用 parlor_table_start 开始；叫地主时会叫你。',
+  rules: ['三席斗地主，先叫地主，再轮流出牌；地主独自对抗两名农民，先出完手牌的一方获胜。', '同型同长度比主牌，炸弹压普通牌，王炸最大；领出不能过牌。牌用点数表示，小王 SJ、大王 BJ。', '本人桌面提供手牌、可过判断及合法出牌建议，超时按服务端规则代打。'],
   create: (ctx) => new DoudizhuTable({ host: ctx.host, now: ctx.now }),
   actionType: 'ddz_action',
   toAction: (body) => ({ move: body.move, call: body.call, cards: body.cards }),
   revisionMode: 'strict',
-  tool: {
-    name: 'parlor_ddz_action',
+  legacyToolName: 'parlor_ddz_action',
+  actionKey: 'move',
+  availableActions: (view) => view.yourTurn !== true ? [] : view.status === 'bidding'
+    ? ['bid'] : view.status === 'playing' ? (view.canPass === true ? ['play', 'pass'] : ['play']) : [],
+  action: {
     description: '斗地主轮到你时叫地主、出牌或过。牌只写点数，SJ 是小王，BJ 是大王。',
     parameters: {
       type: 'object',
@@ -147,11 +180,13 @@ const werewolf: GameDefinition = {
   id: 'werewolf',
   label: '狼人杀',
   icon: 'moon',
-  openHint: `固定九席，至少一只 Coo。坐满后用 parlor_table_start 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
+  openHint: `开桌可选 6／9／12 席（默认 9），至少一只 Coo。坐满后用 parlor_table_start 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
+  rules: ['六、九或十二席狼人杀，服务端分配身份；本人桌面只显示获准知道的身份、查验与队内消息。', '夜晚按角色操作，白天按顺序发言、投票放逐；操作只能使用当前窗口，已经提交的槽不能重复提交。', '发言与狼聊走游戏动作；目标用桌内座号。每个角色的技能、可用药与当前行动，以本人桌面为准。'],
   create: (ctx) => new WerewolfTable({
     host: ctx.host,
     now: ctx.now,
     requireHuman: ctx.requireHuman,
+    seatCount: ctx.seatCount,
     ...(ctx.turnMs ? { turnMs: ctx.turnMs } : {}),
   }),
   actionType: 'werewolf_action',
@@ -163,8 +198,12 @@ const werewolf: GameDefinition = {
     choice: body.choice,
   }),
   revisionMode: 'window',
-  tool: {
-    name: 'parlor_werewolf_action',
+  attachPrivateOnAct: true,
+  legacyToolName: 'parlor_werewolf_action',
+  actionKey: 'move',
+  availableActions: (view) => view.canAct !== true || typeof view.myMove !== 'string' ? []
+    : view.myMove === 'speak' ? ['speak', 'pass_speech'] : [view.myMove],
+  action: {
     description: '提交狼人杀本人桌面列出的当前窗口动作，每个动作槽只提交一次。',
     parameters: {
       type: 'object',
@@ -173,17 +212,17 @@ const werewolf: GameDefinition = {
         windowId: { type: 'string', description: '最新桌面给出的窗口号。' },
         move: {
           type: 'string',
-          enum: ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'witch', 'shoot'],
+          enum: ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'guard', 'witch', 'shoot'],
         },
         text: { type: 'string', description: 'For speak (≤300 chars, one message) or wolf_chat (≤150 chars).' },
-        target: { type: 'integer', description: 'Seat number (1-9). Omit for abstain/skip/none. Not allowed to target yourself (except witch save on night 1).' },
+        target: { type: 'integer', description: 'Seat number within the current table capacity. Omit to skip. Guard can target themselves.' },
         choice: { type: 'string', enum: ['none', 'save', 'poison'], description: 'Only for witch: use nothing, save the kill victim, or poison.' },
       },
       required: ['windowId', 'move'],
     },
     toBody: (args) => {
       const move = String(args.move ?? '');
-      const legal = ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'witch', 'shoot'];
+      const legal = ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'guard', 'witch', 'shoot'];
       if (!legal.includes(move)) throw new Error(`move 只能是 ${legal.join(' / ')}`);
       const windowId = String(args.windowId ?? '').trim();
       if (!windowId) throw new Error('要带上桌面给你的 windowId（先 parlor_table_view 看一眼）');
@@ -215,6 +254,7 @@ const werewolf: GameDefinition = {
         case 'wolf_chat': return '狼队的话交了；同伴能看到。';
         case 'wolf_kill': return body.target === undefined || body.target === null ? '弃刀交了。' : `刀票投给 ${body.target} 号了；到点锁定刀口。`;
         case 'inspect': return body.target === undefined ? '今夜不查验，槽已交。' : `已查验 ${body.target} 号；结果与历史见下方本人私视图。`;
+        case 'guard': return body.target == null ? '今夜空守，动作已提交。' : `已守护 ${body.target} 号。`;
         case 'witch': return body.choice === 'save' ? '解药用掉了。' : body.choice === 'poison' ? '毒药用掉了。' : '今夜不用药，槽已交。';
         case 'shoot': return body.target === undefined ? '放弃开枪了。' : `开枪带走 ${body.target} 号了。`;
         default: return '动作交了。';
@@ -242,8 +282,92 @@ const werewolf: GameDefinition = {
   ],
 };
 
+const monopoly2d: GameDefinition = {
+  id: 'monopoly2d',
+  label: '快局大富翁',
+  icon: 'board',
+  openHint: '（4 席，坐满后由开桌的人开始；只用局内金币，不押筹码）四人 6 轮 24 手，掷骰、买地、收租、抽事件卡，最后按金币加地产估值排名。',
+  rules: ['四人六轮共二十四手，轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则收租或触发事件。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '仅用局内金币，不接受押注；终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
+  create: (ctx) => new Monopoly2dTable({
+    host: ctx.host,
+    now: ctx.now,
+    ...(ctx.turnMs ? { rollMs: ctx.turnMs } : {}),
+  }),
+  actionType: 'monopoly2d_action',
+  toAction: (body) => ({ move: body.move, turnNo: body.turnNo }),
+  revisionMode: 'strict',
+  allowsStake: false,
+  attachPrivateOnAct: true,
+  legacyToolName: 'parlor_monopoly2d_action',
+  actionKey: 'move',
+  availableActions: (view) => view.canAct === true && Array.isArray(view.moves)
+    ? view.moves.filter((move): move is string => typeof move === 'string'
+      && (move !== 'buy' || (view.pending as { affordable?: boolean } | null)?.affordable === true)) : [],
+  action: {
+    description: '快局大富翁轮到你时掷骰，或在买地阶段决定买下 / 放弃。只按自己桌面上的 turnNo 行动。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        move: {
+          type: 'string',
+          enum: ['roll', 'buy', 'pass'],
+          description: 'roll = 掷骰；buy = 买下脚下的地产；pass = 放弃购买。',
+        },
+        turnNo: {
+          type: 'integer',
+          description: '你桌面上给出的当前回合号（从 1 开始，最多 24）。照抄，别自己算。',
+        },
+      },
+      required: ['move', 'turnNo'],
+    },
+    toBody: (args) => {
+      const move = String(args.move ?? '');
+      if (move !== 'roll' && move !== 'buy' && move !== 'pass') throw new Error('move 只能是 roll、buy 或 pass');
+      const turnNo = Number(args.turnNo);
+      if (!Number.isSafeInteger(turnNo) || turnNo < 1) throw new Error('turnNo 要照抄桌面给出的正整数（从 1 开始）');
+      return { type: 'monopoly2d_action', move, turnNo };
+    },
+    done: (body) => {
+      if (body.move === 'roll') return '掷了骰子；落点结算见下方私视图。';
+      if (body.move === 'buy') return '买下了脚下的地产。';
+      return '放弃了购买。';
+    },
+  },
+};
+
 /** 登记顺序 = World 工具与网页卡片的顺序。 */
-export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf];
+const gomoku: GameDefinition = {
+  id: 'gomoku',
+  label: '五子棋',
+  icon: 'board',
+  openHint: '两席坐满后开局，桌主执黑先行。',
+  rules: ['十五乘十五棋盘，桌主执黑先行，双方轮流在空格落子；行列从 0 到 14。', '横、竖或斜向连续至少五子获胜，棋盘下满仍无赢家则和棋；本人桌面提供落点建议。'],
+  create: ({ host, turnMs }) => new GomokuTable(host, turnMs),
+  actionType: 'gomoku_action',
+  revisionMode: 'strict',
+  allowsStake: false,
+  toAction: ({ row, col }) => ({ row, col }),
+  legacyToolName: 'parlor_gomoku_action',
+  singleAction: 'place',
+  availableActions: (view) => view.canAct === true ? ['place'] : [],
+  action: {
+    description: '五子棋轮到你时落子，行列从 0 到 14。用 parlor_table_view 看棋盘和下一步建议。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        row: { type: 'integer', minimum: 0, maximum: GOMOKU_SIZE - 1 },
+        col: { type: 'integer', minimum: 0, maximum: GOMOKU_SIZE - 1 },
+      },
+      required: ['row', 'col'],
+    },
+    toBody: ({ row, col }) => ({ type: 'gomoku_action', row, col }),
+    done: ({ row, col }) => `落子 ${row},${col}。`,
+  },
+};
+
+export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf, monopoly2d, gomoku];
 
 const BY_ID = new Map(GAME_LIST.map((game) => [game.id, game]));
 const BY_ACTION = new Map(GAME_LIST.map((game) => [game.actionType, game]));

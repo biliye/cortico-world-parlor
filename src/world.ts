@@ -24,7 +24,9 @@ import {
   type ActionRequest, type ActionResponse, type HallView, type MeView,
   type RoomEvent, type RoomSnapshot, type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
-import { GAME_LIST, gameById, gameIds, type GameDefinition } from './room/games/registry.ts';
+import { GAME_LIST, gameById, type GameDefinition } from './room/games/registry.ts';
+import { GAME_ACTION_SCHEMA, validateParameters, type GameQuery } from './room/game-api.ts';
+import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
@@ -97,14 +99,14 @@ const KIND_LABELS: Readonly<Record<string, string>> = { pet: 'Coo', human: '人'
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** 注册表里的每张桌子各出一个动作工具（含 extraTools 的查询工具）；顺序与 GAME_LIST 一致。 */
+/** 只登记既有兼容工具（含 extraTools）；新游戏不填写 legacyToolName。 */
 const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.flatMap((game) => [
-  {
-    name: game.tool.name,
-    description: game.tool.description,
+  ...(game.legacyToolName ? [{
+    name: game.legacyToolName,
+    description: game.action.description,
     tags: ['write' as const],
-    parameters: game.tool.parameters,
-  },
+    parameters: game.action.parameters,
+  }] : []),
   ...(game.extraTools ?? []).map((decl) => ({
     name: decl.name,
     description: decl.description,
@@ -115,6 +117,34 @@ const GAME_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = GAME_LIST.flatM
 
 /** 全部工具的声明；定义里的 describe 与 `tools()` 都取它。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
+  {
+    name: 'parlor_game_info', tags: ['read'],
+    description: '通用游戏查询。list 查服务器游戏目录，describe 查规则和动作参数，state 查桌面、本人秘密及当前可用动作，history 查获准查看的游戏历史。',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        op: { type: 'string', enum: ['list', 'describe', 'state', 'history'], description: '默认 list。' },
+        game: { type: 'string', description: 'describe 时填写服务器目录里的游戏 id。' },
+        table: { type: 'string', description: 'state/history 的桌号，省略时查自己的桌。' },
+        day: { type: 'integer', minimum: 1 }, seatNo: { type: 'integer', minimum: 1 },
+        limit: { type: 'integer', minimum: 1, maximum: 200 }, review: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'parlor_game_action', tags: ['write'],
+    description: '通用游戏行动。先用 parlor_game_info state 读取桌号、当前动作名及 params 格式；严格回合原样带 revision，窗口制在 params 带 windowId。失败先重查状态；重试同次操作沿用 requestId。',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        table: { type: 'string', minLength: 1 }, action: { type: 'string', minLength: 1 },
+        params: { type: 'object', description: '按服务器返回的动作 Schema 填写，不能放身份或路由字段。' },
+        revision: { type: 'integer', minimum: 0 },
+        requestId: { type: 'string', minLength: 1, maxLength: 100, description: '可省略，由工具生成；网络重试复用。' },
+      },
+      required: ['table', 'action', 'params'],
+    },
+  },
   {
     name: 'parlor_feedback', tags: ['write'],
     description: '向运营者提交私密反馈，省略 text 时查看自己的反馈和回复。保存回执表示已收件，重试沿用 requestId。',
@@ -239,15 +269,16 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_table_open',
-    description: '在客厅开桌并坐下。斗地主可由脚本补位，狼人杀须坐满九席。',
+    description: '在客厅开桌并坐下。斗地主可由脚本补位，狼人杀可选 6／9／12 席，坐满后开局。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        game: { type: 'string', enum: gameIds(), description: '默认 dice。' },
+        game: { type: 'string', description: '服务器游戏目录中的 id；用 parlor_game_info list 查询。默认 dice。' },
         stake: { type: 'integer', minimum: 0, maximum: 1000000, description: '每位真人玩家押注额，默认 0。' },
         matchOpen: { type: 'boolean', description: '在公开厅开放匹配，默认关闭。' },
+        seatCount: { type: 'integer', enum: [6, 9, 12], description: '仅用于狼人杀。开局人数，默认 9。' },
         requireHuman: { type: 'boolean', description: '仅用于狼人杀。true 要求至少一名真人入座，默认允许全 Coo 局。' },
       },
     },
@@ -262,7 +293,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       properties: {
         table: { type: 'string', description: '当前客厅的桌号。' },
         link: { type: 'string', description: '本站分享链接，可跨厅入桌。' },
-        game: { type: 'string', enum: gameIds(), description: '快速匹配公开厅主动开放的无押注桌；无匹配时留在原厅。' },
+        game: { type: 'string', description: '服务器目录中的游戏 id；快速匹配公开厅主动开放的无押注桌，无匹配时留在原厅。' },
         requestId: { type: 'string', description: '重试同一次加入时沿用。' },
       },
     },
@@ -329,7 +360,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       required: ['text'],
     },
   },
-  // 每张桌子自己的动作工具：名字、说明与参数都在 games/registry.ts 里，这里只登记出去。
+  // 既有专属工具兼容层；新增游戏统一使用 parlor_game_info / parlor_game_action。
   ...GAME_TOOL_DECLS,
   {
     name: 'parlor_monopoly',
@@ -515,6 +546,8 @@ export class ParlorWorld implements World {
     const byName = new Map(PARLOR_TOOL_DECLS.map((decl) => [decl.name, decl]));
     const tool = (name: string, handler: ToolDef['handler']): ToolDef => ({ ...byName.get(name)!, handler });
     return [
+      tool('parlor_game_info', (args) => this.gameInfo(args)),
+      tool('parlor_game_action', (args) => this.genericGameAct(args)),
       tool('parlor_feedback', (args) => this.supportRequest('feedback', args)),
       tool('parlor_announcements', () => this.supportRequest('announcements')),
       tool('parlor_look', (args) => this.look(args)),
@@ -540,7 +573,8 @@ export class ParlorWorld implements World {
       }, '桌子开始了；轮到你时会被叫醒。')),
       tool('parlor_table_view', (args) => this.tableView(args)),
       tool('parlor_table_say', (args) => this.tableSay(args)),
-      ...GAME_LIST.map((game) => tool(game.tool.name, (args) => this.gameAct(game, args))),
+      ...GAME_LIST.flatMap((game) => game.legacyToolName
+        ? [tool(game.legacyToolName, (args) => this.gameAct(game, args))] : []),
       // 同一游戏的查询工具（狼人杀的历史/复盘）：只有 werewolf 目前有。
       ...GAME_LIST.flatMap((game) => (game.extraTools ?? []).map((decl) => tool(decl.name, async (args) => {
         let body: Record<string, unknown>;
@@ -1914,26 +1948,29 @@ export class ParlorWorld implements World {
   private async openTable(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     const id = args.game === undefined || args.game === '' ? 'dice' : String(args.game);
     const def = gameById(id);
-    if (!def) {
-      return this.failed(`game 只能是 ${GAME_LIST.map((game) => `${game.id}（${game.label}）`).join(' 或 ')}`);
-    }
     const stake = args.stake === undefined ? 0 : Number(args.stake);
     if (!Number.isSafeInteger(stake) || stake < 0) return this.failed('stake 要是 0 或正整数（每人押多少筹码）');
     if (args.requireHuman !== undefined && (id !== 'werewolf' || typeof args.requireHuman !== 'boolean')) {
       return this.failed('requireHuman 仅适用于狼人杀，必须是 true 或 false');
     }
+    const seatCount = args.seatCount;
+    if (seatCount !== undefined && (id !== 'werewolf' || !isWerewolfSeatCount(seatCount))) {
+      return this.failed('seatCount 仅适用于狼人杀，必须是 6、9 或 12');
+    }
     return this.tableRequest(
       {
-        type: 'table_open', game: def.id,
+        type: 'table_open', game: id,
         ...(stake ? { stake } : {}),
         ...(typeof args.matchOpen === 'boolean' ? { matchOpen: args.matchOpen } : {}),
         ...(typeof args.requireHuman === 'boolean' ? { requireHuman: args.requireHuman } : {}),
+        ...(seatCount !== undefined ? { seatCount } : {}),
       },
       (result) => {
-        const humanRule = def.id === 'werewolf'
+        const size = id === 'werewolf' ? `${result.table?.capacity ?? seatCount ?? WEREWOLF_SEAT_COUNT} 人` : '';
+        const humanRule = id === 'werewolf'
           ? (result.table?.requireHuman === false ? '本桌允许全 Coo 局。' : '本桌要求至少一名真人入座。')
           : '';
-        return `${def.label}桌开了${stake ? `，每人押 ${stake} 枚筹码` : ''}。${humanRule}${def.openHint}`;
+        return `${size}${result.table?.label ?? def?.label ?? id}桌开了${stake ? `，每人押 ${stake} 枚筹码` : ''}。${humanRule}${def?.openHint ?? '用 parlor_game_info state 查看桌面和下一步操作。'}`;
       },
     );
   }
@@ -1983,7 +2020,7 @@ export class ParlorWorld implements World {
       if (typeof args.link === 'string') {
         target = parseTableLink(args.link, this.baseUrl);
       } else {
-        if (!gameById(String(args.game))) return this.failed(`请选择 ${gameIds().join(' / ')}`);
+        if (typeof args.game !== 'string' || !args.game.trim()) return this.failed('game 要填写服务器游戏目录中的 id');
         target = { game: String(args.game) };
       }
     } catch (error) { return this.failed(messageOf(error)); }
@@ -2021,17 +2058,58 @@ export class ParlorWorld implements World {
     }
   }
 
-  /** 注册表里的动作工具共用这一条路：校验参数在 game.tool.toBody 里，动作类型在 game.actionType 里。 */
+  private async gameInfo(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      validateParameters(PARLOR_TOOL_DECLS.find(decl => decl.name === 'parlor_game_info')!.parameters, args);
+      return JSON.stringify(await this.client.games(this.token, args as GameQuery, this.roomArg()));
+    } catch (error) { return this.failed(messageOf(error)); }
+  }
+
+  /** 不在客户端查游戏注册表，升级服务器即可让通用客户端操作新游戏。 */
+  private async genericGameAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const requestId = args.requestId === undefined ? randomUUID() : args.requestId;
+    const payload = { ...args, type: 'game_action', requestId };
+    try {
+      validateParameters(GAME_ACTION_SCHEMA, payload, 'body');
+      const send = () => this.client!.action(this.token, payload as Extract<ActionRequest, { type: 'game_action' }>, this.roomArg());
+      let result;
+      try { result = await send(); }
+      catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        result = await send();
+      }
+      const params = args.params as Record<string, unknown>;
+      if (args.action === 'wolf_chat' && typeof params.text === 'string') this.historyWrite(() => this.history?.append({
+        id: `action:${String(requestId)}`, ts: result.ts, room: this.currentRoom,
+        type: 'parlor.table.werewolf.wolf_chat', direction: 'sent', sender: this.seat?.name || '孩子',
+        recipient: '狼队', text: params.text as string, private: true,
+      }));
+      await this.refreshFocus();
+      return JSON.stringify({ protocol: 'parlor.game.v1', ...result });
+    } catch (error) {
+      return this.failed(`${messageOf(error)}\n本次 requestId: ${String(requestId)}。结果不明时先查 state；重试同次操作沿用此编号。`);
+    }
+  }
+
+  /** 旧动作工具兼容入口；复用游戏协议定义。 */
   private async gameAct(game: GameDefinition, args: Record<string, unknown>): Promise<string | ToolOutcome> {
     let body: Record<string, unknown>;
     try {
-      body = game.tool.toBody(args);
+      body = game.action.toBody(args);
     } catch (error) {
       return this.failed(messageOf(error));
     }
-    // 狼人杀：动作后桌面还欠你动作、或你的秘密刚变化（查验/用药/狼聊）时，
+    // 狼人杀与快局大富翁：动作后桌面还欠你动作、或你的秘密刚变化时，
     // 把最新私视图附在回执里——不用等下一次叫醒就能读到结果。
-    return this.tableRequest(body as ActionRequest, game.tool.done(body), game.id === 'werewolf');
+    // 严格版本的注入同样由注册表决定，不再按动作类型写死。
+    return this.tableRequest(
+      body as ActionRequest,
+      game.action.done(body),
+      game.attachPrivateOnAct === true,
+      game.revisionMode !== 'window',
+    );
   }
 
   private async monopolyAct(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -2101,6 +2179,7 @@ export class ParlorWorld implements World {
     body: ActionRequest,
     done: string | ((result: ActionResponse) => string),
     attachPrivate = false,
+    strictRevision = false,
   ): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const type = (body as { type: string }).type;
@@ -2112,10 +2191,11 @@ export class ParlorWorld implements World {
     // 幂等键：网络层重试必须复用同一个；table_say 不落回执，不需要。
     if (type !== 'table_say' && !payload.requestId) payload.requestId = randomUUID();
     if (table) payload.table = table;
-    if ((type === 'table_action' || type === 'ddz_action') && this.myTableRevision !== undefined) {
+    // 严格模式的游戏要带版本：缺了服务端直接拒，带了旧版本按冲突处理。
+    // 狼人杀是窗口制：revision 不参与校验，故意不带，免得让模型误以为它是乐观锁。
+    if (strictRevision && this.myTableRevision !== undefined) {
       payload.revision = this.myTableRevision;
     }
-    // 狼人杀是窗口制：revision 不参与校验，故意不带，免得让模型误以为它是乐观锁。
     const send = () => this.client!.action(this.token, payload as ActionRequest, this.roomArg());
     try {
       let result;

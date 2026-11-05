@@ -6,18 +6,23 @@
  * 用可控随机源穷举测试，不用先架起一张完整的桌子。
  *
  * 房规出处：openM/parlor-werewolf-design-2026-10-31.md 第 3 节。
- * 九人局：3 狼人、3 村民、1 预言家、1 女巫、1 猎人；守卫不进首版。
+ * 支持六人、九人和十二人局，守卫仅在十二人局出现。
  */
 
-export type WerewolfRole = 'wolf' | 'villager' | 'seer' | 'witch' | 'hunter';
+export type WerewolfRole = 'wolf' | 'villager' | 'seer' | 'witch' | 'hunter' | 'guard';
 
 export type WerewolfFaction = 'wolf' | 'good';
 
 export const WEREWOLF_SEAT_COUNT = 9;
+export type WerewolfSeatCount = 6 | 9 | 12;
+
+export function isWerewolfSeatCount(value: unknown): value is WerewolfSeatCount {
+  return value === 6 || value === 9 || value === 12;
+}
 
 export const WEREWOLF_MAX_DAYS = 12;
 
-/** 每种角色发几张。 */
+/** 九人局的发牌配置。 */
 export const ROLE_COUNTS: ReadonlyArray<{ role: WerewolfRole; count: number }> = [
   { role: 'wolf', count: 3 },
   { role: 'villager', count: 3 },
@@ -26,12 +31,26 @@ export const ROLE_COUNTS: ReadonlyArray<{ role: WerewolfRole; count: number }> =
   { role: 'hunter', count: 1 },
 ];
 
+const ROLE_COUNTS_BY_SIZE: Record<WerewolfSeatCount, typeof ROLE_COUNTS> = {
+  6: [
+    { role: 'wolf', count: 2 }, { role: 'villager', count: 2 },
+    { role: 'seer', count: 1 }, { role: 'witch', count: 1 },
+  ],
+  9: ROLE_COUNTS,
+  12: [
+    { role: 'wolf', count: 4 }, { role: 'villager', count: 4 },
+    { role: 'seer', count: 1 }, { role: 'witch', count: 1 },
+    { role: 'hunter', count: 1 }, { role: 'guard', count: 1 },
+  ],
+};
+
 export const ROLE_LABELS: Record<WerewolfRole, string> = {
   wolf: '狼人',
   villager: '村民',
   seer: '预言家',
   witch: '女巫',
   hunter: '猎人',
+  guard: '守卫',
 };
 
 /** 玩家口中的「村民」在身份牌上写的是「平民」；同一角色，界面文案跟随牌面。 */
@@ -41,6 +60,7 @@ export const ROLE_CARD_LABELS: Record<WerewolfRole, string> = {
   seer: '预言家',
   witch: '女巫',
   hunter: '猎人',
+  guard: '守卫',
 };
 
 export const FACTION_LABELS: Record<WerewolfFaction, string> = {
@@ -57,12 +77,13 @@ export const ROLE_SKILLS: Record<WerewolfRole, string> = {
   seer: '每晚最多查验一名其他存活玩家，只得到「狼人 / 好人」，不告知具体神职。',
   witch: '全局各一瓶解药、一瓶毒药，每夜最多用其中一瓶。解药尚在时才得知当夜刀口；首夜可自救，之后不能自救，不能自毒。解药只抵消狼刀。',
   hunter: '被狼刀或白天投票出局时可以开枪带走一名其他存活玩家；中毒（含刀毒同中）不能开枪。',
+  guard: '每晚可守护一名存活玩家（可自守或空守），不可连续两夜守同一人。守护挡狼刀，不挡毒药；同守同救时狼刀生效。',
 };
 
-/** 发身份：把 3+3+1+1+1 洗进九个座号。rng 返回 [0,1)。 */
-export function dealRoles(rng: () => number): WerewolfRole[] {
+/** 按本桌人数洗身份牌。rng 返回 [0,1)。 */
+export function dealRoles(rng: () => number, seatCount: WerewolfSeatCount = WEREWOLF_SEAT_COUNT): WerewolfRole[] {
   const pool: WerewolfRole[] = [];
-  for (const { role, count } of ROLE_COUNTS) {
+  for (const { role, count } of ROLE_COUNTS_BY_SIZE[seatCount]) {
     for (let i = 0; i < count; i++) pool.push(role);
   }
   for (let i = pool.length - 1; i > 0; i--) {
@@ -78,7 +99,7 @@ export type AliveMap = ReadonlyMap<number, WerewolfRole>;
 /**
  * 判胜负。返回 null 表示还要继续打。
  * 顺序按房规：全员出局平局 → 狼人全灭好人胜 → 屠边狼人胜 → 未决。
- * 「屠边」：村民全出局，或预言家/女巫/猎人全出局，狼人即胜。
+ * 「屠边」：村民全出局，或神职全出局，狼人即胜。
  */
 export function judgeOutcome(alive: AliveMap): 'good' | 'wolf' | 'draw' | null {
   if (alive.size === 0) return 'draw';
@@ -86,7 +107,7 @@ export function judgeOutcome(alive: AliveMap): 'good' | 'wolf' | 'draw' | null {
   const wolves = roles.filter((role) => role === 'wolf').length;
   if (wolves === 0) return 'good';
   const villagers = roles.filter((role) => role === 'villager').length;
-  const gods = roles.filter((role) => role === 'seer' || role === 'witch' || role === 'hunter').length;
+  const gods = roles.filter((role) => role !== 'wolf' && role !== 'villager').length;
   if (villagers === 0 || gods === 0) return 'wolf';
   return null;
 }

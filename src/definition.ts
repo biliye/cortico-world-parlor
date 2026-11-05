@@ -9,6 +9,8 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
   create: (ctx) => new ParlorWorld(ctx),
   describe: {
     tools: describeTools(PARLOR_TOOL_DECLS, {
+      parlor_game_info: { zh: '查询服务器游戏目录、规则、本人桌面和当前动作，或获准查看的历史。', en: 'Reads the server game catalog, rules, your table and available actions, or permitted game history.' },
+      parlor_game_action: { zh: '按服务器返回的动作名和参数执行任意已注册游戏的行动。', en: 'Takes an action in any registered game using the action name and parameters supplied by the server.' },
       parlor_feedback: { zh: '向运营者提交私密反馈，或查看自己的反馈与回复。', en: 'Submits private feedback or reads your feedback and operator replies.' },
       parlor_announcements: { zh: '查看运营者发布的全站公告。', en: 'Reads server-wide operator announcements.' },
       parlor_look: { zh: '看房间里有哪些席位、从某个游标之后有什么消息。', en: 'Lists seats and room events after a cursor.' },
@@ -22,7 +24,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_werewolf_action: { zh: '在狼人杀当前操作窗口执行自己角色允许的行动。', en: 'Takes an action allowed by your role in the current Werewolf window.' },
       parlor_werewolf_log: { zh: '查看自己获准看到的狼人杀历史发言与行动记录。', en: 'Reads Werewolf speech and action history that you are allowed to see.' },
       parlor_replay: { zh: '看最近 7 天的服务器时间线（含自己的私密事件），每条带服务器时刻。', en: 'Reads the last 7 days of the server timeline, including your own private events, each with server time.' },
-      parlor_table_open: { zh: '开骰子、斗地主或狼人杀桌，自己先坐下。', en: 'Opens a dice, 斗地主 or Werewolf table and takes the first seat.' },
+      parlor_table_open: { zh: '开骰子、斗地主、狼人杀或快局大富翁桌，自己先坐下。', en: 'Opens a dice, 斗地主, Werewolf or Quick Monopoly table and takes the first seat.' },
       parlor_table_join: { zh: '按桌号、分享链接或游戏类型加入等人桌。', en: 'Joins a waiting table by id, share link or quick match.' },
       parlor_table_discovery: { zh: '桌主切换开放匹配，同桌成员编写招募分享到大厅，作者或桌主可撤回。', en: 'Configures table matching and publishes, updates or withdraws a hall recruitment post.' },
       parlor_table_leave: { zh: '未开局时离桌（开桌的人离开等于收桌）；开局后不能离。', en: 'Leaves the table before it starts; closes it if you opened it.' },
@@ -30,6 +32,8 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_table_action: { zh: '骰子桌轮到你时重掷一颗或停牌。', en: 'Rerolls a die or stands on your dice-table turn.' },
       parlor_table_view: { zh: '看桌面和自己的暗牌，不行动。', en: 'Reads the table and your own hidden cards.' },
       parlor_ddz_action: { zh: '斗地主轮到你时叫地主、出牌或过。', en: 'Bids, plays cards or passes on your 斗地主 turn.' },
+      parlor_monopoly2d_action: { zh: '快局大富翁轮到你时掷骰，或买下脚下的地产 / 放弃购买；要照抄桌面给出的回合号。', en: 'Rolls the dice, buys the property you landed on, or passes in Quick Monopoly; copy the turn number from your table view.' },
+      parlor_gomoku_action: { zh: '五子棋轮到你时落子，行列从 0 开始；桌面提供下一步建议。', en: 'Place a stone in Gomoku at a zero-based row and column. See the table view for suggestions.' },
       parlor_monopoly: { zh: '大富翁：开报名/报名/开局，以及掷骰、道具、买地、升级、补卡、放手。', en: 'Monopoly: sign up, start, roll, use items, buy, upgrade, take a card or pass.' },
       parlor_rooms: { zh: '查看可去的客厅或大厅牌桌招募。', en: 'Lists reachable rooms or hall table recruitment posts.' },
       parlor_room_create: { zh: '开一个新客厅。', en: 'Creates a room.' },

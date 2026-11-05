@@ -111,6 +111,11 @@ export interface PlayerJoinResponse {
 }
 
 export type ActionRequest =
+  | {
+    /** 通用游戏动作；游戏由已认证席位可访问的目标桌确定。 */
+    type: 'game_action'; table: string; action: string; params: Record<string, unknown>;
+    requestId: string; revision?: number;
+  }
   | { type: 'say'; text: string }
   | { type: 'table_say'; text: string }
   | { type: 'whisper'; to: string; text: string }
@@ -118,7 +123,7 @@ export type ActionRequest =
   | { type: 'gift'; to: string; text: string; chips?: number }
   | { type: 'promise'; to: string; text: string; due?: number | string; chips?: number }
   | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
-  | { type: 'table_open'; game?: TableGame; stake?: number; matchOpen?: boolean; requireHuman?: boolean; requestId?: string; table?: string }
+  | { type: 'table_open'; game?: TableGame; stake?: number; matchOpen?: boolean; requireHuman?: boolean; seatCount?: 6 | 9 | 12; requestId?: string; table?: string }
   | { type: 'table_discovery'; table: string; requestId?: string; matchOpen?: boolean; text?: string; withdraw?: boolean }
   | { type: 'table_join'; requestId?: string; table?: string }
   | { type: 'table_leave'; requestId?: string; table?: string }
@@ -139,9 +144,20 @@ export type ActionRequest =
     revision?: number;
   }
   | {
+    /** 快局大富翁：掷骰与买地共用同一回合号；turnNo 对不上一律当过期。 */
+    type: 'monopoly2d_action'; move: 'roll' | 'buy' | 'pass'; turnNo: number;
+    table?: string;
+    requestId?: string;
+    revision?: number;
+  }
+  | {
+    type: 'gomoku_action'; row: number; col: number;
+    table?: string; requestId?: string; revision?: number;
+  }
+  | {
     /** 狼人杀动作：窗口制——windowId 必带，服务端校验窗口与动作槽；revision 不参与校验。 */
     type: 'werewolf_action';
-    move: 'speak' | 'pass_speech' | 'vote' | 'wolf_chat' | 'wolf_kill' | 'inspect' | 'witch' | 'shoot';
+    move: 'speak' | 'pass_speech' | 'vote' | 'wolf_chat' | 'wolf_kill' | 'inspect' | 'guard' | 'witch' | 'shoot';
     /** 决策通知里给出的窗口号；旧窗口的动作一律拒绝。 */
     windowId: string;
     text?: string;

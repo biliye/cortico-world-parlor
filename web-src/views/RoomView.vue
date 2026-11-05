@@ -17,6 +17,7 @@ const notice = ref('');
 const busy = ref(false);
 const accessOpen = ref(false);
 const requireHuman = ref(false);
+const werewolfSize = ref<6 | 9 | 12>(9);
 
 const seats = computed(() => snapshot.value?.seats || []);
 const seatedCount = computed(() => seats.value.filter((person) => person.kind !== 'observer').length);
@@ -44,7 +45,7 @@ function seatedAt(table: TableSummary): boolean {
 }
 
 function capacityOf(table: TableSummary): number {
-  return table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : 4;
+  return table.capacity ?? (table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : table.game === 'gomoku' ? 2 : 4);
 }
 
 async function run(task: () => Promise<unknown>): Promise<void> {
@@ -70,7 +71,7 @@ function backToMine(): void {
 
 function open(game: string): void {
   void run(async () => {
-    if (await openRoomTable(game, game === 'werewolf' && requireHuman.value) && game === 'werewolf') {
+    if (await openRoomTable(game, game === 'werewolf' && requireHuman.value, game === 'werewolf' ? werewolfSize.value : undefined) && game === 'werewolf') {
       requireHuman.value = false;
     }
   });
@@ -152,7 +153,7 @@ async function invite(): Promise<void> {
 
     <div class="club-section-head">
       <h2>挑张桌，坐下来</h2>
-      <span class="muted">斗地主 3 席 · 狼人杀 9 席</span>
+      <span class="muted">斗地主 3 席 · 狼人杀 6／9／12 席</span>
     </div>
 
     <p v-if="notice" class="warn">{{ notice }}</p>
@@ -214,6 +215,14 @@ async function invite(): Promise<void> {
           <span class="eyebrow">{{ mine && mine.game === game ? '我的牌桌' : '开一张新桌' }}</span>
           <h2>{{ gameLabel(game) }}</h2>
           <p>{{ gameOf(game)?.blurb }}</p>
+          <label v-if="game === 'werewolf' && (!mine || mine.status === 'ended')" class="muted">
+            开局人数
+            <select v-model="werewolfSize" :disabled="busy">
+              <option :value="6">6 人</option>
+              <option :value="9">9 人</option>
+              <option :value="12">12 人（含守卫）</option>
+            </select>
+          </label>
           <label v-if="game === 'werewolf' && (!mine || mine.status === 'ended')" class="muted">
             <input v-model="requireHuman" type="checkbox" :disabled="busy">
             开局须至少一名真人入座

@@ -21,7 +21,8 @@ import { openStorage, type StorageKind } from './storage/open.ts';
 import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
-import { gameByActionType } from './games/registry.ts';
+import { gameByActionType, gameById } from './games/registry.ts';
+import { GAME_ACTION_SCHEMA, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
 import { likePrefix, parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
 import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
@@ -1527,7 +1528,7 @@ export class WorldServer {
       json(res, 200, { room: target.id, token: joined.token, seat: await seatOfRow(this.db, target.id, joined.seat),
         identity: { cooId: person.cooId, cooSecret: 'seat-only' } }); return;
     }
-    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|table|history|action|mail|stream|replay|table-log)$/);
+    const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|table|games|history|action|mail|stream|replay|table-log)$/);
     if (route) {
       const roomId = route[1];
       const action = route[2];
@@ -1569,7 +1570,7 @@ export class WorldServer {
       return;
     }
 
-    const alias = url.pathname.match(/^\/v1\/(room|table|history|action|mail|stream|replay)$/);
+    const alias = url.pathname.match(/^\/v1\/(room|table|games|history|action|mail|stream|replay)$/);
     if (alias) {
       await this.roomRoute(req, res, url, this.defaultRoomId, alias[1], method);
       return;
@@ -1882,6 +1883,49 @@ export class WorldServer {
       return;
     }
 
+    if (action === 'games' && method === 'GET') {
+      const seat = await this.seatAuth(req, roomId);
+      const op = url.searchParams.get('op') || 'list';
+      const base = { ok: true, protocol: 'parlor.game.v1', at: serverClock(this.now()) };
+      if (op === 'list') {
+        json(res, 200, { ...base, games: gameCatalog() });
+        return;
+      }
+      if (op === 'describe') {
+        const game = gameById(url.searchParams.get('game') || '');
+        if (!game) throw new HttpError(404, '未知游戏；先查询游戏目录');
+        json(res, 200, { ...base, game: describeGame(game) });
+        return;
+      }
+      if (op !== 'state' && op !== 'history') throw new HttpError(400, 'op 只能是 list / describe / state / history');
+      const host = await this.host(roomId);
+      await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
+      const tableId = url.searchParams.get('table')?.trim() || undefined;
+      if (op === 'history') {
+        const query: { day?: number; seatNo?: number; limit?: number; review?: boolean } = {};
+        for (const key of ['day', 'seatNo', 'limit'] as const) {
+          if (!url.searchParams.has(key)) continue;
+          const value = Number(url.searchParams.get(key));
+          if (!Number.isSafeInteger(value) || value < 1 || (key === 'limit' && value > 200)) {
+            throw new HttpError(400, `${key} 要是正整数（limit ≤ 200）`);
+          }
+          query[key] = value;
+        }
+        query.review = url.searchParams.get('review') === 'true' || url.searchParams.get('review') === '1';
+        json(res, 200, { ...base, log: await host.tableLog(seat.cooId, tableId, query) });
+        return;
+      }
+      const seq = await host.latest();
+      const slice = await host.tableSlice(seat.cooId, tableId);
+      if (tableId && !slice.table) throw new HttpError(404, '这个客厅里没有这张桌');
+      const game = slice.table && gameById(slice.table.game);
+      json(res, 200, { ...base, seq, tables: slice.tables,
+        ...(game && slice.table ? gameState(game, slice.table, slice.tablePrivate)
+          : { table: null, tablePrivate: null, availableActions: [] }),
+      });
+      return;
+    }
+
     if (action === 'table' && method === 'GET') {
       // 牌桌增量：只补当前桌需要的三块。整份快照（含席位、事件、账本、信箱）仍走 /room。
       const seat = await this.seatAuth(req, roomId);
@@ -1906,11 +1950,16 @@ export class WorldServer {
       const seat = await this.seatAuth(req, roomId);
       const body = await readJson(req);
       const type = typeof body.type === 'string' ? body.type : '';
+      if (type === 'game_action') {
+        try { validateParameters(GAME_ACTION_SCHEMA, body, 'body'); }
+        catch (error) { throw new HttpError(400, (error as Error).message); }
+      }
       const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
       // 牌桌修改一律要幂等键：旧客户端在这里拿到明确的升级提示，不会开出一张打不了的桌。
+      // 玩法动作按注册表判断，加一个游戏不用再改这里。
       const tableMutation = type === 'table_open' || type === 'table_join' || type === 'table_leave'
-        || type === 'table_start' || type === 'table_action' || type === 'ddz_action'
-        || type === 'werewolf_action' || type === 'table_discovery';
+        || type === 'table_start' || type === 'table_discovery'
+        || type === 'game_action' || gameByActionType(type) !== null;
       if (tableMutation && !requestId) {
         throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
       }
@@ -1972,6 +2021,7 @@ export class WorldServer {
           clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
           ...(typeof body.matchOpen === 'boolean' ? { matchOpen: body.matchOpen } : {}),
           requireHuman: body.requireHuman,
+          seatCount: body.seatCount,
         }, requestId);
         tableId = opened.tableId;
         revision = opened.receipt.revision;
@@ -2029,7 +2079,9 @@ export class WorldServer {
         tablesChanged = true;
       } else {
         // 牌桌动作按注册表分发：加一个游戏不用再改这里，只要它在 games/registry.ts 里登记过。
-        const game = gameByActionType(type);
+        const genericTarget = type === 'game_action' ? await host.tablePublic(tableArg, seat.cooId) : null;
+        if (type === 'game_action' && !genericTarget) throw new HttpError(404, '这个客厅里没有这张桌');
+        const game = genericTarget ? gameById(genericTarget.game) : gameByActionType(type);
         if (game) {
           const target = await host.tablePublic(tableArg, seat.cooId);
           // 不带桌号时，快照里那张「刚打完」的结果桌不能当成正在打的桌。
@@ -2039,7 +2091,12 @@ export class WorldServer {
           if (target.game !== game.id) {
             throw new HttpError(400, `这张桌子不是${game.label}桌`);
           }
-          const receipt = await host.tableAction(seat.cooId, game.toAction(body), {
+          let gameBody = body;
+          if (type === 'game_action') {
+            try { gameBody = gameActionBody(game, body.action as string, body.params); }
+            catch (error) { throw new HttpError(400, (error as Error).message); }
+          }
+          const receipt = await host.tableAction(seat.cooId, game.toAction(gameBody), {
             ...(tableArg ? { tableId: tableArg } : { tableId: target.id ?? target.tableId }),
             ...(revisionArg !== undefined ? { revision: revisionArg } : {}),
             ...(requestId ? { requestId } : {}),
@@ -2065,10 +2122,12 @@ export class WorldServer {
       const tablePatch = touchedTable !== undefined
         ? await (async () => {
           const slice = await host.tableSlice(seat.cooId, touchedTable);
+          const game = type === 'game_action' && slice.table ? gameById(slice.table.game) : null;
           return {
             ...(tablesChanged ? { tables: slice.tables } : {}),
             table: slice.table,
             tablePrivate: slice.tablePrivate,
+            ...(game && slice.table ? { protocol: 'parlor.game.v1', ...gameState(game, slice.table, slice.tablePrivate) } : {}),
           };
         })()
         : {};

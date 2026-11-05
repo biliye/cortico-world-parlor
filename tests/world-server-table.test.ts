@@ -63,6 +63,28 @@ const tableRef = async (app: WorldServer, token: string): Promise<{ table: strin
 };
 
 describe('WorldServer 牌桌网关', () => {
+  it('五子棋两席开局，提供建议，拒绝旧版本并记录连五终局', async () => {
+    const app = await start();
+    const black = await enter(app, A, '黑方');
+    const white = await enter(app, B, '白方');
+    const opened = await act(app, black, { type: 'table_open', game: 'gomoku', requestId: 'gomoku-open' });
+    expect(opened.status).toBe(200);
+    const table = opened.body.tableId;
+    expect((await act(app, white, { type: 'table_join', table, requestId: 'gomoku-join' })).status).toBe(200);
+    expect((await act(app, black, { type: 'table_start', table, requestId: 'gomoku-start' })).status).toBe(200);
+    const initial = await get(app.url, '/v1/room?limit=1', black);
+    expect(initial.body.tablePrivate).toMatchObject({ canAct: true, hints: [{ row: 7, col: 7 }, expect.any(Object), expect.any(Object)] });
+    for (let i = 0; i < 9; i++) {
+      const player = i % 2 === 0 ? black : white;
+      const reference = await tableRef(app, player);
+      const body = { ...reference, type: 'gomoku_action', row: i % 2, col: Math.floor(i / 2), requestId: `gomoku-${i}` };
+      if (i === 0) expect((await act(app, player, { ...body, revision: reference.revision - 1 })).status).toBe(409);
+      expect((await act(app, player, body)).status).toBe(200);
+    }
+    const result = await get(app.url, '/v1/room?limit=1', black);
+    expect(result.body.table).toMatchObject({ game: 'gomoku', status: 'ended', winningLine: expect.arrayContaining([{ row: 0, col: 4 }]) });
+  });
+
   it('狼人杀按开桌选项决定全 Coo 能否开局', async () => {
     const app = await start();
     const tokens: string[] = [];

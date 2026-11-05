@@ -2425,7 +2425,7 @@ button.room-pill:hover { border-color: var(--accent-border); color: var(--text);
 /* 同名时直接展开号，手机也能分清。 */
 .member-chip.has-same-name .member-handle { display: inline; }
 
-/* ===================== 狼人杀（九席像素木桌） ===================== */
+/* ===================== 狼人杀（像素木桌） ===================== */
 /* 奶油客厅的延续：白天暖光木桌、夜晚压暗加星点；像素感用无模糊的阶梯阴影表达。 */
 .game-werewolf { display: flex; flex-direction: column; gap: 12px; }
 
@@ -2459,6 +2459,16 @@ button.room-pill:hover { border-color: var(--accent-border); color: var(--text);
     linear-gradient(160deg, #b98a55, #8a5c33);
   box-shadow: inset 0 0 0 4px rgba(70, 44, 20, .55), inset 0 0 0 6px rgba(255, 235, 200, .28), 0 10px 24px rgba(70, 44, 20, .18);
 }
+.wf-ring.seats-6 {
+  grid-template-areas: 'a1 a2 a3' 'core core core' 'a6 a5 a4';
+}
+.wf-ring.seats-12 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-areas: 'a1 a2 a3 a4' 'a12 core core a5' 'a11 core core a6' 'a10 a9 a8 a7';
+}
+.wf-ring.seats-12 .a10 { grid-area: a10; }
+.wf-ring.seats-12 .a11 { grid-area: a11; }
+.wf-ring.seats-12 .a12 { grid-area: a12; }
 .game-werewolf.is-night .wf-ring {
   background:
     radial-gradient(1.5px 1.5px at 12% 20%, rgba(255,255,255,.85) 45%, transparent 55%),

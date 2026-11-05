@@ -30,24 +30,25 @@ interface Rig {
   events: TableEvent[];
 }
 
-const makeRig = (seed = 7, humans = 1, requireHuman = false): Rig => {
+const makeRig = (seed = 7, humans = 1, requireHuman = false, seatCount: 6 | 9 | 12 = 9): Rig => {
   const clock = { now: 1_000_000 };
   const table = new WerewolfTable({
     host: { id: 's1', name: NAMES[0], kind: humans >= 1 ? 'human' : 'pet', clientVersion: '0.29.0' },
     now: clock.now,
     requireHuman,
+    seatCount,
     turnMs: T,
     rng: seeded(seed),
   });
-  for (let i = 2; i <= 9; i++) {
+  for (let i = 2; i <= seatCount; i++) {
     table.join({
       id: `s${i}`,
-      name: NAMES[i - 1],
+      name: NAMES[i - 1] ?? `玩家${i}`,
       kind: i <= humans ? 'human' : 'pet',
       clientVersion: '0.29.0',
     });
   }
-  return { table, clock, ids: Array.from({ length: 9 }, (_, i) => `s${i + 1}`), steps: [], events: [] };
+  return { table, clock, ids: Array.from({ length: seatCount }, (_, i) => `s${i + 1}`), steps: [], events: [] };
 };
 
 const view = (rig: Rig, id: string): AnyView => rig.table.view(id) as AnyView;
@@ -146,6 +147,71 @@ const advance = (rig: Rig, ms: number): void => {
 };
 
 const eventType = (rig: Rig, type: string): TableEvent[] => rig.events.filter((event) => event.type === type);
+
+describe('狼人杀人数与守卫', () => {
+  it.each([
+    [6, { wolf: 2, villager: 2, seer: 1, witch: 1 }],
+    [9, { wolf: 3, villager: 3, seer: 1, witch: 1, hunter: 1 }],
+    [12, { wolf: 4, villager: 4, seer: 1, witch: 1, hunter: 1, guard: 1 }],
+  ] as const)('%i 人局按桌容量开局和发牌', (size, roles) => {
+    const rig = makeRig(7, 1, false, size);
+    rig.table.leave(`s${size}`);
+    expect(() => rig.table.start('s1', rig.clock.now)).toThrow(/正好/);
+    rig.table.join({ id: `s${size}`, name: '补齐', clientVersion: '0.29.0' });
+    expect(() => rig.table.join({ id: 'extra', name: '满桌' })).toThrow(/坐满/);
+    expect(rig.table.public()).toMatchObject({ capacity: size });
+    startGame(rig);
+    const actual = new Map<string, number>();
+    for (const id of rig.ids) actual.set(roleOf(rig, id), (actual.get(roleOf(rig, id)) ?? 0) + 1);
+    expect(Object.fromEntries(actual)).toEqual(roles);
+  });
+
+  it('没有人数的旧桌存档仍按 9 席恢复', () => {
+    const rig = makeRig();
+    const { seatCount: _seatCount, ...legacy } = rig.table.exportState() as AnyView;
+    const restored = new WerewolfTable({ host: { id: 's1', name: NAMES[0] }, now: rig.clock.now, seatCount: 12 });
+    restored.restoreState(legacy);
+    expect(restored.public()).toMatchObject({ capacity: 9, startBlockers: [] });
+  });
+
+  it('守卫自守挡刀，动作和连守限制跨存档保留，只对本人显示', () => {
+    const rig = makeRig(7, 1, false, 12);
+    startGame(rig);
+    const guard = idWithRole(rig, 'guard');
+    const wolf = idWithRole(rig, 'wolf');
+    const target = seatNo(guard);
+    expect(view(rig, guard).myMove).toBe('guard');
+    expect(() => act(rig, wolf, { move: 'guard', target })).toThrow(/只有守卫/);
+    expect(act(rig, guard, { move: 'guard', target })).toMatchObject({ events: [], views: [guard] });
+    expect(view(rig, wolf)).not.toHaveProperty('previousGuard');
+    expect(rig.table.public()).not.toHaveProperty('guarded');
+
+    const restored = new WerewolfTable({ host: { id: 's1', name: NAMES[0] }, now: rig.clock.now, turnMs: T });
+    restored.restoreState(JSON.parse(JSON.stringify(rig.table.exportState())));
+    rig.table = restored;
+    expect(() => act(rig, guard, { move: 'guard' })).toThrow(/已经交过/);
+    runNightA(rig, { kill: target });
+    runNightB(rig);
+    expect(view(rig, guard).alive).toBe(true);
+    runSpeeches(rig, () => '');
+    runVote(rig, {});
+    expect(view(rig, guard)).toMatchObject({ myMove: 'guard', previousGuard: target });
+    expect(() => act(rig, guard, { move: 'guard', target })).toThrow(/不能连续两晚/);
+    expect(() => act(rig, guard, { move: 'guard' })).not.toThrow();
+  });
+
+  it.each(['save', 'poison'] as const)('同守同救及守护遇毒均出局（%s）', (choice) => {
+    const rig = makeRig(7, 1, false, 12);
+    startGame(rig);
+    const guard = idWithRole(rig, 'guard');
+    const victim = idWithRole(rig, 'villager');
+    const target = seatNo(victim);
+    act(rig, guard, { move: 'guard', target });
+    runNightA(rig, { kill: target });
+    runNightB(rig, { choice, ...(choice === 'poison' ? { target } : {}) });
+    expect(view(rig, victim).alive).toBe(false);
+  });
+});
 
 describe('狼人杀引擎', () => {
   it('狼人出局后不再收到后续狼聊、刀票与锁定刀口，存活同伴仍正常接收', () => {

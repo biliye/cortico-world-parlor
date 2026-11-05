@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { canStartTable, tableSeatLabel, tableStartBlockers } from '../web-src/lib/games.ts';
 
 describe('狼人杀开局前提示', () => {
+  it.each([6, 12])('按 %i 人桌实际容量判断可开局', (capacity) => {
+    const table = { game: 'werewolf', capacity, requireHuman: false, seats: Array.from({ length: capacity }, () => ({ kind: 'pet' })) };
+    expect(canStartTable(table)).toBe(true);
+    expect(canStartTable({ ...table, seats: table.seats.slice(1) })).toBe(false);
+  });
   it('满九席仍检查真人/Coo，兼容旧服务端；不把 Coo 显示成人', () => {
     const table = { game: 'werewolf', seats: Array.from({ length: 9 }, () => ({ kind: 'pet' })) };
     expect(canStartTable(table)).toBe(false);

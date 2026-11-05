@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ParlorServer } from '../src/room/server.ts';
 
-const ROLES = ['wolf', 'villager', 'seer', 'witch', 'hunter'] as const;
+const ROLES = ['wolf', 'villager', 'seer', 'witch', 'hunter', 'guard'] as const;
 const MIN_ROLE_JPG_BYTES = 10 * 1024;
 const roleArtUrl = (role: string) => `/play/assets/assets/werewolf/roles/${role}.jpg`;
 
@@ -39,7 +39,7 @@ describe('狼人杀网页：角色牌路由', () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  it('五张角色牌走 /play/assets/assets/werewolf/roles/ 能整张取回：200、image/jpeg、超过 10KB', async () => {
+  it('六张角色牌走 /play/assets/assets/werewolf/roles/ 能整张取回：200、image/jpeg、超过 10KB', async () => {
     for (const role of ROLES) {
       const response = await fetch(server.url + roleArtUrl(role));
       expect(response.status, role + '.jpg 的 HTTP 状态').toBe(200);
@@ -47,10 +47,6 @@ describe('狼人杀网页：角色牌路由', () => {
       const bytes = Buffer.from(await response.arrayBuffer());
       expect(bytes.length, role + '.jpg 只有 ' + bytes.length + ' 字节，小于 10KB').toBeGreaterThan(MIN_ROLE_JPG_BYTES);
     }
-  });
-
-  it('guard.jpg 不进包：守卫不在角色牌库里，请求直接 404', async () => {
-    expect((await fetch(server.url + roleArtUrl('guard'))).status).toBe(404);
   });
 
   it('单层 assets 的路径取不到：前缀剥一层，剩下的相对 src/web/ 解析', async () => {
@@ -66,7 +62,7 @@ describe('狼人杀网页：werewolf.js 静态断言与打包完整性', () => {
     expect(result.status, result.stderr || '').toBe(0);
   });
 
-  it('磁盘上五张角色牌都在、都超过 10KB；manifest 出现时哈希一致', () => {
+  it('磁盘上六张角色牌都在、都超过 10KB；manifest 出现时哈希一致', () => {
     const rolesDir = fileURLToPath(new URL('../src/web/assets/werewolf/roles/', import.meta.url));
     for (const role of ROLES) {
       const file = join(rolesDir, role + '.jpg');
@@ -85,7 +81,7 @@ describe('狼人杀网页：werewolf.js 静态断言与打包完整性', () => {
     }
   });
 
-  it('打包 files 覆盖 src/ 且没有排除规则挡角色牌，五张 jpg 会进 npm 包', () => {
+  it('打包 files 覆盖 src/ 且没有排除规则挡角色牌，六张 jpg 会进 npm 包', () => {
     const files = pkgFiles();
     expect(files, 'files 里要有 src（角色牌都在 src/ 下）').toContain('src');
     for (const role of ROLES) {
@@ -102,13 +98,13 @@ describe('狼人杀网页：werewolf.js 静态断言与打包完整性', () => {
     }
   });
 
-  it('五个角色的牌图都预加载，路径只从 roleArtUrl 一处出', () => {
+  it('六个角色的牌图都预加载，路径只从 roleArtUrl 一处出', () => {
     const js = werewolfJs();
     const roster = js.match(/const ROLES = \[([^\]]+)\]/)?.[1] ?? '';
     for (const role of ROLES) {
       expect(roster, 'ROLES 名单里缺 ' + role).toContain("'" + role + "'");
     }
-    // 挂桌就预载五种角色牌（不代表谁是什么）；路径模板只出现一次，改形状只改一处。
+    // 挂桌就预载六种角色牌（不代表谁是什么）；路径模板只出现一次，改形状只改一处。
     expect(js).toContain('for (const role of ROLES)');
     expect(js).toContain('new Image()');
     expect(js).toContain('img.src = roleArtUrl(role);');

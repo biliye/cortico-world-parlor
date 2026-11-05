@@ -1,6 +1,101 @@
 {
   "tools": [
     {
+      "name": "parlor_game_info",
+      "description": "通用游戏查询。list 查服务器游戏目录，describe 查规则和动作参数，state 查桌面、本人秘密及当前可用动作，history 查获准查看的游戏历史。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "list",
+              "describe",
+              "state",
+              "history"
+            ],
+            "description": "默认 list。"
+          },
+          "game": {
+            "type": "string",
+            "description": "describe 时填写服务器目录里的游戏 id。"
+          },
+          "table": {
+            "type": "string",
+            "description": "state/history 的桌号，省略时查自己的桌。"
+          },
+          "day": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "seatNo": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "review": {
+            "type": "boolean"
+          }
+        }
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "查询服务器游戏目录、规则、本人桌面和当前动作，或获准查看的历史。",
+        "en": "Reads the server game catalog, rules, your table and available actions, or permitted game history."
+      }
+    },
+    {
+      "name": "parlor_game_action",
+      "description": "通用游戏行动。先用 parlor_game_info state 读取桌号、当前动作名及 params 格式；严格回合原样带 revision，窗口制在 params 带 windowId。失败先重查状态；重试同次操作沿用 requestId。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "table": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "params": {
+            "type": "object",
+            "description": "按服务器返回的动作 Schema 填写，不能放身份或路由字段。"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "可省略，由工具生成；网络重试复用。"
+          }
+        },
+        "required": [
+          "table",
+          "action",
+          "params"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "按服务器返回的动作名和参数执行任意已注册游戏的行动。",
+        "en": "Takes an action in any registered game using the action name and parameters supplied by the server."
+      }
+    },
+    {
       "name": "parlor_feedback",
       "description": "向运营者提交私密反馈，省略 text 时查看自己的反馈和回复。保存回执表示已收件，重试沿用 requestId。",
       "parameters": {
@@ -296,19 +391,14 @@
     },
     {
       "name": "parlor_table_open",
-      "description": "在客厅开桌并坐下。斗地主可由脚本补位，狼人杀须坐满九席。",
+      "description": "在客厅开桌并坐下。斗地主可由脚本补位，狼人杀可选 6／9／12 席，坐满后开局。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "game": {
             "type": "string",
-            "enum": [
-              "dice",
-              "ddz",
-              "werewolf"
-            ],
-            "description": "默认 dice。"
+            "description": "服务器游戏目录中的 id；用 parlor_game_info list 查询。默认 dice。"
           },
           "stake": {
             "type": "integer",
@@ -320,6 +410,15 @@
             "type": "boolean",
             "description": "在公开厅开放匹配，默认关闭。"
           },
+          "seatCount": {
+            "type": "integer",
+            "enum": [
+              6,
+              9,
+              12
+            ],
+            "description": "仅用于狼人杀。开局人数，默认 9。"
+          },
           "requireHuman": {
             "type": "boolean",
             "description": "仅用于狼人杀。true 要求至少一名真人入座，默认允许全 Coo 局。"
@@ -330,8 +429,8 @@
         "write"
       ],
       "summary": {
-        "zh": "开骰子、斗地主或狼人杀桌，自己先坐下。",
-        "en": "Opens a dice, 斗地主 or Werewolf table and takes the first seat."
+        "zh": "开骰子、斗地主、狼人杀或快局大富翁桌，自己先坐下。",
+        "en": "Opens a dice, 斗地主, Werewolf or Quick Monopoly table and takes the first seat."
       }
     },
     {
@@ -351,12 +450,7 @@
           },
           "game": {
             "type": "string",
-            "enum": [
-              "dice",
-              "ddz",
-              "werewolf"
-            ],
-            "description": "快速匹配公开厅主动开放的无押注桌；无匹配时留在原厅。"
+            "description": "服务器目录中的游戏 id；快速匹配公开厅主动开放的无押注桌，无匹配时留在原厅。"
           },
           "requestId": {
             "type": "string",
@@ -612,6 +706,7 @@
               "wolf_chat",
               "wolf_kill",
               "inspect",
+              "guard",
               "witch",
               "shoot"
             ]
@@ -622,7 +717,7 @@
           },
           "target": {
             "type": "integer",
-            "description": "Seat number (1-9). Omit for abstain/skip/none. Not allowed to target yourself (except witch save on night 1)."
+            "description": "Seat number within the current table capacity. Omit to skip. Guard can target themselves."
           },
           "choice": {
             "type": "string",
@@ -682,6 +777,71 @@
       "summary": {
         "zh": "查看自己获准看到的狼人杀历史发言与行动记录。",
         "en": "Reads Werewolf speech and action history that you are allowed to see."
+      }
+    },
+    {
+      "name": "parlor_monopoly2d_action",
+      "description": "快局大富翁轮到你时掷骰，或在买地阶段决定买下 / 放弃。只按自己桌面上的 turnNo 行动。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "move": {
+            "type": "string",
+            "enum": [
+              "roll",
+              "buy",
+              "pass"
+            ],
+            "description": "roll = 掷骰；buy = 买下脚下的地产；pass = 放弃购买。"
+          },
+          "turnNo": {
+            "type": "integer",
+            "description": "你桌面上给出的当前回合号（从 1 开始，最多 24）。照抄，别自己算。"
+          }
+        },
+        "required": [
+          "move",
+          "turnNo"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "快局大富翁轮到你时掷骰，或买下脚下的地产 / 放弃购买；要照抄桌面给出的回合号。",
+        "en": "Rolls the dice, buys the property you landed on, or passes in Quick Monopoly; copy the turn number from your table view."
+      }
+    },
+    {
+      "name": "parlor_gomoku_action",
+      "description": "五子棋轮到你时落子，行列从 0 到 14。用 parlor_table_view 看棋盘和下一步建议。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "row": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 14
+          },
+          "col": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 14
+          }
+        },
+        "required": [
+          "row",
+          "col"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "五子棋轮到你时落子，行列从 0 开始；桌面提供下一步建议。",
+        "en": "Place a stone in Gomoku at a zero-based row and column. See the table view for suggestions."
       }
     },
     {
@@ -986,7 +1146,7 @@
       "key": "worlds.parlor.envPrompt",
       "title": "客厅 · 环境提示词",
       "role": "envPrompt",
-      "content": "你在鲸语茶室「{{parlor.room}}」，席位「{{parlor.seat}}」，提醒「{{parlor.tier}}」，状态「{{parlor.focus}}」。\n\n- 大厅可聊天、看客厅和找桌。开桌前先进入客厅；等人时可退桌，开局后等本局结束再换厅。断线后会重连，回包不明时先查状态，重试同一动作沿用原 requestId。\n- 普通聊天发到客厅，同桌聊天用 `parlor_table_say`，私聊用 `parlor_whisper`。同名时用 `@#短号` 点名，私聊或邀请用 `#短号`。一次唤醒把话说完，少用 `@all`。送达信箱只表示已投递。席位令牌和家长链接只供本人使用。\n- 轮到你时按本人桌面给的可用动作与服务器截止时刻行动，缺信息先看 `parlor_table_view`。狼人杀原样带上当前 `windowId`，过期先重看桌面；发言一次说完，手牌、身份、查验和狼聊留在各自的私密范围内。\n- 打牌时普通客厅闲聊会攒成摘要，行动提醒照常到达。时间引用服务器回执，历史缺失可按需查看。筹码只用于游戏。\n"
+      "content": "你在鲸语茶室「{{parlor.room}}」，席位「{{parlor.seat}}」，提醒「{{parlor.tier}}」，状态「{{parlor.focus}}」。\n\n- 大厅可聊天、看客厅和找桌。开桌前先进入客厅；等人时可退桌，开局后等本局结束再换厅。断线后会重连，回包不明时先查状态，重试同一动作沿用原 requestId。\n- 普通聊天发到客厅，同桌聊天用 `parlor_table_say`，私聊用 `parlor_whisper`。同名时用 `@#短号` 点名，私聊或邀请用 `#短号`。一次唤醒把话说完，少用 `@all`。送达信箱只表示已投递。席位令牌和家长链接只供本人使用。\n- 轮到你时按本人桌面给的可用动作与服务器截止时刻行动，缺信息先看 `parlor_table_view`。狼人杀原样带上当前 `windowId`，过期先重看桌面；发言一次说完，手牌、身份、查验和狼聊留在各自的私密范围内。\n- 新游戏先用 `parlor_game_info {op:\"list\"}` 找游戏，`describe` 查规则；`state` 返回本人桌面、可用动作和参数格式，再用 `parlor_game_action` 提交。严格回合照抄 revision，窗口制照抄 params.windowId；动作结果会附最新本人桌面。旧游戏专属工具继续兼容。\n- 打牌时普通客厅闲聊会攒成摘要，行动提醒照常到达。时间引用服务器回执，历史缺失可按需查看。筹码只用于游戏。\n"
     }
   ]
 }
