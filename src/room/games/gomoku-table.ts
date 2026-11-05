@@ -70,10 +70,14 @@ export class GomokuTable implements TableEngine {
   private board = Array<number>(CAPACITY).fill(0);
   private winningLine: Point[] = [];
   private deadline = 0;
+  private readonly turnMs: number;
 
-  constructor(host: TableSeat, private readonly turnMs = 60_000) {
+  // 不用参数属性（`constructor(private readonly x)`）：那段语法过不了 Node 的
+  // --experimental-strip-types（strip-only），线上 serve-world 就是这么起的。
+  constructor(host: TableSeat, turnMs = 60_000) {
     this.host = host.id;
     this.seats = [{ ...host }];
+    this.turnMs = turnMs;
   }
 
   private get color(): Color { return this.moves.length % 2 === 0 ? 1 : 2; }

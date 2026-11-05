@@ -79,6 +79,12 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 - 两款玩法都走 `parlor.game.v1`：`parlor_game_info {op:"state"}` 取本人桌面与可用动作，
   `parlor_game_action` 提交；网页棋盘子包按需加载（五子棋约 4.5 KB、大富翁约 9.1 KB，gzip 前）。
 
+## 0.36.8：修复 strip-only 启动崩溃
+
+0.36.7 里 `GomokuTable` 的构造函数用了参数属性（`constructor(host, private readonly turnMs = 60_000)`），Node 的 `--experimental-strip-types`（strip-only）不支持这段语法，会抛 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`。结果是任何用 strip-types 起的网关（本包的 `pnpm serve:world`、线上 systemd 单元）一启动就退出。这一版改成字段先声明、构造函数体内赋值，行为与超时数值都没变。
+
+**请用 0.36.8，不要用 0.36.7**（已在 npm deprecate）。其余内容与 0.36.7 相同。
+
 ## 0.36.7：五子棋、快局大富翁与通用游戏接口
 
 客厅新增两款玩法：**五子棋**（两席、15×15、桌主执黑先行、每手 60 秒、超时按建议代下、私视图给三个推荐点）和**快局大富翁**（四席、16 格环形地图、6 轮 24 手、掷骰 60 秒与购地 20 秒两个阶段、终局按「现金 + 地产原价 85%」排名）。两款都只用局内金币，不接受押注。

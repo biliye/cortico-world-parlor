@@ -1,3 +1,9 @@
+## 0.36.8（2026-11-05）
+
+- 修复五子棋引擎让扩展在 Node 的类型剥离（`--experimental-strip-types`，strip-only）下无法加载：`GomokuTable` 的构造函数原来用了参数属性 `constructor(host, private readonly turnMs = 60_000)`，strip-only 抛出 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`，`serve-world` 一起进程就退出。改为先声明 `private readonly turnMs`，再在构造函数体内赋值，与原 `storage/sqlite.ts` 的写法一致。行为、超时数值与对外接口均未变。
+- 0.36.7 在 npm 上带着这个问题，用 `--experimental-strip-types` 起的网关（包括本项目自带的 `serve:world` 脚本与线上 systemd 单元）会起不来；请直接用 0.36.8。0.36.7 已 deprecate。
+- 包版本、客户端版本与网页资源 `?v=` 三处统一为 0.36.8；发布内容以 npm tarball 为准。
+
 ## 0.36.7（2026-11-05）
 
 - 修复换厅后旧 SSE 连接迟到 401 导致重复入座、替换有效新令牌的竞态：换厅先停止旧流并等待退出，成功或失败后按当前身份恢复连接；迟到事件、打开回调和错误按连接身份隔离。并发换厅/匹配互斥，正常席位失效仍会重新入座。五子棋旁观者显示「观战」及真实赢家，不再被标为执黑或判为本人输棋。
