@@ -103,7 +103,7 @@ const currentRoom = async () => (await world!.envPromptVars() as Record<string,s
 
 describe('Coo 快速匹配与牌桌分享', () => {
   it('Coo 通过固定通用工具完成真实HTTP/PG五子棋落子，旧开桌和入桌工具继续兼容', async () => {
-    const { friend, friendToken } = await startWorld();
+    const { friend, friendToken, host } = await startWorld();
     const catalog = JSON.parse(await call('parlor_game_info'));
     expect(catalog.games).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'gomoku' })]));
     expect(await call('parlor_table_open', { game: 'gomoku' })).toContain('五子棋');
@@ -113,13 +113,21 @@ describe('Coo 快速匹配与牌桌分享', () => {
     await call('parlor_table_start', { table });
     const state = JSON.parse(await call('parlor_game_info', { op: 'state', table }));
     expect(state.availableActions).toMatchObject([{ action: 'place' }]);
+    expect(state.table.board).toContain('\n 7 ...............');
+    expect(state.tablePrivate.board).toBeUndefined();
+    expect(state.tables.find((entry: { id: string }) => entry.id === table).board).toBeUndefined();
+    await until(() => pushedText(host).includes('建议（行,列）：'), 8000);
+    expect(pushedText(host)).toContain('012345678901234');
     const args = { table, action: 'place', params: { row: 7, col: 7 }, revision: state.table.revision, requestId: 'generic-coo-place' };
     const result = JSON.parse(await call('parlor_game_action', args));
     expect(result).toMatchObject({ ok: true, protocol: 'parlor.game.v1', revision: state.table.revision + 1 });
+    expect(result.table.board).toContain('\n 7 .......x.......');
     expect(JSON.parse(await call('parlor_game_action', args)).revision).toBe(result.revision);
     const next = await friend.games(friendToken, { op: 'state', table }, 'lobby') as Record<string, any>;
     expect(next.availableActions).toMatchObject([{ action: 'place' }]);
     expect(next.table.revision).toBe(result.revision);
+    expect(next.table.board).toHaveLength(225);
+    expect(next.tablePrivate.board).toHaveLength(225);
   });
 
   it('工具快速匹配后持久化新厅和令牌，重连到本桌，能继续接收桌聊', async () => {

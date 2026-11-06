@@ -15,6 +15,23 @@ const other = (color: Color): Color => color === 1 ? 2 : 1;
 const inside = (row: number, col: number) => row >= 0 && row < SIZE && col >= 0 && col < SIZE;
 const index = (row: number, col: number) => row * SIZE + col;
 
+export function formatGomokuBoard(board: readonly number[], last?: Point): string {
+  const rows = Array.from({ length: SIZE }, (_, row) => {
+    const cells = board.slice(index(row, 0), index(row + 1, 0)).map((cell, col) => {
+      const stone = '.XO'[cell];
+      return row === last?.row && col === last.col ? stone.toLowerCase() : stone;
+    }).join('');
+    return `${String(row).padStart(2)} ${cells}`;
+  });
+  return ['X黑 O白 .空，小写是末手。列号上下合读。', '             11111', '   012345678901234', ...rows].join('\n');
+}
+
+export function formatGomokuAdvice(hints: readonly Hint[], warning?: Warning): string {
+  const suggestions = hints.map(({ row, col, reason, level }) =>
+    `(${row},${col}) ${level === 'win' ? '连五' : reason}`).join('；');
+  return [warning?.text, suggestions && `建议（行,列）：${suggestions}`].filter(Boolean).join('\n');
+}
+
 function bestLine(board: readonly number[], { row: originRow, col: originCol }: Point, color: Color): Point[] {
   const point = { row: originRow, col: originCol };
   let best: Point[] = [point];
@@ -263,12 +280,11 @@ export class GomokuTable implements TableEngine {
     const view = this.view(seatId);
     if (!view) return null;
     if (!view.canAct) return this.publicText();
-    const hints = view.hints.map(hint =>
-      `parlor_game_action {action:"place",params:{"row":${hint.row},"col":${hint.col}}}（${hint.reason}）`).join('；');
-    const rows = Array.from({ length: SIZE }, (_, row) =>
-      this.board.slice(row * SIZE, (row + 1) * SIZE).map(cell => '.XO'[cell]).join(''));
-    const warning = view.warning ? `\n${view.warning.text}` : '';
-    return `${this.publicText()} 你执${this.color === 1 ? '黑' : '白'}，行列从 0 开始（X 黑，O 白）。\n${rows.join('\n')}${warning}\n建议：${hints}`;
+    return [
+      `${this.publicText()} 你执${this.color === 1 ? '黑' : '白'}，行列 0–14。`,
+      formatGomokuBoard(view.board, view.last),
+      formatGomokuAdvice(view.hints, view.warning),
+    ].filter(Boolean).join('\n');
   }
 
   exportState() {

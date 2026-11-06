@@ -24,6 +24,20 @@ function playThreat(blackMoves: Array<[number, number]>, whiteMoves = blackMoves
 }
 
 describe('五子棋牌桌', () => {
+  it('行动通知用数字标尺和小写末手，只用坐标写建议', () => {
+    const table = started();
+    expect(table.privateText(black.id)).toContain(' 0 ...............');
+    table.act(black.id, { row: 0, col: 10 }, 1001);
+    const whiteText = table.privateText(white.id)!;
+    expect(whiteText).toContain('\n             11111\n   012345678901234\n 0 ..........x....');
+    table.act(white.id, { row: 14, col: 14 }, 1001);
+    const blackText = table.privateText(black.id)!;
+    expect(blackText).toContain('\n 0 ..........X....');
+    expect(blackText).toContain('\n14 ..............o');
+    expect(blackText).toMatch(/建议（行,列）：\(\d+,\d+\) /);
+    expect(blackText).not.toContain('parlor_game_action');
+  });
+
   it('提示一步连五或封堵，只给当前玩家，按空交点和轮序校验', () => {
     const table = started();
     expect(table.view(black.id)?.hints[0]).toMatchObject({ row: 7, col: 7, level: 'shape' });

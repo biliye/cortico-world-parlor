@@ -7,6 +7,7 @@ import type { ToolCallContext } from 'cortico/core/types.ts';
 import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
 import { ParlorClient, ParlorHttpError } from '../src/room/client.ts';
+import { GomokuTable } from '../src/room/games/gomoku-table.ts';
 import type { ActionRequest, RoomEvent, RoomSnapshot } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
@@ -70,6 +71,50 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
   });
 
 describe('World 牌桌版本同步', () => {
+  it('五子棋 state 和行动回执只给一份点阵，兼容旧服务器正文并保留动作版本', async () => {
+    const engine = new GomokuTable({ id: 'mine', name: '小满' });
+    engine.join({ id: 'other', name: '对手' });
+    engine.start('mine', 1000);
+    engine.act('mine', { row: 0, col: 10 }, 1001);
+    engine.act('other', { row: 14, col: 14 }, 1001);
+    const table = { ...engine.public(), id: 't1', tableId: 't1', revision: 8, label: '五子棋', text: engine.publicText() };
+    const tablePrivate = {
+      ...engine.view('mine')!, tableId: 't1', revision: 8,
+      text: '你执黑。\n...............\n建议：parlor_game_action {action:"place"}',
+    };
+    const response = { ...snapshot, seq: ++seq, table, tablePrivate, tables: [table, snapshot.table!] };
+    const games = vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue(response);
+    const readState = async () => {
+      const output = await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler({ op: 'state' }, {} as ToolCallContext);
+      return JSON.parse(typeof output === 'string' ? output : output.text);
+    };
+    const state = await readState();
+    expect(state.table.board).toContain('\n14 ..............o');
+    expect(state.tables[0].board).toBeUndefined();
+    expect(state.tables[1]).toEqual(snapshot.table);
+    expect(state.tablePrivate.board).toBeUndefined();
+    expect(state.tablePrivate.hints).toBeUndefined();
+    expect(state.tablePrivate.text).toMatch(/^你执黑。\n建议（行,列）：\(\d+,\d+\) /);
+    expect(state.tablePrivate.text).not.toContain('parlor_game_action');
+    expect(response.table.board).toHaveLength(225);
+    expect(response.tablePrivate.board).toHaveLength(225);
+
+    const action = expectRevision(8);
+    action.mockResolvedValueOnce({ ok: true, seq: ++seq, ts: 1002, at: '测试时刻', table, tablePrivate } as Awaited<ReturnType<ParlorClient['action']>>);
+    const receipt = await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(
+      { action: 'place', params: { row: 7, col: 7 } }, {} as ToolCallContext,
+    );
+    expect(action.mock.calls[0][1]).toMatchObject({ table: 't1', revision: 8 });
+    expect(JSON.parse(typeof receipt === 'string' ? receipt : receipt.text)).toMatchObject({
+      ok: true, table: { board: state.table.board }, tablePrivate: state.tablePrivate,
+    });
+
+    games.mockResolvedValueOnce({ ...response, tablePrivate: null });
+    const watching = await readState();
+    expect(watching.table.board).toBe(state.table.board);
+    expect(watching.tablePrivate).toBeNull();
+  });
+
   it('通用 state 读到的新版本供省略桌号的下一次行动使用', async () => {
     vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue({
       seq: ++seq, at: '测试时刻', table: { ...snapshot.table!, revision: 8 },

@@ -26,8 +26,10 @@ import {
 } from './room/protocol.ts';
 import { gameById, type GameDefinition } from './room/games/registry.ts';
 import { GAME_ACTION_SCHEMA, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
+import { formatGomokuAdvice, formatGomokuBoard } from './room/games/gomoku-table.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
+import type { TablePrivateSummary, TableSummary } from './room/table-engine.ts';
 import { PARLOR_TOOL_DECLS, OPERATION_DECLS, TOOL_OPERATIONS, operationHelp } from './tool-contract.ts';
 export { PARLOR_TOOL_DECLS } from './tool-contract.ts';
 
@@ -55,6 +57,40 @@ const TIER_BUDGET: Readonly<Record<WakeTier, number>> = {
   quiet: 0,
   off: 0,
 };
+
+/** 只裁剪 Coo 工具输出。HTTP 快照仍给网页完整的棋盘数组。 */
+function compactGameResult(result: Record<string, unknown>): Record<string, unknown> {
+  const table = result.table as TableSummary | null | undefined;
+  const view = result.tablePrivate as TablePrivateSummary | null | undefined;
+  const output = { ...result };
+  const hasPublicBoard = table?.game === 'gomoku' && Array.isArray(table.board);
+  if (hasPublicBoard) {
+    const last = table.last as Parameters<typeof formatGomokuBoard>[1];
+    output.table = { ...table, board: formatGomokuBoard(table.board as number[], last) };
+  }
+  if (view?.game === 'gomoku' && Array.isArray(view.board)) {
+    const { board, hints, warning, ...rest } = view;
+    const hasSameBoard = hasPublicBoard && (table.id ?? table.tableId) === view.tableId && table.revision === view.revision;
+    const advice = formatGomokuAdvice(
+      (Array.isArray(hints) ? hints : []) as Parameters<typeof formatGomokuAdvice>[0],
+      warning as Parameters<typeof formatGomokuAdvice>[1],
+    );
+    const headline = typeof view.text === 'string' ? view.text.split('\n', 1)[0] : '';
+    output.tablePrivate = {
+      ...rest,
+      text: [headline, advice].filter(Boolean).join('\n'),
+      ...(!hasSameBoard && { board: formatGomokuBoard(board, view.last as Parameters<typeof formatGomokuBoard>[1]) }),
+    };
+  }
+  if (Array.isArray(result.tables)) {
+    output.tables = result.tables.map((entry: TableSummary) => {
+      if (entry.game !== 'gomoku') return entry;
+      const { board: _board, ...summary } = entry;
+      return summary;
+    });
+  }
+  return output;
+}
 
 interface WakeBatch {
   events: RoomEvent[];
@@ -1802,7 +1838,7 @@ export class ParlorWorld implements World {
           latest: result.seq as number, events: [], seats: [], maxSeats: 30, now: Date.now(), at: String(result.at ?? ''),
         });
       }
-      return JSON.stringify(result);
+      return JSON.stringify(args.op === 'state' ? compactGameResult(result) : result);
     } catch (error) { return this.failed(messageOf(error)); }
   }
 
@@ -1841,7 +1877,9 @@ export class ParlorWorld implements World {
       }));
       const snapshot = await this.refreshFocus();
       const sameTable = snapshot?.table?.id === table || snapshot?.table?.tableId === table;
-      return JSON.stringify({ protocol: 'parlor.game.v1', ...(sameTable ? { tablePrivate: snapshot?.tablePrivate } : {}), ...result });
+      return JSON.stringify(compactGameResult({
+        protocol: 'parlor.game.v1', ...(sameTable ? { tablePrivate: snapshot?.tablePrivate } : {}), ...result,
+      }));
     } catch (error) {
       return this.failed(`${messageOf(error)}\n本次 requestId: ${String(requestId)}。结果不明时先查 state；重试同次操作沿用此编号。`);
     }
