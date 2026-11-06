@@ -6,9 +6,10 @@ const CAPACITY = SIZE * SIZE;
 type Color = 1 | 2;
 type Point = { row: number; col: number };
 type Move = Point & { color: Color };
-/** win=这步连五；block=不挡就输；shape=做形/发展。前端据此区分提示样式。 */
 type Level = 'win' | 'block' | 'shape';
 type Hint = Point & { reason: string; level: Level };
+type Warning = { level: 'block' | 'danger'; text: string };
+type OpenThree = { blocks: number[]; canMakeOpenFour: boolean };
 const directions = [[0, 1], [1, 0], [1, 1], [1, -1]] as const;
 const other = (color: Color): Color => color === 1 ? 2 : 1;
 const inside = (row: number, col: number) => row >= 0 && row < SIZE && col >= 0 && col < SIZE;
@@ -33,24 +34,93 @@ function bestLine(board: readonly number[], { row: originRow, col: originCol }: 
   return best;
 }
 
-export function gomokuHints(board: readonly number[], color: Color): Hint[] {
-  const candidates: Array<Hint & { score: number }> = [];
+function findOpenThrees(board: readonly number[], color: Color): OpenThree[] {
+  const threes: OpenThree[] = [];
+  const isEmpty = (row: number, col: number) => inside(row, col) && board[index(row, col)] === 0;
+  for (let i = 0; i < CAPACITY; i++) {
+    if (board[i] !== color) continue;
+    const row = Math.floor(i / SIZE), col = i % SIZE;
+    for (const [dr, dc] of directions) {
+      if (!isEmpty(row - dr, col - dc) || !isEmpty(row + 3 * dr, col + 3 * dc)
+        || board[index(row + dr, col + dc)] !== color || board[index(row + 2 * dr, col + 2 * dc)] !== color) continue;
+      const blocks = [index(row - dr, col - dc), index(row + 3 * dr, col + 3 * dc)];
+      const canExtendBefore = isEmpty(row - 2 * dr, col - 2 * dc);
+      const canExtendAfter = isEmpty(row + 4 * dr, col + 4 * dc);
+      // 只有一侧能延伸成活四时，封住那一侧的外端也能化解这条威胁。
+      if (canExtendBefore && !canExtendAfter) blocks.push(index(row - 2 * dr, col - 2 * dc));
+      if (canExtendAfter && !canExtendBefore) blocks.push(index(row + 4 * dr, col + 4 * dc));
+      threes.push({ blocks, canMakeOpenFour: canExtendBefore || canExtendAfter });
+    }
+  }
+  return threes;
+}
+
+function makesFour(board: readonly number[], { row, col }: Point, color: Color): boolean {
+  // 包含本手的五格里，有三颗己方棋子和一个空位即可冲四，空位也可以在中间。
+  for (const [dr, dc] of directions) {
+    for (let start = -4; start <= 0; start++) {
+      const end = start + 4;
+      if (!inside(row + start * dr, col + start * dc) || !inside(row + end * dr, col + end * dc)) continue;
+      let stones = 0, empty = 0;
+      for (let offset = start; offset <= end; offset++) {
+        if (offset === 0) continue;
+        const cell = board[index(row + offset * dr, col + offset * dc)];
+        if (cell === color) stones++;
+        if (cell === 0) empty++;
+      }
+      if (stones === 3 && empty === 1) return true;
+    }
+  }
+  return false;
+}
+
+function analyzeGomoku(board: readonly number[], color: Color): { hints: Hint[]; warning: Warning | null } {
+  const opponent = other(color);
+  const threes = findOpenThrees(board, opponent);
+  const forcingThrees = threes.filter(three => three.canMakeOpenFour);
+  const winningReplies: number[] = [];
+  const candidates: Array<Point & { attack: number; defense: number }> = [];
   for (let i = 0; i < CAPACITY; i++) {
     if (board[i] !== 0) continue;
     const point = { row: Math.floor(i / SIZE), col: i % SIZE };
     const attack = bestLine(board, point, color).length;
-    const defense = bestLine(board, point, other(color)).length;
-    const distance = Math.abs(point.row - 7) + Math.abs(point.col - 7);
-    const score = attack >= 5 ? 1000 : defense >= 5 ? 500 : 30 * attack + 18 * defense;
-    const level: Level = attack >= 5 ? 'win' : defense >= 5 ? 'block' : 'shape';
+    const defense = bestLine(board, point, opponent).length;
+    if (defense >= 5) winningReplies.push(i);
+    candidates.push({ ...point, attack, defense });
+  }
+  const fourThree = winningReplies.length === 1 && forcingThrees.some(three => !three.blocks.includes(winningReplies[0]!));
+  const doubleThree = forcingThrees.length >= 2 && !forcingThrees[0]!.blocks.some(point =>
+    forcingThrees.every(three => three.blocks.includes(point)));
+  const warning: Warning | null = fourThree ? { level: 'danger', text: '对方四三，单手封堵挡不住两路。' }
+    : doubleThree ? { level: 'danger', text: '对方双活三，单手封堵挡不住两路。' }
+    : threes.length ? { level: 'block', text: '对方有活三。不堵就被连成五，有冲四时可抢先手。' } : null;
+  const ranked = candidates.map(({ row, col, attack, defense }) => {
+    const i = index(row, col);
+    const blockedThrees = threes.filter(three => three.blocks.includes(i));
+    const blocksThree = blockedThrees.length;
+    const blocksEnd = blockedThrees.some(({ blocks: [before, after] }) => i === before || i === after);
+    const counterFour = threes.length > 0 && winningReplies.length === 0 && attack < 5
+      && makesFour(board, { row, col }, color);
+    const distance = Math.abs(row - 7) + Math.abs(col - 7);
+    const priority = attack >= 5 ? 5 : defense >= 5 ? 4 : doubleThree && counterFour ? 3
+      : blocksEnd || blocksThree > 1 ? 2 : counterFour ? 1 : 0;
+    const score = (attack >= 5 || defense >= 5 ? 0 : 30 * attack + 18 * defense) - distance;
+    const level: Level = attack >= 5 ? 'win' : defense >= 5 || blocksThree ? 'block' : 'shape';
     const reason = level === 'win' ? '这一步可以连五获胜'
-      : level === 'block' ? '挡住对方下一步连五'
+      : defense >= 5 ? '挡住对方下一步连五'
+      : blocksThree ? '封堵对方活三'
+      : counterFour ? '冲四抢先手'
       : attack >= 2 ? '延伸自己的棋形'
       : defense >= 2 ? '限制对手的棋形' : '靠近棋盘中央';
-    candidates.push({ ...point, level, score: score - distance, reason });
-  }
-  return candidates.sort((a, b) => b.score - a.score).slice(0, 3)
+    return { row, col, level, priority, blocksThree, score, reason };
+  });
+  const hints = ranked.sort((a, b) => b.priority - a.priority || b.blocksThree - a.blocksThree || b.score - a.score).slice(0, 3)
     .map(({ row, col, reason, level }) => ({ row, col, reason, level }));
+  return { hints, warning };
+}
+
+export function gomokuHints(board: readonly number[], color: Color): Hint[] {
+  return analyzeGomoku(board, color).hints;
 }
 
 function isPoint(value: unknown): value is Point {
@@ -178,7 +248,8 @@ export class GomokuTable implements TableEngine {
   view(seatId: string) {
     if (!this.has(seatId)) return null;
     const canAct = this.status === 'playing' && this.turnSeat?.id === seatId;
-    return { ...this.public(), seat: seatId, canAct, hints: canAct ? gomokuHints(this.board, this.color) : [] };
+    const { hints, warning } = canAct ? analyzeGomoku(this.board, this.color) : { hints: [], warning: null };
+    return { ...this.public(), seat: seatId, canAct, hints, ...(warning && { warning }) };
   }
 
   publicText(): string {
@@ -196,7 +267,8 @@ export class GomokuTable implements TableEngine {
       `parlor_game_action {action:"place",params:{"row":${hint.row},"col":${hint.col}}}（${hint.reason}）`).join('；');
     const rows = Array.from({ length: SIZE }, (_, row) =>
       this.board.slice(row * SIZE, (row + 1) * SIZE).map(cell => '.XO'[cell]).join(''));
-    return `${this.publicText()} 你执${this.color === 1 ? '黑' : '白'}，行列从 0 开始（X 黑，O 白）。\n${rows.join('\n')}\n建议：${hints}`;
+    const warning = view.warning ? `\n${view.warning.text}` : '';
+    return `${this.publicText()} 你执${this.color === 1 ? '黑' : '白'}，行列从 0 开始（X 黑，O 白）。\n${rows.join('\n')}${warning}\n建议：${hints}`;
   }
 
   exportState() {

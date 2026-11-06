@@ -22,11 +22,11 @@ beforeAll(async () => {
   component = (await import(/* @vite-ignore */ url)).default;
 });
 
-const render = (viewer: string, status = 'ended', winner: string | null = 'black') => renderToString(createSSRApp(component, {
+const render = (viewer: string, status = 'ended', winner: string | null = 'black', priv: unknown = null) => renderToString(createSSRApp(component, {
   view: {
     table: { game: 'gomoku', status, board: Array(225).fill(0),
       seats: [{ id: 'black', name: '黑方', color: 1 }, { id: 'white', name: '白方', color: 2 }], winningLine: [], winner },
-    priv: null, me: { id: viewer },
+    priv, me: { id: viewer },
   },
   ctx: { showLobby() {} },
 }));
@@ -52,5 +52,18 @@ describe('五子棋玩家与旁观者身份', () => {
     expect(draw).toContain('和棋');
     expect(draw).toContain('观战');
     expect(draw).not.toMatch(/你输了|你执黑|你执白/);
+  });
+  it('未点建议时就单独显示威胁，只有双威胁使用红色样式', async () => {
+    const single = await render('white', 'playing', null, {
+      canAct: true, warning: { level: 'block', text: '对方有活三。不堵就被连成五，有冲四时可抢先手。' },
+    });
+    expect(single).toContain('class="gomoku-tip block"');
+    expect(single).toContain('不堵就被连成五');
+    expect(single).not.toContain('gomoku-tip danger');
+    const double = await render('white', 'playing', null, {
+      canAct: true, warning: { level: 'danger', text: '对方双活三，单手封堵挡不住两路。' },
+    });
+    expect(double).toContain('class="gomoku-tip danger"');
+    expect(double).toContain('对方双活三');
   });
 });

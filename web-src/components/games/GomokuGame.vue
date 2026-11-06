@@ -5,6 +5,7 @@ import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
 type Point = { row: number; col: number };
 type Level = 'win' | 'block' | 'shape';
 type Hint = Point & { reason: string; level?: Level };
+type Warning = { level: 'block' | 'danger'; text: string };
 interface BoardView {
   board: number[];
   seats: Array<{ id: string; name: string; color: number }>;
@@ -19,7 +20,7 @@ interface BoardView {
 
 const props = defineProps<{ view: GameView; ctx: GameCtx }>();
 const table = computed(() => props.view.table as unknown as BoardView);
-const mine = computed(() => props.view.priv as unknown as { canAct?: boolean; hints?: Hint[] } | null);
+const mine = computed(() => props.view.priv as unknown as { canAct?: boolean; hints?: Hint[]; warning?: Warning } | null);
 const hints = computed<Hint[]>(() => (mine.value?.canAct ? mine.value.hints ?? [] : []));
 
 /** 棋盘边长跟着服务端的棋盘数组走，避免这里再写死一份 15。 */
@@ -139,6 +140,7 @@ async function play(): Promise<void> {
           </li>
         </ul>
         <template v-if="canPlay">
+          <p v-if="mine?.warning" class="gomoku-tip" :class="mine.warning.level" role="status">{{ mine.warning.text }}</p>
           <p v-if="hint" class="gomoku-tip" :class="hint.level || 'shape'" role="status">
             建议 {{ hintIndex + 1 }}/{{ hints.length }} · {{ hint.reason }}
           </p>
@@ -251,6 +253,7 @@ async function play(): Promise<void> {
 .gomoku-tip { margin: 0; padding-left: 9px; border-left: 2px solid var(--accent-2); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .gomoku-tip.win { border-color: #e08a3c; color: #b3541d; }
 .gomoku-tip.block { border-color: #d9a03a; color: #9a6a1c; }
+.gomoku-tip.danger { border-color: #d96b6b; color: var(--text); background: rgba(217, 107, 107, .18); font-weight: 600; }
 
 .gomoku .btn.primary:disabled {
   opacity: 1;
