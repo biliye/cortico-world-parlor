@@ -170,7 +170,7 @@ input::placeholder,textarea::placeholder { color:#92a69a; }
 .club-welcome>.club-scene { position:absolute; right:0; top:0; height:100%; width:220px; background:none; opacity:.55; }
 .members { padding:0 0 20px; background:none; border:0; border-bottom:1px solid var(--line); border-radius:0; margin-bottom:25px; }
 .members .panel-head h2 { font-size:12px; font-weight:500; }.members .panel-head span { font-size:10px; }
-.club-section-head { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:11px; margin-bottom:20px; }
+.club-section-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; font-size:11px; margin-bottom:20px; }
 .club-section-head h2 { font-size:20px; font-weight:500; }.club-section-head>.muted { font-size:10px; }
 .club-table-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:15px; margin-bottom:28px; }
 .club-table-card { background:#1a2b27; border:1px solid #3a5142; border-radius:14px; padding:16px; min-width:0; }

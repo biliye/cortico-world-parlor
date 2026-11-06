@@ -18,6 +18,10 @@
   transform:translateY(-70%) rotate(45deg);
 }
 .theme-picker option { background:var(--panel-solid); color:var(--text); }
+/* 全局兜底：原生 <select> 的 option 只继承文字色，弹层底色却由系统 color-scheme 画，
+   深色外观下会出现浅色文字压在白色弹层上（快速匹配、狼人杀人数、可见性等都受影响）。
+   显式给每个 option 一组不透明色，跟随当前外观的面板与正文 token。 */
+select option { background:var(--panel-solid); color:var(--text); }
 .join .panel { position:relative; }
 .join .theme-picker { position:absolute; right:18px; top:18px; }
 

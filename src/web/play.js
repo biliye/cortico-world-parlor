@@ -1322,7 +1322,7 @@ function buildShell() {
     el('p', '', '同一个客厅，不同的好时光。想玩就入座，想聊就坐一会儿。'), clubScene('ddz'));
   const roomTables = el('div', 'club-table-grid');
   const tableSectionHead = el('div', 'club-section-head');
-  tableSectionHead.append(el('h2', '', '挑张桌，坐下来'), el('span', 'muted', '斗地主 3 席 · 狼人杀 6／9／12 席'));
+  tableSectionHead.append(el('h2', '', '挑张桌，坐下来'), el('span', 'muted', '斗地主 3 席 · 狼人杀 6／9／12 席 · 五子棋 2 席 · 大富翁 4 席'));
   const stay = el('div', 'club-stay');
   stay.append(el('strong', '', '✳  不玩游戏，也欢迎留下来。'), el('p', '', '打开聊天，和这个客厅里的朋友说两句。'));
   viewLobby.append(roomNavigation, lobbyHead, roomWelcome, members, tableSectionHead, roomTables, gameGrid, lobbyNotice, stay, guide);

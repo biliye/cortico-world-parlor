@@ -1394,7 +1394,7 @@ html.vue-app .members, html.vue-app .view-table .panel, html.vue-app .view-lobby
 html.vue-app .panel-head { display: flex; align-items: center; gap: 12px; }
 html.vue-app .panel-head h2 { margin: 0; font-size: 18px; font-weight: 700; }
 html.vue-app .panel-head .muted { margin-left: auto; font-size: 11.5px; color: var(--muted); }
-html.vue-app .club-section-head { display: flex; align-items: baseline; gap: 12px; margin: 26px 0 0; }
+html.vue-app .club-section-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 26px 0 0; }
 html.vue-app .club-section-head h2 { margin: 0; font-size: 22px; font-weight: 700; }
 html.vue-app .club-section-head .muted { margin-left: auto; font-size: 11.5px; color: var(--muted); }
 html.vue-app .club-table-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }

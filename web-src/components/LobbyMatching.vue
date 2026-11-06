@@ -133,6 +133,9 @@ function stakeText(item: TableRecruitment): string {
   padding: 7px 11px;
 }
 .board-select select:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+/* 原生下拉弹层的底色由系统 color-scheme 决定，深色外观下会变成「浅字压白底」。
+   给 option 一组不透明的作者色，三套外观都跟着当前 token 走。 */
+.board-select select option { background: var(--panel-solid); color: var(--text); }
 .board-match { height: 36px; padding: 0 15px; }
 
 .board-note { margin: 9px 0 0; font-size: 12px; }
