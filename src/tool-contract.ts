@@ -5,7 +5,7 @@ import type { ToolDef } from 'cortico/core/types.ts';
 export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   {
     name: 'parlor_game_info', tags: ['read'],
-    description: '通用游戏查询。list 查服务器游戏目录，describe 查规则和动作参数，state 查桌面、本人秘密及当前可用动作，history 查获准查看的游戏历史。',
+    description: '通用游戏查询。list 查服务器游戏目录，describe 查规则和完整动作参数，state 查当前桌面、本人秘密及可用动作，history 分页查获准查看的游戏历史。',
     parameters: {
       type: 'object', additionalProperties: false,
       properties: {
@@ -14,7 +14,8 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
         table: { type: 'string', description: 'state/history 的桌号，省略时查自己的桌。' },
         day: { type: 'integer', minimum: 1, description: 'history：按游戏天数筛选狼人杀记录，从第 1 天开始。' },
         seatNo: { type: 'integer', minimum: 1, description: 'history：按座号筛选狼人杀发言与出局记录，从 1 开始。' },
-        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'history：最多返回多少条狼人杀发言，默认 100，上限 200。' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'history：每页最多多少条记录，默认 100，上限 200，也受返回字节上限约束。' },
+        cursor: { type: 'string', minLength: 1, maxLength: 64, description: 'history：续查时原样传回 log.nextCursor，沿用桌号和筛选条件。' },
         review: { type: 'boolean', description: 'history：请求狼人杀复盘；仅终局后的参赛者可见夜间记录与完整死因。' },
       },
     },

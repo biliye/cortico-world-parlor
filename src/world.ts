@@ -25,11 +25,11 @@ import {
   type RoomEvent, type RoomSnapshot, type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
 import { gameById, type GameDefinition } from './room/games/registry.ts';
-import { GAME_ACTION_SCHEMA, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
+import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
 import { formatGomokuAdvice, formatGomokuBoard } from './room/games/gomoku-table.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
-import type { TablePrivateSummary, TableSummary } from './room/table-engine.ts';
+import { GAME_RESPONSE_MAX_BYTES, type TablePrivateSummary, type TableSummary } from './room/table-engine.ts';
 import { PARLOR_TOOL_DECLS, OPERATION_DECLS, TOOL_OPERATIONS, operationHelp } from './tool-contract.ts';
 export { PARLOR_TOOL_DECLS } from './tool-contract.ts';
 
@@ -1838,7 +1838,13 @@ export class ParlorWorld implements World {
           latest: result.seq as number, events: [], seats: [], maxSeats: 30, now: Date.now(), at: String(result.at ?? ''),
         });
       }
-      return JSON.stringify(args.op === 'state' ? compactGameResult(result) : result);
+      const text = JSON.stringify(args.op === 'state' ? compactGameResult(compactGameState(result)) : result);
+      if ((args.op === 'state' || args.op === 'history') && Buffer.byteLength(text) > GAME_RESPONSE_MAX_BYTES) {
+        return this.failed(args.op === 'history'
+          ? '历史回包太大；请按天筛选或减少 limit，并使用支持分页的茶馆服务器。'
+          : '桌面回包太大；请确认茶馆服务器已更新。');
+      }
+      return text;
     } catch (error) { return this.failed(messageOf(error)); }
   }
 
@@ -1857,12 +1863,15 @@ export class ParlorWorld implements World {
     }
     const requestId = args.requestId === undefined ? randomUUID() : args.requestId;
     const { game: _game, ...input } = args;
+    const token = this.token;
+    const room = this.currentRoom;
+    const roomArg = this.roomArg();
     const table = args.table ?? this.myTableId;
     const revision = args.revision ?? (table === this.myTableId ? this.myTableRevision : undefined);
     const payload = { ...input, type: 'game_action', requestId, table, ...(revision !== undefined ? { revision } : {}) };
     try {
       validateParameters(GAME_ACTION_SCHEMA, payload, 'body');
-      const send = () => this.client!.action(this.token, payload as Extract<ActionRequest, { type: 'game_action' }>, this.roomArg());
+      const send = () => this.client!.action(token, payload as Extract<ActionRequest, { type: 'game_action' }>, roomArg);
       let result;
       try { result = await send(); }
       catch (error) {
@@ -1875,11 +1884,15 @@ export class ParlorWorld implements World {
         type: 'parlor.table.werewolf.wolf_chat', direction: 'sent', sender: this.seat?.name || '孩子',
         recipient: '狼队', text: params.text as string, private: true,
       }));
-      const snapshot = await this.refreshFocus();
-      const sameTable = snapshot?.table?.id === table || snapshot?.table?.tableId === table;
-      return JSON.stringify(compactGameResult({
-        protocol: 'parlor.game.v1', ...(sameTable ? { tablePrivate: snapshot?.tablePrivate } : {}), ...result,
-      }));
+      if (this.token === token && this.currentRoom === room && result.tableId && result.tableId === this.myTableId
+        && typeof result.revision === 'number' && result.revision >= (this.myTableRevision ?? 0)) {
+        this.myTableRevision = result.revision;
+      }
+      const { ok, tableId, seq, ts, at, text, deadline, deadlineAt, turn, windowId, inspection } = result;
+      return JSON.stringify({
+        protocol: 'parlor.game.v1', ok, requestId: result.requestId ?? requestId,
+        tableId, seq, revision: result.revision, ts, at, text, deadline, deadlineAt, turn, windowId, inspection,
+      });
     } catch (error) {
       return this.failed(`${messageOf(error)}\n本次 requestId: ${String(requestId)}。结果不明时先查 state；重试同次操作沿用此编号。`);
     }

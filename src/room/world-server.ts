@@ -24,7 +24,8 @@ import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { gameByActionType, gameById } from './games/registry.ts';
-import { GAME_ACTION_SCHEMA, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
+import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
+import { GAME_RESPONSE_MAX_BYTES, type TableLogQuery } from './table-engine.ts';
 import { likePrefix, parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
 import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
@@ -124,6 +125,31 @@ const json = (res: ServerResponse, status: number, body: unknown, req?: Incoming
   });
   res.end(data);
 };
+
+function boundedGameJson(res: ServerResponse, body: unknown): void {
+  if (Buffer.byteLength(JSON.stringify(body)) > GAME_RESPONSE_MAX_BYTES) {
+    throw new HttpError(413, '游戏查询结果超出大小限制；历史请缩小范围后分页查询');
+  }
+  json(res, 200, body);
+}
+
+function gameLogQuery(params: URLSearchParams): TableLogQuery {
+  const query: TableLogQuery = { review: ['true', '1'].includes(params.get('review') ?? '') };
+  for (const key of ['day', 'seatNo', 'limit'] as const) {
+    if (!params.has(key)) continue;
+    const value = Number(params.get(key));
+    if (!Number.isSafeInteger(value) || value < 1 || (key === 'limit' && value > 200)) {
+      throw new HttpError(400, `${key} 要是正整数（limit ≤ 200）`);
+    }
+    query[key] = value;
+  }
+  const cursor = params.get('cursor');
+  if (cursor !== null) {
+    if (!cursor || cursor.length > 64) throw new HttpError(400, '历史游标无效');
+    query.cursor = cursor;
+  }
+  return query;
+}
 
 const readBody = (req: IncomingMessage, limit = 64 * 1024): Promise<string> => new Promise((resolve, reject) => {
   let size = 0;
@@ -1922,27 +1948,18 @@ export class WorldServer {
       await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
       const tableId = url.searchParams.get('table')?.trim() || undefined;
       if (op === 'history') {
-        const query: { day?: number; seatNo?: number; limit?: number; review?: boolean } = {};
-        for (const key of ['day', 'seatNo', 'limit'] as const) {
-          if (!url.searchParams.has(key)) continue;
-          const value = Number(url.searchParams.get(key));
-          if (!Number.isSafeInteger(value) || value < 1 || (key === 'limit' && value > 200)) {
-            throw new HttpError(400, `${key} 要是正整数（limit ≤ 200）`);
-          }
-          query[key] = value;
-        }
-        query.review = url.searchParams.get('review') === 'true' || url.searchParams.get('review') === '1';
-        json(res, 200, { ...base, log: await host.tableLog(seat.cooId, tableId, query) });
+        const log = await host.tableLog(seat.cooId, tableId, gameLogQuery(url.searchParams));
+        boundedGameJson(res, { ...base, log });
         return;
       }
       const seq = await host.latest();
       const slice = await host.tableSlice(seat.cooId, tableId);
       if (tableId && !slice.table) throw new HttpError(404, '这个客厅里没有这张桌');
       const game = slice.table && gameById(slice.table.game);
-      json(res, 200, { ...base, seq, tables: slice.tables,
+      boundedGameJson(res, compactGameState({ ...base, seq, tables: slice.tables,
         ...(game && slice.table ? gameState(game, slice.table, slice.tablePrivate)
           : { table: null, tablePrivate: null, availableActions: [] }),
-      });
+      }));
       return;
     }
 
@@ -1990,7 +2007,6 @@ export class WorldServer {
       let seats: unknown;
       let deadline: number | undefined;
       let turn: string | undefined;
-      let text: string | undefined;
       let tableId: string | undefined;
       let revision: number | undefined;
       let receiptSeq: number | undefined;
@@ -2103,7 +2119,7 @@ export class WorldServer {
         if (type === 'game_action' && !genericTarget) throw new HttpError(404, '这个客厅里没有这张桌');
         const game = genericTarget ? gameById(genericTarget.game) : gameByActionType(type);
         if (game) {
-          const target = await host.tablePublic(tableArg, seat.cooId);
+          const target = genericTarget ?? await host.tablePublic(tableArg, seat.cooId);
           // 不带桌号时，快照里那张「刚打完」的结果桌不能当成正在打的桌。
           if (!target || (!tableArg && target.status === 'ended')) {
             throw new HttpError(404, '你不在任何牌桌上');
@@ -2115,13 +2131,23 @@ export class WorldServer {
           if (type === 'game_action') {
             try { gameBody = gameActionBody(game, body.action as string, body.params); }
             catch (error) { throw new HttpError(400, (error as Error).message); }
-            text = game.action.done(gameBody);
           }
           const receipt = await host.tableAction(seat.cooId, game.toAction(gameBody), {
             ...(tableArg ? { tableId: tableArg } : { tableId: target.id ?? target.tableId }),
             ...(revisionArg !== undefined ? { revision: revisionArg } : {}),
             ...(requestId ? { requestId } : {}),
           });
+          if (type === 'game_action') {
+            this.pokeClock();
+            const ts = receipt.ts ?? this.now();
+            json(res, 200, {
+              ok: true, protocol: 'parlor.game.v1', requestId, tableId: receipt.tableId,
+              seq: receipt.seq ?? await host.latest(), revision: receipt.revision, ts, at: receipt.at ?? serverClock(ts),
+              text: game.action.done(gameBody), deadline: receipt.deadline, deadlineAt: receipt.deadlineAt,
+              turn: receipt.turn, windowId: receipt.windowId, inspection: receipt.inspection,
+            });
+            return;
+          }
           tableId = receipt.tableId;
           revision = receipt.revision;
           receiptSeq = receipt.seq;
@@ -2143,12 +2169,10 @@ export class WorldServer {
       const tablePatch = touchedTable !== undefined
         ? await (async () => {
           const slice = await host.tableSlice(seat.cooId, touchedTable);
-          const game = type === 'game_action' && slice.table ? gameById(slice.table.game) : null;
           return {
             ...(tablesChanged ? { tables: slice.tables } : {}),
             table: slice.table,
             tablePrivate: slice.tablePrivate,
-            ...(game && slice.table ? { protocol: 'parlor.game.v1', ...gameState(game, slice.table, slice.tablePrivate) } : {}),
           };
         })()
         : {};
@@ -2165,7 +2189,6 @@ export class WorldServer {
         ...(seats ? { seats } : {}),
         ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
         ...(turn ? { turn } : {}),
-        ...(text ? { text } : {}),
         ...(closed !== undefined ? { closed } : {}),
         ...tablePatch,
       });
@@ -2175,14 +2198,8 @@ export class WorldServer {
     if (action === 'table-log' && method === 'GET') {
       const seat = await this.seatAuth(req, roomId);
       const tableArg = url.searchParams.get('table')?.trim() || undefined;
-      const query = {
-        ...(url.searchParams.get('day') !== null ? { day: Number(url.searchParams.get('day')) } : {}),
-        ...(url.searchParams.get('seatNo') !== null ? { seatNo: Number(url.searchParams.get('seatNo')) } : {}),
-        ...(url.searchParams.get('limit') !== null ? { limit: Number(url.searchParams.get('limit')) } : {}),
-        review: url.searchParams.get('review') === '1',
-      };
-      const log = await (await this.host(roomId)).tableLog(seat.cooId, tableArg, query);
-      json(res, 200, { ok: true, at: serverClock(this.now()), log });
+      const log = await (await this.host(roomId)).tableLog(seat.cooId, tableArg, gameLogQuery(url.searchParams));
+      boundedGameJson(res, { ok: true, at: serverClock(this.now()), log });
       return;
     }
 

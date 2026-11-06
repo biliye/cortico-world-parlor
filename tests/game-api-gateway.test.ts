@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { WorldServer } from '../src/room/world-server.ts';
 import { ParlorClient } from '../src/room/client.ts';
+import { GAME_RESPONSE_MAX_BYTES } from '../src/room/table-engine.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 
 let app: WorldServer | undefined;
@@ -50,6 +51,8 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     await a.client.action(a.token, { type: 'table_start', table, requestId: 'start' }, 'lobby');
     const state = await a.client.games(a.token, { op: 'state' }, 'lobby') as Record<string, any>;
     expect(state.availableActions).toMatchObject([{ action: 'place' }]);
+    expect(state.game.actions).toBeUndefined();
+    expect(state.tables[0].board).toBeUndefined();
     const body = { type: 'game_action', table, action: 'place', params: { row: 7, col: 7 }, requestId: 'place', revision: state.table.revision };
     expect((await post(a.token, { ...body, revision: body.revision - 1 })).status).toBe(409);
     expect((await post(a.token, { ...body, revision: undefined })).status).toBe(400);
@@ -61,8 +64,10 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     expect((await post(c.token, body)).status).toBe(403);
     const first = await post(a.token, body);
     expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ protocol: 'parlor.game.v1', revision: body.revision + 1, availableActions: [] });
-    expect((await post(a.token, body)).body.revision).toBe(first.body.revision);
+    expect(first.body).toMatchObject({ protocol: 'parlor.game.v1', tableId: table, requestId: 'place', revision: body.revision + 1 });
+    expect(first.body.table).toBeUndefined();
+    expect(first.body.tablePrivate).toBeUndefined();
+    expect((await post(a.token, body)).body).toEqual(first.body);
     expect((await post(a.token, { ...body, params: { row: 6, col: 6 } })).status).toBe(409);
     expect((await post(b.token, { ...body, requestId: 'stale-white', params: { row: 8, col: 8 } })).status).toBe(409);
     const white = await b.client.games(b.token, { op: 'state', table }, 'lobby') as Record<string, any>;
@@ -107,22 +112,32 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     for (let attempt = 0; attempt < 60 && !actor; attempt++) {
       for (const player of players) {
         const state = await player.client.games(player.token, { op: 'state', table }, 'lobby') as Record<string, any>;
-        if ((state.availableActions as unknown[]).length) { actor = { token: player.token, state }; break; }
+        if (state.availableActions.some((entry: { action: string }) => entry.action === 'inspect')) {
+          actor = { token: player.token, state };
+          break;
+        }
       }
       if (!actor) await new Promise(resolve => setTimeout(resolve, 50));
     }
     expect(actor).toBeDefined();
     const available = actor!.state.availableActions[0];
-    const params = { ...available.defaults, ...(available.action === 'wolf_chat' ? { text: '通用入口狼聊' } : {}) };
+    const target = actor!.state.tablePrivate.seatNo === 1 ? 2 : 1;
+    const params = { ...available.defaults, target };
     const body = { type: 'game_action', table, action: available.action, params, requestId: 'wolf-generic' };
     expect((await post(actor!.token, { ...body, params: { ...params, windowId: 'stale-window' } })).status).toBe(409);
     const acted = await post(actor!.token, body);
     expect(acted.status).toBe(200);
-    expect(acted.body.tablePrivate).toMatchObject({ windowId: params.windowId });
-    expect((await post(actor!.token, body)).status).toBe(200);
+    expect(acted.body).toMatchObject({ windowId: params.windowId, requestId: 'wolf-generic' });
+    expect(acted.body.inspection).toEqual({ day: 1, target, result: expect.stringMatching(/^(wolf|good)$/) });
+    expect(acted.body.tablePrivate).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(acted.body))).toBeLessThan(1024);
+    expect((await post(actor!.token, body)).body).toEqual(acted.body);
     const history = await a.client.games(a.token, { op: 'history', table }, 'lobby') as Record<string, any>;
     expect(history.log.nights).toBeUndefined();
     const review = await a.client.games(a.token, { op: 'history', table, review: true }, 'lobby') as Record<string, any>;
     expect(review.log.nights).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(review))).toBeLessThanOrEqual(GAME_RESPONSE_MAX_BYTES);
+    await expect(a.client.games(a.token, { op: 'history', table, cursor: 'nights:0' }, 'lobby'))
+      .rejects.toMatchObject({ status: 400 });
   });
 });

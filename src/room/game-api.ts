@@ -1,17 +1,13 @@
 /** 通用游戏协议 v1。只处理协议与参数，行动合法性仍由事务里的游戏引擎决定。 */
 import { GAME_LIST, type GameDefinition } from './games/registry.ts';
-import type { TablePrivateSummary, TableSummary } from './table-engine.ts';
+import type { TableLogQuery, TablePrivateSummary, TableSummary } from './table-engine.ts';
 
 type Schema = Record<string, unknown>;
 export type GameQueryOp = 'list' | 'describe' | 'state' | 'history';
-export interface GameQuery {
+export interface GameQuery extends TableLogQuery {
   op?: GameQueryOp;
   game?: string;
   table?: string;
-  day?: number;
-  seatNo?: number;
-  limit?: number;
-  review?: boolean;
 }
 
 export const GAME_ACTION_SCHEMA: Schema = {
@@ -114,7 +110,47 @@ export function gameState(
       .filter(key => view && Object.hasOwn(view, key) && ['windowId', 'turnNo'].includes(key))
       .map(key => [key, view![key]])),
   }));
-  return { game: describeGame(game), table, tablePrivate: view, availableActions };
+  return {
+    game: { id: game.id, label: game.label, revisionMode: game.revisionMode },
+    table, tablePrivate: view, availableActions,
+  };
+}
+
+/** Also applied in the World when talking to servers that still return full snapshots. */
+export function compactGameState(state: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = { ...state };
+  const game = state.game as ReturnType<typeof describeGame> | undefined;
+  if (game?.id) output.game = { id: game.id, label: game.label, revisionMode: game.revisionMode };
+  if (Array.isArray(state.tables)) {
+    output.tables = state.tables.map(({ id, tableId, game, label, status, host, revision, capacity, frozen }: TableSummary) => ({
+      id, tableId, game, label, status, host, revision, capacity, frozen,
+    }));
+  }
+  const table = state.table as TableSummary | null | undefined;
+  if (table?.game !== 'werewolf') return output;
+
+  const { speeches, votes, ...publicView } = table;
+  const allSpeeches = Array.isArray(speeches) ? speeches as Array<{ day: number }> : [];
+  const current = allSpeeches.filter(entry => entry.day === table.day);
+  const preview = current.slice(-4);
+  while (Buffer.byteLength(JSON.stringify(preview)) > 3 * 1024) preview.shift();
+  const lastVotes = Array.isArray(votes) ? votes.at(-1) : table.lastVotes;
+  output.table = {
+    ...publicView, speeches: preview,
+    ...(lastVotes === undefined ? {} : { lastVotes }),
+    hasMoreHistory: table.hasMoreHistory === true || allSpeeches.length > preview.length
+      || (Array.isArray(votes) && votes.length > 1),
+  };
+  const view = state.tablePrivate as TablePrivateSummary | null | undefined;
+  if (view?.game === 'werewolf') {
+    // The public preview is already present, and the private text repeats it verbatim.
+    const { speeches: _speeches, lastVotes: _votes, deaths: _deaths, seats: _seats, text, ...privateView } = view;
+    output.tablePrivate = {
+      ...privateView,
+      ...(view.status === 'open' ? { text } : {}),
+    };
+  }
+  return output;
 }
 
 export function gameActionBody(game: GameDefinition, action: string, params: unknown): Record<string, unknown> {

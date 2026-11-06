@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from '../src/room/games/werewolf-table.ts';
-import type { TableEvent, TableStep } from '../src/room/table-engine.ts';
+import { compactGameState } from '../src/room/game-api.ts';
+import { GAME_RESPONSE_MAX_BYTES, type TableEvent, type TableStep } from '../src/room/table-engine.ts';
 
 /** 测试基准毫秒。各窗口按比例缩（真人发言 = 3T、Coo 发言 = T、阅读 = T/3）。 */
 const T = 40;
@@ -865,6 +866,55 @@ describe('狼人杀引擎', () => {
     expect(review.nights[0].wolfChats !== undefined).toBe(true);
     const outsider = rig.table.tableLog({ review: true }, { seatId: '', onTable: false }) as AnyView;
     expect(outsider.nights).toBeUndefined();
+  });
+
+  it('长局状态只预览最近发言，公开与复盘历史按字节分页', () => {
+    const rig = makeRig(151, 1, false, 12);
+    startGame(rig);
+    const stored = rig.table.exportState() as AnyView;
+    const speeches = Array.from({ length: 144 }, (_, index) => ({
+      day: Math.floor(index / 12) + 1, seatNo: index % 12 + 1, kind: 'day',
+      text: `${index}${'测'.repeat(297)}`, passed: false,
+    }));
+    const nights = Array.from({ length: 12 }, (_, index) => ({
+      day: index + 1, kill: null, saved: false, killVotes: [], inspections: [], deaths: [],
+      wolfChats: [{ seatNo: 1, text: '复盘'.repeat(150) }],
+    }));
+    rig.table.restoreState({ ...stored, day: 12, status: 'ended', speeches, nightLog: nights,
+      voteRounds: [{ day: 11, variant: 'day', entries: [] }, { day: 12, variant: 'pk', entries: [] }],
+    });
+    const table = { ...(rig.table.public() as AnyView), id: 't1' };
+    const tablePrivate = { ...view(rig, 's1'), text: speeches.map(entry => entry.text).join('\n') };
+    const state = compactGameState({ table, tablePrivate, tables: [table, { ...table, id: 't2' }] });
+    expect(state.table).toMatchObject({ hasMoreHistory: true, lastVotes: { day: 12 } });
+    expect((state.table as AnyView).speeches).toEqual(speeches.slice(-3));
+    expect((state.tablePrivate as AnyView).speeches).toBeUndefined();
+    expect((state.tablePrivate as AnyView).text).toBeUndefined();
+    expect((state.tables as AnyView[]).every(entry => !entry.speeches)).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(state))).toBeLessThan(GAME_RESPONSE_MAX_BYTES);
+
+    const readPages = (review: boolean, onTable: boolean) => {
+      const texts: string[] = [];
+      const days: number[] = [];
+      const votes: number[] = [];
+      let cursor: string | undefined;
+      for (let i = 0; i < 20; i++) {
+        const log = rig.table.tableLog({ review, cursor }, { seatId: 's1', onTable }) as AnyView;
+        expect(Buffer.byteLength(JSON.stringify(log))).toBeLessThan(GAME_RESPONSE_MAX_BYTES);
+        texts.push(...log.speeches.map((entry: AnyView) => entry.text));
+        votes.push(...log.votes.map((entry: AnyView) => entry.day));
+        days.push(...(log.nights ?? []).map((entry: AnyView) => entry.day));
+        if (!log.hasMore) return { texts, votes, days };
+        expect(log.nextCursor).not.toBe(cursor);
+        cursor = log.nextCursor;
+      }
+      throw new Error('历史分页未结束');
+    };
+    const review = readPages(true, true);
+    expect(review.texts.sort()).toEqual(speeches.map(entry => entry.text).sort());
+    expect(review.votes.sort()).toEqual([11, 12]);
+    expect(review.days.sort((a, b) => a - b)).toEqual(nights.map(entry => entry.day));
+    expect(readPages(true, false).days).toEqual([]);
   });
 
   it('十二个白天仍未决胜 → 平局；平局也写终局', () => {

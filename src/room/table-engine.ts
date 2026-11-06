@@ -109,7 +109,11 @@ export interface TableLogQuery {
   seatNo?: number;
   limit?: number;
   review?: boolean;
+  cursor?: string;
 }
+
+/** Uncompressed UTF-8 JSON, including the HTTP envelope. */
+export const GAME_RESPONSE_MAX_BYTES = 16 * 1024;
 
 export type TableErrorCode =
   | 'not_open' | 'not_started' | 'full' | 'seated' | 'not_seated'

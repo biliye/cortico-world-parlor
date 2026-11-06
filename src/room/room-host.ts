@@ -31,7 +31,7 @@ import {
   type LedgerEntry,
 } from './ledger.ts';
 import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt } from './table-host.ts';
-import type { TablePrivateSummary, TableSummary } from './table-engine.ts';
+import type { TableLogQuery, TablePrivateSummary, TableSummary } from './table-engine.ts';
 import type { DeliveryReceipt, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
 export { HostError, type HostErrorCode } from './host-error.ts';
@@ -711,7 +711,7 @@ export class RoomHost {
   }
 
   /** 游戏历史查询（狼人杀按天/按人回看与终局复盘）。 */
-  tableLog(cooId: string, tableId: string | undefined, query: { day?: number; seatNo?: number; limit?: number; review?: boolean }) {
+  tableLog(cooId: string, tableId: string | undefined, query: TableLogQuery) {
     return this.tableHost.tableLog(cooId, tableId, query);
   }
 

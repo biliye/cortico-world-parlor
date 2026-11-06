@@ -71,7 +71,7 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
   });
 
 describe('World 牌桌版本同步', () => {
-  it('五子棋 state 和行动回执只给一份点阵，兼容旧服务器正文并保留动作版本', async () => {
+  it('五子棋 state 只给一份点阵，旧服务器的通用行动回执也精简', async () => {
     const engine = new GomokuTable({ id: 'mine', name: '小满' });
     engine.join({ id: 'other', name: '对手' });
     engine.start('mine', 1000);
@@ -91,7 +91,8 @@ describe('World 牌桌版本同步', () => {
     const state = await readState();
     expect(state.table.board).toContain('\n14 ..............o');
     expect(state.tables[0].board).toBeUndefined();
-    expect(state.tables[1]).toEqual(snapshot.table);
+    expect(state.tables[1]).toMatchObject({ game: snapshot.table!.game, revision: snapshot.table!.revision });
+    expect(state.tables[1].text).toBeUndefined();
     expect(state.tablePrivate.board).toBeUndefined();
     expect(state.tablePrivate.hints).toBeUndefined();
     expect(state.tablePrivate.text).toMatch(/^你执黑。\n建议（行,列）：\(\d+,\d+\) /);
@@ -100,14 +101,18 @@ describe('World 牌桌版本同步', () => {
     expect(response.tablePrivate.board).toHaveLength(225);
 
     const action = expectRevision(8);
-    action.mockResolvedValueOnce({ ok: true, seq: ++seq, ts: 1002, at: '测试时刻', table, tablePrivate } as Awaited<ReturnType<ParlorClient['action']>>);
+    action.mockResolvedValueOnce({ ok: true, seq: ++seq, ts: 1002, at: '测试时刻',
+      tableId: 't1', revision: 9, table, tablePrivate } as Awaited<ReturnType<ParlorClient['action']>>);
+    const refresh = vi.mocked(ParlorClient.prototype.snapshot).mockClear();
     const receipt = await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(
       { action: 'place', params: { row: 7, col: 7 } }, {} as ToolCallContext,
     );
     expect(action.mock.calls[0][1]).toMatchObject({ table: 't1', revision: 8 });
-    expect(JSON.parse(typeof receipt === 'string' ? receipt : receipt.text)).toMatchObject({
-      ok: true, table: { board: state.table.board }, tablePrivate: state.tablePrivate,
-    });
+    const accepted = JSON.parse(typeof receipt === 'string' ? receipt : receipt.text);
+    expect(accepted).toMatchObject({ ok: true, tableId: 't1', revision: 9, requestId: expect.any(String) });
+    expect(accepted.table).toBeUndefined();
+    expect(accepted.tablePrivate).toBeUndefined();
+    expect(refresh).not.toHaveBeenCalled();
 
     games.mockResolvedValueOnce({ ...response, tablePrivate: null });
     const watching = await readState();
@@ -157,17 +162,22 @@ describe('World 牌桌版本同步', () => {
     expect(typeof result === 'string' ? result : result.text).toContain('retry-id');
   });
 
-  it('查验动作回执直接附本人结论，即使已提交后 canAct/freshResult 不再存在', async () => {
+  it('查验回执传递本次本人结论，历史仍可按需从本人桌面读取', async () => {
     const result = '查验历史（仅自己可见）：第1夜查 3号=狼人。';
     snapshot = { ...snapshot,
       table: { ...snapshot.table!, game: 'werewolf', label: '狼人杀' },
       tablePrivate: { game: 'werewolf', seat: 'mine', tableId: 't1', canAct: false, text: result },
     };
-    vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({ ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻' });
+    const inspection = { day: 1, target: 3, result: 'wolf' } as const;
+    vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({
+      ok: true, seq: ++seq, ts: Date.now(), at: '测试时刻', inspection,
+    });
     const output = await toolForOperation(world, 'parlor_werewolf_action')!.handler(
       { windowId: 'w1', move: 'inspect', target: 3 }, {} as ToolCallContext,
     );
-    expect(typeof output === 'string' ? output : output.text).toContain(result);
+    const receipt = JSON.parse(typeof output === 'string' ? output : output.text);
+    expect(receipt.inspection).toEqual(inspection);
+    expect(receipt.tablePrivate).toBeUndefined();
     expect(await call('parlor_table_view')).toContain(result);
   });
   it('重新领出的通知到达后立即出牌，使用该通知的版本，不等待后台快照', async () => {

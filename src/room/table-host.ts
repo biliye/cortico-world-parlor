@@ -138,6 +138,8 @@ export interface TableReceipt {
   turn?: string;
   seats?: string[];
   text?: string;
+  windowId?: string;
+  inspection?: { day: number; target: number; result: 'wolf' | 'good' };
 }
 
 export interface StartReceipt extends TableReceipt {
@@ -889,6 +891,12 @@ export class TableHost {
     const revision = table.revision + 1;
     const stateJson = JSON.stringify(draft.exportState());
     const receipt: TableReceipt = { tableId: table.id, revision };
+    if (draft.game === 'werewolf') {
+      const own = draft.view(seat.id) as { windowId?: string; inspections?: NonNullable<TableReceipt['inspection']>[] } | null;
+      receipt.windowId = own?.windowId;
+      const move = action as { move?: string; target?: number };
+      if (move.move === 'inspect' && move.target != null) receipt.inspection = own?.inspections?.at(-1);
+    }
     const duplicateAct = await withTransaction(this.db, async () => {
       // 库里的 revision 必须还是我们手里这一版；不一致说明有别的写者推进过。
       const revisionInDb = await lockTableRow(this.db, table.id);
@@ -1094,7 +1102,8 @@ export class TableHost {
       throw new HostError('forbidden', '夜间复盘只给这局的参与者看');
     }
     if (!table.engine.tableLog) throw new HostError('invalid', '这张桌子没有历史记录可查');
-    return table.engine.tableLog(query, { seatId, onTable });
+    try { return table.engine.tableLog(query, { seatId, onTable }); }
+    catch (error) { return asHostError(error); }
   }
 
   /** 公开视图（给网关判断桌子类型/取桌号）。 */

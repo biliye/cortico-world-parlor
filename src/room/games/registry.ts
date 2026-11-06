@@ -246,7 +246,7 @@ const werewolf: GameDefinition = {
         case 'vote': return body.target === undefined || body.target === null ? '弃票交了；到点统一揭晓。' : `投给 ${body.target} 号了；到点统一揭晓。`;
         case 'wolf_chat': return '狼队的话交了；同伴能看到。';
         case 'wolf_kill': return body.target === undefined || body.target === null ? '弃刀交了。' : `刀票投给 ${body.target} 号了；到点锁定刀口。`;
-        case 'inspect': return body.target === undefined ? '今夜不查验，槽已交。' : `已查验 ${body.target} 号；结果与历史见下方本人私视图。`;
+        case 'inspect': return body.target === undefined ? '今夜不查验，槽已交。' : `已查验 ${body.target} 号；可在 state 查看本人查验记录。`;
         case 'guard': return body.target == null ? '今夜空守，动作已提交。' : `已守护 ${body.target} 号。`;
         case 'witch': return body.choice === 'save' ? '解药用掉了。' : body.choice === 'poison' ? '毒药用掉了。' : '今夜不用药，槽已交。';
         case 'shoot': return body.target === undefined ? '放弃开枪了。' : `开枪带走 ${body.target} 号了。`;
@@ -303,7 +303,7 @@ const monopoly2d: GameDefinition = {
       return { type: 'monopoly2d_action', move, turnNo };
     },
     done: (body) => {
-      if (body.move === 'roll') return '掷了骰子；落点结算见下方私视图。';
+      if (body.move === 'roll') return '掷了骰子；可在 state 查看落点与结算。';
       if (body.move === 'buy') return '买下了脚下的地产。';
       return '放弃了购买。';
     },

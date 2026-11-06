@@ -29,7 +29,7 @@ export interface ReplayResponse {
  * 能不能玩需要新能力的游戏（狼人杀要 ≥ 0.29.0）。
  * 它跟 npm 包版本解耦——发新版时在这里抬一格即可（有测试盯着别忘）。
  */
-export const PARLOR_CLIENT_VERSION = '0.37.0';
+export const PARLOR_CLIENT_VERSION = '0.37.1';
 
 export class ParlorHttpError extends Error {
   readonly status: number;
@@ -284,7 +284,7 @@ export class ParlorClient {
   /** 游戏历史查询（狼人杀的按天/按人回看与终局复盘）。 */
   async tableLog(
     token: string,
-    query: { table?: string; day?: number; seatNo?: number; limit?: number; review?: boolean } = {},
+    query: Omit<GameQuery, 'op' | 'game'> = {},
     roomId?: string,
   ): Promise<{ ok: true; at: string; log: Record<string, unknown> }> {
     const params = new URLSearchParams();
@@ -293,6 +293,7 @@ export class ParlorClient {
     if (query.seatNo !== undefined) params.set('seatNo', String(query.seatNo));
     if (query.limit !== undefined) params.set('limit', String(query.limit));
     if (query.review) params.set('review', '1');
+    if (query.cursor !== undefined) params.set('cursor', query.cursor);
     const response = await fetch(`${this.path('table-log', roomId)}?${params}`, {
       headers: await this.headers({
         authorization: `Bearer ${token}`,

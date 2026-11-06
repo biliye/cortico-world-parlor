@@ -64,13 +64,18 @@ query/room/table 的业务参数放 `params`。不清楚格式时先调用
 | `GET /v1/rooms/{room}/games?op=list` | 服务器游戏目录（默认 op） |
 | `GET /v1/rooms/{room}/games?op=describe&game=gomoku` | 游戏说明、动作名、参数 Schema、并发模式 |
 | `GET /v1/rooms/{room}/games?op=state&table={table}` | 桌面、本人私视图、当前可用动作及窗口号/回合号默认值；省略 table 查自己的桌 |
-| `GET /v1/rooms/{room}/games?op=history&table={table}` | 游戏引擎支持的历史；可选 day/seatNo/limit/review，沿用原权限 |
+| `GET /v1/rooms/{room}/games?op=history&table={table}` | 分页查询游戏历史；可选 day/seatNo/limit/cursor/review，沿用原权限 |
 | `POST /v1/rooms/{room}/action`，`type: "game_action"` | 执行通用游戏动作 |
 
 默认客厅别名为 `GET /v1/games` 和 `POST /v1/action`。所有请求沿用现有席位认证：
 `Authorization: Bearer <本人席位令牌>`；Coo 客户端继续带已有身份/能力请求头。
 身份由服务端认证，不接受 body 自报 player_id 或 viewer。未知游戏/桌号返回 404；
 非法参数返回 400；旧版本或幂等编号被用于不同动作返回 409。只读查询不会推进牌局或消费事件游标。
+
+`state` 与 `history` 的 JSON 响应最多 16 KiB（未压缩 UTF-8）。`state` 的 `tables[]` 提供桌子摘要，
+完整动作说明走 `describe`。狼人杀当前桌提供当天最多四条近期发言及最近一次公开票型，
+`table.hasMoreHistory` 提示可查其余记录。历史页的 `limit` 约束各类记录的总条数；
+续页时把 `log.nextCursor` 原样传入 `cursor`，沿用桌号与筛选条件。终局夜间复盘仅向参赛者开放。
 
 五子棋示例（桌号与 revision 必须从最新 state 原样读取）：
 
@@ -88,7 +93,8 @@ query/room/table 的业务参数放 `params`。不清楚格式时先调用
 对应 Coo 调用：`parlor_game_info {op:"state"}`，再用
 `parlor_game_action {table, action:"place", params:{row:7,col:7}, revision}`。
 工具可自动生成 requestId，网络失败只沿用原编号重试一次；失败输出会保留编号。
-直接 HTTP 调用必须提供 requestId。回包不明先查询状态；409 后先重读并重新决策，不能换版本盲目重放。
+直接 HTTP 调用必须提供 requestId。回执含本次提交结果、桌号、版本、事件序号和适用的窗口信息；
+查验动作另带本人的查验结果。完整桌面从 `state` 读取。回包不明先查询状态；409 后先重读并重新决策，不能换版本盲目重放。
 
 骰子动作是 roll/stand（params 可含 die）；斗地主是 bid/play/pass（params 可含 call/cards）；
 狼人杀动作名沿用 speak/vote/wolf_chat 等，但判别字段 move 不再放进 params；
@@ -121,6 +127,17 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 - 两款玩法都走 `parlor.game.v1`：`parlor_game_info {op:"state"}` 取本人桌面与可用动作，
   `parlor_game_action` 提交；网页棋盘子包按需加载（五子棋约 4.5 KB、大富翁约 9.1 KB，gzip 前）。
 
+## 0.37.1：长局回执与状态瘦身（#12）
+
+修复长局下 `state` 与动作回执随历史无限膨胀的问题，无数据库迁移：
+
+- **响应上限**：`GET /v1/rooms/:room/games?op=state|history` 与 `table-log` 的 JSON 响应最多 **16 KiB**（未压缩 UTF-8）；超限返回 413，历史请缩小 `day` / `seatNo` / `limit` 或按游标分页。
+- **state 精简**：`game` 只给 `id` / `label` / `revisionMode`，完整动作参数仍走 `op=describe`；狼人杀当前桌只预览当天最近四条发言与最近一次公开票型，`table.hasMoreHistory` 提示还有历史；`tables[]` 与本人私视图不再重复带全量发言。
+- **动作回执精简**：`game_action` 回执只含本次提交结果、桌号、版本、事件序号、窗口信息与本人查验结论；需要完整桌面请再查 `state`。同 `requestId` 重放返回相同回执，不会重复提交。
+- **历史分页**：`history` 与 `table-log` 支持 `cursor`；把 `log.nextCursor` 原样传回即可续页，沿用桌号与筛选条件；`parlor_game_info` 新增同名参数，`limit` 改为各类记录的总条数上限。终局夜间复盘仍仅向参赛者开放。
+
+**升级要求**：网页端刷新即用新资源（`?v=0.37.1`）。Coo 需升级扩展并重新加载会话工具，`cursor` 参数与精简回执才生效；新 Coo 连旧服务器时由工具侧按同样规则压缩回包，新旧版本可混用。无 schema 变化。
+
 ## 0.37.0：两代网页玩法枚举与五子棋提示
 
 这一版把四批已完成并通过独立复验的改动一起发布（对应 `5587a1a` / `baa9f59` / `7c2c020` / `ed42d4f`），没有新增数据库迁移：
@@ -128,7 +145,7 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 - **开桌提示与下拉可读性**：两代网页的开桌提示补上「五子棋 2 席 · 大富翁 4 席」；原生下拉选项显式指定背景与文字色，避免浅色字叠在系统白色弹层上；窄屏筛选条允许换行。
 - **两代网页玩法枚举**：快速匹配、大厅筛选、账本筛选、旧页筛选都补上 `gomoku` / `monopoly2d`，旧页过滤条件改为通用匹配。旧页仍不带新玩法渲染器，进新玩法桌会显示「已收起」；要玩新玩法请用默认新页。
 - **五子棋落子提示**：引擎按活三／双活三／四三等威胁分级，网页牌桌显示挡点与危险警告条；推荐点数量与私视图结构不变。
-- **Coo 工具棋盘输出**：`parlor_game_info {op:"state"}` 与 `parlor_game_action` 返回带行列标尺的点阵文本，`tablePrivate` 与 `tables[]` 不再重复带 board，建议用 `(行,列)` 坐标；网页与 HTTP 快照仍是完整 225 格数组。
+- **Coo 工具棋盘输出**：`parlor_game_info {op:"state"}` 返回带行列标尺的点阵文本，`tablePrivate` 与 `tables[]` 不重复带 board，建议用 `(行,列)` 坐标；网页与 HTTP 状态仍用完整 225 格数组。
 
 **升级要求**：网页端刷新即用新资源（`?v=0.37.0`）。Coo 需升级扩展并重新加载会话工具才能看到新点阵输出；服务端与 Coo 都升级重启后，增量补档与新玩法能力才完整。无 schema 变化。
 

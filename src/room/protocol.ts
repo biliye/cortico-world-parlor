@@ -214,6 +214,9 @@ export interface DeliveryReceipt {
 
 export interface ActionResponse {
   ok: true;
+  requestId?: string;
+  windowId?: string;
+  inspection?: { day: number; target: number; result: 'wolf' | 'good' };
   tableId?: string;
   table?: TableSummary | null;
   revision?: number;

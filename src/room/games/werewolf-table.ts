@@ -18,6 +18,7 @@
 import { randomInt } from 'node:crypto';
 import { serverClockLabel } from '../clock.ts';
 import {
+  GAME_RESPONSE_MAX_BYTES,
   TableError,
   secondsLeft,
   type TableEngine, type TableErrorCode, type TableEvent, type TableLogQuery, type TableSeat, type TableStatus, type TableStep,
@@ -1306,8 +1307,7 @@ export class WerewolfTable implements TableEngine {
     const ended = this.status === 'ended';
     const review = query.review === true;
     const speeches = this.speeches
-      .filter((entry) => (day === undefined || entry.day === day) && (seatNo === undefined || entry.seatNo === seatNo))
-      .slice(-limit);
+      .filter((entry) => (day === undefined || entry.day === day) && (seatNo === undefined || entry.seatNo === seatNo));
     const votes = this.voteRounds.filter((round) => day === undefined || round.day === day);
     const deaths = this.deaths
       .filter((entry) => (day === undefined || entry.day === day) && (seatNo === undefined || entry.seatNo === seatNo))
@@ -1318,24 +1318,57 @@ export class WerewolfTable implements TableEngine {
         // 终局前不公开死因；终局后对参与者完整公开（复盘）。
         ...(ended && review && requestor.onTable ? { cause: entry.cause } : {}),
       }));
-    return {
-      game: this.game,
-      status: this.status,
-      day: this.day,
+    const sections: Record<string, unknown[]> = {
       speeches,
       votes,
       deaths,
       ...(ended && review && requestor.onTable
         ? {
-          nights: this.nightLog.map((record) => ({
-            ...record,
-            wolfChats: record.wolfChats.map((entry) => ({ ...entry, name: this.seatByNo(entry.seatNo)?.name ?? '' })),
-          })),
-          potionLog: this.potionLog.map((entry) => ({ ...entry })),
+          nights: this.nightLog.filter((record) => day === undefined || record.day === day)
+            .map((record) => ({
+              ...record,
+              wolfChats: record.wolfChats.map((entry) => ({ ...entry, name: this.seatByNo(entry.seatNo)?.name ?? '' })),
+            })),
+          potionLog: this.potionLog.filter((entry) => day === undefined || entry.day === day),
         }
         : {}),
+    };
+    const page: Record<string, unknown[]> = {};
+    for (const key of Object.keys(sections)) page[key] = [];
+    const log = {
+      game: this.game,
+      status: this.status,
+      day: this.day,
+      ...page,
       ...(this.result ? { result: { ...this.result } } : {}),
     };
+    // Cursor points to the next item in a section. Appending newer entries doesn't move it.
+    const keys = Object.keys(sections);
+    const cursor = query.cursor === undefined ? null : /^([A-Za-z]+):(\d+)$/.exec(query.cursor);
+    const start = cursor ? keys.indexOf(cursor[1]) : 0;
+    const index = cursor ? Number(cursor[2]) : -1;
+    if (query.cursor !== undefined && (!cursor || start < 0 || !Number.isSafeInteger(index)
+      || index >= sections[keys[start]].length)) {
+      throw new WerewolfError('bad_action', '历史游标无效；请沿用原来的桌号和筛选条件');
+    }
+    let count = 0;
+    let bytes = Buffer.byteLength(JSON.stringify(log));
+    for (let section = start; section < keys.length; section++) {
+      const key = keys[section];
+      const entries = sections[key];
+      for (let i = cursor && section === start ? index : entries.length - 1; i >= 0; i--) {
+        const entryBytes = Buffer.byteLength(JSON.stringify(entries[i])) + 1;
+        // Reserve space for the envelope and nextCursor.
+        if (count >= limit || bytes + entryBytes > GAME_RESPONSE_MAX_BYTES - 1024) {
+          if (!count) throw new WerewolfError('bad_action', '单条历史记录超出大小限制');
+          return { ...log, hasMore: true, nextCursor: `${key}:${i}` };
+        }
+        page[key].unshift(entries[i]);
+        bytes += entryBytes;
+        count++;
+      }
+    }
+    return { ...log, hasMore: false, nextCursor: null };
   }
 
   // —— 契约：文案 ——

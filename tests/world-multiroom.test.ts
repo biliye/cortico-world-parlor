@@ -121,8 +121,10 @@ describe('Coo 快速匹配与牌桌分享', () => {
     const args = { table, action: 'place', params: { row: 7, col: 7 }, revision: state.table.revision, requestId: 'generic-coo-place' };
     const result = JSON.parse(await call('parlor_game_action', args));
     expect(result).toMatchObject({ ok: true, protocol: 'parlor.game.v1', revision: state.table.revision + 1 });
-    expect(result.table.board).toContain('\n 7 .......x.......');
-    expect(JSON.parse(await call('parlor_game_action', args)).revision).toBe(result.revision);
+    expect(result.table).toBeUndefined();
+    expect(JSON.parse(await call('parlor_game_action', args))).toEqual(result);
+    const updated = JSON.parse(await call('parlor_game_info', { op: 'state', table }));
+    expect(updated.table.board).toContain('\n 7 .......x.......');
     const next = await friend.games(friendToken, { op: 'state', table }, 'lobby') as Record<string, any>;
     expect(next.availableActions).toMatchObject([{ action: 'place' }]);
     expect(next.table.revision).toBe(result.revision);
