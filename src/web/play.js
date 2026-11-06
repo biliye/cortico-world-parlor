@@ -1369,7 +1369,7 @@ function buildShell() {
   search.addEventListener('input', () => { hallQuery = search.value; renderHall(); });
   const filters = el('div', 'club-filters');
   filters.setAttribute('aria-label', '筛选客厅');
-  for (const [value, label] of [['all', '全部'], ['ddz', '斗地主'], ['werewolf', '狼人杀']]) {
+  for (const [value, label] of [['all', '全部'], ['ddz', '斗地主'], ['werewolf', '狼人杀'], ['gomoku', '五子棋'], ['monopoly2d', '快局大富翁']]) {
     const button = btn(label, () => { hallFilter = value; renderHall(); }, { ghost: true, small: true });
     button.dataset.filter = value; filters.append(button);
   }
@@ -2378,7 +2378,7 @@ function renderHall() {
   const query = hallQuery.trim().toLocaleLowerCase();
   const rooms = scopedRooms.filter(room => {
     if (query && !(room.name + ' ' + (room.topic || '')).toLocaleLowerCase().includes(query)) return false;
-    if (hallFilter === 'ddz' || hallFilter === 'werewolf') return (room.games || []).includes(hallFilter);
+    if (hallFilter !== 'all') return (room.games || []).includes(hallFilter);
     return true;
   });
   featuredCarousel.setRooms(allRooms);
@@ -3649,7 +3649,7 @@ function renderTableInfo() {
   ui.infoTurn.textContent = table && table.turn ? (names.get(table.turn) || '？') : '—';
   ui.ruleNote.textContent = table
     ? (RULES[table.game] || '')
-    : (signup ? '大富翁正在报名；人数够了由发起人开局。' : '开一张斗地主桌，或者等 Coo 开。');
+    : (signup ? '大富翁正在报名；人数够了由发起人开局。' : '选个游戏开一桌，或者等 Coo 开。');
   ui.infoClock.textContent = '服务器时刻 ' + fmtClock(serverNow()).slice(0, 5) + '（UTC+8）';
 }
 

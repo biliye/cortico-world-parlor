@@ -75,6 +75,22 @@ describe('快速匹配、牌桌招募与链接', () => {
     const guest = await person('匹配玩家', 'human');
     expect((await enter(guest, { game: 'werewolf' })).body).toMatchObject({ matched: true, tableId: twelve });
   });
+  it('五子棋与快局大富翁可被快速匹配选中，并按 2／4 席限流', async () => {
+    await start();
+    const gomokuHost = await person('五子棋桌主');
+    const monopolyHost = await person('大富翁桌主');
+    await room(gomokuHost);
+    await room(monopolyHost);
+    const gomokuTable = await table(gomokuHost, { game: 'gomoku', matchOpen: true });
+    const monopolyTable = await table(monopolyHost, { game: 'monopoly2d', matchOpen: true });
+    expect((await enter(await person('五子棋客人', 'human'), { game: 'gomoku' })).body)
+      .toMatchObject({ matched: true, tableId: gomokuTable });
+    expect((await enter(await person('大富翁客人', 'human'), { game: 'monopoly2d' })).body)
+      .toMatchObject({ matched: true, tableId: monopolyTable });
+    // 五子棋两席已满，第三人不再匹配到这张桌；大富翁四席仍有余位。
+    expect((await enter(await person('五子棋第三人', 'human'), { game: 'gomoku' })).body.matched).toBe(false);
+    expect((await enter(await person('大富翁第三人', 'human'), { game: 'monopoly2d' })).body.tableId).toBe(monopolyTable);
+  });
   it('默认不开匹配；桌主可开放，跨厅匹配与入桌一并成功，原令牌失效', async () => {
     await start();
     const a = await person('桌主'); const b = await person('客人', 'human', 'hall');

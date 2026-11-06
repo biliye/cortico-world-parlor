@@ -703,7 +703,8 @@ html.vue-app .search {
 }
 html.vue-app .search::placeholder { color: var(--dim); }
 html.vue-app .search:focus { border-color: rgba(217, 248, 125, .4); }
-html.vue-app .filters { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; border: 1px solid var(--line); }
+/* 五种玩法后会比三个按钮宽，允许在窄屏折行，别把整条筛选挤出目录头。 */
+html.vue-app .filters { display: flex; align-items: center; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 3px; border-radius: 999px; border: 1px solid var(--line); }
 html.vue-app .filter { height: 28px; padding: 0 13px; border-radius: 999px; font-size: 12px; color: var(--muted); }
 html.vue-app .filter:hover { color: var(--text); }
 html.vue-app .filter.is-on { background: rgba(217, 248, 125, .14); color: var(--lime); }

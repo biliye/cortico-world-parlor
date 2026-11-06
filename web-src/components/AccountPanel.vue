@@ -63,7 +63,7 @@ watch(() => seat.value?.cooId, () => { ++epoch; items.value = []; summary.value 
         <p class="muted">包含你在所有客厅的记录；已归档客厅的对局仍可查看。时间按北京时间显示。</p>
         <form class="account-filters" @submit.prevent="load()">
           <label>记录 <select v-model="kind"><option value="games">历史对局</option><option value="chips">筹码流水</option></select></label>
-          <label>游戏 <select v-model="game"><option value="">全部</option><option value="ddz">斗地主</option><option value="werewolf">狼人杀</option><option value="dice">骰子</option></select></label>
+          <label>游戏 <select v-model="game"><option value="">全部</option><option value="ddz">斗地主</option><option value="werewolf">狼人杀</option><option value="dice">骰子</option><option value="gomoku">五子棋</option><option value="monopoly2d">快局大富翁</option></select></label>
           <label>开始日期 <input v-model="from" type="date" /></label>
           <label>结束日期 <input v-model="until" type="date" /></label>
           <label>原客厅号 <input v-model="room" placeholder="全部客厅" /></label>

@@ -15,7 +15,7 @@ import {
 import type { RoomCard } from '../api/types.ts';
 
 const section = hallSection;
-const filter = ref<'all' | 'ddz' | 'werewolf'>('all');
+const filter = ref<'all' | 'ddz' | 'werewolf' | 'gomoku' | 'monopoly2d'>('all');
 const query = ref('');
 const createName = ref('');
 const createVisibility = ref<'public' | 'unlisted' | 'private'>('public');
@@ -291,7 +291,7 @@ async function createRoom(): Promise<void> {
             <input v-model="query" class="search" type="search" placeholder="搜客厅名字、话题…" aria-label="搜索客厅">
             <div class="filters" aria-label="筛选客厅">
               <button
-                v-for="item in [{ id: 'all', label: '全部' }, { id: 'ddz', label: '斗地主' }, { id: 'werewolf', label: '狼人杀' }] as const"
+                v-for="item in [{ id: 'all', label: '全部' }, { id: 'ddz', label: '斗地主' }, { id: 'werewolf', label: '狼人杀' }, { id: 'gomoku', label: '五子棋' }, { id: 'monopoly2d', label: '快局大富翁' }] as const"
                 :key="item.id"
                 class="filter"
                 type="button"
