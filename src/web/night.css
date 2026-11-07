@@ -1368,6 +1368,10 @@ html.vue-app .join .theme-picker { position: absolute; right: 18px; top: 16px; z
 /* ——— 客厅页 ——— */
 html.vue-app .club-page-nav { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 6px 0 2px; }
 html.vue-app .club-page-nav .btn { height: 30px; padding: 0 12px; font-size: 12px; border-color: transparent; color: var(--muted); background: transparent; }
+/* 牌桌页要把头部的空白收掉：club.css 给这里留了 23px，加上 table-head 的 14px，
+   整桌就被顶到视口外面，手牌正好卡在屏幕下沿切半截。 */
+html.vue-app .view-table .club-page-nav { margin-bottom: 8px; padding-bottom: 0; }
+html.vue-app .view-table .table-head { margin-top: 6px; }
 html.vue-app .club-page-nav .btn:hover { color: var(--text); border-color: var(--line-2); background: rgba(255, 255, 255, .03); }
 html.vue-app .lobby-head { margin-top: 18px; }
 html.vue-app .lobby-head h1 { margin: 10px 0 0; font-size: 44px; font-weight: 700; letter-spacing: -.025em; }
@@ -1490,6 +1494,172 @@ html.vue-app .turn-timer.is-off { background: conic-gradient(var(--line-2) 100%,
 html.vue-app .table-head-host { margin-top: 14px; }
 html.vue-app .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 html.vue-app .view-table .panel h2 { font-size: 18px; margin: 0 0 10px; }
+
+/* ——— 牌桌外壳：一张有厚度的木桌 ———
+   club.css 里那套深绿皮肤（`.ddz-board { background:#1c3c32 }`）把 play.css 的木纹桌面整个盖掉了，
+   于是桌面读起来是「网页里挖了一块绿」。这里按茶室重新起一遍：外层木框、内嵌绒布、顶部一盏灯。
+   只动样式，不碰任何游戏组件的 DOM，退掉这一段就回到原来那版。 */
+html.vue-app .view-table .game-ddz { padding: 0; background: transparent; border: 0; }
+
+html.vue-app .view-table .ddz-board {
+  position: relative;
+  z-index: 0;
+  /* 铺满整幅内容区会把桌面拉成 2.19 的横幅，不像桌子。
+     给一个上限、居中摆，剩下的留白交给桌上的投影去接。 */
+  width: 100%;
+  max-width: 1040px;
+  margin-inline: auto;
+  padding: 30px 32px 32px;
+  border: 0;
+  border-radius: 30px;
+  color: #f7e7cd;
+  background:
+    linear-gradient(180deg, rgba(255, 226, 180, .14), transparent 20%),
+    /* 木纹沿长边（接近水平）走：竖着排会像竹排，不像桌沿。 */
+    repeating-linear-gradient(178.6deg, rgba(0, 0, 0, .07) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(177.2deg, rgba(255, 226, 180, .035) 0 2px, transparent 2px 11px),
+    repeating-linear-gradient(179.4deg, rgba(0, 0, 0, .05) 0 3px, transparent 3px 18px),
+    linear-gradient(180deg, #6d4826 0%, #533416 46%, #3a210f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 232, 196, .38),
+    inset 0 -1px 0 rgba(0, 0, 0, .5),
+    /* 桌沿侧壁：两段实色 shadow 叠出厚度 */
+    0 5px 0 #3b2412,
+    0 12px 0 #1f120a,
+    0 30px 60px rgba(0, 0, 0, .6),
+    0 52px 110px rgba(0, 0, 0, .4);
+}
+/* 绒布：木框往里缩 14px 的那一块，带一盏从上方打下来的灯 */
+html.vue-app .view-table .ddz-board::before {
+  content: "";
+  position: absolute;
+  inset: 16px;
+  z-index: 0;
+  border-radius: 18px;
+  pointer-events: none;
+  background:
+    radial-gradient(112% 64% at 50% -6%, rgba(255, 232, 190, .2), transparent 56%),
+    radial-gradient(92% 58% at 50% 112%, rgba(0, 0, 0, .46), transparent 60%),
+    /* 桌布中央压出来的一道淡纹：不然中间那一片绿太空 */
+    radial-gradient(circle at 50% 44%, transparent 0 31%, rgba(255, 232, 190, .055) 31.3%, transparent 31.8%),
+    radial-gradient(circle at 50% 44%, transparent 0 38%, rgba(0, 0, 0, .1) 38.3%, transparent 39%),
+    radial-gradient(circle at 50% 40%, #37604f 0%, #2c4d40 44%, #21392f 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 226, 180, .14),
+    inset 0 12px 28px rgba(0, 0, 0, .4),
+    inset 0 -16px 32px rgba(0, 0, 0, .32);
+}
+/* 绣在绒布上的桌号：淡淡一圈，不外露 */
+html.vue-app .view-table .ddz-board::after {
+  content: "";
+  position: absolute;
+  inset: 30px;
+  z-index: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 226, 180, .07);
+  pointer-events: none;
+}
+/* 伪元素垫在下面，内容要显式抬起来 */
+html.vue-app .view-table .ddz-board > * { position: relative; z-index: 1; }
+
+/* 中央出牌区：原来是一条 90px 圆角的绿跑道 + 2px 硬边，把桌面切成了两块。
+   改成桌面正中一小片灯光，边界不画线。
+   顺带把 min-height 收到 180：club.css 那 230 会把整张桌子顶到视口外面，
+   手牌正好卡在屏幕下沿被切掉半截。 */
+html.vue-app .view-table .ddz-center {
+  border: 0;
+  border-radius: 24px;
+  background: radial-gradient(72% 66% at 50% 46%, rgba(255, 232, 190, .11), rgba(255, 232, 190, .03) 52%, transparent 78%);
+  box-shadow: none;
+  margin: 10px 0 0;
+  min-height: 180px;
+}
+
+/* 桌面上的小牌子：半透明暗底 + 金边，不再用那套墨绿 */
+html.vue-app .view-table .ddz-pill,
+html.vue-app .view-table .ddz-chip {
+  color: #f2e0c2;
+  border-color: rgba(240, 200, 140, .3);
+  background: rgba(16, 9, 5, .52);
+}
+html.vue-app .view-table .ddz-pill.live {
+  background: linear-gradient(180deg, #ffe0a6, #dda44e);
+  border-color: #b8822f;
+  color: #3a230e;
+  box-shadow: 0 2px 0 rgba(110, 68, 22, .5);
+}
+html.vue-app .view-table .ddz-seat-mine { color: #d6bb96; }
+
+/* 对手：一叠牌背 + 一张名片，做成压在绒布上的样子 */
+html.vue-app .view-table .ddz-side-info {
+  background: rgba(14, 8, 4, .5);
+  border-color: rgba(240, 200, 140, .2);
+  color: #f2e2c8;
+}
+html.vue-app .view-table .ddz-side-info.is-turn {
+  border-color: rgba(255, 205, 120, .6);
+  background: rgba(58, 32, 12, .62);
+  box-shadow: 0 0 22px rgba(255, 196, 120, .14);
+}
+html.vue-app .view-table .ddz-side-info.is-landlord { border-color: rgba(231, 169, 79, .55); }
+html.vue-app .view-table .ddz-side-name { color: #f7e7cd; }
+html.vue-app .view-table .ddz-side-meta,
+html.vue-app .view-table .ddz-play-name,
+html.vue-app .view-table .ddz-play-pass,
+html.vue-app .view-table .ddz-play-quiet,
+html.vue-app .view-table .ddz-center-note,
+html.vue-app .view-table .ddz-bottom-label { color: #c9ab84; }
+
+/* 牌背：暗红，压在绿绒上才有对比 */
+html.vue-app .view-table .ddz-back {
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 226, 180, .18) 0 2px, transparent 2px 5px),
+    linear-gradient(180deg, #9b4038, #6d2a24);
+  box-shadow: inset 0 0 0 1px rgba(255, 226, 180, .4);
+}
+html.vue-app .view-table .ddz-stack {
+  background: rgba(10, 6, 3, .3);
+  border-color: rgba(240, 200, 140, .12);
+  /* 牌堆撑得比中间出牌区还高，整张桌子因此超出一屏。收到 110，牌背照样一叠。 */
+  min-height: 110px;
+}
+html.vue-app .view-table .ddz-stack.is-turn {
+  border-color: rgba(255, 205, 120, .55);
+  box-shadow: 0 0 18px rgba(255, 196, 120, .2);
+}
+
+/* 桌面上的按钮：木头上放的，不是网页里的 */
+html.vue-app .view-table .ddz-board .btn {
+  background: rgba(20, 11, 5, .55);
+  border: 1px solid rgba(240, 200, 140, .28);
+  color: #f4e3c8;
+  box-shadow: inset 0 1px 0 rgba(255, 232, 196, .14);
+}
+html.vue-app .view-table .ddz-board .btn:hover:not(:disabled) { background: rgba(58, 33, 14, .7); }
+html.vue-app .view-table .ddz-board .btn.primary {
+  background: linear-gradient(180deg, #ffdfa4, #dfa64e);
+  border-color: #b8822f;
+  color: #3a230e;
+  box-shadow: 0 2px 0 rgba(110, 68, 22, .55), inset 0 1px 0 rgba(255, 255, 255, .35);
+}
+html.vue-app .view-table .ddz-board .btn.primary:hover:not(:disabled) { background: linear-gradient(180deg, #ffe9bb, #e8b263); }
+html.vue-app .view-table .ddz-role.landlord,
+html.vue-app .view-table .ddz-role.farmer {
+  background: #e8c88f;
+  border-color: #f0dcb2;
+  color: #4a2c11;
+}
+html.vue-app .view-table .ddz-hand .pcard.sel { filter: drop-shadow(0 -4px 6px rgba(255, 214, 150, .45)); }
+
+/* 手牌宽度原先写死在 club.css（`.ddz-hand .pcard { --cw: 90px }`），
+   桌面一让开面板就变成 700 宽，17 张牌按 90px 排下来必然溢出、被裁掉半个身子。
+   改成跟着手牌栏自己的宽度走：容器查询单位 cqi，窄桌面自动缩到 40 上下。 */
+html.vue-app .view-table .ddz-hand { container-type: inline-size; }
+html.vue-app .view-table .ddz-hand .pcard { --cw: clamp(44px, 9.4cqi, 64px); }
+@supports not (width: 1cqi) {
+  /* 老浏览器没有容器查询：退回按视口算，至少不会溢出太多 */
+  html.vue-app .view-table .ddz-hand .pcard { --cw: clamp(40px, 4.6vw, 60px); }
+}
 
 /* ——— 弹窗、私聊、公告、提示 ——— */
 html.vue-app .rooms-dialog, html.vue-app .access-dialog {
@@ -1663,6 +1833,9 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
    把底角那排整体让开面板的宽度，牌子仍然贴着「看得见的」右边缘。 */
 @media (min-width: 1321px) {
   html.vue-app .shell.chat-open .view-hall .hero-dock { right: 366px; }
+  /* 牌桌页同一个毛病：面板浮在桌子上，手牌右边几张被盖住。
+     桌面整体让开 366px —— 桌布、牌堆、手牌都是自适应的，缩窄不丢信息。 */
+  html.vue-app .shell.chat-open .view-table .game-ddz { padding-right: 366px; }
 }
 
 @media (max-width: 1320px) {
@@ -1806,6 +1979,12 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .fav-copy p { display: none; }
   html.vue-app .fav-row > .btn { display: none; }
   html.vue-app .empty-stage { padding: 32px 16px 30px; }
+  /* 手机上手边只有 430，木框再各占 32px 就没地方摆牌了，整圈收薄一层。 */
+  html.vue-app .view-table .ddz-board { padding: 16px 14px 18px; border-radius: 22px; }
+  html.vue-app .view-table .ddz-board::before { inset: 9px; border-radius: 14px; }
+  html.vue-app .view-table .ddz-board::after { inset: 14px; border-radius: 10px; }
+  html.vue-app .view-table .ddz-stack { min-height: 84px; }
+  html.vue-app .view-table .ddz-hand .pcard { --cw: clamp(42px, 8cqi, 56px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
