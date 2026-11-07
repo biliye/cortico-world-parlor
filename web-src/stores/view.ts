@@ -11,8 +11,12 @@ export const watchTableId = ref('');
  * `?viewhall=1`：本地单厅服务没有 /switch 接口，进不了大厅，
  * 但大厅那半屏（茶馆 canvas）最需要单独核对，所以留一个只读的开关。
  * 它只决定「渲染哪个视图」，不改席位、不写回 URL。
+ *
+ * 写成函数而不是顶层常量：这个文件会被单测 import，那时没有 location。
  */
-export const forceHall = new URLSearchParams(location.search).get('viewhall') === '1';
+export function wantHall(): boolean {
+  return new URLSearchParams(location.search).get('viewhall') === '1';
+}
 
 export function readView(): void {
   const params = new URLSearchParams(location.search);

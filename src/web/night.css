@@ -416,8 +416,11 @@ html.vue-app .hero-copy {
 html.vue-app .hero-stage {
   grid-area: stage;
   height: auto;
-  margin: 2px 0 0;
+  margin: 14px 0 0;
 }
+/* 右栏（找一桌）会被固定的聊天面板压掉一截 —— 这是改版前就有的：
+   面板是浮层，不占流，收起后才露出完整的右栏。这里不再额外收窄，
+   否则牌子被压窄了两头不落好。 */
 html.vue-app .hero-side {
   grid-area: side;
   position: relative;
