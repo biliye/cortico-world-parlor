@@ -7,12 +7,23 @@ export type ViewName = 'hall' | 'lobby' | 'table';
 export const view = ref<ViewName>('hall');
 export const watchTableId = ref('');
 
+/**
+ * `?viewhall=1`：本地单厅服务没有 /switch 接口，进不了大厅，
+ * 但大厅那半屏（茶馆 canvas）最需要单独核对，所以留一个只读的开关。
+ * 它只决定「渲染哪个视图」，不改席位、不写回 URL。
+ */
+export const forceHall = new URLSearchParams(location.search).get('viewhall') === '1';
+
 export function readView(): void {
   const params = new URLSearchParams(location.search);
   watchTableId.value = params.get('table') || '';
-  view.value = params.get('view') === 'table'
-    ? 'table'
-    : (seat.value?.room === 'hall' ? 'hall' : 'lobby');
+  /* `?viewhall=1` 强行看大厅：单厅本地服务没有 /switch 接口，进不去大厅，
+     而大厅那半屏（茶馆 canvas）又最需要单独截图核对。只影响这一屏，不写回 URL。 */
+  view.value = params.get('viewhall') === '1'
+    ? 'hall'
+    : params.get('view') === 'table'
+      ? 'table'
+      : (seat.value?.room === 'hall' ? 'hall' : 'lobby');
 }
 
 export function writeView(replace = false): void {

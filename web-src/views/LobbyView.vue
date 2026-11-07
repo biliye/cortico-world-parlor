@@ -3,6 +3,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import LobbyMatching from '../components/LobbyMatching.vue';
+import LobbyScene from '../components/LobbyScene.vue';
 import { api } from '../api/client.ts';
 import { createRoomCarousel, type CarouselModel } from '../lib/room-carousel.ts';
 import { ROOM_CAPACITY, createRoomBody } from '../lib/rooms.ts';
@@ -240,27 +241,16 @@ async function createRoom(): Promise<void> {
           </div>
         </div>
 
-        <!-- 右栏：灯下的空桌 + 挂在门边的「找一桌」告示牌。
-             快速匹配原本塞在左栏文案底下，把首屏拉成一条长左栏、右半边全空；
-             挪到这张桌上之后，左边说「走进哪间」，右边直接「坐下哪一桌」。 -->
+        <!-- 茶馆放在**左栏、文案下面**，不是右栏。
+             右栏被固定的聊天面板（336px）压住小一半，16:9 的画面塞进去，
+             右边半间屋子就没了；左栏宽 660 左右，正好够它 1:1 不丢像素。
+             画法在 lobby/scene.js，组件是 components/LobbyScene.vue。 -->
+        <div class="scene scene-tea hero-stage">
+          <LobbyScene />
+          <span class="scene-caption">鲸语茶室 · 今夜营业 · OPEN</span>
+        </div>
+
         <div class="hero-side">
-          <div class="scene" aria-hidden="true">
-            <span class="scene-lamp" />
-            <span class="spark spark-a">✳</span>
-            <span class="spark spark-b">✳</span>
-            <span class="spark spark-c">✳</span>
-            <div class="scene-table">
-              <div class="scene-felt"><span class="scene-felt-mark">GOOD COMPANY · GREAT HANDS</span></div>
-              <div class="scene-seat seat-a" />
-              <div class="scene-seat seat-b" />
-              <div class="scene-cards">
-                <span class="scard black">A<span>♠</span></span>
-                <span class="scard red">K<span>♥</span></span>
-                <span class="scard black">Q<span>♣</span></span>
-              </div>
-            </div>
-            <span class="scene-caption">THE PARLOR SESSIONS · VOL. 03</span>
-          </div>
           <LobbyMatching />
         </div>
 
