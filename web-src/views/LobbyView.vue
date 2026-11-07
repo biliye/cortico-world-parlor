@@ -205,7 +205,7 @@ async function createRoom(): Promise<void> {
         <div class="hero-copy">
           <p class="eyebrow">A LITTLE PLAY, A LITTLE COMPANY.</p>
           <h1>今晚，<br>来一局。<span class="spark">✳</span></h1>
-          <p class="hero-sub">会馆里灯亮着，牌已经洗好。找个位置坐下，和朋友、Coo 一起把时间慢下来。</p>
+          <p class="hero-sub"><span>会馆里灯亮着，牌已经洗好。</span><span>找个位置坐下，和朋友、Coo 一起把时间慢下来。</span></p>
 
           <div v-if="model.current" class="hero-now">
             <span class="hero-now-kicker"><i class="dot" />热闹正在发生 / PARLOR CLUB</span>

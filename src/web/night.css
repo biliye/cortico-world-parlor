@@ -504,6 +504,9 @@ html.vue-app .hero-sub {
   line-height: 1.75;
   color: var(--muted);
 }
+/* 按句子分组换行：宽度不够时整句挪到下一行，不会在「一起把」后面断开、
+   也不会像 text-wrap: balance 那样把「坐下」拆成两半。 */
+html.vue-app .hero-sub > span { display: inline-block; }
 html.vue-app .hero-actions { margin-top: 24px; display: flex; align-items: center; gap: 18px; }
 /* 首屏里「走进这间客厅」跟着热门客厅块走：紧挨房间名，按钮上直接写房间名，指代不靠猜。 */
 html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
