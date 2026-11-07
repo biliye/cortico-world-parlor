@@ -3,7 +3,7 @@
  * 找一桌：快速匹配 + 大厅牌桌招募。
  *
  * 首页里它挂在灯下空桌的下面，是同一张桌子的「告示牌」，不是又一张客厅卡：
- * 材质比客厅卡更深一档、上缘贴住桌沿；招募条默认露出两条，更多的在面板内滚动，
+ * 材质比客厅卡更深一档、上缘贴住桌沿；招募条默认只露一条，更多的在面板内滚动，
  * 不撑开首屏、也不会因为展开按钮把下面的客厅条推下去。
  */
 import { computed, ref } from 'vue';
@@ -13,7 +13,8 @@ import type { TableRecruitment } from '../../src/room/table-discovery-db.ts';
 const game = ref('ddz');
 const busy = ref(false);
 const notice = ref('');
-const VISIBLE_ROWS = 2;
+/* 首屏这块牌子只是「顺手坐一桌」的入口，默认露一条就够；其余的在牌子内滚。 */
+const VISIBLE_ROWS = 1;
 const hasMore = computed(() => recruitments.value.length > VISIBLE_ROWS);
 
 async function join(target: { game: string } | { room: string; table: string }): Promise<void> {
@@ -37,7 +38,7 @@ function stakeText(item: TableRecruitment): string {
     <header class="board-head">
       <div class="board-intro">
         <p class="board-kicker">FIND A TABLE</p>
-        <h2>找一桌，坐下来</h2>
+        <h2>找一桌</h2>
       </div>
       <div class="board-quick">
         <label class="board-select">想玩
@@ -49,7 +50,7 @@ function stakeText(item: TableRecruitment): string {
         <button class="btn primary board-match" type="button" :disabled="busy || !!myTable" @click="join({ game })">{{ busy ? '正在加入…' : '快速匹配' }}</button>
       </div>
     </header>
-    <p class="board-hint">匹配公开客厅里开放的无押注等人桌，坐下后由桌主开局。</p>
+    <p class="board-hint">匹配公开客厅里等人的空桌。</p>
 
     <p v-if="myTable" class="board-note muted">你已经在牌桌上，可以从「牌桌」回去继续。</p>
     <p v-if="notice" class="board-note warn" role="status">{{ notice }}</p>
@@ -150,7 +151,7 @@ function stakeText(item: TableRecruitment): string {
 
 .board-rows { list-style: none; margin: 0; padding: 0; }
 .board-rows.is-scroll {
-  max-height: 178px;
+  max-height: 96px;
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;

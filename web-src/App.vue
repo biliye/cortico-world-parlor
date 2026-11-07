@@ -9,7 +9,7 @@ import RoomTransition from './components/RoomTransition.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
 import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition, onSeatStorage } from './stores/parlor.ts';
 import { entryNotice, seat } from './stores/session.ts';
-import { readView, view } from './stores/view.ts';
+import { readView, view, wantHall } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
 import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
@@ -92,7 +92,7 @@ watch(seat, (next) => {
 <template>
   <JoinView v-if="!seat" :initial-error="failed || entryNotice" @entered="enter" />
   <AppShell v-else-if="ready && !roomTransition">
-    <LobbyView v-if="snapshot && snapshot.id === 'hall'" />
+    <LobbyView v-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />
     <RoomView v-else />
   </AppShell>

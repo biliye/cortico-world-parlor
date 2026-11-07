@@ -3,29 +3,30 @@
    ----------------------------------------------------------------------------
    只作用于 <html class="vue-app">：旧页（?legacy=1）继续用 play.css / club.css。
    结构：窄门牌栏 + 顶部细条 + 舞台内容 + 浮起的「有话慢慢聊」。
-   颜色 token 在这里重定义；两套外观 = 深色（默认）与浅色「白天模式」。
+   颜色 token 在这里重定义；两套外观 = 深色「茶室夜灯」（默认）与浅色「米纸白天」。
+   2026-11-07：色板对齐大厅动画（中式茶馆）——原来是深绿 + 荧光青柠。
    ========================================================================== */
 
 /* ——— token ——— */
 html.vue-app {
-  --bg: #060c0a;
-  --bg-soft: #0a1311;
-  --panel: #0f1a17;
-  --panel-glass: rgba(11, 20, 17, .78);
-  --panel-2: #13221d;
-  --line: rgba(206, 232, 201, .10);
-  --line-2: rgba(206, 232, 201, .20);
-  --text: #eef4e8;
-  --muted: #a5b8aa;
-  --dim: #7f9485;
-  --lime: #d9f87d;
-  --lime-ink: #14210e;
+  --bg: #140c07;
+  --bg-soft: #1b120b;
+  --panel: #241610;
+  --panel-glass: rgba(30, 20, 13, .80);
+  --panel-2: #2e1d13;
+  --line: rgba(230, 196, 150, .13);
+  --line-2: rgba(230, 196, 150, .26);
+  --text: #f4e7d0;
+  --muted: #bba184;
+  --dim: #8d765a;
+  --lime: #f0b95e;
+  --lime-ink: #241408;
   --lamp: #f3d6a0;
-  --felt: #2f5b45;
-  --felt-deep: #17332a;
+  --felt: #4a3226;
+  --felt-deep: #2c1d14;
   --paper: #f4efdf;
-  --paper-ink: #26352c;
-  --red: #c75b5f;
+  --paper-ink: #2a1a10;
+  --red: #c9553c;
   --radius: 20px;
   --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
   --num: "Bahnschrift", "DIN Alternate", "Segoe UI Variable Display", "Segoe UI", var(--font);
@@ -35,24 +36,24 @@ html.vue-app {
 }
 
 html.vue-app[data-theme="light"] {
-  --bg: #f1f3e8;
-  --bg-soft: #e9ecdf;
-  --panel: #ffffff;
-  --panel-glass: rgba(255, 255, 255, .84);
-  --panel-2: #eef1e5;
-  --line: rgba(38, 53, 44, .12);
-  --line-2: rgba(38, 53, 44, .22);
-  --text: #26352c;
-  --muted: #4f6459;
-  --dim: #5e7365;
-  --lime: #527029;
-  --lime-ink: #f6fbe6;
-  --lamp: #b9813a;
-  --felt: #3f7a5e;
-  --felt-deep: #2c5b45;
-  --paper: #ffffff;
-  --paper-ink: #26352c;
-  --red: #a64347;
+  --bg: #f7eedb;
+  --bg-soft: #f0e6d0;
+  --panel: #fffaf1;
+  --panel-glass: rgba(255, 250, 241, .86);
+  --panel-2: #f3e8d3;
+  --line: rgba(90, 60, 35, .14);
+  --line-2: rgba(90, 60, 35, .28);
+  --text: #2a1a10;
+  --muted: #6b5138;
+  --dim: #836a4f;
+  --lime: #a85c22;
+  --lime-ink: #fff6e6;
+  --lamp: #a9662a;
+  --felt: #6b4832;
+  --felt-deep: #4a3226;
+  --paper: #fffdf8;
+  --paper-ink: #2a1a10;
+  --red: #a8402c;
   --shadow-lg: 0 26px 60px rgba(55, 70, 58, .18);
   --shadow-md: 0 12px 28px rgba(55, 70, 58, .14);
   color-scheme: light;
@@ -105,7 +106,7 @@ html.vue-app .sheet-backdrop.is-show {
   position: fixed;
   inset: 0;
   z-index: 65;
-  background: rgba(3, 8, 6, .55);
+  background: rgba(6, 4, 2, .55);
   backdrop-filter: blur(2px);
 }
 
@@ -116,7 +117,7 @@ html.vue-app .shell {
   grid-template-columns: 78px minmax(0, 1fr);
   background:
     radial-gradient(1100px 620px at 62% -12%, rgba(243, 214, 160, .07), transparent 62%),
-    radial-gradient(900px 520px at 30% -6%, rgba(217, 248, 125, .055), transparent 60%),
+    radial-gradient(900px 520px at 30% -6%, rgba(240, 185, 94, .055), transparent 60%),
     var(--bg);
 }
 
@@ -139,7 +140,7 @@ html.vue-app .rail-mark {
   height: 44px;
   color: var(--lime);
   margin-bottom: 10px;
-  filter: drop-shadow(0 0 12px rgba(217, 248, 125, .22));
+  filter: drop-shadow(0 0 12px rgba(240, 185, 94, .22));
 }
 html.vue-app .rail-mark .icon { width: 30px; height: 30px; stroke: none; fill: currentColor; }
 html.vue-app .rail-nav { display: flex; flex-direction: column; align-items: center; gap: 6px; }
@@ -160,7 +161,7 @@ html.vue-app .rail-btn .icon { width: 19px; height: 19px; }
 html.vue-app .rail-btn:hover { color: var(--text); background: rgba(255, 255, 255, .045); }
 html.vue-app .rail-btn.is-on {
   color: var(--lime);
-  background: linear-gradient(180deg, rgba(217, 248, 125, .14), rgba(217, 248, 125, .03));
+  background: linear-gradient(180deg, rgba(240, 185, 94, .14), rgba(240, 185, 94, .03));
 }
 html.vue-app .rail-sep { width: 24px; height: 1px; background: var(--line); margin: 10px 0; }
 html.vue-app .rail-spacer { flex: 1; }
@@ -232,7 +233,7 @@ html.vue-app .topbar .room-pill {
   font-size: 12.5px;
   background: rgba(255, 255, 255, .03);
 }
-html.vue-app .room-pill:hover { border-color: rgba(217, 248, 125, .45); }
+html.vue-app .room-pill:hover { border-color: rgba(240, 185, 94, .45); }
 html.vue-app .room-pill-name { max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.vue-app .room-pill-arrow { color: var(--muted); font-size: 10px; }
 html.vue-app .presence { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
@@ -242,7 +243,7 @@ html.vue-app .pulse {
   height: 6px;
   border-radius: 50%;
   background: var(--lime);
-  box-shadow: 0 0 0 3px rgba(217, 248, 125, .12);
+  box-shadow: 0 0 0 3px rgba(240, 185, 94, .12);
 }
 html.vue-app .pulse.off { background: var(--lamp); box-shadow: 0 0 0 3px rgba(243, 214, 160, .12); }
 html.vue-app .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); flex: none; }
@@ -329,7 +330,7 @@ html.vue-app .eyebrow {
   color: var(--lime);
   font-weight: 600;
 }
-html.vue-app .eyebrow::before { content: ""; width: 28px; height: 1px; background: rgba(217, 248, 125, .55); }
+html.vue-app .eyebrow::before { content: ""; width: 28px; height: 1px; background: rgba(240, 185, 94, .55); }
 
 /* 按钮 */
 html.vue-app .btn {
@@ -346,7 +347,7 @@ html.vue-app .btn {
   height: 38px;
   transition: background .18s, border-color .18s, color .18s;
 }
-html.vue-app .btn:hover:not(:disabled) { border-color: rgba(217, 248, 125, .45); background: rgba(255, 255, 255, .07); }
+html.vue-app .btn:hover:not(:disabled) { border-color: rgba(240, 185, 94, .45); background: rgba(255, 255, 255, .07); }
 html.vue-app .btn.small { height: 30px; padding: 0 12px; font-size: 12px; }
 html.vue-app .btn.primary {
   background: var(--lime);
@@ -360,7 +361,7 @@ html.vue-app .btn.ghost { background: transparent; }
 html.vue-app .btn:disabled {
   opacity: 1;
   cursor: not-allowed;
-  background: rgba(206, 232, 201, .05);
+  background: rgba(230, 196, 150, .05);
   border-color: var(--line);
   color: var(--dim);
 }
@@ -384,44 +385,107 @@ html.vue-app .link:hover { color: var(--lime); }
 
 /* ——— 大厅首屏 ——— */
 html.vue-app .view-hall { position: relative; }
-/* 左栏说「走进哪间客厅」，右栏是灯下的空桌 + 挂在旁边的「找一桌」告示牌。
-   两栏同高：左栏文案 + 今晚有人的客厅席位条，右栏画面 + 快速匹配/招募面板。 */
+
+/* 整个大厅的底：一间真的在动的茶馆，钉在视口上铺满整个界面。
+   固定定位是为了「翻到目录时画还在」，同时不把画面拉成竖条；
+   一层暗渐变从左往右、从上往下压，左栏文案压在最暗的地方，右栏还能看清屋子。
+   画法在 web-src/lobby/scene.js，组件是 components/LobbyScene.vue（fill 模式 = cover）。 */
+html.vue-app .hall-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--bg);
+}
+html.vue-app .hall-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(96deg,
+      rgba(10, 6, 3, .84) 0%,
+      rgba(10, 6, 3, .60) 30%,
+      rgba(10, 6, 3, .22) 56%,
+      rgba(10, 6, 3, .10) 74%,
+      rgba(10, 6, 3, .34) 100%),
+    linear-gradient(180deg,
+      rgba(12, 7, 4, .62) 0%,
+      rgba(12, 7, 4, .12) 22%,
+      rgba(12, 7, 4, .14) 58%,
+      rgba(12, 7, 4, .74) 90%,
+      var(--bg) 100%);
+}
+/* 画角的门牌：跟旧版的「THE PARLOR SESSIONS」一个位置，压在右下 */
+html.vue-app .hall-bg-mark {
+  position: absolute;
+  right: 26px;
+  bottom: 20px;
+  z-index: 1;
+  font-family: var(--num);
+  font-size: 9.5px;
+  letter-spacing: .28em;
+  color: rgba(246, 233, 210, .5);
+  pointer-events: none;
+}
+
+/* 首屏不再分两栏。文案贴左上，两块牌子各坐一个底角，中间整片留给那间屋子：
+   「找一桌」不再浮在茶柜正中挡着柜子，「推荐」也不再压在标题和副文案下面。
+   高度抵到视口底部（顶条 92px 已经被 stage-body 让出来了），首屏就是一整张画。 */
 html.vue-app .hero {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr);
-  grid-template-areas:
-    "copy side"
-    "shelf side";
-  column-gap: 40px;
-  row-gap: 6px;
-  align-items: stretch;
-  min-height: 540px;
-  padding: 18px 0 0;
-  border-bottom: 1px solid var(--line);
+  z-index: 1;
+  /* 底角那排是绝对定位的，窗口太矮时得让 hero 自己长高，别让牌子压到标题上。 */
+  min-height: max(calc(100vh - 92px), 640px);
+  padding: 20px 0 30px;
 }
 html.vue-app .hero-copy {
-  grid-area: copy;
   position: relative;
   z-index: 3;
-  display: flex;
-  flex-direction: column;
+  max-width: 620px;
   min-width: 0;
-  padding-bottom: 6px;
 }
-html.vue-app .hero-side {
-  grid-area: side;
+/* 底角那一排：左「推荐」，右「找一桌」，贴到首屏底沿。 */
+html.vue-app .hero-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: flex-end;
+  gap: 28px;
+}
+/* 画面往下交给纸面：实底从这一行开始，滚动时不会和背景打架。
+   负边距是把实底铺到内容区的左右留白外面，接缝处不会漏出一条动画；
+   ::after 补住 .view 底部那 90px 的留白，否则滚到底会漏出一排 Coo。 */
+html.vue-app .hall-floor {
   position: relative;
   z-index: 2;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  padding-top: 30px;
+  margin: 0 -40px;
+  padding: 0 40px;
+  background: var(--bg);
 }
-/* 画面在下、告示牌在上：面板压住桌沿一点点，读作同一张桌子。 */
-html.vue-app .hero-side .scene { flex: 1 1 auto; height: auto; min-height: 300px; z-index: 1; }
-html.vue-app .hero-side > .recruit-board { flex: none; }
+html.vue-app .hall-floor::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 120px;
+  background: var(--bg);
+}
+/* 右下角：告示牌。宽度收在一个上限内，别吃满半屏挡住屋子；
+   margin-left:auto 保证没有「推荐」卡时它仍然贴右。 */
+html.vue-app .hero-side {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  width: min(460px, 47%);
+  min-width: 0;
+  margin-left: auto;
+}
+html.vue-app .hero-side > .recruit-board { width: 100%; max-width: none; margin-inline: 0; }
 html.vue-app .hero h1 {
   margin: 20px 0 0;
   font-size: clamp(52px, 5.1vw, 78px);
@@ -437,7 +501,7 @@ html.vue-app .hero h1 .spark {
   font-size: .38em;
   color: var(--lime);
   font-weight: 400;
-  text-shadow: 0 0 22px rgba(217, 248, 125, .5);
+  text-shadow: 0 0 22px rgba(240, 185, 94, .5);
   animation: night-twinkle 5.6s ease-in-out infinite;
 }
 html.vue-app .hero-sub {
@@ -447,10 +511,28 @@ html.vue-app .hero-sub {
   line-height: 1.75;
   color: var(--muted);
 }
+/* 按句子分组换行：宽度不够时整句挪到下一行，不会在「一起把」后面断开、
+   也不会像 text-wrap: balance 那样把「坐下」拆成两半。 */
+html.vue-app .hero-sub > span { display: inline-block; }
 html.vue-app .hero-actions { margin-top: 24px; display: flex; align-items: center; gap: 18px; }
-/* 首屏里「走进这间客厅」跟着热门客厅块走：紧挨房间名，按钮上直接写房间名，指代不靠猜。 */
-html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
-html.vue-app .hero-now .hero-actions-inline { margin-top: 18px; }
+/* 左下角：推荐客厅。和右边告示牌用同一套玻璃面，两块牌子才像一对，不是两块贴图。 */
+html.vue-app .hero-now {
+  flex: 0 1 560px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px 18px 15px;
+  border: 1px solid var(--line-2);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 4%, transparent), transparent 42%),
+    var(--panel-2);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent),
+    var(--shadow-md);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+html.vue-app .hero-now .hero-actions-inline { margin-top: 14px; }
 html.vue-app .cta {
   height: 50px;
   padding: 0 6px 0 20px;
@@ -463,10 +545,10 @@ html.vue-app .cta {
   font-size: 14.5px;
   font-weight: 700;
   letter-spacing: .02em;
-  box-shadow: 0 14px 36px rgba(217, 248, 125, .16);
+  box-shadow: 0 14px 36px rgba(240, 185, 94, .16);
   transition: transform .18s, box-shadow .18s;
 }
-html.vue-app .cta:hover { transform: translateY(-1px); box-shadow: 0 18px 42px rgba(217, 248, 125, .24); }
+html.vue-app .cta:hover { transform: translateY(-1px); box-shadow: 0 18px 42px rgba(240, 185, 94, .24); }
 html.vue-app .cta-arrow {
   width: 36px;
   height: 36px;
@@ -480,7 +562,6 @@ html.vue-app .cta-arrow {
 html.vue-app .ghost-link { font-size: 13px; color: var(--muted); padding: 4px 0; }
 html.vue-app .ghost-link:hover { color: var(--lime); }
 
-html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
 html.vue-app .hero-now-kicker {
   display: flex;
   align-items: center;
@@ -509,7 +590,7 @@ html.vue-app .car-btn {
   place-items: center;
   font-size: 11px;
 }
-html.vue-app .car-btn:hover { color: var(--text); border-color: rgba(217, 248, 125, .5); }
+html.vue-app .car-btn:hover { color: var(--text); border-color: rgba(240, 185, 94, .5); }
 html.vue-app .car-count { font-family: var(--num); font-size: 10.5px; color: var(--dim); letter-spacing: .08em; }
 html.vue-app .car-dots { display: flex; align-items: center; gap: 5px; }
 html.vue-app .car-dot { width: 5px; height: 5px; border-radius: 99px; background: var(--line-2); padding: 0; }
@@ -517,82 +598,9 @@ html.vue-app .car-dot.is-on { width: 15px; background: var(--lime); }
 html.vue-app .car-pause { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; color: var(--dim); border: 1px solid transparent; }
 html.vue-app .car-pause:hover { color: var(--muted); border-color: var(--line-2); }
 
-/* 首屏画面：灯下的一张绿绒桌 */
-html.vue-app .scene { position: relative; height: 430px; z-index: 2; }
-html.vue-app .scene-lamp {
-  position: absolute;
-  left: 56%;
-  top: -34px;
-  width: 2px;
-  height: 74px;
-  transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(217, 248, 125, .06), rgba(217, 248, 125, .45));
-}
-html.vue-app .scene-lamp::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -12px;
-  transform: translateX(-50%);
-  width: 38px;
-  height: 17px;
-  border-radius: 4px 4px 9px 9px;
-  background: linear-gradient(180deg, #e9d3a5, #b79f74);
-  box-shadow: 0 6px 22px rgba(243, 214, 160, .45);
-}
-html.vue-app .scene-lamp::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 86px;
-  transform: translateX(-50%);
-  width: 430px;
-  height: 380px;
-  background: radial-gradient(ellipse at 50% 0%, rgba(243, 214, 160, .16), rgba(243, 214, 160, .04) 42%, transparent 68%);
-  pointer-events: none;
-}
-html.vue-app .scene-table {
-  position: absolute;
-  left: 50%;
-  bottom: -18px;
-  width: 440px;
-  height: 268px;
-  transform: translateX(-50%) rotate(-6deg);
-}
-html.vue-app .scene-felt {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at 44% 26%, #427a5c 0%, #2f5b45 40%, #1e4233 74%, #153025 100%);
-  box-shadow:
-    0 34px 60px rgba(0, 0, 0, .5),
-    0 0 0 9px #24483a,
-    0 0 0 10px rgba(196, 228, 178, .14),
-    inset 0 6px 22px rgba(224, 242, 204, .10),
-    inset 0 -22px 44px rgba(0, 0, 0, .4);
-}
-html.vue-app .scene-felt::after {
-  content: "";
-  position: absolute;
-  inset: 18px 24px;
-  border-radius: 50%;
-  border: 1px dashed rgba(220, 243, 201, .2);
-}
-html.vue-app .scene-felt-mark {
-  position: absolute;
-  left: 50%;
-  top: 26px;
-  transform: translateX(-50%);
-  font-family: var(--num);
-  font-size: 8px;
-  letter-spacing: .34em;
-  color: rgba(222, 240, 205, .3);
-  white-space: nowrap;
-}
-html.vue-app .scene-seat { position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 1px dashed rgba(213, 240, 190, .26); }
-html.vue-app .scene-seat.seat-a { left: 5%; bottom: 108px; }
-html.vue-app .scene-seat.seat-b { right: 5%; bottom: 108px; }
-html.vue-app .scene-cards { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); display: flex; align-items: flex-end; }
+/* 首屏的静态茶馆（绿绒桌 + 三张扑克 + 吊灯）在 2026-11-07 撤掉了：
+   现在整屏都是 web-src/lobby/scene.js 画的那间真茶馆，见上面的 .hall-bg。
+   剩下的只有加入页还在用的三张牌（.scard）。 */
 html.vue-app .scard {
   width: 56px;
   height: 78px;
@@ -612,25 +620,14 @@ html.vue-app .scard:nth-child(1) { transform: rotate(-12deg) translateX(15px) tr
 html.vue-app .scard:nth-child(2) { transform: rotate(-1deg); z-index: 2; }
 html.vue-app .scard:nth-child(3) { transform: rotate(11deg) translateX(-15px) translateY(5px); z-index: 3; }
 html.vue-app .scard.red { color: var(--red); }
-html.vue-app .spark { position: absolute; color: var(--lime); opacity: .75; text-shadow: 0 0 16px rgba(217, 248, 125, .45); pointer-events: none; }
+html.vue-app .spark { position: absolute; color: var(--lime); opacity: .75; text-shadow: 0 0 16px rgba(240, 185, 94, .45); pointer-events: none; }
 html.vue-app .spark-a { left: 12%; top: 18%; font-size: 20px; }
 html.vue-app .spark-b { right: 16%; top: 8%; font-size: 12px; opacity: .5; }
 html.vue-app .spark-c { right: 6%; bottom: 30%; font-size: 22px; }
-html.vue-app .scene-caption {
-  position: absolute;
-  right: 2px;
-  top: 4px;
-  font-family: var(--num);
-  font-size: 8.5px;
-  letter-spacing: .3em;
-  color: var(--dim);
-  white-space: nowrap;
-}
 
-/* 首屏左下：今晚有人的客厅席位条（拉满左栏宽度，和右栏的告示牌同高收底） */
+/* 「今晚有人的客厅」那一排席位条在 v1.5 从首屏撤掉了（画面铺满整屏，再挂一排就挤）。
+   样式先留着：想让它回来时，把 hero 里的 .hero-chips 结构接回去就行。 */
 html.vue-app .hero-chips {
-  grid-area: shelf;
-  align-self: end;
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
@@ -675,7 +672,7 @@ html.vue-app .rchip {
   gap: 7px;
   transition: transform .2s, border-color .2s, background .2s;
 }
-html.vue-app .rchip:hover { transform: translateY(-3px); border-color: rgba(217, 248, 125, .3); }
+html.vue-app .rchip:hover { transform: translateY(-3px); border-color: rgba(240, 185, 94, .3); }
 html.vue-app .rchip-top { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: .08em; color: var(--dim); }
 html.vue-app .rchip-top .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); flex: none; }
 html.vue-app .rchip-top .dot.live { background: var(--lamp); }
@@ -702,12 +699,12 @@ html.vue-app .search {
   outline: none;
 }
 html.vue-app .search::placeholder { color: var(--dim); }
-html.vue-app .search:focus { border-color: rgba(217, 248, 125, .4); }
+html.vue-app .search:focus { border-color: rgba(240, 185, 94, .4); }
 /* 五种玩法后会比三个按钮宽，允许在窄屏折行，别把整条筛选挤出目录头。 */
 html.vue-app .filters { display: flex; align-items: center; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 3px; border-radius: 999px; border: 1px solid var(--line); }
 html.vue-app .filter { height: 28px; padding: 0 13px; border-radius: 999px; font-size: 12px; color: var(--muted); }
 html.vue-app .filter:hover { color: var(--text); }
-html.vue-app .filter.is-on { background: rgba(217, 248, 125, .14); color: var(--lime); }
+html.vue-app .filter.is-on { background: rgba(240, 185, 94, .14); color: var(--lime); }
 html.vue-app .refresh { font-size: 12px; color: var(--dim); padding: 4px 2px; }
 html.vue-app .refresh:hover { color: var(--lime); }
 
@@ -721,12 +718,12 @@ html.vue-app .poster {
   cursor: pointer;
   transition: transform .22s cubic-bezier(.2, .7, .2, 1), border-color .22s, box-shadow .22s;
 }
-html.vue-app .poster:hover { transform: translateY(-4px); border-color: rgba(217, 248, 125, .32); box-shadow: var(--shadow-md); }
+html.vue-app .poster:hover { transform: translateY(-4px); border-color: rgba(240, 185, 94, .32); box-shadow: var(--shadow-md); }
 html.vue-app .poster-art { position: relative; height: 132px; overflow: hidden; }
 html.vue-app .poster-art.art-cards { background: radial-gradient(120% 130% at 70% 10%, #356a4f 0%, #24493a 52%, #162d25 100%); }
 html.vue-app .poster-art.art-moon { background: radial-gradient(120% 130% at 30% 6%, #40506e 0%, #28324a 46%, #151c2a 100%); }
 html.vue-app .poster-art.art-dice { background: radial-gradient(120% 130% at 66% 4%, #4b5b3c 0%, #2f3c2a 50%, #1a2419 100%); }
-html.vue-app .poster-art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 55%, rgba(9, 17, 14, .5)); }
+html.vue-app .poster-art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 55%, rgba(14, 9, 5, .5)); }
 html.vue-app .poster-motif { position: absolute; inset: 0; display: block; }
 html.vue-app .poster-motif .die {
   position: absolute;
@@ -790,7 +787,7 @@ html.vue-app .poster-chip {
   border-radius: 999px;
   font-size: 10px;
   letter-spacing: .06em;
-  background: rgba(7, 13, 11, .5);
+  background: rgba(10, 6, 3, .5);
   border: 1px solid rgba(255, 255, 255, .13);
   color: #dfe9d9;
 }
@@ -809,10 +806,10 @@ html.vue-app .poster-fav {
   place-items: center;
   font-size: 13px;
   color: rgba(238, 244, 232, .75);
-  background: rgba(7, 13, 11, .45);
+  background: rgba(10, 6, 3, .45);
   border: 1px solid rgba(255, 255, 255, .12);
 }
-html.vue-app .poster-fav:hover { color: var(--lime); border-color: rgba(217, 248, 125, .4); }
+html.vue-app .poster-fav:hover { color: var(--lime); border-color: rgba(240, 185, 94, .4); }
 html.vue-app .poster-body { padding: 13px 16px 15px; }
 html.vue-app .poster-body h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
 html.vue-app .poster-body p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); min-height: 38px; }
@@ -870,7 +867,7 @@ html.vue-app .mine-card {
   text-align: left;
   transition: transform .2s cubic-bezier(.2, .7, .2, 1), border-color .2s, box-shadow .2s;
 }
-html.vue-app .mine-card:hover { transform: translateY(-3px); border-color: rgba(217, 248, 125, .32); box-shadow: var(--shadow-md); }
+html.vue-app .mine-card:hover { transform: translateY(-3px); border-color: rgba(240, 185, 94, .32); box-shadow: var(--shadow-md); }
 html.vue-app .mine-card .poster-art { height: 168px; }
 html.vue-app .mine-copy { padding: 15px 18px 17px; }
 html.vue-app .mine-title { display: flex; align-items: baseline; gap: 10px; }
@@ -897,7 +894,7 @@ html.vue-app .mine-card.add .add-plus {
   width: 46px; height: 46px; border-radius: 50%;
   display: grid; place-items: center;
   font-size: 22px; font-weight: 300;
-  border: 1px dashed rgba(217, 248, 125, .4);
+  border: 1px dashed rgba(240, 185, 94, .4);
   color: var(--lime);
   margin-bottom: 8px;
 }
@@ -916,7 +913,7 @@ html.vue-app .fav-row {
   background: var(--panel);
   transition: border-color .2s, transform .2s, background .2s;
 }
-html.vue-app .fav-row:hover { border-color: rgba(217, 248, 125, .3); transform: translateX(2px); }
+html.vue-app .fav-row:hover { border-color: rgba(240, 185, 94, .3); transform: translateX(2px); }
 html.vue-app .fav-thumb {
   position: relative;
   width: 132px;
@@ -947,12 +944,12 @@ html.vue-app .fav-meta b { color: var(--text); font-family: var(--num); font-wei
 html.vue-app .fav-star {
   width: 34px; height: 34px; border-radius: 50%; flex: none;
   display: grid; place-items: center;
-  border: 1px solid rgba(217, 248, 125, .28);
-  background: rgba(217, 248, 125, .08);
+  border: 1px solid rgba(240, 185, 94, .28);
+  background: rgba(240, 185, 94, .08);
   color: var(--lime);
   font-size: 15px;
 }
-html.vue-app .fav-star:hover { border-color: rgba(217, 248, 125, .55); background: rgba(217, 248, 125, .14); }
+html.vue-app .fav-star:hover { border-color: rgba(240, 185, 94, .55); background: rgba(240, 185, 94, .14); }
 html.vue-app .fav-row > .btn { flex: none; }
 
 /* 空状态（我的 / 收藏各自一张小画） */
@@ -968,7 +965,7 @@ html.vue-app .empty-art { position: relative; height: 116px; display: grid; plac
 html.vue-app .empty-orbit { position: absolute; top: 2px; left: calc(50% + 52px); color: var(--lime); font-size: 17px; opacity: .8; }
 html.vue-app .empty-chair {
   width: 62px; height: 76px;
-  border: 2px dashed rgba(217, 248, 125, .36);
+  border: 2px dashed rgba(240, 185, 94, .36);
   border-radius: 30px 30px 9px 9px;
 }
 html.vue-app .empty-dash {
@@ -979,7 +976,7 @@ html.vue-app .empty-dash {
 }
 html.vue-app .empty-frame {
   width: 88px; height: 64px;
-  border: 2px dashed rgba(217, 248, 125, .36);
+  border: 2px dashed rgba(240, 185, 94, .36);
   border-radius: 10px;
   display: grid; place-items: center;
   font-size: 22px; color: var(--lime);
@@ -1029,7 +1026,7 @@ html.vue-app .avatar {
 html.vue-app .avatar.avatar-xs { width: 26px; height: 26px; font-size: 11px; }
 html.vue-app .avatar.avatar-sm { width: 30px; height: 30px; }
 html.vue-app .tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--dim); }
-html.vue-app .tag-coo { color: rgba(217, 248, 125, .8); border-color: rgba(217, 248, 125, .25); }
+html.vue-app .tag-coo { color: rgba(240, 185, 94, .8); border-color: rgba(240, 185, 94, .25); }
 html.vue-app .hall-create-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 html.vue-app .hall-create-row input, html.vue-app .hall-create-row select {
   height: 38px;
@@ -1137,8 +1134,8 @@ html.vue-app .chat-log .msg p {
   max-width: 100%;
   padding: 8px 11px;
   border-radius: 3px 13px 13px 13px;
-  background: rgba(206, 232, 201, .055);
-  border: 1px solid rgba(206, 232, 201, .07);
+  background: rgba(230, 196, 150, .055);
+  border: 1px solid rgba(230, 196, 150, .07);
   color: #dfe8db;
   font-size: 12.5px;
   line-height: 1.6;
@@ -1175,9 +1172,9 @@ html.vue-app .mail-item {
   cursor: pointer;
   transition: border-color .16s, background .16s;
 }
-html.vue-app .mail-item:hover { border-color: rgba(217, 248, 125, .3); background: rgba(255, 255, 255, .045); }
+html.vue-app .mail-item:hover { border-color: rgba(240, 185, 94, .3); background: rgba(255, 255, 255, .045); }
 html.vue-app .mail-seal { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; background: var(--line-2); flex: none; }
-html.vue-app .mail-item.is-unread .mail-seal { background: var(--lime); box-shadow: 0 0 0 3px rgba(217, 248, 125, .12); }
+html.vue-app .mail-item.is-unread .mail-seal { background: var(--lime); box-shadow: 0 0 0 3px rgba(240, 185, 94, .12); }
 html.vue-app .mail-copy { min-width: 0; flex: 1; }
 html.vue-app .mail-meta { display: flex; align-items: baseline; gap: 7px; }
 html.vue-app .mail-meta strong { font-size: 12.5px; }
@@ -1205,7 +1202,7 @@ html.vue-app .chat-fab {
   gap: 8px;
   font-size: 13px;
   font-weight: 700;
-  box-shadow: 0 14px 36px rgba(217, 248, 125, .22);
+  box-shadow: 0 14px 36px rgba(240, 185, 94, .22);
 }
 
 /* ——— 加入页 ——— */
@@ -1216,7 +1213,7 @@ html.vue-app .join {
   padding: 48px 20px;
   background:
     radial-gradient(820px 480px at 50% -6%, rgba(243, 214, 160, .14), transparent 62%),
-    radial-gradient(700px 420px at 28% 8%, rgba(217, 248, 125, .07), transparent 58%),
+    radial-gradient(700px 420px at 28% 8%, rgba(240, 185, 94, .07), transparent 58%),
     var(--bg);
   position: relative;
   overflow: hidden;
@@ -1229,7 +1226,7 @@ html.vue-app .join-lamp {
   width: 2px;
   height: 92px;
   transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(217, 248, 125, .08), rgba(217, 248, 125, .42));
+  background: linear-gradient(180deg, rgba(240, 185, 94, .08), rgba(240, 185, 94, .42));
 }
 html.vue-app .join-lamp::before {
   content: "";
@@ -1261,19 +1258,19 @@ html.vue-app .join-felt {
   height: 420px;
   transform: translateX(-50%) rotate(-5deg);
   border-radius: 50%;
-  background: radial-gradient(ellipse at 44% 24%, #427a5c 0%, #2f5b45 40%, #1e4233 74%, #153025 100%);
+  background: radial-gradient(ellipse at 44% 24%, #7a5539 0%, #5a3d28 40%, #3d2a1c 74%, #2a1c12 100%);
   box-shadow:
     0 -24px 60px rgba(0, 0, 0, .5),
-    0 0 0 11px #234638,
-    0 0 0 12px rgba(196, 228, 178, .13),
-    inset 0 8px 26px rgba(224, 242, 204, .10);
+    0 0 0 11px #4a3425,
+    0 0 0 12px rgba(216, 184, 144, .13),
+    inset 0 8px 26px rgba(240, 214, 176, .10);
 }
 html.vue-app .join-felt::after {
   content: "";
   position: absolute;
   inset: 24px 32px;
   border-radius: 50%;
-  border: 1px dashed rgba(220, 243, 201, .18);
+  border: 1px dashed rgba(240, 214, 176, .18);
 }
 html.vue-app .join-felt-mark {
   position: absolute;
@@ -1283,7 +1280,7 @@ html.vue-app .join-felt-mark {
   font-family: var(--num);
   font-size: 9px;
   letter-spacing: .36em;
-  color: rgba(222, 240, 205, .3);
+  color: rgba(240, 214, 176, .3);
   white-space: nowrap;
 }
 html.vue-app .join-cards {
@@ -1359,7 +1356,7 @@ html.vue-app .join .field input {
   padding: 0 15px;
   outline: none;
 }
-html.vue-app .join .field input:focus { border-color: rgba(217, 248, 125, .55); }
+html.vue-app .join .field input:focus { border-color: rgba(240, 185, 94, .55); }
 html.vue-app .join .field input::placeholder { color: var(--dim); }
 html.vue-app .join .btn.primary { width: 100%; height: 48px; margin-top: 20px; font-size: 14.5px; }
 html.vue-app .join .note { margin: 12px 0 0; font-size: 11px; line-height: 1.6; color: var(--dim); }
@@ -1380,7 +1377,7 @@ html.vue-app .club-welcome {
   padding: 22px 24px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
-  background: linear-gradient(120deg, rgba(47, 91, 69, .35), rgba(47, 91, 69, .08));
+  background: linear-gradient(120deg, rgba(122, 85, 57, .30), rgba(122, 85, 57, .06));
 }
 html.vue-app .club-welcome .eyebrow { margin-bottom: 10px; }
 html.vue-app .club-welcome h2 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
@@ -1406,7 +1403,7 @@ html.vue-app .club-table-card {
   overflow: hidden;
   transition: transform .2s, border-color .2s, box-shadow .2s;
 }
-html.vue-app .club-table-card:hover { transform: translateY(-3px); border-color: rgba(217, 248, 125, .3); box-shadow: var(--shadow-md); }
+html.vue-app .club-table-card:hover { transform: translateY(-3px); border-color: rgba(240, 185, 94, .3); box-shadow: var(--shadow-md); }
 html.vue-app .club-table-card > .club-section-head { margin: 0; padding: 13px 16px 0; display: flex; }
 html.vue-app .club-table-card > .club-section-head span { font-size: 12px; color: var(--muted); }
 html.vue-app .club-scene {
@@ -1429,7 +1426,7 @@ html.vue-app .club-felt .club-playing-card:nth-child(1) { left: 46%; top: 26%; t
 html.vue-app .club-felt .club-playing-card:nth-child(2) { left: 50%; top: 22%; transform: rotate(-1deg); z-index: 2; }
 html.vue-app .club-felt .club-playing-card:nth-child(3) { left: 54%; top: 26%; transform: rotate(12deg); color: var(--red); z-index: 3; }
 html.vue-app .club-orbit { position: absolute; left: 12px; top: 10px; color: var(--lime); opacity: .65; font-size: 13px; }
-html.vue-app .club-scene-label { position: absolute; right: 12px; bottom: 8px; font-family: var(--num); font-size: 7.5px; letter-spacing: .26em; color: rgba(222, 240, 205, .4); }
+html.vue-app .club-scene-label { position: absolute; right: 12px; bottom: 8px; font-family: var(--num); font-size: 7.5px; letter-spacing: .26em; color: rgba(240, 214, 176, .4); }
 html.vue-app .club-table-avatars { position: absolute; left: 12px; bottom: 10px; display: flex; gap: 4px; }
 html.vue-app .club-table-avatars .avatar { width: 22px; height: 22px; font-size: 9.5px; }
 html.vue-app .club-table-copy { padding: 12px 16px 16px; }
@@ -1485,7 +1482,7 @@ html.vue-app .turn-timer {
   font-family: var(--num);
   font-size: 11px;
   color: var(--text);
-  background: conic-gradient(var(--lime) calc(var(--p, 100) * 1%), rgba(206, 232, 201, .12) 0);
+  background: conic-gradient(var(--lime) calc(var(--p, 100) * 1%), rgba(230, 196, 150, .12) 0);
 }
 html.vue-app .turn-timer::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg); }
 html.vue-app .turn-timer span { position: relative; z-index: 1; }
@@ -1504,7 +1501,7 @@ html.vue-app .rooms-dialog, html.vue-app .access-dialog {
   width: min(520px, calc(100vw - 32px));
   box-shadow: var(--shadow-lg);
 }
-html.vue-app .rooms-dialog::backdrop, html.vue-app .access-dialog::backdrop { background: rgba(3, 8, 6, .62); backdrop-filter: blur(4px); }
+html.vue-app .rooms-dialog::backdrop, html.vue-app .access-dialog::backdrop { background: rgba(6, 4, 2, .62); backdrop-filter: blur(4px); }
 html.vue-app .rooms-box, html.vue-app .access-box { padding: 22px 24px 24px; }
 html.vue-app .rooms-head { display: flex; align-items: center; gap: 12px; }
 html.vue-app .rooms-head h2 { margin: 0; font-size: 20px; font-weight: 700; }
@@ -1535,15 +1532,25 @@ html.vue-app .announce-banner {
   margin: 0 0 16px;
   padding: 10px 14px;
   border-radius: 14px;
-  border: 1px solid rgba(217, 248, 125, .22);
-  background: rgba(217, 248, 125, .07);
+  border: 1px solid rgba(240, 185, 94, .22);
+  background: rgba(240, 185, 94, .07);
   color: var(--text);
   font-size: 12.5px;
 }
-html.vue-app .announce-mark { color: var(--lime); display: grid; place-items: center; }
-html.vue-app .announce-text { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.vue-app .announce-mark { color: var(--lime); display: grid; place-items: center; }html.vue-app .announce-text { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.vue-app .announce-link { color: var(--lime); font-size: 12px; }
 html.vue-app .announce-dismiss { height: 26px; padding: 0 10px; font-size: 11.5px; }
+/* 大厅首屏那条窄金底压在画面上读不清：换一块深一点的玻璃底，并抬到背景之上。 */
+html.vue-app .view-hall.section-all > .announce-banner {
+  position: relative;
+  z-index: 3;
+  border-color: rgba(240, 185, 94, .26);
+  background:
+    linear-gradient(180deg, rgba(240, 185, 94, .12), rgba(240, 185, 94, .04)),
+    rgba(24, 15, 9, .82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
 
 /* 私聊浮窗：气泡、输入框、会话列表全部走 token，深浅两套外观都跟着变。
    旧 play.css 给 .dm-msg 留了浅色底（#fff）、.dm-input 留了白底，这里统一改掉。 */
@@ -1594,12 +1601,29 @@ html.vue-app .toast {
 html.vue-app .toast.bad { border-color: color-mix(in srgb, var(--red) 45%, transparent); color: var(--red); }
 
 /* ——— 浅色「白天模式」的局部修正 ——— */
-html.vue-app[data-theme="light"] .scene-felt,
 html.vue-app[data-theme="light"] .join-felt {
-  box-shadow: 0 30px 60px rgba(45, 70, 55, .25), 0 0 0 9px #2f5c47, 0 0 0 10px rgba(60, 90, 70, .18), inset 0 6px 20px rgba(230, 245, 220, .18);
+  box-shadow: 0 30px 60px rgba(52, 44, 32, .25), 0 0 0 9px #2f5c47, 0 0 0 10px rgba(70, 62, 44, .18), inset 0 6px 20px rgba(230, 245, 220, .18);
+}
+/* 首屏那层背景永远是暗的茶馆，跟主题无关：
+   浅色主题下把 hero 里的字与牌子一起拉回「深色外观」那一组 token，
+   否则深字压在暗画面上读不出来。 */
+html.vue-app[data-theme="light"] .view-hall.section-all .hero {
+  --text: #f6ead6;
+  --muted: #d6c0a3;
+  --dim: #ab9071;
+  --line: rgba(230, 196, 150, .16);
+  --line-2: rgba(230, 196, 150, .30);
+  --panel-2: rgba(30, 19, 11, .90);
+  --panel-solid: #241610;
+  --panel-glass: rgba(30, 20, 13, .80);
+  --lime: #f0b95e;
+  --lime-ink: #241408;
+  --lamp: #f3d6a0;
+  /* color 是继承属性，只有重新声明一次，里面的子元素才真的用上这组浅字 */
+  color: var(--text);
+  color-scheme: dark;
 }
 html.vue-app[data-theme="light"] .topbar { background: linear-gradient(180deg, rgba(241, 243, 232, .96), rgba(241, 243, 232, .6) 70%, transparent); }
-html.vue-app[data-theme="light"] .scene-lamp::after { background: radial-gradient(ellipse at 50% 0%, rgba(201, 138, 46, .18), rgba(201, 138, 46, .05) 42%, transparent 68%); }
 html.vue-app[data-theme="light"] .chat-log .msg p { background: rgba(38, 53, 44, .05); border-color: rgba(38, 53, 44, .08); color: #2e4035; }
 html.vue-app[data-theme="light"] .mail-copy > p { color: #2e4035; }
 html.vue-app[data-theme="light"] .poster-art::after { background: linear-gradient(180deg, transparent 60%, rgba(241, 243, 232, .25)); }
@@ -1612,7 +1636,7 @@ html.vue-app[data-theme="light"] .btn:not(.primary):hover:not(:disabled) { backg
 /* 浅色下「Coo」「牌桌」这类浅黄标签在白底上读不出来，换成深一档的绿。 */
 html.vue-app[data-theme="light"] :is(.tag-coo, .tag-table) {
   color: #4c6a30;
-  border-color: rgba(76, 106, 48, .34);
+  border-color: rgba(168, 92, 34, .34);
 }
 /* 浅色下当前门牌项、错误字样这类小字也换成深一档的颜色。 */
 html.vue-app[data-theme="light"] .rail-btn.is-on { color: #3c5222; }
@@ -1620,9 +1644,9 @@ html.vue-app[data-theme="light"] :is(.warn, .bad) { color: #a64347; }
 html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 
 /* ——— 响应式 ——— */
-/* 宽屏（2560 一档的桌面）：字号、桌面画与告示牌一起放大，避免 1440 的尺寸被拉成一条细线。 */
+/* 宽屏（2560 一档的桌面）：字号与告示牌一起放大，避免 1440 的尺寸被拉成一条细线。 */
 @media (min-width: 1600px) {
-  html.vue-app .hero { column-gap: 52px; min-height: 620px; }
+  html.vue-app .hero-dock { gap: 36px; }
   html.vue-app .hero h1 { font-size: clamp(78px, 4.3vw, 96px); }
   html.vue-app .hero-sub { max-width: 34em; font-size: 15px; }
   html.vue-app .hero-now-main h2 { font-size: 34px; }
@@ -1630,37 +1654,37 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .hero-now-meta { font-size: 13px !important; }
   html.vue-app .hero-now-meta b { font-size: 14.5px; }
   html.vue-app .cta { height: 54px; font-size: 15.5px; }
-  html.vue-app .hero-side { padding-top: 40px; }
-  html.vue-app .scene-table { width: 500px; height: 305px; }
-  html.vue-app .scene-lamp { top: -46px; height: 96px; }
-  html.vue-app .scene-lamp::after { width: 560px; height: 470px; }
-  html.vue-app .scene-seat { width: 38px; height: 38px; }
-  html.vue-app .scene-seat.seat-a, html.vue-app .scene-seat.seat-b { bottom: 128px; }
   html.vue-app .scard { width: 64px; height: 90px; }
-  html.vue-app .scene-caption { font-size: 9.5px; }
-  /* 宽屏时告示牌铺满右栏、贴齐内容右缘，画面与面板同一条中轴。 */
+  /* 宽屏时告示牌铺满右栏、贴齐内容右缘，和左栏文案同一条中轴。 */
   html.vue-app .hero-side > .recruit-board { width: 100%; max-width: none; }
-  html.vue-app .rchip-name { font-size: 18px; }
-  html.vue-app .rchip { padding: 14px 16px 15px; }
+}
+
+/* 聊天面板是固定浮层（宽 336，right 26），展开时正好压住右下角那块牌子。
+   把底角那排整体让开面板的宽度，牌子仍然贴着「看得见的」右边缘。 */
+@media (min-width: 1321px) {
+  html.vue-app .shell.chat-open .view-hall .hero-dock { right: 366px; }
 }
 
 @media (max-width: 1320px) {
+  /* 两个底角挤不下就按顺序摞起来：文案 → 推荐 → 找一桌。
+     首屏不再强撑一屏高，交给内容自己撑。 */
   html.vue-app .hero {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "copy" "board" "scene" "shelf";
-    row-gap: 14px;
     min-height: 0;
-    padding-top: 26px;
+    padding: 26px 0 0;
   }
   html.vue-app .hero h1 { font-size: clamp(48px, 6.4vw, 72px); }
-  /* 单列时把两栏拆开：先给「找一桌」的动作，再留灯下那张桌的画面。 */
-  html.vue-app .hero-side { display: contents; }
-  html.vue-app .hero-side > .recruit-board { grid-area: board; width: 100%; max-width: 560px; margin-inline: auto; }
-  html.vue-app .hero-side .scene { grid-area: scene; flex: none; height: 300px; margin-top: 4px; }
-  html.vue-app .scene-table { width: 340px; height: 208px; bottom: -10px; }
-  html.vue-app .scene-lamp { left: 50%; }
-  html.vue-app .scene-lamp::after { width: 380px; height: 320px; }
-  html.vue-app .hero-chips { padding-bottom: 20px; }
+  html.vue-app .hero-dock {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    margin-top: 22px;
+    padding-bottom: 20px;
+  }
+  /* 告示牌靠左而不是居中：聊天面板是固定浮层，
+     居中的牌会有一截伸到它底下，「快速匹配」按钮正好被切掉。 */
+  html.vue-app .hero-side { width: 100%; max-width: 560px; margin-left: 0; }
+  html.vue-app .hero-now { flex: 1 1 auto; max-width: 560px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   html.vue-app .section-head h1 { font-size: clamp(36px, 5vw, 48px); }
 }
@@ -1693,6 +1717,8 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .stage { height: 100vh; }
   html.vue-app .stage-body { padding-top: 84px; padding-bottom: 74px; }
   html.vue-app .stage-body > .view { padding: 0 20px 40px; }
+  /* 内容区左右留白收到 20，纸面实底跟着收，接缝处才不漏画面。 */
+  html.vue-app .hall-floor { margin: 0 -20px; padding: 0 20px; }
   html.vue-app .shell.chat-open .stage-body > .view { padding-right: 20px; }
   html.vue-app .topbar { height: 76px; padding: 0 20px; gap: 10px; }
   html.vue-app .topbar .presence { display: none; }
@@ -1743,12 +1769,16 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   /* 手机窄栏里把「人数/桌数」和轮播拆成两行，统计不再被挤断。 */
   html.vue-app .hero-now-main { flex: 1 1 100%; }
   html.vue-app .hero-carousel { justify-content: flex-start; padding-bottom: 0; }
-  html.vue-app .hero-side .scene { height: 260px; }
-  html.vue-app .scene-table { width: 300px; height: 186px; }
   html.vue-app .scard { width: 48px; height: 68px; font-size: 12px; }
   html.vue-app .posters { grid-template-columns: minmax(0, 1fr); }
-  html.vue-app .rchip { flex: 1 1 calc(50% - 5px); width: auto; min-width: 0; max-width: none; }
-  html.vue-app .rchip-name { font-size: 15.5px; }
+  /* 手机上画面只铺在首屏那一块，字和牌子挤在一起容易糊，
+     把暗压得更重一点，保证「今晚，来一局」和按钮读得清。 */
+  html.vue-app .hall-bg::after {
+    background:
+      linear-gradient(180deg, rgba(10, 6, 3, .74) 0%, rgba(10, 6, 3, .5) 46%, rgba(10, 6, 3, .84) 88%, var(--bg) 100%);
+  }
+  html.vue-app .hall-bg-mark { display: none; }
+  html.vue-app .hero-now { padding: 12px 14px 13px; border-radius: 16px; }
   html.vue-app .topbar { gap: 6px; padding: 0 14px; }
   html.vue-app .brand span { display: none; }
   html.vue-app .brand b { font-size: 18px; }
