@@ -207,6 +207,18 @@ async function createRoom(): Promise<void> {
           <h1>今晚，<br>来一局。<span class="spark">✳</span></h1>
           <p class="hero-sub"><span>会馆里灯亮着，牌已经洗好。</span><span>找个位置坐下，和朋友、Coo 一起把时间慢下来。</span></p>
 
+          <div v-if="!model.current" class="hero-actions">
+            <button class="cta" type="button" @click="heroEnter">
+              {{ rooms.length ? '逛逛客厅' : '开一间客厅' }}<span class="cta-arrow">↗</span>
+            </button>
+            <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
+          </div>
+        </div>
+
+        <!-- 底角那一排：左「推荐客厅」、右「找一桌」。
+             两块牌子各坐一个角，中间那片屋子完整露出来 ——
+             原先「找一桌」挂在右栏正中，正好压住茶柜。 -->
+        <div class="hero-dock">
           <div v-if="model.current" class="hero-now">
             <span class="hero-now-kicker"><i class="dot" />热闹正在发生 / PARLOR CLUB</span>
             <div class="hero-now-row">
@@ -251,18 +263,9 @@ async function createRoom(): Promise<void> {
             </div>
           </div>
 
-          <div v-else class="hero-actions">
-            <button class="cta" type="button" @click="heroEnter">
-              {{ rooms.length ? '逛逛客厅' : '开一间客厅' }}<span class="cta-arrow">↗</span>
-            </button>
-            <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
+          <div class="hero-side">
+            <LobbyMatching />
           </div>
-        </div>
-
-        <!-- 右栏：挂在墙边的「找一桌」告示牌。底下的茶馆已经铺满整个界面，
-             这里只留这一块牌子浮在画面上，不再单独摆一幅画。 -->
-        <div class="hero-side">
-          <LobbyMatching />
         </div>
       </section>
 

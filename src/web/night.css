@@ -429,26 +429,32 @@ html.vue-app .hall-bg-mark {
   pointer-events: none;
 }
 
-/* 版式还是原来的两栏：左说「走进哪间」，右挂「找一桌」的牌子。
-   变的是这两栏现在浮在整屏的画面上，不再各自占一块地。
+/* 首屏不再分两栏。文案贴左上，两块牌子各坐一个底角，中间整片留给那间屋子：
+   「找一桌」不再浮在茶柜正中挡着柜子，「推荐」也不再压在标题和副文案下面。
    高度抵到视口底部（顶条 92px 已经被 stage-body 让出来了），首屏就是一整张画。 */
 html.vue-app .hero {
   position: relative;
   z-index: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr);
-  column-gap: 40px;
-  align-items: center;
-  min-height: calc(100vh - 92px);
+  /* 底角那排是绝对定位的，窗口太矮时得让 hero 自己长高，别让牌子压到标题上。 */
+  min-height: max(calc(100vh - 92px), 640px);
   padding: 20px 0 30px;
 }
 html.vue-app .hero-copy {
   position: relative;
   z-index: 3;
-  display: flex;
-  flex-direction: column;
+  max-width: 620px;
   min-width: 0;
-  padding-bottom: 6px;
+}
+/* 底角那一排：左「推荐」，右「找一桌」，贴到首屏底沿。 */
+html.vue-app .hero-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: flex-end;
+  gap: 28px;
 }
 /* 画面往下交给纸面：实底从这一行开始，滚动时不会和背景打架。
    负边距是把实底铺到内容区的左右留白外面，接缝处不会漏出一条动画；
@@ -469,16 +475,17 @@ html.vue-app .hall-floor::after {
   height: 120px;
   background: var(--bg);
 }
+/* 右下角：告示牌。宽度收在一个上限内，别吃满半屏挡住屋子；
+   margin-left:auto 保证没有「推荐」卡时它仍然贴右。 */
 html.vue-app .hero-side {
   position: relative;
   z-index: 2;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 12px;
+  flex: 0 0 auto;
+  width: min(460px, 47%);
   min-width: 0;
+  margin-left: auto;
 }
-html.vue-app .hero-side > .recruit-board { flex: none; }
+html.vue-app .hero-side > .recruit-board { width: 100%; max-width: none; margin-inline: 0; }
 html.vue-app .hero h1 {
   margin: 20px 0 0;
   font-size: clamp(52px, 5.1vw, 78px);
@@ -508,9 +515,24 @@ html.vue-app .hero-sub {
    也不会像 text-wrap: balance 那样把「坐下」拆成两半。 */
 html.vue-app .hero-sub > span { display: inline-block; }
 html.vue-app .hero-actions { margin-top: 24px; display: flex; align-items: center; gap: 18px; }
-/* 首屏里「走进这间客厅」跟着热门客厅块走：紧挨房间名，按钮上直接写房间名，指代不靠猜。 */
-html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
-html.vue-app .hero-now .hero-actions-inline { margin-top: 18px; }
+/* 左下角：推荐客厅。和右边告示牌用同一套玻璃面，两块牌子才像一对，不是两块贴图。 */
+html.vue-app .hero-now {
+  flex: 0 1 560px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px 18px 15px;
+  border: 1px solid var(--line-2);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 4%, transparent), transparent 42%),
+    var(--panel-2);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent),
+    var(--shadow-md);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+html.vue-app .hero-now .hero-actions-inline { margin-top: 14px; }
 html.vue-app .cta {
   height: 50px;
   padding: 0 6px 0 20px;
@@ -540,7 +562,6 @@ html.vue-app .cta-arrow {
 html.vue-app .ghost-link { font-size: 13px; color: var(--muted); padding: 4px 0; }
 html.vue-app .ghost-link:hover { color: var(--lime); }
 
-html.vue-app .hero-now { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
 html.vue-app .hero-now-kicker {
   display: flex;
   align-items: center;
@@ -1625,7 +1646,7 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 /* ——— 响应式 ——— */
 /* 宽屏（2560 一档的桌面）：字号与告示牌一起放大，避免 1440 的尺寸被拉成一条细线。 */
 @media (min-width: 1600px) {
-  html.vue-app .hero { column-gap: 52px; }
+  html.vue-app .hero-dock { gap: 36px; }
   html.vue-app .hero h1 { font-size: clamp(78px, 4.3vw, 96px); }
   html.vue-app .hero-sub { max-width: 34em; font-size: 15px; }
   html.vue-app .hero-now-main h2 { font-size: 34px; }
@@ -1638,25 +1659,32 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .hero-side > .recruit-board { width: 100%; max-width: none; }
 }
 
+/* 聊天面板是固定浮层（宽 336，right 26），展开时正好压住右下角那块牌子。
+   把底角那排整体让开面板的宽度，牌子仍然贴着「看得见的」右边缘。 */
+@media (min-width: 1321px) {
+  html.vue-app .shell.chat-open .view-hall .hero-dock { right: 366px; }
+}
+
 @media (max-width: 1320px) {
+  /* 两个底角挤不下就按顺序摞起来：文案 → 推荐 → 找一桌。
+     首屏不再强撑一屏高，交给内容自己撑。 */
   html.vue-app .hero {
-    grid-template-columns: minmax(0, 1fr);
-    /* 单列：文案在上，「找一桌」的牌子跟在后头 —— 画面已经是整屏的底，不用再占一行。 */
-    grid-template-areas: "copy" "board";
-    row-gap: 22px;
-    min-height: calc(100vh - 84px);
-    padding: 26px 0 34px;
+    min-height: 0;
+    padding: 26px 0 0;
   }
   html.vue-app .hero h1 { font-size: clamp(48px, 6.4vw, 72px); }
-  /* 单列时把两栏拆开。告示牌靠左而不是居中：聊天面板是固定浮层，
-     居中的牌会有一截伸到它底下，「快速匹配」按钮正好被切掉。 */
-  html.vue-app .hero-side { display: contents; }
-  html.vue-app .hero-side > .recruit-board {
-    grid-area: board;
-    width: 100%;
-    max-width: 560px;
-    margin-inline: 0;
+  html.vue-app .hero-dock {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    margin-top: 22px;
+    padding-bottom: 20px;
   }
+  /* 告示牌靠左而不是居中：聊天面板是固定浮层，
+     居中的牌会有一截伸到它底下，「快速匹配」按钮正好被切掉。 */
+  html.vue-app .hero-side { width: 100%; max-width: 560px; margin-left: 0; }
+  html.vue-app .hero-now { flex: 1 1 auto; max-width: 560px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   html.vue-app .section-head h1 { font-size: clamp(36px, 5vw, 48px); }
 }
@@ -1750,8 +1778,7 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
       linear-gradient(180deg, rgba(10, 6, 3, .74) 0%, rgba(10, 6, 3, .5) 46%, rgba(10, 6, 3, .84) 88%, var(--bg) 100%);
   }
   html.vue-app .hall-bg-mark { display: none; }
-  /* 手机上这两块撑不满一屏，上下分开摆：文案贴顶、牌子靠底，中间留出茶博士。 */
-  html.vue-app .hero { align-content: space-between; }
+  html.vue-app .hero-now { padding: 12px 14px 13px; border-radius: 16px; }
   html.vue-app .topbar { gap: 6px; padding: 0 14px; }
   html.vue-app .brand span { display: none; }
   html.vue-app .brand b { font-size: 18px; }
