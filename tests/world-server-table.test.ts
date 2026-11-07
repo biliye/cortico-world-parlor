@@ -92,7 +92,7 @@ describe('WorldServer 牌桌网关', () => {
       tokens.push(await enter(app, `coo-werewolf-${index}`, `Coo ${index + 1}`));
     }
     const [host, ...others] = tokens;
-    const headers = { 'x-parlor-client': '0.37.1' };
+    const headers = { 'x-parlor-client': '0.37.2' };
     const open = { type: 'table_open', game: 'werewolf' };
     expect((await act(app, host, { ...open, requireHuman: 'false' }, headers)).status).toBe(400);
 
@@ -472,9 +472,14 @@ describe('家长门户', () => {
     const page = await fetch(`${app.url}/parent`);
     expect(page.status).toBe(200);
     expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(page.headers.get('content-security-policy')).toContain("font-src 'self'");
     expect(page.headers.get('referrer-policy')).toBe('no-referrer');
     expect(await page.text()).toMatch(/<script type="module" src="\/parent\/assets\/parent\.js(?:\?[^"\s]+)?">/);
     const script = await fetch(`${app.url}/parent/assets/parent.js`);
     expect(script.status).toBe(200);
+    // 像素字体要真的在包里、按字体类型发；否则家长页会静默退回系统字体。
+    const font = await fetch(`${app.url}/parent/assets/fonts/fusion-pixel-sc.woff2`);
+    expect(font.status).toBe(200);
+    expect(font.headers.get('content-type')).toBe('font/woff2');
   });
 });

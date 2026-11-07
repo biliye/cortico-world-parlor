@@ -7,20 +7,32 @@ const ui = {
   gateKey: document.getElementById('key'),
   gateError: document.getElementById('gate-error'),
   view: document.getElementById('view'),
+  liveDot: document.getElementById('live-dot'),
+  consoleClock: document.getElementById('clock'),
   roomName: document.getElementById('room-name'),
   roomSeat: document.getElementById('room-seat'),
   roomLive: document.getElementById('room-live'),
+  statMsgs: document.getElementById('stat-msgs'),
+  statChips: document.getElementById('stat-chips'),
+  statUnread: document.getElementById('stat-unread'),
+  statGames: document.getElementById('stat-games'),
   people: document.getElementById('room-people'),
   tableStatus: document.getElementById('table-status'),
   tableText: document.getElementById('table-text'),
   tablePrivate: document.getElementById('table-private'),
+  privateNote: document.getElementById('private-note'),
   chips: document.getElementById('chips'),
   ledgerLine: document.getElementById('ledger-line'),
   ledgerRoom: document.getElementById('ledger-room'),
+  meter: document.getElementById('meter'),
+  meterLegend: document.getElementById('meter-legend'),
+  alerts: document.getElementById('alerts'),
+  alertCount: document.getElementById('alert-count'),
   latest: document.getElementById('latest'),
   log: document.getElementById('log'),
   mailUnread: document.getElementById('mail-unread'),
   mail: document.getElementById('mail'),
+  refresh: document.getElementById('refresh'),
   toast: document.getElementById('toast'),
 };
 
@@ -77,16 +89,16 @@ function showView(account) {
   clear(ui.account);
   const who = el('span', 'who', account.displayName || '家长');
   ui.account.append(who);
-  const play = el('button', 'btn primary small', '下场玩');
+  const play = el('button', 'board-btn primary small', '下场玩');
   play.type = 'button';
   play.title = '以家长身份进客厅；和孩子的账本分开';
   play.addEventListener('click', () => { void playAsParent(play); });
   ui.account.append(play);
-  const rename = el('button', 'link', '改名字');
+  const rename = el('button', 'board-btn ghost small', '改名字');
   rename.type = 'button';
   rename.addEventListener('click', () => openRename(account, who));
   ui.account.append(rename);
-  const logout = el('button', 'link', '退出');
+  const logout = el('button', 'board-btn ghost small', '退出');
   logout.type = 'button';
   logout.addEventListener('click', async () => {
     try { await api('/v1/parent/logout', { method: 'POST' }); } catch { /* 已经失效 */ }
@@ -109,9 +121,9 @@ function openRename(account, who) {
   input.maxLength = 24;
   input.placeholder = '比如：塞斯普瑞家的家长';
   input.setAttribute('aria-label', '新名字');
-  const save = el('button', 'btn primary small', '保存');
+  const save = el('button', 'board-btn primary small', '保存');
   save.type = 'submit';
-  const cancel = el('button', 'link', '取消');
+  const cancel = el('button', 'board-btn ghost small', '取消');
   cancel.type = 'button';
   cancel.addEventListener('click', () => box.remove());
   box.append(input, save, cancel);
@@ -220,48 +232,187 @@ async function loadView() {
 function render(view) {
   const seat = view.seat;
   const room = view.room;
+  const ledger = view.ledger;
+  const events = view.events || [];
+
+  ui.consoleClock.textContent = clock(view.now);
+  ui.liveDot.className = seat ? 'live-dot is-live' : 'live-dot is-off';
+
   ui.roomName.textContent = room ? (room.kind === 'hall' ? '大厅' : room.name) : '不在任何客厅';
   ui.roomSeat.textContent = seat
-    ? `席位 ${seat.name}${seat.handle ? ` #${seat.handle}` : ''}`
+    ? `席位 ${seat.name}${seat.handle ? ` #${seat.handle}` : ''} · ${KIND[seat.kind] || seat.kind}`
     : '孩子现在没有活跃席位。';
-  ui.roomLive.textContent = room ? `${(view.events || []).length} 条可见` : '—';
+  ui.roomLive.textContent = room ? `${events.length} 条可见` : '不在客厅';
   ui.latest.textContent = view.at ? `服务器 ${clock(view.now)}` : '';
 
-  const seats = [];
-  if (seat) seats.push(seat);
-  clear(ui.people);
-  if (seat) {
-    const line = el('li', 'person');
-    line.append(el('span', 'avatar', Array.from(String(seat.name || '？'))[0] || '？'));
-    line.append(el('span', '', `${seat.name}（${KIND[seat.kind] || seat.kind}）`));
-    ui.people.append(line);
-  }
+  ui.statMsgs.textContent = String(events.length);
+  ui.statChips.textContent = ledger && ledger.chips !== undefined ? String(ledger.chips) : '—';
+  ui.statUnread.textContent = String(view.mailUnread || 0);
+  ui.statGames.textContent = ledger && ledger.games ? String(ledger.games) : '0';
 
+  renderTable(view);
+  renderPeople(view);
+  renderAlerts(view);
+  renderLedger(view);
+  renderLog(view);
+  renderMail(view);
+}
+
+function renderTable(view) {
   const table = view.table;
   ui.tableStatus.textContent = table ? (table.label || table.game || '牌桌') : '空闲';
   ui.tableText.textContent = table ? (table.text || '') : '现在没有桌子。';
-  if (view.tablePrivate && view.tablePrivate.text) {
+
+  const priv = view.tablePrivate && view.tablePrivate.text ? view.tablePrivate.text : '';
+  if (priv) {
     ui.tablePrivate.hidden = false;
-    ui.tablePrivate.textContent = view.tablePrivate.text;
+    ui.tablePrivate.textContent = priv;
+    ui.privateNote.hidden = false;
+    ui.privateNote.textContent = '这是孩子现在的私牌，只有他自己和你能看到。';
+  } else if (view.ownerPrivateHidden) {
+    ui.tablePrivate.hidden = true;
+    ui.tablePrivate.textContent = '';
+    ui.privateNote.hidden = false;
+    ui.privateNote.textContent = '这张桌子上还有别的人，按隐私规则，孩子的暗牌不在这里显示。';
   } else {
     ui.tablePrivate.hidden = true;
     ui.tablePrivate.textContent = '';
+    ui.privateNote.hidden = true;
+    ui.privateNote.textContent = '';
+  }
+}
+
+/** 最近说过话的人：家长一眼看出孩子正跟谁待在一个客厅。 */
+function renderPeople(view) {
+  const events = view.events || [];
+  const seen = new Set();
+  const list = [];
+  for (let i = events.length - 1; i >= 0 && list.length < 6; i -= 1) {
+    const event = events[i];
+    const raw = event.data && typeof event.data.name === 'string' ? event.data.name : '';
+    const name = raw || (event.from === 'system' ? '系统' : String(event.from || ''));
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    list.push({ name, system: !raw && event.from === 'system' });
   }
 
+  clear(ui.people);
+  if (list.length === 0) {
+    ui.people.append(el('li', 'people-empty', '还没有人说话'));
+    return;
+  }
+  for (const person of list) {
+    const item = el('li', person.system ? 'person is-system' : 'person');
+    item.append(el('span', 'avatar', Array.from(person.name)[0] || '？'));
+    item.append(el('span', '', person.name));
+    ui.people.append(item);
+  }
+}
+
+/** 要注意：没有需要处理的事就明说“一切正常”，不要留一片空白让人猜。 */
+function renderAlerts(view) {
+  const items = [];
+  if (!view.seat) {
+    items.push({ tone: 'off', mark: '·', title: '孩子现在不在客厅', note: '他打开客厅之后，这一页会自动跟上。' });
+  }
+  if (view.seat && view.ownerPrivateHidden) {
+    items.push({
+      tone: 'warn',
+      mark: '!',
+      title: '私牌已隐藏',
+      note: '这张桌子上还有别的人，孩子的暗牌不会显示在这一页。',
+    });
+  }
+  const unread = view.mailUnread || 0;
+  if (unread > 0) {
+    items.push({
+      tone: 'info',
+      mark: 'i',
+      title: `有 ${unread} 封未读来信`,
+      note: '来信会一直留着；看这一页不会把信标成已读。',
+    });
+  }
+  if (items.length === 0) {
+    items.push({ tone: 'ok', mark: '✓', title: '一切正常', note: '没有要你处理的事，孩子在自己玩。' });
+  }
+
+  const needsAttention = items.filter((item) => item.tone === 'warn' || item.tone === 'info').length;
+  ui.alertCount.textContent = String(needsAttention);
+  ui.alertCount.className = needsAttention === 0 ? 'badge is-zero' : 'badge';
+
+  clear(ui.alerts);
+  for (const item of items) {
+    const row = el('li', `alert ${item.tone}`);
+    const mark = el('span', 'mark', item.mark);
+    mark.setAttribute('aria-hidden', 'true');
+    const body = el('span');
+    body.append(el('strong', '', item.title));
+    body.append(el('em', '', item.note));
+    row.append(mark, body);
+    ui.alerts.append(row);
+  }
+}
+
+function renderLedger(view) {
   const ledger = view.ledger;
   ui.chips.textContent = ledger && ledger.chips !== undefined ? `${ledger.chips} 枚` : '—';
   ui.ledgerLine.textContent = ledger && ledger.games > 0
     ? `共 ${ledger.games} 局，${ledger.wins} 胜 ${ledger.losses} 负 ${ledger.draws} 平。`
     : '还没有战绩。';
-  clear(ui.ledgerRoom);
-  for (const entry of view.ledgerRoom || []) {
-    const item = el('li', '', entry.text);
-    item.append(el('span', 'when', clock(entry.ts)));
-    ui.ledgerRoom.append(item);
+
+  const games = ledger && ledger.games > 0 ? ledger.games : 0;
+  if (games === 0) {
+    ui.meter.hidden = true;
+    ui.meterLegend.hidden = true;
+    ui.meter.replaceChildren();
+  } else {
+    // 20 格代表这孩子打过的全部局数，按最大余数分配，最后几格留给没结算的。
+    const cells = 20;
+    const parts = [
+      { key: 'g-win', value: ledger.wins || 0 },
+      { key: 'g-draw', value: ledger.draws || 0 },
+      { key: 'g-loss', value: ledger.losses || 0 },
+    ];
+    let used = 0;
+    const counts = parts.map((part) => {
+      const exact = (part.value * cells) / games;
+      const base = Math.floor(exact);
+      used += base;
+      return { ...part, base, rest: exact - base };
+    });
+    let left = Math.max(0, cells - used);
+    for (const entry of [...counts].sort((a, b) => b.rest - a.rest)) {
+      if (left <= 0) break;
+      entry.base += 1;
+      left -= 1;
+    }
+    const frag = [];
+    for (const entry of counts) {
+      for (let i = 0; i < entry.base; i += 1) frag.push(el('i', entry.key));
+    }
+    ui.meter.replaceChildren(...frag);
+    ui.meter.hidden = false;
+    ui.meterLegend.hidden = false;
+    clear(ui.meterLegend);
+    const legend = [
+      { cls: 'k k-win', text: `胜 ${ledger.wins || 0}` },
+      { cls: 'k k-draw', text: `平 ${ledger.draws || 0}` },
+      { cls: 'k k-loss', text: `负 ${ledger.losses || 0}` },
+    ];
+    for (const item of legend) {
+      const wrap = el('span', 'legend');
+      wrap.append(el('span', item.cls), el('span', 'legend-text', item.text));
+      ui.meterLegend.append(wrap);
+    }
   }
 
-  renderLog(view);
-  renderMail(view);
+  clear(ui.ledgerRoom);
+  for (const entry of view.ledgerRoom || []) {
+    const item = el('li');
+    item.append(el('span', 'when', clock(entry.ts)));
+    item.append(el('span', 'ledger-text', entry.text));
+    ui.ledgerRoom.append(item);
+  }
 }
 
 function renderLog(view) {
@@ -315,6 +466,16 @@ ui.gateForm.addEventListener('submit', (event) => {
     return;
   }
   void openWithKey(key);
+});
+
+ui.refresh?.addEventListener('click', async () => {
+  ui.refresh.disabled = true;
+  try {
+    await loadView();
+    toast('已经是最新的了');
+  } finally {
+    ui.refresh.disabled = false;
+  }
 });
 
 void boot();

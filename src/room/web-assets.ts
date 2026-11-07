@@ -16,6 +16,7 @@ export const WEB_TYPES: Readonly<Record<string, string>> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
   '.ico': 'image/x-icon',
 };
 
@@ -26,6 +27,7 @@ export const PLAY_CSP = [
   "style-src 'self'",
   "connect-src 'self'",
   "img-src 'self'",
+  "font-src 'self'",
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",
@@ -54,7 +56,11 @@ function loadAsset(rel: string): Asset {
   const body = readFileSync(file);
   // ETag 用内容算：npm 打包会把 mtime 抹平，同长度的改动靠 mtime 认不出来。
   const etag = `"${createHash('sha1').update(body).digest('base64url').slice(0, 18)}"`;
-  const asset: Asset = { stamp, etag, body, gzipped: gzipSync(body) };
+  // 字体这类已经压过的二进制不再 gzip：省下的那份内存和首次请求的 CPU 都是白花的。
+  const dot = rel.lastIndexOf('.');
+  const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : '';
+  const gzipped = COMPRESSIBLE.has(ext) ? gzipSync(body) : body;
+  const asset: Asset = { stamp, etag, body, gzipped };
   assets.set(rel, asset);
   return asset;
 }
