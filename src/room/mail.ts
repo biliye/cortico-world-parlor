@@ -63,8 +63,15 @@ export interface MailPage {
   items: MailView[];
   /** 这次有没有把信标成已读。 */
   marked: boolean;
+  /** 本次实际标成已读的封数。旧服务端可能省略。 */
+  changed?: number;
   /** 当前这个 cooId 每个客厅各有多少未读（读完之后的状态）。 */
   unreadByRoom: Record<string, number>;
+}
+
+export interface MailReadResult {
+  changed: number;
+  remaining: number;
 }
 
 export interface MailStoreOptions {
@@ -208,17 +215,17 @@ export class MailStore {
   }
 
   /**
-   * 读最旧的未读；markRead=false 时只看不标记。
+   * 取一页未读；markRead=false 时只看不标记。
    * 给了 room 就只读那个客厅；不给读全部，回执带每厅未读。
    */
-  list(cooId: string, room?: string, limit = 10, markRead = true): MailPage {
+  list(cooId: string, room?: string, limit = 10, markRead = true, newest = false): MailPage {
     const unread = this.items
       .filter((item) => (
         item.to === cooId
         && item.read !== true
         && (room === undefined || item.room === room)
       ))
-      .sort((left, right) => left.seq - right.seq);
+      .sort((left, right) => newest ? right.seq - left.seq : left.seq - right.seq);
     const count = Math.max(1, Math.min(50, Math.trunc(limit)));
     const picked = unread.slice(0, count);
     if (markRead && picked.length > 0) {
@@ -230,8 +237,21 @@ export class MailStore {
       remaining: Math.max(0, unread.length - picked.length),
       items: picked.map(view),
       marked: markRead && picked.length > 0,
+      changed: markRead ? picked.length : 0,
       unreadByRoom: this.unreadByRoom(cooId),
     };
+  }
+
+  markAllRead(cooId: string): MailReadResult {
+    const unread = this.items.filter((item) => item.to === cooId && item.read !== true);
+    if (unread.length > 0) {
+      for (const item of unread) item.read = true;
+      if (!this.save()) {
+        for (const item of unread) item.read = false;
+        throw new MailWriteError('信箱已读状态写盘失败');
+      }
+    }
+    return { changed: unread.length, remaining: 0 };
   }
 
   /** 只标记一封；用于「读这一封」的入口。 */
@@ -267,8 +287,8 @@ export class MailStore {
       };
       const temp = `${this.file}.tmp`;
       writeFileSync(temp, `${JSON.stringify(state)}\n`, { encoding: 'utf8', mode: 0o600 });
+      chmodSync(temp, 0o600);
       renameSync(temp, this.file);
-      chmodSync(this.file, 0o600);
       return true;
     } catch {
       return false;

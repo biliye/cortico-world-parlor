@@ -70,6 +70,8 @@ const state = {
   unread: { room: 0, table: 0 },
   mail: null,
   mailLoading: false,
+  mailRequest: 0,
+  mailMarking: false,
   sheet: null,
   hallData: null,
   hallLoading: false,
@@ -2963,20 +2965,27 @@ function syncNav() {
 }
 
 async function loadMail(force = false) {
-  if (state.mailLoading) return;
+  if (state.mailLoading && !force) return;
   if (state.mail && !force && Date.now() - state.mail.at < 15000) return;
+  const id = ++state.mailRequest;
+  const token = state.cfg?.token;
   state.mailLoading = true;
   renderMail();
   try {
     // recent=1 是只读的最近几封（含已读），信箱 tab 用它；peek=1 只取未读，会把读过的信藏起来。
     const page = await api('/v1/mail?recent=1&limit=12');
+    if (id !== state.mailRequest || token !== state.cfg?.token) return;
     state.mail = { items: page.items || [], unread: page.unread || 0, at: Date.now() };
+    if (state.snap) state.snap.mailUnread = state.mail.unread;
     state.mail.error = null;
   } catch (error) {
+    if (id !== state.mailRequest || token !== state.cfg?.token) return;
     state.mail = { items: [], unread: 0, at: Date.now(), error: error.message || '取不到信箱' };
   } finally {
-    state.mailLoading = false;
-    renderMail();
+    if (id === state.mailRequest) {
+      state.mailLoading = false;
+      if (token === state.cfg?.token) renderMail();
+    }
   }
 }
 
@@ -2995,9 +3004,8 @@ function renderMail() {
     ui.mailList.append(el('p', 'chat-empty', '信箱是空的。'));
     return;
   }
-  mail.items.forEach((item, index) => {
-    // MailView 不带逐封已读位；peek 返回的是最近的几封，未读数以内的算未读。
-    const unread = index < mail.unread;
+  mail.items.forEach((item) => {
+    const unread = item.read === false;
     const node = el('article', 'mail-item' + (unread ? ' is-unread' : ''));
     node.append(el('span', 'mail-seal' + (item.fromName === '系统' ? ' is-system' : '')));
     const copy = el('div', 'mail-copy');
@@ -3036,8 +3044,9 @@ function renderMail() {
     }
     ui.mailList.append(node);
   });
-  if (mail.unread > mail.items.length) {
-    ui.mailList.append(el('p', 'chat-empty', '还有 ' + (mail.unread - mail.items.length) + ' 封未读。'));
+  const hiddenUnread = mail.unread - mail.items.filter(item => item.read === false).length;
+  if (hiddenUnread > 0) {
+    ui.mailList.append(el('p', 'chat-empty', '列表外还有 ' + hiddenUnread + ' 封未读。'));
   }
 }
 
@@ -3092,15 +3101,23 @@ async function declineRoomInvite(item) {
 }
 
 async function markMailRead() {
+  if (state.mailMarking) return;
+  const token = state.cfg?.token;
+  state.mailMarking = true;
+  ui.markRead.disabled = true;
   try {
-    await api('/v1/mail?limit=50');
-    await refreshSnapshot();
-    state.mail = null;
+    const { changed, remaining } = await api('/v1/mail/read-all', { method: 'POST' });
+    if (token !== state.cfg?.token) return;
+    if (state.snap) state.snap.mailUnread = remaining;
     await loadMail(true);
+    if (token !== state.cfg?.token) return;
     render();
-    showToast('信箱标成已读了');
+    showToast(`已标记 ${changed} 封，剩余 ${remaining} 封未读。`);
   } catch (error) {
-    showToast(error.message, 'bad');
+    if (token === state.cfg?.token) showToast(error.message, 'bad');
+  } finally {
+    state.mailMarking = false;
+    ui.markRead.disabled = false;
   }
 }
 

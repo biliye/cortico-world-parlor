@@ -105,17 +105,24 @@ watch(tab, (next) => {
   if (next === 'mail') void loadMail(true);
 }, { immediate: true });
 
+const readingAll = ref(false);
+const hiddenUnread = computed(() => Math.max(0, mailUnread.value - mailItems.value.filter(item => item.read === false).length));
+
 // 快照里的未读变了（新私聊/新邀请）：正看着信箱就顺手刷新列表。
 watch(mailUnread, (next, prev) => {
-  if (tab.value === 'mail' && next !== prev) void loadMail(true);
+  if (tab.value === 'mail' && next !== prev && !readingAll.value) void loadMail(true);
 });
 
 async function readAll(): Promise<void> {
+  if (readingAll.value) return;
+  readingAll.value = true;
   try {
-    await markAllRead();
-    showToast('信箱标成已读了');
+    const result = await markAllRead();
+    if (result) showToast(`已标记 ${result.changed} 封，剩余 ${result.remaining} 封未读。`);
   } catch (caught) {
     showToast((caught as Error).message || '标不上已读', 'bad');
+  } finally {
+    readingAll.value = false;
   }
 }
 
@@ -233,7 +240,7 @@ function closeDrawer(): void {
           <h2>有话慢慢聊</h2>
         </div>
         <div class="chat-head-actions">
-          <button v-if="tab === 'mail' && mailUnread" class="btn ghost small" type="button" @click="readAll">都看过了</button>
+          <button v-if="tab === 'mail' && mailUnread" class="btn ghost small" type="button" :disabled="readingAll" @click="readAll">都看过了</button>
           <button class="btn ghost small" type="button" aria-label="收起聊天" @click="collapse">收起</button>
           <button class="btn ghost small sheet-close" type="button" aria-label="关闭聊天" @click="closeDrawer">✕</button>
         </div>
@@ -290,11 +297,11 @@ function closeDrawer(): void {
           <p v-else-if="mailError" class="chat-empty bad">{{ mailError }}</p>
           <p v-else-if="!mailItems.length" class="chat-empty">信箱是空的。</p>
           <article
-            v-for="(item, index) in mailItems"
-            :key="index"
+            v-for="item in mailItems"
+            :key="item.id"
             class="mail-item"
             :class="{
-              'is-unread': index < mailUnread,
+              'is-unread': item.read === false,
               'is-invite': item.kind === 'invite',
               'is-dm': item.kind === 'whisper',
             }"
@@ -318,10 +325,10 @@ function closeDrawer(): void {
                 <button v-else class="ghost-btn mail-go" type="button" @click.stop="enterRoom(item.room)">进去</button>
               </template>
             </div>
-            <span v-if="index < mailUnread" class="unread-dot" />
+            <span v-if="item.read === false" class="unread-dot" />
           </article>
-          <p v-if="mailUnread > mailItems.length" class="chat-empty">
-            还有 {{ mailUnread - mailItems.length }} 封未读。
+          <p v-if="hiddenUnread" class="chat-empty">
+            列表外还有 {{ hiddenUnread }} 封未读。
           </p>
         </div>
       </div>

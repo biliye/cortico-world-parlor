@@ -2,7 +2,7 @@
 import type { CooIdentity } from './identity.ts';
 import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
 import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } from './global-identity.ts';
-import type { MailPage } from './mail.ts';
+import type { MailPage, MailReadResult } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type { HistorySyncPage } from './history-sync.ts';
 import type { Announcement, Feedback } from './support-db.ts';
@@ -144,11 +144,12 @@ export class ParlorClient {
   }
 
   /** 读信箱；peek 只看不标已读，all 看所有客厅（跨厅邀请在这里）。 */
-  async mail(token: string, limit = 10, peek = false, roomId?: string, all = false): Promise<MailPage> {
+  async mail(token: string, limit = 10, peek = false, roomId?: string, all = false, newest = false): Promise<MailPage> {
     const query = new URLSearchParams({
       limit: String(limit),
       ...(peek ? { peek: '1' } : {}),
-      ...(all ? { all: '1' } : {}),
+      all: all ? '1' : '0',
+      ...(newest ? { newest: '1' } : {}),
     });
     const response = await fetch(`${this.path('mail', roomId)}?${query}`, {
       headers: await this.headers({ authorization: `Bearer ${token}` }),
@@ -161,17 +162,27 @@ export class ParlorClient {
    * 身份级信箱：不占着任何客厅席位也能读（被移出客厅后，结算与退注还看得到）。
    * 用 x-parlor-coo 身份头，不需要席位令牌。
    */
-  async mailAsIdentity(limit = 10, peek = false, roomId?: string): Promise<MailPage> {
+  async mailAsIdentity(limit = 10, peek = false, roomId?: string, newest = false): Promise<MailPage> {
     const query = new URLSearchParams({
       limit: String(limit),
       ...(peek ? { peek: '1' } : {}),
       ...(roomId ? { room: roomId } : {}),
+      ...(newest ? { newest: '1' } : {}),
     });
     const response = await fetch(`${this.url('/v1/me/mail')}?${query}`, {
       headers: await this.headers({}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailPage>(response);
+  }
+
+  async markAllMailRead(token: string): Promise<MailReadResult> {
+    const response = await fetch(this.url('/v1/mail/read-all'), {
+      method: 'POST',
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<MailReadResult>(response);
   }
 
   /** 只读补档：包括已读信，按游标向前，不动信箱。 */

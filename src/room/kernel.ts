@@ -718,8 +718,12 @@ export class RoomKernel {
   }
 
   /** 读信：默认把取走的这几封标成已读。 */
-  readMail(seat: StoredSeat, limit = 10, markRead = true): MailPage {
-    return this.mail.list(this.cooIdOf(seat), this.id, limit, markRead);
+  readMail(seat: StoredSeat, limit = 10, markRead = true, newest = false): MailPage {
+    return this.mail.list(this.cooIdOf(seat), this.id, limit, markRead, newest);
+  }
+
+  markAllMailRead(seat: StoredSeat) {
+    return this.mail.markAllRead(this.cooIdOf(seat));
   }
 
   /** 最近几封（含已读），给家长页看，不动游标。 */

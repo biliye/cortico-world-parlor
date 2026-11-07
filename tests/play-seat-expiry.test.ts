@@ -99,6 +99,26 @@ describe('H2/H3旧入口与私密内容恢复', () => {
     return { dm: await import(dmPath), mail: await import(mailPath) };
   }
 
+  it('信箱全部标已读用专用写接口，迟到的旧首屏响应不能恢复旧未读数', async () => {
+    let release!: (data: any) => void;
+    const pending = new Promise(resolve => { release = resolve; });
+    let lists = 0;
+    const api = vi.fn((path: string) => {
+      if (path === '/v1/mail/read-all') return Promise.resolve({ changed: 87, remaining: 0 });
+      lists += 1;
+      return lists === 1 ? pending : Promise.resolve({ unread: 0, items: [{ id: 'new', read: true }] });
+    });
+    const { mail } = await privateStores(api);
+    const first = mail.loadMail(true);
+    expect(await mail.markAllRead()).toEqual({ changed: 87, remaining: 0 });
+    expect(api).toHaveBeenCalledWith('/v1/mail/read-all', { method: 'POST' });
+    release({ unread: 87, items: [{ id: 'old', read: false }] });
+    await first;
+    expect(mail.unread.value).toBe(0);
+    expect(mail.items.value).toEqual([{ id: 'new', read: true }]);
+    expect(mail.loading.value).toBe(false);
+  });
+
   it('切换席位后迟到的私聊列表、信箱响应不会填回旧私密内容', async () => {
     let release!: (data:any) => void;
     const pending = new Promise(resolve => { release = resolve; });

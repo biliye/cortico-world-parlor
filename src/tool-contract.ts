@@ -114,7 +114,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_mail',
-    description: '从最旧的未读开始取私信、礼物、邀请和账本通知；默认标已读。',
+    description: '按从新到旧的顺序取未读私信、礼物、邀请和账本通知；默认标已读。',
     tags: ['read'],
     parameters: {
       type: 'object',
@@ -122,6 +122,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       properties: {
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many letters to take, default 10.' },
         peek: { type: 'boolean', description: 'Only look; do not mark them read.' },
+        markAllRead: { type: 'boolean', description: 'Mark every unread letter as read without returning letters. Use only when explicitly asked; incompatible with peek.' },
       },
     },
   },

@@ -33,14 +33,15 @@ describe('家长页消息渲染', () => {
     const { renderMail, nodes } = mount();
     const view = { mailUnread: 1, mail: [
       { ts: 1, fromMe: true, toName: '阿岚', toHandle: 'alan', text: '<script>回复</script>', kind: 'whisper' },
-      { ts: 0, fromName: '阿岚', fromHandle: 'alan', text: '在吗', kind: 'whisper' },
+      { ts: 0, fromName: '阿岚', fromHandle: 'alan', text: '在吗', kind: 'whisper', read: false },
     ] };
     renderMail(view);
     const rows = nodes.get('mail')!.children;
     expect(rows[0].children[1].textContent).toBe('孩子 → 阿岚 #alan');
     expect(rows[0].children[2].textContent).toBe('<script>回复</script>');
     expect(rows[0].children[2].children).toHaveLength(0);
-    expect(rows[1].children[1].textContent).toBe('阿岚 #alan → 孩子');
+    expect(rows[1].children[1].textContent).toBe('阿岚 #alan → 孩子 · 未读');
+    expect(nodes.get('mail-unread')!.textContent).toBe('孩子未读 1 封');
     renderMail(view);
     expect(nodes.get('mail')!.children).toHaveLength(2);
     renderMail({ mail: [] });

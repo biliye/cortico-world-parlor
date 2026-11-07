@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { migrate, withTransaction, type Db } from './db.ts';
 import { registeredHandle } from './global-identity.ts';
-import type { MailItem, MailKind, MailPage, MailView } from './mail.ts';
+import type { MailItem, MailKind, MailPage, MailReadResult, MailView } from './mail.ts';
 
 /** 投递一封新信时需要的字段；id/seq/ts/read 由 store 填。 */
 export type MailInput = Omit<MailItem, 'id' | 'seq' | 'ts' | 'read'>;
@@ -37,9 +37,10 @@ export interface DmThreadMessage {
   unread: boolean;
 }
 
-/** 家长只读信箱：不提供对方的已读状态。 */
+/** 家长只读信箱：只提供孩子收到的信的已读状态。 */
 export type ParentMailView = Omit<MailView, 'read'> & {
   fromMe: boolean;
+  read?: boolean;
   toName?: string;
   toHandle?: string;
 };
@@ -231,28 +232,42 @@ export class MailDb {
   }
 
   /**
-   * 读最旧的未读；markRead=false 时只看不标记（peek）。
+   * 取一页未读；markRead=false 时只看不标记（peek）。
    * 给了 room 就只读那个客厅；回执里的 unreadByRoom 仍是所有客厅的。
    */
-  async list(cooId: string, room?: string, limit = DEFAULT_PAGE, markRead = true): Promise<MailPage> {
+  async list(cooId: string, room?: string, limit = DEFAULT_PAGE, markRead = true, newest = false): Promise<MailPage> {
     const size = clampPage(limit, DEFAULT_PAGE);
     return await this.tx(async () => {
-      const rows = await this.selectUnread(cooId, room, size);
-      const unread = await this.countUnread(cooId, room);
+      const rows = await this.selectUnread(cooId, room, size, newest);
+      let changed = 0;
       if (markRead && rows.length > 0) {
-        const at = this.now();
-        const update = this.db.prepare(
-          'UPDATE mail SET read_at = ? WHERE coo_id = ? AND seq = ? AND read_at IS NULL',
-        );
-        for (const row of rows) await update.run(at, cooId, Number(row.seq));
+        const slots = rows.map(() => '?').join(', ');
+        const result = await this.db.prepare(
+          `UPDATE mail SET read_at = ? WHERE coo_id = ? AND read_at IS NULL AND seq IN (${slots})`,
+        ).run(this.now(), cooId, ...rows.map((row) => Number(row.seq)));
+        changed = Number(result.changes);
+        for (const row of rows) row.read_flag = true;
       }
+      const unreadByRoom = await this.unreadByRoom(cooId);
+      const unreadNow = await this.countUnread(cooId, room);
       return {
-        unread,
-        remaining: Math.max(0, unread - rows.length),
+        unread: unreadNow + changed,
+        remaining: markRead ? unreadNow : Math.max(0, unreadNow - rows.length),
         items: await Promise.all(rows.map((row) => toView(this.db, row))),
-        marked: markRead && rows.length > 0,
-        unreadByRoom: await this.unreadByRoom(cooId),
+        marked: changed > 0,
+        changed,
+        unreadByRoom,
       };
+    });
+  }
+
+  /** 一次更新这个身份的全部来信，回执给实际更新数和剩余未读数。 */
+  async markAllRead(cooId: string): Promise<MailReadResult> {
+    return await this.tx(async () => {
+      const result = await this.db.prepare(
+        'UPDATE mail SET read_at = ? WHERE coo_id = ? AND read_at IS NULL',
+      ).run(this.now(), cooId);
+      return { changed: Number(result.changes), remaining: await this.countUnread(cooId) };
     });
   }
 
@@ -290,7 +305,7 @@ export class MailDb {
        ORDER BY seq ${after !== undefined ? 'ASC' : 'DESC'} LIMIT ?`,
     ).all(cooId, cooId, ...(after !== undefined ? [after] : []), size);
     return Promise.all(rows.map(async (row) => {
-      const { read: _read, ...view } = await toView(this.db, row);
+      const { read, ...view } = await toView(this.db, row);
       const fromMe = row.from_coo_id === cooId;
       return {
         ...view,
@@ -298,7 +313,7 @@ export class MailDb {
         ...(fromMe ? {
           toName: String(row.to_name || '对方'),
           toHandle: await registeredHandle(this.db, String(row.coo_id)),
-        } : {}),
+        } : { read }),
       };
     }));
   }
@@ -498,13 +513,14 @@ export class MailDb {
     return Number(row?.n ?? 0);
   }
 
-  private async selectUnread(cooId: string, room: string | undefined, limit: number): Promise<Record<string, unknown>[]> {
+  private async selectUnread(cooId: string, room: string | undefined, limit: number, newest: boolean): Promise<Record<string, unknown>[]> {
+    const order = newest ? 'DESC' : 'ASC';
     return room === undefined
       ? await this.db.prepare(
-        `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND read_at IS NULL ORDER BY seq ASC LIMIT ?`,
+        `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND read_at IS NULL ORDER BY seq ${order} LIMIT ?`,
       ).all(cooId, limit)
       : await this.db.prepare(
-        `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? AND read_at IS NULL ORDER BY seq ASC LIMIT ?`,
+        `SELECT ${VIEW_COLUMNS} FROM mail WHERE coo_id = ? AND room_id = ? AND read_at IS NULL ORDER BY seq ${order} LIMIT ?`,
       ).all(cooId, room, limit);
   }
 

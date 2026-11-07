@@ -440,7 +440,7 @@ function renderLog(view) {
 
 function renderMail(view) {
   const items = view.mail || [];
-  ui.mailUnread.textContent = view.mailUnread ? `${view.mailUnread} 封未读` : '';
+  ui.mailUnread.textContent = `孩子未读 ${view.mailUnread || 0} 封`;
   clear(ui.mail);
   if (items.length === 0) {
     ui.mail.append(el('li', 'empty', '信箱是空的。'));
@@ -452,7 +452,7 @@ function renderMail(view) {
     const from = item.fromMe
       ? `孩子 → ${item.toName || '对方'}${item.toHandle ? ` #${item.toHandle}` : ''}`
       : `${item.fromName || '系统'}${item.fromHandle ? ` #${item.fromHandle}` : ''}${item.kind === 'whisper' ? ' → 孩子' : ''}`;
-    row.append(el('span', 'from', from));
+    row.append(el('span', 'from', from + (item.read === false ? ' · 未读' : '')));
     row.append(el('span', 'text', item.text));
     ui.mail.append(row);
   }

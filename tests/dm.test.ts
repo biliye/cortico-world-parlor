@@ -8,6 +8,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorldServer } from '../src/room/world-server.ts';
+import { MailDb } from '../src/room/mail-db.ts';
+import { openStorage } from '../src/room/storage/open.ts';
 
 type Json = Record<string, any>;
 
@@ -95,7 +97,7 @@ describe('网页私聊', () => {
       expect(view.body.mail.map((item: Json) => item.text)).toEqual(['在的，稍后一起玩', '在吗']);
       expect(view.body.mail[0]).toMatchObject({ fromMe: true, toName: '阿岚', toHandle: expect.any(String) });
       expect(view.body.mail[0]).not.toHaveProperty('read');
-      expect(view.body.mail[1]).toMatchObject({ fromMe: false, fromName: '阿岚' });
+      expect(view.body.mail[1]).toMatchObject({ fromMe: false, fromName: '阿岚', read: false });
       expect(view.body.mailUnread).toBe(1);
       return view.body;
     };
@@ -105,6 +107,7 @@ describe('网页私聊', () => {
     expect(limited.body.mail).toHaveLength(1);
     expect(limited.body.mail[0].text).toBe('在的，稍后一起玩');
     expect((await get(app.url, '/v1/parent/view')).status).toBe(401);
+    expect((await post(app.url, '/v1/mail/read-all', {}, { cookie })).status).toBe(401);
     expect((await post(app.url, '/v1/rooms/hall/leave', {}, {
       authorization: `Bearer ${moved.body.token}`, ...headers(child),
     })).status).toBe(200);
@@ -119,6 +122,49 @@ describe('网页私聊', () => {
     expect((await get(app.url, '/v1/me/message-history?after=-1', headers(child))).status).toBe(400);
     expect((await get(app.url, '/v1/me/message-history')).status).toBe(401);
     expect((await get(app.url, '/v1/dm/threads', headers(child))).body.unread).toBe(1);
+  });
+
+  it('信箱默认跨厅，按实际已读状态显示，一次标完超过 50 封', async () => {
+    const app = await start();
+    const reader = 'coo-mailreader01';
+    const other = 'coo-mailother001';
+    const token = await joinRoom(app, reader, '小满');
+    await joinRoom(app, other, '阿岚');
+    const { databaseUrl } = await pgServerStorage(join(dir!, 'parlor.db'));
+    const db = await openStorage({ url: databaseUrl });
+    try {
+      const mail = new MailDb(db);
+      for (let index = 1; index <= 95; index++) {
+        const item = await mail.append({
+          room: index <= 67 ? 'lobby' : 'hall', to: reader, kind: 'ledger', fromName: '系统', text: String(index),
+        });
+        if (index > 87) await mail.readOne(reader, item.seq);
+      }
+      await mail.append({ room: 'hall', to: other, kind: 'ledger', fromName: '系统', text: '别人的信' });
+      const seat = { authorization: `Bearer ${token}` };
+      const page = await get(app.url, '/v1/mail?recent=1&limit=12', seat);
+      expect(page.status).toBe(200);
+      expect(page.body.unread).toBe(87);
+      expect(page.body.items.map((item: Json) => item.read)).toEqual([
+        true, true, true, true, true, true, true, true, false, false, false, false,
+      ]);
+      const scoped = '/v1/rooms/lobby/mail';
+      expect((await get(app.url, scoped + '?recent=1', seat)).body.unread).toBe(87);
+      expect((await get(app.url, scoped + '?recent=1&all=0', seat)).body.unread).toBe(67);
+      const peek = await get(app.url, scoped + '?peek=1&newest=1&limit=4', seat);
+      expect(peek.body.items.map((item: Json) => item.seq)).toEqual(page.body.items.slice(8).map((item: Json) => item.seq));
+      expect(await mail.unreadCount(reader)).toBe(87);
+
+      const readAll = '/v1/mail/read-all';
+      expect((await post(app.url, readAll, {}, seat)).body).toEqual({ changed: 87, remaining: 0 });
+      const after = (await get(app.url, '/v1/me/mail?recent=1&limit=12', headers(reader))).body;
+      expect(after.unread).toBe(0);
+      expect(after.items.map((item: Json) => [item.seq, item.read])).toEqual(page.body.items.map((item: Json) => [item.seq, true]));
+      expect((await post(app.url, readAll, {}, headers(reader))).body).toEqual({ changed: 0, remaining: 0 });
+      expect(await mail.unreadCount(other)).toBe(1);
+    } finally {
+      await db.close();
+    }
   });
 
   it('互发、离线投递、会话摘要与未读', async () => {

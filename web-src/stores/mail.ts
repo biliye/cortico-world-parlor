@@ -1,9 +1,12 @@
-/** 信箱：最近 12 封（含已读），未读数以内的算未读；标已读、处理私密客厅邀请。 */
+/** 信箱：最近 12 封（含已读）；标已读、处理私密客厅邀请。 */
 import { ref } from 'vue';
+import type { MailReadResult } from '../../src/room/mail.ts';
 import { api } from '../api/client.ts';
 import { refreshSnapshot } from './parlor.ts';
 
 export interface MailItem {
+  id: string;
+  read: boolean;
   kind?: string;
   fromName?: string;
   fromHandle?: string;
@@ -27,6 +30,7 @@ export function setUnread(count: number): void {
 
 let at = 0;
 let epoch = 0;
+let loadId = 0;
 
 export function resetMailState(): void {
   epoch += 1; at = 0;
@@ -34,32 +38,35 @@ export function resetMailState(): void {
 }
 
 export async function loadMail(force = false): Promise<void> {
-  if (loading.value) return;
+  if (loading.value && !force) return;
   if (at && !force && Date.now() - at < 15000) return;
   loading.value = true;
   const current = epoch;
+  const id = ++loadId;
   try {
     const page = await api<{ items?: MailItem[]; unread?: number }>('/v1/mail?recent=1&limit=12');
-    if (current !== epoch) return;
+    if (current !== epoch || id !== loadId) return;
     items.value = page.items || [];
     unread.value = page.unread || 0;
     error.value = '';
     at = Date.now();
   } catch (caught) {
-    if (current !== epoch) return;
+    if (current !== epoch || id !== loadId) return;
     error.value = (caught as Error).message || '取不到信箱';
   } finally {
-    if (current === epoch) loading.value = false;
+    if (current === epoch && id === loadId) loading.value = false;
   }
 }
 
-/** 不带 recent/peek 读一次信箱就是「都看过了」。 */
-export async function markAllRead(): Promise<void> {
+export async function markAllRead(): Promise<MailReadResult | undefined> {
   const current = epoch;
-  await api('/v1/mail?limit=50');
+  const result = await api<MailReadResult>('/v1/mail/read-all', { method: 'POST' });
   if (current !== epoch) return;
+  unread.value = result.remaining;
   await loadMail(true);
-  await refreshSnapshot();
+  if (current !== epoch) return;
+  void refreshSnapshot().catch(() => {});
+  return result;
 }
 
 /** 403 不是你的，409 过期或处理过了，404 不存在。 */

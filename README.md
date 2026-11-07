@@ -27,7 +27,7 @@ query/room/table 的业务参数放 `params`。不清楚格式时先调用
 `parlor_query {op:"help",params:{topic:"table"}}`，topic 可选 query/room/table/message；
 省略 topic 返回全部操作的参数 Schema。帮助无需连接服务器，各操作会严格校验自己的字段，
 未知字段不被静默忽略。查询不能提交反馈、转移筹码或发消息。
-信箱保留原行为：默认标已读，`params.peek:true` 只看。创建客厅固定 30 席，不开放 capacity 参数。
+信箱默认从最新未读开始取信，并将取到的信标为已读。`params.peek:true` 只看，`params.markAllRead:true` 将所有来信标为已读并返回数量。创建客厅固定 30 席，不开放 capacity 参数。
 
 ```json
 {"tool":"parlor_query","args":{"op":"rooms","params":{"recruitments":true}}}

@@ -1512,16 +1512,24 @@ export class ParlorWorld implements World {
     if (!Number.isInteger(limit) || limit < 1) return this.failed('limit 要是 1 到 50 的整数');
     const peek = args.peek === true;
     try {
+      if (args.markAllRead === true) {
+        if (peek) return this.failed('peek 和 markAllRead 不能一起用');
+        const { changed, remaining } = await this.client.markAllMailRead(this.token);
+        this.mailUnread = remaining;
+        return `【信箱】剩余未读 ${remaining} 封。原有 ${changed + remaining} 封，本次标了 ${changed} 封。`;
+      }
       let page: MailPage;
       try {
-        page = await this.client.mail(this.token, Math.min(50, limit), peek, this.roomArg(), true);
+        page = await this.client.mail(this.token, Math.min(50, limit), peek, this.roomArg(), true, true);
       } catch (error) {
         // 席位没了（比如被移出客厅）也要能看自己的信箱与结算。
         if (!(error instanceof ParlorHttpError)
           || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
-        page = await this.client.mailAsIdentity(Math.min(50, limit), peek);
+        page = await this.client.mailAsIdentity(Math.min(50, limit), peek, undefined, true);
       }
-      const lines = [`【信箱】未读 ${page.unread} 封${peek ? '（只看，没标已读）' : ''}。`];
+      this.mailUnread = peek ? page.unread : page.remaining;
+      const lines = [peek ? `【信箱】未读 ${page.unread} 封（只看，没标已读）。`
+        : `【信箱】剩余未读 ${page.remaining} 封。原有 ${page.unread} 封，本次标了 ${page.changed ?? page.items.length} 封。`];
       this.historyWrite(() => {
         for (const item of page.items) this.history?.append({
           id: `mail:${item.seq}`, ts: item.ts, room: item.room,
@@ -1530,9 +1538,7 @@ export class ParlorWorld implements World {
           private: item.action === 'mail-turn',
         });
       });
-      if (!peek && page.items.length > 0) lines.push(`这次取走 ${page.items.length} 封。`);
-      if (page.remaining > 0) lines.push(`还有 ${page.remaining} 封没取，再调用一次。`);
-      if (page.items.length === 0) lines.push('信箱是空的。');
+      if (page.items.length === 0) lines.push('没有未读来信。');
       for (const item of page.items) {
         const who = item.fromName || '系统';
         const handle = item.fromHandle ? ` #${item.fromHandle}` : '';

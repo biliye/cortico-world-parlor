@@ -1027,12 +1027,17 @@ export class WorldServer {
       return;
     }
 
-    if (method === 'GET' && url.pathname === '/v1/me/mail') {
+    if (method === 'POST' && url.pathname === '/v1/mail/read-all') {
       const cooId = await this.cooOrSeat(req);
-      const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
-      const peek = url.searchParams.get('peek') === '1';
-      const room = url.searchParams.get('room') || undefined;
-      json(res, 200, await new MailDb(this.db, { now: this.now }).list(cooId, room, limit, !peek));
+      json(res, 200, await new MailDb(this.db, { now: this.now }).markAllRead(cooId));
+      return;
+    }
+
+    if (method === 'GET' && (url.pathname === '/v1/me/mail'
+      || (url.pathname === '/v1/mail' && url.searchParams.get('all') !== '0'))) {
+      const cooId = await this.cooOrSeat(req);
+      const room = url.pathname === '/v1/me/mail' ? url.searchParams.get('room') || undefined : undefined;
+      json(res, 200, await this.mailPage(cooId, url.searchParams, room));
       return;
     }
 
@@ -2231,22 +2236,8 @@ export class WorldServer {
 
     if (action === 'mail' && method === 'GET') {
       const seat = await this.seatAuth(req, roomId);
-      const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
-      const peek = url.searchParams.get('peek') === '1';
-      const all = url.searchParams.get('all') === '1';
-      const host = await this.host(roomId);
-      // 信箱页首屏要「最近 12 封（含已读）」，这个分支绝不能标已读。
-      if (url.searchParams.get('recent') === '1') {
-        const unread = all ? await host.mailUnreadAll(seat.cooId) : await host.mailUnread(seat.cooId);
-        json(res, 200, {
-          unread,
-          remaining: unread,
-          items: await host.mailRecent(seat.cooId, limit, all),
-          marked: false,
-        });
-        return;
-      }
-      json(res, 200, await host.readMail(seat.cooId, limit, !peek, all));
+      const room = url.searchParams.get('all') === '0' ? roomId : undefined;
+      json(res, 200, await this.mailPage(seat.cooId, url.searchParams, room));
       return;
     }
 
@@ -2258,6 +2249,21 @@ export class WorldServer {
     }
 
     throw new HttpError(405, '这个动作不支持这个 HTTP 方法');
+  }
+
+  private async mailPage(cooId: string, query: URLSearchParams, room?: string) {
+    const mail = new MailDb(this.db, { now: this.now });
+    const limit = Number(query.get('limit') ?? 10) || 10;
+    if (query.get('recent') === '1') {
+      const unread = await mail.unreadCount(cooId, room);
+      return {
+        unread,
+        remaining: unread,
+        items: await mail.recent(cooId, room, Math.min(50, limit)),
+        marked: false,
+      };
+    }
+    return mail.list(cooId, room, limit, query.get('peek') !== '1', query.get('newest') === '1');
   }
 
   private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {

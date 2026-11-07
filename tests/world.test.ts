@@ -59,6 +59,30 @@ describe('客厅 World', () => {
     expect(report.failures).toEqual([]);
   });
 
+  it('Coo 信箱先取最新未读，回执给剩余数，也能显式标完所有信', async () => {
+    await startServer();
+    const ctx = makeContext({ PARLOR_INVITE_CODE: 'inv' });
+    ctx.cfg.serverUrl = server.url;
+    ctx.cfg.identityUrl = server.url;
+    ctx.cfg.seatName = '小满';
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+    const client = new ParlorClient(server.url, { cooId: 'coo-ffffffff', cooSecret: 'friend-secret-0123456789' });
+    const friend = await client.join('inv', { name: '阿岚' });
+    await client.action(friend.token, { type: 'whisper', to: '小满', text: '第一封信' });
+    await client.action(friend.token, { type: 'whisper', to: '小满', text: '第二封信' });
+
+    const tool = toolForOperation(world, 'parlor_mail');
+    const call = async (params: Record<string, unknown>) => String(await tool.handler(params, {} as ToolCallContext));
+    expect(await call({ limit: 1, peek: true })).toMatch(/^【信箱】未读 2 封/);
+    const read = await call({ limit: 1 });
+    expect(read).toMatch(/^【信箱】剩余未读 1 封。原有 2 封，本次标了 1 封/);
+    expect(read).toContain('第二封信');
+    expect(read).not.toContain('第一封信');
+    expect(await call({ markAllRead: true })).toMatch(/^【信箱】剩余未读 0 封。原有 1 封，本次标了 1 封/);
+    expect(await call({ peek: true })).toContain('没有未读来信');
+  });
+
   it('连接后发 started；被 @ 时收到房间消息，工具能说话和查看', async () => {
     await startServer();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };

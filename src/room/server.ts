@@ -354,6 +354,12 @@ export class ParlorServer {
       });
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/v1/mail/read-all') {
+      const auth = this.auth(req, url);
+      if (auth.role === 'owner') throw new HttpError(403, '读信是孩子自己的动作');
+      json(res, 200, this.kernel.markAllMailRead(auth.seat));
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/v1/mail') {
       const auth = this.auth(req, url);
       const limit = Number(url.searchParams.get('limit') ?? 10) || 10;
@@ -374,7 +380,7 @@ export class ParlorServer {
         return;
       }
       const peek = url.searchParams.get('peek') === '1';
-      json(res, 200, this.kernel.readMail(auth.seat, limit, !peek));
+      json(res, 200, this.kernel.readMail(auth.seat, limit, !peek, url.searchParams.get('newest') === '1'));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/replay') {

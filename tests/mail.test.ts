@@ -16,6 +16,26 @@ const letter = (to: string, text: string, kind: 'whisper' | 'gift' | 'promise' |
 });
 
 describe('信箱', () => {
+  it('全部标已读跨厅且不限 50 封，持久化后重试只处理本人的新信', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'parlor-mail-all-'));
+    try {
+      const file = join(dir, 'mail.json');
+      const store = MailStore.load({ file });
+      for (let index = 0; index < 87; index++) {
+        store.append({ ...letter(A, String(index)), room: index % 2 ? 'lobby' : 'hall' });
+      }
+      store.append(letter(B, '别人的信'));
+      expect(store.markAllRead(A)).toEqual({ changed: 87, remaining: 0 });
+      const reloaded = MailStore.load({ file });
+      expect(reloaded.markAllRead(A)).toEqual({ changed: 0, remaining: 0 });
+      expect(reloaded.unreadCount(B)).toBe(1);
+      reloaded.append(letter(A, '新的信'));
+      expect(reloaded.unreadCount(A)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('按收件人分开：别人读不到你的信，未读数也分开算', () => {
     const store = new MailStore({ now: () => 1000 });
     store.append(letter(A, '在吗'));
