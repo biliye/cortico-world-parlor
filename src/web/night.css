@@ -385,25 +385,64 @@ html.vue-app .link:hover { color: var(--lime); }
 
 /* ——— 大厅首屏 ——— */
 html.vue-app .view-hall { position: relative; }
-/* 左栏说「走进哪间客厅」，右栏是灯下的空桌 + 挂在旁边的「找一桌」告示牌。
-   两栏同高：左栏文案 + 今晚有人的客厅席位条，右栏画面 + 快速匹配/招募面板。 */
+
+/* 整个大厅的底：一间真的在动的茶馆，钉在视口上铺满整个界面。
+   固定定位是为了「翻到目录时画还在」，同时不把画面拉成竖条；
+   一层暗渐变从左往右、从上往下压，左栏文案压在最暗的地方，右栏还能看清屋子。
+   画法在 web-src/lobby/scene.js，组件是 components/LobbyScene.vue（fill 模式 = cover）。 */
+html.vue-app .hall-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--bg);
+}
+html.vue-app .hall-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(96deg,
+      rgba(10, 6, 3, .84) 0%,
+      rgba(10, 6, 3, .60) 30%,
+      rgba(10, 6, 3, .22) 56%,
+      rgba(10, 6, 3, .10) 74%,
+      rgba(10, 6, 3, .34) 100%),
+    linear-gradient(180deg,
+      rgba(12, 7, 4, .62) 0%,
+      rgba(12, 7, 4, .12) 22%,
+      rgba(12, 7, 4, .14) 58%,
+      rgba(12, 7, 4, .74) 90%,
+      var(--bg) 100%);
+}
+/* 画角的门牌：跟旧版的「THE PARLOR SESSIONS」一个位置，压在右下 */
+html.vue-app .hall-bg-mark {
+  position: absolute;
+  right: 26px;
+  bottom: 20px;
+  z-index: 1;
+  font-family: var(--num);
+  font-size: 9.5px;
+  letter-spacing: .28em;
+  color: rgba(246, 233, 210, .5);
+  pointer-events: none;
+}
+
+/* 版式还是原来的两栏：左说「走进哪间」，右挂「找一桌」的牌子。
+   变的是这两栏现在浮在整屏的画面上，不再各自占一块地。
+   高度抵到视口底部（顶条 92px 已经被 stage-body 让出来了），首屏就是一整张画。 */
 html.vue-app .hero {
   position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr);
-  grid-template-areas:
-    "copy side"
-    "stage side"
-    "shelf side";
   column-gap: 40px;
-  row-gap: 10px;
-  align-items: stretch;
-  min-height: 540px;
-  padding: 18px 0 0;
-  border-bottom: 1px solid var(--line);
+  align-items: center;
+  min-height: calc(100vh - 92px);
+  padding: 20px 0 30px;
 }
 html.vue-app .hero-copy {
-  grid-area: copy;
   position: relative;
   z-index: 3;
   display: flex;
@@ -411,25 +450,33 @@ html.vue-app .hero-copy {
   min-width: 0;
   padding-bottom: 6px;
 }
-/* 画面在左栏、文案下面：宽 = 左栏宽，高度由 16:9 自己撑。
-   不再跟着 hero-side 的 flex 高度走 —— 那样它会把告示牌挤出去。 */
-html.vue-app .hero-stage {
-  grid-area: stage;
-  height: auto;
-  margin: 14px 0 0;
+/* 画面往下交给纸面：实底从这一行开始，滚动时不会和背景打架。
+   负边距是把实底铺到内容区的左右留白外面，接缝处不会漏出一条动画；
+   ::after 补住 .view 底部那 90px 的留白，否则滚到底会漏出一排 Coo。 */
+html.vue-app .hall-floor {
+  position: relative;
+  z-index: 2;
+  margin: 0 -40px;
+  padding: 0 40px;
+  background: var(--bg);
 }
-/* 右栏（找一桌）会被固定的聊天面板压掉一截 —— 这是改版前就有的：
-   面板是浮层，不占流，收起后才露出完整的右栏。这里不再额外收窄，
-   否则牌子被压窄了两头不落好。 */
+html.vue-app .hall-floor::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 120px;
+  background: var(--bg);
+}
 html.vue-app .hero-side {
-  grid-area: side;
   position: relative;
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  justify-content: center;
+  gap: 12px;
   min-width: 0;
-  padding-top: 30px;
 }
 html.vue-app .hero-side > .recruit-board { flex: none; }
 html.vue-app .hero h1 {
@@ -527,108 +574,9 @@ html.vue-app .car-dot.is-on { width: 15px; background: var(--lime); }
 html.vue-app .car-pause { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; color: var(--dim); border: 1px solid transparent; }
 html.vue-app .car-pause:hover { color: var(--muted); border-color: var(--line-2); }
 
-/* 首屏画面：一间**真的在动的**中式茶馆（canvas）。
-   原来的绿绒桌 + 三张扑克是 div 拼的静物，已经撤掉；
-   画法在 web-src/lobby/scene.js，这里只管它怎么摆在版面上。 */
-html.vue-app .scene { position: relative; height: 430px; z-index: 2; }
-html.vue-app .scene-tea {
-  display: block;
-  overflow: hidden;
-  border-radius: 3px;
-  /* 一圈极淡的木色描边 + 下方投影：让它像挂在墙上的画，不是一块贴上去的图 */
-  box-shadow:
-    0 24px 58px rgba(0, 0, 0, .52),
-    0 0 0 1px rgba(216, 184, 144, .16),
-    0 0 0 6px rgba(0, 0, 0, .16);
-}
-/* 门牌压在画面左下角：茶馆底部本身就是暗的，所以配一条半透明暗底才读得清 */
-html.vue-app .scene-tea .scene-caption {
-  left: 10px;
-  right: auto;
-  top: auto;
-  bottom: 9px;
-  padding: 3px 7px;
-  border-radius: 2px;
-  background: rgba(16, 9, 5, .58);
-  color: rgba(246, 233, 210, .78);
-  font-size: 8px;
-  letter-spacing: .26em;
-  pointer-events: none;
-}
-html.vue-app .scene-lamp {
-  position: absolute;
-  left: 56%;
-  top: -34px;
-  width: 2px;
-  height: 74px;
-  transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(240, 185, 94, .06), rgba(240, 185, 94, .45));
-}
-html.vue-app .scene-lamp::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -12px;
-  transform: translateX(-50%);
-  width: 38px;
-  height: 17px;
-  border-radius: 4px 4px 9px 9px;
-  background: linear-gradient(180deg, #e9d3a5, #b79f74);
-  box-shadow: 0 6px 22px rgba(243, 214, 160, .45);
-}
-html.vue-app .scene-lamp::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 86px;
-  transform: translateX(-50%);
-  width: 430px;
-  height: 380px;
-  background: radial-gradient(ellipse at 50% 0%, rgba(243, 214, 160, .16), rgba(243, 214, 160, .04) 42%, transparent 68%);
-  pointer-events: none;
-}
-html.vue-app .scene-table {
-  position: absolute;
-  left: 50%;
-  bottom: -18px;
-  width: 440px;
-  height: 268px;
-  transform: translateX(-50%) rotate(-6deg);
-}
-html.vue-app .scene-felt {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at 44% 26%, #427a5c 0%, #2f5b45 40%, #1e4233 74%, #153025 100%);
-  box-shadow:
-    0 34px 60px rgba(0, 0, 0, .5),
-    0 0 0 9px #24483a,
-    0 0 0 10px rgba(216, 184, 144, .14),
-    inset 0 6px 22px rgba(240, 214, 176, .10),
-    inset 0 -22px 44px rgba(0, 0, 0, .4);
-}
-html.vue-app .scene-felt::after {
-  content: "";
-  position: absolute;
-  inset: 18px 24px;
-  border-radius: 50%;
-  border: 1px dashed rgba(240, 214, 176, .2);
-}
-html.vue-app .scene-felt-mark {
-  position: absolute;
-  left: 50%;
-  top: 26px;
-  transform: translateX(-50%);
-  font-family: var(--num);
-  font-size: 8px;
-  letter-spacing: .34em;
-  color: rgba(240, 214, 176, .3);
-  white-space: nowrap;
-}
-html.vue-app .scene-seat { position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 1px dashed rgba(213, 240, 190, .26); }
-html.vue-app .scene-seat.seat-a { left: 5%; bottom: 108px; }
-html.vue-app .scene-seat.seat-b { right: 5%; bottom: 108px; }
-html.vue-app .scene-cards { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); display: flex; align-items: flex-end; }
+/* 首屏的静态茶馆（绿绒桌 + 三张扑克 + 吊灯）在 2026-11-07 撤掉了：
+   现在整屏都是 web-src/lobby/scene.js 画的那间真茶馆，见上面的 .hall-bg。
+   剩下的只有加入页还在用的三张牌（.scard）。 */
 html.vue-app .scard {
   width: 56px;
   height: 78px;
@@ -652,21 +600,10 @@ html.vue-app .spark { position: absolute; color: var(--lime); opacity: .75; text
 html.vue-app .spark-a { left: 12%; top: 18%; font-size: 20px; }
 html.vue-app .spark-b { right: 16%; top: 8%; font-size: 12px; opacity: .5; }
 html.vue-app .spark-c { right: 6%; bottom: 30%; font-size: 22px; }
-html.vue-app .scene-caption {
-  position: absolute;
-  right: 2px;
-  top: 4px;
-  font-family: var(--num);
-  font-size: 8.5px;
-  letter-spacing: .3em;
-  color: var(--dim);
-  white-space: nowrap;
-}
 
-/* 首屏左下：今晚有人的客厅席位条（拉满左栏宽度，和右栏的告示牌同高收底） */
+/* 「今晚有人的客厅」那一排席位条在 v1.5 从首屏撤掉了（画面铺满整屏，再挂一排就挤）。
+   样式先留着：想让它回来时，把 hero 里的 .hero-chips 结构接回去就行。 */
 html.vue-app .hero-chips {
-  grid-area: shelf;
-  align-self: end;
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
@@ -1576,10 +1513,20 @@ html.vue-app .announce-banner {
   color: var(--text);
   font-size: 12.5px;
 }
-html.vue-app .announce-mark { color: var(--lime); display: grid; place-items: center; }
-html.vue-app .announce-text { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.vue-app .announce-mark { color: var(--lime); display: grid; place-items: center; }html.vue-app .announce-text { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.vue-app .announce-link { color: var(--lime); font-size: 12px; }
 html.vue-app .announce-dismiss { height: 26px; padding: 0 10px; font-size: 11.5px; }
+/* 大厅首屏那条窄金底压在画面上读不清：换一块深一点的玻璃底，并抬到背景之上。 */
+html.vue-app .view-hall.section-all > .announce-banner {
+  position: relative;
+  z-index: 3;
+  border-color: rgba(240, 185, 94, .26);
+  background:
+    linear-gradient(180deg, rgba(240, 185, 94, .12), rgba(240, 185, 94, .04)),
+    rgba(24, 15, 9, .82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
 
 /* 私聊浮窗：气泡、输入框、会话列表全部走 token，深浅两套外观都跟着变。
    旧 play.css 给 .dm-msg 留了浅色底（#fff）、.dm-input 留了白底，这里统一改掉。 */
@@ -1630,12 +1577,29 @@ html.vue-app .toast {
 html.vue-app .toast.bad { border-color: color-mix(in srgb, var(--red) 45%, transparent); color: var(--red); }
 
 /* ——— 浅色「白天模式」的局部修正 ——— */
-html.vue-app[data-theme="light"] .scene-felt,
 html.vue-app[data-theme="light"] .join-felt {
   box-shadow: 0 30px 60px rgba(52, 44, 32, .25), 0 0 0 9px #2f5c47, 0 0 0 10px rgba(70, 62, 44, .18), inset 0 6px 20px rgba(230, 245, 220, .18);
 }
+/* 首屏那层背景永远是暗的茶馆，跟主题无关：
+   浅色主题下把 hero 里的字与牌子一起拉回「深色外观」那一组 token，
+   否则深字压在暗画面上读不出来。 */
+html.vue-app[data-theme="light"] .view-hall.section-all .hero {
+  --text: #f6ead6;
+  --muted: #d6c0a3;
+  --dim: #ab9071;
+  --line: rgba(230, 196, 150, .16);
+  --line-2: rgba(230, 196, 150, .30);
+  --panel-2: rgba(30, 19, 11, .90);
+  --panel-solid: #241610;
+  --panel-glass: rgba(30, 20, 13, .80);
+  --lime: #f0b95e;
+  --lime-ink: #241408;
+  --lamp: #f3d6a0;
+  /* color 是继承属性，只有重新声明一次，里面的子元素才真的用上这组浅字 */
+  color: var(--text);
+  color-scheme: dark;
+}
 html.vue-app[data-theme="light"] .topbar { background: linear-gradient(180deg, rgba(241, 243, 232, .96), rgba(241, 243, 232, .6) 70%, transparent); }
-html.vue-app[data-theme="light"] .scene-lamp::after { background: radial-gradient(ellipse at 50% 0%, rgba(201, 138, 46, .18), rgba(201, 138, 46, .05) 42%, transparent 68%); }
 html.vue-app[data-theme="light"] .chat-log .msg p { background: rgba(38, 53, 44, .05); border-color: rgba(38, 53, 44, .08); color: #2e4035; }
 html.vue-app[data-theme="light"] .mail-copy > p { color: #2e4035; }
 html.vue-app[data-theme="light"] .poster-art::after { background: linear-gradient(180deg, transparent 60%, rgba(241, 243, 232, .25)); }
@@ -1656,9 +1620,9 @@ html.vue-app[data-theme="light"] :is(.warn, .bad) { color: #a64347; }
 html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 
 /* ——— 响应式 ——— */
-/* 宽屏（2560 一档的桌面）：字号、桌面画与告示牌一起放大，避免 1440 的尺寸被拉成一条细线。 */
+/* 宽屏（2560 一档的桌面）：字号与告示牌一起放大，避免 1440 的尺寸被拉成一条细线。 */
 @media (min-width: 1600px) {
-  html.vue-app .hero { column-gap: 52px; min-height: 620px; }
+  html.vue-app .hero { column-gap: 52px; }
   html.vue-app .hero h1 { font-size: clamp(78px, 4.3vw, 96px); }
   html.vue-app .hero-sub { max-width: 34em; font-size: 15px; }
   html.vue-app .hero-now-main h2 { font-size: 34px; }
@@ -1666,29 +1630,19 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .hero-now-meta { font-size: 13px !important; }
   html.vue-app .hero-now-meta b { font-size: 14.5px; }
   html.vue-app .cta { height: 54px; font-size: 15.5px; }
-  html.vue-app .hero-side { padding-top: 40px; }
-  html.vue-app .scene-table { width: 500px; height: 305px; }
-  html.vue-app .scene-lamp { top: -46px; height: 96px; }
-  html.vue-app .scene-lamp::after { width: 560px; height: 470px; }
-  html.vue-app .scene-seat { width: 38px; height: 38px; }
-  html.vue-app .scene-seat.seat-a, html.vue-app .scene-seat.seat-b { bottom: 128px; }
   html.vue-app .scard { width: 64px; height: 90px; }
-  html.vue-app .scene-caption { font-size: 9.5px; }
-  /* 宽屏时告示牌铺满右栏、贴齐内容右缘，画面与面板同一条中轴。 */
+  /* 宽屏时告示牌铺满右栏、贴齐内容右缘，和左栏文案同一条中轴。 */
   html.vue-app .hero-side > .recruit-board { width: 100%; max-width: none; }
-  html.vue-app .rchip-name { font-size: 18px; }
-  html.vue-app .rchip { padding: 14px 16px 15px; }
 }
 
 @media (max-width: 1320px) {
   html.vue-app .hero {
     grid-template-columns: minmax(0, 1fr);
-    /* 单列时画面紧跟文案：宽屏下它是主角，窄屏下更该先看到它，
-       「找一桌」是动作，排在画面后面也来得及。 */
-    grid-template-areas: "copy" "stage" "board" "shelf";
-    row-gap: 14px;
-    min-height: 0;
-    padding-top: 26px;
+    /* 单列：文案在上，「找一桌」的牌子跟在后头 —— 画面已经是整屏的底，不用再占一行。 */
+    grid-template-areas: "copy" "board";
+    row-gap: 22px;
+    min-height: calc(100vh - 84px);
+    padding: 26px 0 34px;
   }
   html.vue-app .hero h1 { font-size: clamp(48px, 6.4vw, 72px); }
   /* 单列时把两栏拆开。告示牌靠左而不是居中：聊天面板是固定浮层，
@@ -1700,14 +1654,6 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
     max-width: 560px;
     margin-inline: 0;
   }
-  html.vue-app .hero-stage { margin-top: 4px; }
-  /* 单列时画面按内容区满宽算会有 546 高，一半超出首屏，右边还伸到聊天面板底下。
-     聊天展开时收到 620（约 1.08 倍，仍然不丢像素），正好一屏放得下。 */
-  html.vue-app .shell.chat-open .view-hall .hero-stage {
-    width: 100%;
-    max-width: 620px;
-  }
-  html.vue-app .hero-chips { padding-bottom: 20px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   html.vue-app .section-head h1 { font-size: clamp(36px, 5vw, 48px); }
 }
@@ -1740,6 +1686,8 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .stage { height: 100vh; }
   html.vue-app .stage-body { padding-top: 84px; padding-bottom: 74px; }
   html.vue-app .stage-body > .view { padding: 0 20px 40px; }
+  /* 内容区左右留白收到 20，纸面实底跟着收，接缝处才不漏画面。 */
+  html.vue-app .hall-floor { margin: 0 -20px; padding: 0 20px; }
   html.vue-app .shell.chat-open .stage-body > .view { padding-right: 20px; }
   html.vue-app .topbar { height: 76px; padding: 0 20px; gap: 10px; }
   html.vue-app .topbar .presence { display: none; }
@@ -1790,12 +1738,17 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   /* 手机窄栏里把「人数/桌数」和轮播拆成两行，统计不再被挤断。 */
   html.vue-app .hero-now-main { flex: 1 1 100%; }
   html.vue-app .hero-carousel { justify-content: flex-start; padding-bottom: 0; }
-  html.vue-app .hero-side .scene { height: 260px; }
-  html.vue-app .scene-table { width: 300px; height: 186px; }
   html.vue-app .scard { width: 48px; height: 68px; font-size: 12px; }
   html.vue-app .posters { grid-template-columns: minmax(0, 1fr); }
-  html.vue-app .rchip { flex: 1 1 calc(50% - 5px); width: auto; min-width: 0; max-width: none; }
-  html.vue-app .rchip-name { font-size: 15.5px; }
+  /* 手机上画面只铺在首屏那一块，字和牌子挤在一起容易糊，
+     把暗压得更重一点，保证「今晚，来一局」和按钮读得清。 */
+  html.vue-app .hall-bg::after {
+    background:
+      linear-gradient(180deg, rgba(10, 6, 3, .74) 0%, rgba(10, 6, 3, .5) 46%, rgba(10, 6, 3, .84) 88%, var(--bg) 100%);
+  }
+  html.vue-app .hall-bg-mark { display: none; }
+  /* 手机上这两块撑不满一屏，上下分开摆：文案贴顶、牌子靠底，中间留出茶博士。 */
+  html.vue-app .hero { align-content: space-between; }
   html.vue-app .topbar { gap: 6px; padding: 0 14px; }
   html.vue-app .brand span { display: none; }
   html.vue-app .brand b { font-size: 18px; }

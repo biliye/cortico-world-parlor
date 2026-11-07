@@ -8,11 +8,17 @@
  *   2. 贴图异步到位后重画，失败就安静地少一个人；
  *   3. 尊重 `prefers-reduced-motion`：不动的版本也给一张能看的画；
  *   4. 把 canvas 的逻辑分辨率钉死 576×324，放大交给 CSS 的最近邻。
+ *
+ * 两种摆法：默认按 16:9 原比例摆在版面上（像一幅画）；`fill` 时铺满父容器
+ * （object-fit: cover），用作大厅的整屏背景 —— 会裁掉两侧一点，屋子始终在画面中间。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createScene, SCENE_H, SCENE_W } from '../lobby/scene.js';
 import type { SceneHandle } from '../lobby/scene.js';
 import { loadWhaleImages, WHALE } from '../lobby/whale-art.js';
+
+/* paused：铺满背景时固定定位不受滚动影响，交回给调用方按「首屏还在不在」决定要不要跑。 */
+const props = defineProps<{ fill?: boolean; paused?: boolean }>();
 
 const root = ref<HTMLDivElement | null>(null);
 const box = ref<HTMLCanvasElement | null>(null);
@@ -102,10 +108,15 @@ onBeforeUnmount(() => {
   cleanup.length = 0;
   scene = null;
 });
+
+watch(() => props.paused, (paused) => {
+  if (paused) stop();
+  else play();
+});
 </script>
 
 <template>
-  <div ref="root" class="tea-scene">
+  <div ref="root" class="tea-scene" :class="{ 'is-fill': fill }">
     <canvas ref="box" :width="SCENE_W" :height="SCENE_H" aria-hidden="true" />
   </div>
 </template>
@@ -126,5 +137,20 @@ onBeforeUnmount(() => {
   /* 一整格一整格地放大，不要浏览器插值 */
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+}
+
+/* 铺满：交给父容器定尺寸，画面按 cover 裁切，屋子始终居中。 */
+.tea-scene.is-fill {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+.tea-scene.is-fill canvas {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  object-fit: cover;
+  object-position: 50% 46%;
 }
 </style>
