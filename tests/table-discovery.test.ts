@@ -86,6 +86,59 @@ describe('快速匹配、牌桌招募与链接', () => {
     expect(matchable.map((item) => item.tableId)).toEqual([id]);
   });
 
+  it('招募事件写清游戏、人数和改了什么，但广播正文不带玩家原文', async () => {
+    await start();
+    const host = await person('桌主');
+    await room(host);
+    const id = await table(host, { game: 'ddz' });
+    expect((await act(host, { type: 'table_discovery', table: id, text: '缺一个，来不来' })).status).toBe(200);
+    const latest = async () => ((await call(`/v1/rooms/${host.room}/room`, host)).body.events as Json[])
+      .filter((event) => event.type === 'parlor.table.discovery').at(-1)!;
+    const notice = await latest();
+    expect(notice.text).toContain('斗地主');
+    expect(notice.text).toContain('发了招募');
+    expect(notice.text).toContain('（1/3 人）');
+    expect(notice.text).not.toContain('缺一个，来不来');
+    expect(notice.data).toEqual(expect.objectContaining({
+      game: 'ddz', seats: 1, capacity: 3, matchOpen: false, recruit: true,
+    }));
+    // 另一步更新：开放匹配要写成正向事实，且 data 跟上
+    expect((await act(host, { type: 'table_discovery', table: id, matchOpen: true })).status).toBe(200);
+    const opened = await latest();
+    expect(opened.text).toContain('开放了快速匹配');
+    expect(opened.data).toEqual(expect.objectContaining({ matchOpen: true, recruit: true }));
+  });
+
+  it('撤回招募与关掉匹配各有各的说法，不会都写成「更新了设置」', async () => {
+    await start();
+    const host = await person('桌主');
+    await room(host);
+    const id = await table(host, { game: 'ddz', matchOpen: true });
+    await act(host, { type: 'table_discovery', table: id, text: '来一张' });
+    const latest = async () => ((await call(`/v1/rooms/${host.room}/room`, host)).body.events as Json[])
+      .filter((event) => event.type === 'parlor.table.discovery').at(-1)!;
+    expect((await act(host, { type: 'table_discovery', table: id, withdraw: true })).status).toBe(200);
+    expect((await latest()).text).toContain('撤回了招募');
+    expect((await act(host, { type: 'table_discovery', table: id, matchOpen: false })).status).toBe(200);
+    const closed = await latest();
+    expect(closed.text).toContain('关掉了快速匹配');
+    expect(closed.data).toEqual(expect.objectContaining({ matchOpen: false, recruit: false }));
+  });
+
+  it('狼人杀按开局人数定容量，事件里只报人数不报比例', async () => {
+    await start();
+    const host = await person('狼主');
+    await room(host);
+    const id = await table(host, { game: 'werewolf', seatCount: 6 });
+    await act(host, { type: 'table_discovery', table: id, text: '六人局缺人' });
+    const notice = ((await call(`/v1/rooms/${host.room}/room`, host)).body.events as Json[])
+      .filter((event) => event.type === 'parlor.table.discovery').at(-1)!;
+    expect(notice.text).toContain('狼人杀');
+    expect(notice.text).toContain('（1 人）');
+    expect(notice.text).not.toContain('/');
+    expect(notice.data).toEqual(expect.objectContaining({ seats: 1, recruit: true }));
+  });
+
   it('没开匹配的桌两个清单都不进', async () => {
     await start();
     const host = await person('桌主');

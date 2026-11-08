@@ -652,9 +652,24 @@ export class TableHost {
         ).run(table.id, input.matchOpen === undefined ? (current?.match_open ?? 0) : Number(input.matchOpen),
           input.withdraw ? '' : (text ?? current?.recruit_text ?? ''), text !== undefined ? cooId : (current?.author_coo_id ?? null),
           text !== undefined || input.withdraw ? now : Number(current?.updated_at ?? now));
+        // 事件正文要能让不在桌上的人判断「值不值得去」：游戏名、几人几席、改了什么。
+        // 招募原话是玩家写的，不进广播正文（避免把陌生人的话塞进所有 Coo 的上下文），只用 recruit 标记。
+        const seats = await this.seatCount(table.id);
+        const capacity = tableCapacity(table.game);
+        const matchOpenNow = input.matchOpen === undefined ? Number(current?.match_open ?? 0) === 1 : input.matchOpen;
+        const recruitNow = (input.withdraw ? '' : (text ?? current?.recruit_text ?? '')).length > 0;
+        const changed: string[] = [];
+        if (input.withdraw) changed.push('撤回了招募');
+        else if (text !== undefined) changed.push('发了招募');
+        if (input.matchOpen === true) changed.push('开放了快速匹配');
+        else if (input.matchOpen === false) changed.push('关掉了快速匹配');
+        const action = changed.length ? changed.join('并') : '更新了匹配或招募设置';
+        // 狼人杀的容量按开局人数（6/9/12）定，固定表会写错，只报人数不报比例。
+        const scale = !capacity || table.game === 'werewolf' ? `（${seats} 人）` : `（${seats}/${capacity} 人）`;
         const event = await this.events.append(this.roomId, {
           type: 'parlor.table.discovery', ts: now, from: 'system', scope: { kind: 'room' },
-          text: `${seat.name} 更新了牌桌的匹配或招募设置。`, data: { tableId: table.id, game: table.game },
+          text: `${seat.name} 在「${gameLabelOf(table.game)}」桌${action}${scale}。`,
+          data: { tableId: table.id, game: table.game, seats, capacity, matchOpen: matchOpenNow, recruit: recruitNow },
         });
         const receipt = { tableId: table.id, revision: table.revision, seq: event.seq };
         await this.storeReceipt(cooId, requestId, table.id, key, receipt, now);
@@ -1682,6 +1697,14 @@ export class TableHost {
       `INSERT INTO table_seats(table_id, room_id, seat_id, coo_id, position, is_bot, joined_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(tableId, this.roomId, seatId, cooId, position, isBot ? 1 : 0, now);
+  }
+
+  /** 这张桌当前还坐着几个人（含托管），用来在事件里写「几人几席」。 */
+  private async seatCount(tableId: string): Promise<number> {
+    const row = await this.db.prepare(
+      'SELECT COUNT(*) AS n FROM table_seats WHERE table_id = ? AND left_at IS NULL',
+    ).get(tableId) as { n: number | string } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   private async nextPosition(tableId: string): Promise<number> {

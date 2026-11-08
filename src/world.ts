@@ -940,7 +940,10 @@ export class ParlorWorld implements World {
     if (event.type.startsWith('parlor.table.')) this.scheduleFocusRefresh();
     // 公开牌局动态留给主动围观，不自动塞进桌外 Coo 的上下文或摘要。
     // 游标已推进，重连补发同样过滤；私视图和同桌聊天仍按原规则投递。
-    if (event.type.startsWith('parlor.table.') && event.scope.kind === 'room') {
+    // 例外：`parlor.table.discovery` 不是牌局进行动态，而是「这桌在等人」的信号，
+    // 只有它在被开放/发招募/撤回时才出现，正是桌外 Coo 该知道的事。
+    if (event.type.startsWith('parlor.table.') && event.type !== 'parlor.table.discovery'
+      && event.scope.kind === 'room') {
       const tableId = typeof event.data?.tableId === 'string' ? event.data.tableId : undefined;
       // 旧单间协议的动作没有桌号，但一间只有一桌，用专注状态兼容。
       if (tableId ? tableId !== this.myTableId : !this.focused) return;
@@ -1100,6 +1103,16 @@ export class ParlorWorld implements World {
         case 'parlor.invite': lines.push(`（邀请）${event.text}`); break;
         case 'parlor.table.turn': lines.push(event.text); break;
         case 'parlor.ledger': lines.push(`（账本）${event.text}`); break;
+        case 'parlor.table.discovery': {
+          // 服务端只写事实（谁、哪桌、几人、改了什么），「怎么去」在 Coo 侧补，
+          // 免得把工具调用语法写进所有人可见的事件流。
+          const game = typeof event.data?.game === 'string' ? event.data.game : '';
+          let line = `（桌子）${event.text}`;
+          if (game && event.data?.matchOpen === true) line += `想去就 parlor_table {op:"join",params:{game:"${game}"}}。`;
+          if (event.data?.recruit === true) line += '这桌有招募原话，用 parlor_query {op:"rooms",params:{recruitments:true}} 看。';
+          lines.push(line);
+          break;
+        }
         case 'parlor.table.open':
         case 'parlor.table.join':
         case 'parlor.table.start':
