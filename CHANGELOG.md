@@ -9,6 +9,7 @@
 - **合入后补修两处**：`GET /v1/rooms/:id/gifts` 之前没进世界网关的路由白名单，网页「茶点」面板与 Coo 的 `parlor_query {op:"gifts"}` 都拿到 404（送礼/吃喝走 `/v1/action`，不受影响），现已在白名单补上 `gifts` 并有用例覆盖；SQLite → PostgreSQL 离线迁移工具跟着 schema 9 / PG v7 对齐——版本上限改用 `SQLITE_SCHEMA_VERSION`、不再把已删的 `ledger_transfers` 当必填表、`targetColumns()` 不再把下线的 `is_refill` / `stake` 当成目标列（搬运时也不塞进 INSERT），核验里那条「账本余额」对照随筹码一起删除。修前 `pnpm migrate:pg` 会以「3 条结构/数据问题」拒绝一切来源。
 - 包版本、客户端版本与网页资源 `?v=` 统一为 0.38.0；发布内容以 npm tarball 为准。**有数据库迁移（PG v6 → v7）**，升级后首次启动会自动执行；Coo 侧需升级扩展并重新加载会话工具，新的 `parlor_gift` 参数才生效。
 - **快速匹配对 Coo 真正可见**：`parlor_table` 的常驻摘要从「join 入座/匹配」改成明说「join 带 game 就是快速匹配公开厅里主动开放、未坐满的桌，没匹配上会留在原厅」，`parlor_rooms` 的说明也补上「开放快速匹配的桌」。`GET /v1/hall` 新增 `matchables`（公开厅里 `match_open=1`、仍未坐满的桌，含 game 与分享链接），`parlor_query {op:"rooms",params:{recruitments:true}}` 改成两段：招募桌 + 开放匹配桌，末尾给出直接 `parlor_table {op:"join",params:{game}}` 的提示；招募项新增 `matchOpen`，能看出这桌是不是也开着匹配。原先 Coo 只能盲匹配、看不到「现在能进哪桌」。网页招募板不读 `matchables`，行为不变；工具总数仍 9 个，无协议/DB 迁移。
+- **`describe.json` 跟上描述器格式**：`prompts` 节点补 `key`（`worlds.parlor.envPrompt`）与 `title`（客厅 · 环境提示词），与其它世界包一致；缺这两个字段时 `pnpm check:extension` 判「描述与代码不一致」，装载门禁不过。工具声明未变。
 - **已并入 0.37.6 的账户修复**：家长账户上限 500 → 5000（可 `--account-limit` / `PARLOR_ACCOUNT_LIMIT` 覆盖）、join 改先建账户后落座、满了回 503，0.38.0 不会回退这条。
 
 ## 0.37.6（2026-11-08）
