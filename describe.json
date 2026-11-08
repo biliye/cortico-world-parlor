@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "parlor_query",
-      "description": "查询客厅状态、客厅目录/招募、信箱、账户、历史、公告或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。",
+      "description": "查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -114,7 +114,7 @@
     },
     {
       "name": "parlor_table",
-      "description": "牌桌操作：open 开桌、join 入座/匹配/分享链接、start 开始、leave 未开局退桌、discovery 设置匹配或招募。legacy_monopoly 仅兼容旧单厅长局。参数按需查 help。",
+      "description": "牌桌操作：open 开桌（matchOpen 开放匹配）、join 入座/快速匹配/分享链接、start 开始、leave 未开局退桌、discovery 设置匹配或招募。join 带 game 就是快速匹配公开厅里主动开放、未坐满的桌；没匹配上会留在原厅。想看哪些桌开放着匹配，用 parlor_query 的 rooms（recruitments）。legacy_monopoly 仅兼容旧单厅长局。参数按需查 help。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -143,8 +143,8 @@
         "write"
       ],
       "summary": {
-        "zh": "管理开桌、入座、开局、退桌、匹配及招募。",
-        "en": "Manages tables, seating, starting, leaving, matching and recruitment."
+        "zh": "管理开桌、入座、开局、退桌、快速匹配及招募。",
+        "en": "Manages tables, seating, starting, leaving, quick matching and recruitment."
       }
     },
     {

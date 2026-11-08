@@ -10,6 +10,10 @@ import { WEREWOLF_MIN_CLIENT } from './games/werewolf-table.ts';
 import { tableCapacity, type TableEntryInput, type TableEntryResponse, type TableEntryResult, type TableRecruitment } from './table-discovery-db.ts';
 
 interface Candidate { id: string; room_id: string; room_name: string; game: string; created_at: number; n: number }
+interface RecruitmentRow {
+  id: string; room_id: string; room_name: string; game: string;
+  recruit_text: string; updated_at: number; match_open: number; author: string | null;
+}
 interface EntryReceipt { coo_id: string; source_token_hash: string; result_token_hash: string; body_key: string; receipt_json: string }
 
 /** 选择桌、换厅、入桌和回执在同一事务内提交；桌队列一直持有到 COMMIT。 */
@@ -26,23 +30,48 @@ export class TableDiscovery {
 
   async recruits(): Promise<TableRecruitment[]> {
     const rows = await this.db.prepare(
-      `SELECT t.id, t.room_id, r.name AS room_name, t.game, t.created_at,
-              d.recruit_text, d.author_coo_id, d.updated_at, c.display_name AS author
+      `SELECT t.id, t.room_id, r.name AS room_name, t.game,
+              d.recruit_text, d.updated_at, d.match_open, c.display_name AS author
          FROM table_discovery d JOIN tables t ON t.id=d.table_id JOIN rooms r ON r.id=t.room_id
          LEFT JOIN coos c ON c.id=d.author_coo_id
         WHERE d.recruit_text<>'' AND t.status='open' AND t.frozen_at IS NULL
           AND t.deadline_at>? AND r.visibility='public' AND r.archived_at IS NULL
         ORDER BY d.updated_at DESC, t.id LIMIT 100`,
-    ).all(this.now()) as Array<Candidate & { recruit_text: string; author: string; updated_at: number }>;
+    ).all(this.now()) as RecruitmentRow[];
+    return this.entries(rows, false);
+  }
+
+  /**
+   * 只读：公开厅里主动开放快速匹配、还没坐满的桌。
+   * 与 recruits() 的区别是「写没写招募文案」不参与判断，只看 match_open；
+   * 给 Coo 一个可以定点挑的清单，避免只能盲匹配。
+   */
+  async matchables(): Promise<TableRecruitment[]> {
+    const rows = await this.db.prepare(
+      `SELECT t.id, t.room_id, r.name AS room_name, t.game,
+              d.recruit_text, d.updated_at, d.match_open, c.display_name AS author
+         FROM table_discovery d JOIN tables t ON t.id=d.table_id JOIN rooms r ON r.id=t.room_id
+         LEFT JOIN coos c ON c.id=d.author_coo_id
+        WHERE d.match_open=1 AND t.status='open' AND t.frozen_at IS NULL
+          AND t.deadline_at>? AND r.visibility='public' AND r.archived_at IS NULL
+        ORDER BY d.updated_at DESC, t.id LIMIT 100`,
+    ).all(this.now()) as RecruitmentRow[];
+    return this.entries(rows, true);
+  }
+
+  /** 两种清单共用同一套过滤：桌仍开放、没过期、没冻结；onlyOpen 时再排除已坐满的。 */
+  private async entries(rows: RecruitmentRow[], onlyOpen: boolean): Promise<TableRecruitment[]> {
     const result: TableRecruitment[] = [];
     for (const row of rows) {
       const table = await (await this.host(row.room_id)).tablePublic(row.id);
       const capacity = Number(table?.capacity ?? tableCapacity(row.game));
       if (!table || table.status !== 'open' || table.frozen || !capacity || Number(table.openDeadline) <= this.now()) continue;
       const seats = Array.isArray(table.seats) ? table.seats.length : 0;
+      if (onlyOpen && seats >= capacity) continue;
       result.push({ tableId: row.id, room: row.room_id, roomName: row.room_name, game: row.game,
         label: table.label, seats, capacity, full: seats >= capacity,
         text: row.recruit_text, author: row.author || '来客', updatedAt: Number(row.updated_at),
+        matchOpen: Number(row.match_open) === 1,
         link: `/play?${new URLSearchParams({ room: row.room_id, view: 'table', table: row.id })}` });
     }
     return result;

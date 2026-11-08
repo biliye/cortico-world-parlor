@@ -1151,6 +1151,7 @@ export class WorldServer {
           : null,
         rooms: await Promise.all(visible.map((room) => roomSummary(this.db, room))),
         recruitments: await this.tableDiscovery.recruits(),
+        matchables: await this.tableDiscovery.matchables(),
       });
       return;
     }

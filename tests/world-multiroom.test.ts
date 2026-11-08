@@ -132,6 +132,17 @@ describe('Coo 快速匹配与牌桌分享', () => {
     expect(next.tablePrivate.board).toHaveLength(225);
   });
 
+  it('招募清单会带上只开了快速匹配的桌，并提示直接 join', async () => {
+    const { friend, friendToken } = await startWorld({ room: 'hall' });
+    const room = (await friend.createRoom({ name: '只开匹配厅', visibility: 'public' }, friendToken)).room;
+    const moved = await friend.switchTo(friendToken, 'hall', room.id);
+    await friend.action(moved.token, { type: 'table_open', game: 'gomoku', matchOpen: true, requestId: 'match-only-open' }, room.id);
+    const listing = await call('parlor_query', { op: 'rooms', params: { recruitments: true } });
+    expect(listing).toContain('开放快速匹配');
+    expect(listing).toContain('game gomoku');
+    expect(listing).toContain('parlor_table {op:"join"');
+  });
+
   it('工具快速匹配后持久化新厅和令牌，重连到本桌，能继续接收桌聊', async () => {
     const { friend, friendToken, secrets, host } = await startWorld({ room: 'hall' });
     const room = (await friend.createRoom({ name: '公开匹配厅', visibility: 'public' }, friendToken)).room;

@@ -56,6 +56,45 @@ const enter = (actor: Actor, target: Json = { game: 'ddz' }, requestId = randomU
 const recruit = async (viewer: Actor) => (await call('/v1/hall', viewer)).body.recruitments as Json[];
 
 describe('快速匹配、牌桌招募与链接', () => {
+  it('只开了快速匹配、没写招募的桌出现在 matchables，坐满后从清单消失', async () => {
+    await start();
+    const host = await person('桌主');
+    const guest = await person('路人');
+    await room(host);
+    const id = await table(host, { game: 'gomoku', matchOpen: true });
+    const matchables = async (viewer: Actor) => (await call('/v1/hall', viewer)).body.matchables as Json[];
+    expect(await recruit(host)).toEqual([]);
+    expect(await matchables(host)).toEqual([expect.objectContaining({
+      tableId: id, game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, text: '',
+    })]);
+    const joined = await enter(guest, { game: 'gomoku' });
+    expect(joined.status, JSON.stringify(joined.body)).toBe(200);
+    expect(await matchables(host)).toEqual([]);
+  });
+
+  it('写了招募又开着匹配的桌两边都在，招募项带 matchOpen', async () => {
+    await start();
+    const host = await person('桌主');
+    await room(host);
+    const id = await table(host, { matchOpen: true });
+    const recruited = await act(host, { type: 'table_discovery', table: id, text: '缺一个' });
+    expect(recruited.status, JSON.stringify(recruited.body)).toBe(200);
+    expect(await recruit(host)).toEqual([expect.objectContaining({
+      tableId: id, matchOpen: true, text: '缺一个', full: false,
+    })]);
+    const matchable = (await call('/v1/hall', host)).body.matchables as Json[];
+    expect(matchable.map((item) => item.tableId)).toEqual([id]);
+  });
+
+  it('没开匹配的桌两个清单都不进', async () => {
+    await start();
+    const host = await person('桌主');
+    await room(host);
+    await table(host);
+    expect(await recruit(host)).toEqual([]);
+    expect((await call('/v1/hall', host)).body.matchables).toEqual([]);
+  });
+
   it('狼人杀快速匹配跳过满六席桌，允许加入已有九席的十二人桌', async () => {
     await start();
     const small = await person('六人桌主');
