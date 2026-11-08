@@ -642,7 +642,7 @@ export class WorldServer {
       const needed = new Set([...occupied, ...tables].map(row => row.room_id));
       for (const [id, host] of this.hosts) {
         if (!needed.has(id) && !this.sse.has(id)) continue;
-        try { await host.tickClock(now); } catch (error) {
+        try { await host.tickClock(); } catch (error) {
           console.error('parlor: 客厅时钟出错', error);
         }
         try {
@@ -1052,7 +1052,7 @@ export class WorldServer {
       try {
         const q = Object.fromEntries(url.searchParams);
         const page = await personalHistory(this.db, cooId, {
-          kind: (q.kind ?? 'games') as 'games' | 'chips', game: q.game, room: q.room,
+          kind: (q.kind ?? 'games') as 'games' | 'gifts', game: q.game, room: q.room,
           ...Object.fromEntries(['from','until','before','limit'].filter(k => q[k] !== undefined).map(k => [k, Number(q[k])])),
         });
         json(res, 200, page);
@@ -1934,6 +1934,17 @@ export class WorldServer {
       return;
     }
 
+    if (action === 'gifts' && method === 'GET') {
+      // 茶单 + 本人存货：只读，任何登录席位都能看自己的。
+      const seat = await this.seatAuth(req, roomId);
+      const host = await this.host(roomId);
+      const stock = await host.giftStock(seat.cooId);
+      const mine = url.searchParams.get('mine') === '1';
+      const items = mine ? stock.filter((item) => item.count > 0) : stock;
+      json(res, 200, { items, at: serverClock(this.now()) });
+      return;
+    }
+
     if (action === 'games' && method === 'GET') {
       const seat = await this.seatAuth(req, roomId);
       const op = url.searchParams.get('op') || 'list';
@@ -2017,6 +2028,8 @@ export class WorldServer {
       let receiptSeq: number | undefined;
       let saidEvent: RoomEvent | undefined;
       let closed: boolean | undefined;
+      /** 送礼/吃掉这类没有桌的动作，回执里带一句人话（运气文案走这里）。 */
+      let notice: string | undefined;
       /** 这次动作碰到的桌（离桌也要：动之前先记下）。回执按它附桌视图。 */
       let touchedTable: string | undefined;
       /** 上/下桌、开桌这种会改桌列表的动作：回执连 tables 一起带。 */
@@ -2045,12 +2058,17 @@ export class WorldServer {
         const result = await host.gift(
           seat.cooId,
           typeof body.to === 'string' ? body.to : '',
-          typeof body.text === 'string' ? body.text : '',
-          body.chips,
+          body.item,
+          typeof body.text === 'string' ? body.text : undefined,
         );
         delivered = result.delivered;
+        notice = `送了 ${result.item.icon}${result.item.name} 给 ${result.toName}。`;
+      } else if (type === 'gift_eat') {
+        // 运气只是文案：不进牌局、不改概率、不写任何数值。
+        const result = await host.consumeGift(seat.cooId, body.item);
+        notice = `${result.luck.line}（还剩 ${result.remaining} 份）`;
       } else if (type === 'promise' || type === 'respond') {
-        throw new HttpError(410, '承诺功能已停用；已有筹码转移保留。');
+        throw new HttpError(410, '承诺功能已停用。');
       } else if (type === 'table_open') {
         if (body.matchOpen !== undefined && typeof body.matchOpen !== 'boolean') throw new HttpError(400, 'matchOpen 必须是 true 或 false');
         if (body.requireHuman !== undefined && typeof body.requireHuman !== 'boolean') {
@@ -2058,7 +2076,6 @@ export class WorldServer {
         }
         const opened = await host.openTable(seat.cooId, {
           game: typeof body.game === 'string' ? body.game : undefined,
-          stake: body.stake,
           clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
           ...(typeof body.matchOpen === 'boolean' ? { matchOpen: body.matchOpen } : {}),
           requireHuman: body.requireHuman,
@@ -2190,6 +2207,7 @@ export class WorldServer {
         ...(requestId ? { requestId } : {}),
         ...(tableId ? { tableId } : {}),
         ...(revision !== undefined ? { revision } : {}),
+        ...(notice ? { notice } : {}),
         ...(delivered && Array.isArray(delivered) && delivered.length > 0 ? { delivered } : {}),
         ...(seats ? { seats } : {}),
         ...(deadline ? { deadline, deadlineAt: serverClock(deadline) } : {}),
@@ -2427,7 +2445,7 @@ export class WorldServer {
   /**
    * 家长下场：用家长会话给自己领一个 human 席位。
    * 玩家身份固定在 `accounts.player_coo_id` 上——同一个家长链接在任何浏览器都是同一个人；
-   * 账本/筹码与孩子那份分开（孩子是 Coo 的 cooId，家长玩家是另一个 human coo）。
+   * 账本与信箱跟孩子那份分开（孩子是 Coo 的 cooId，家长玩家是另一个 human coo）。
    */
   private async parentPlay(account: ParentAccount, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const requested = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : '';

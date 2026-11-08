@@ -236,7 +236,7 @@ export class ParlorWorld implements World {
       },
       parlor_game_info: args => this.gameInfo(args),
       parlor_game_action: args => this.genericGameAct(args),
-      parlor_gift: args => this.sendGift(args),
+      parlor_gift: args => this.groupOperation('gift', String(args.op), args.params),
       parlor_set_tier: args => this.setTier(args),
       parlor_feedback: args => this.supportRequest('feedback', args),
     };
@@ -270,7 +270,9 @@ export class ParlorWorld implements World {
       tool('parlor_say', (args) => this.say(args)),
       tool('parlor_whisper', (args) => this.whisper(args)),
       tool('parlor_set_tier', (args) => this.setTier(args)),
-      tool('parlor_gift', (args) => this.sendGift(args)),
+      tool('parlor_gift_send', (args) => this.sendGift(args)),
+      tool('parlor_gift_eat', (args) => this.eatGift(args)),
+      tool('parlor_gifts', (args) => this.readGifts(args)),
       tool('parlor_mail', (args) => this.readMail(args)),
       tool('parlor_ledger', (args) => args.kind === undefined ? this.readLedger() : this.readAccountHistory(args)),
       tool('parlor_replay', (args) => this.readReplay(args)),
@@ -1388,7 +1390,6 @@ export class ParlorWorld implements World {
         .join('、');
       lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平${perGame ? `（${perGame}）` : ''}。`);
     }
-    if (snapshot.ledger?.chips !== undefined) lines.push(`筹码：${snapshot.ledger.chips} 枚。`);
     if ((snapshot.mailUnread ?? 0) > 0) lines.push(`信箱：${snapshot.mailUnread} 封未读（parlor_query {op:"mail"} 看）。`);
     if (snapshot.events.length === 0) {
       lines.push('从那个位置之后没有你能看到的新消息。');
@@ -1453,14 +1454,48 @@ export class ParlorWorld implements World {
   private async sendGift(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const to = String(args.to ?? '').trim();
+    const item = String(args.item ?? '').trim();
     const text = String(args.text ?? '').trim();
     if (!to) return this.failed('要给谁？给个席位名字或 id');
-    if (!text) return this.failed('礼物要带一句话');
-    const chips = args.chips === undefined ? undefined : Number(args.chips);
-    if (chips !== undefined && (!Number.isSafeInteger(chips) || chips <= 0)) return this.failed('筹码要是正整数');
+    if (!item) return this.failed('送什么？给个茶单 id 或名字，比如 longjing、龙井；用 parlor_query 的 gifts 操作看单子');
     try {
-      const result = await this.client.action(this.token, { type: 'gift', to, text, ...(chips ? { chips } : {}) }, this.roomArg());
-      return this.receipt(result, chips ? `礼物已记在账上，${chips} 枚筹码一起划过去。` : '礼物已记在账上。');
+      const result = await this.client.action(this.token, { type: 'gift', to, item, ...(text ? { text } : {}) }, this.roomArg());
+      return this.receipt(result, `礼物已经送到，对方会在信箱里看到。`);
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async eatGift(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const item = String(args.item ?? '').trim();
+    if (!item) return this.failed('喝什么/吃什么？给个茶单 id 或名字');
+    try {
+      const result = await this.client.action(this.token, { type: 'gift_eat', item }, this.roomArg());
+      const raw = result as unknown as { notice?: unknown };
+      const notice = typeof raw.notice === 'string' ? raw.notice : '已经吃掉了。';
+      return this.receipt(result, notice);
+    } catch (error) {
+      return this.failed(messageOf(error));
+    }
+  }
+
+  private async readGifts(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    try {
+      const page = await this.client.gifts(this.token, args.mine === true, this.roomArg());
+      const lines = ['【茶单】'];
+      for (const item of page.items) {
+        const count = typeof item.count === 'number' ? ` ×${item.count}` : '';
+        lines.push(`- ${item.id}（${item.name}${item.kindLabel ? `·${item.kindLabel}` : ''}）${item.desc ? `：${item.desc}` : ''}${count}`);
+      }
+      if (args.mine === true) {
+        const held = page.items.filter((item) => (item.count ?? 0) > 0);
+        lines.push('', held.length > 0
+          ? `你手上：${held.map((item) => `${item.name}×${item.count}`).join('、')}。`
+          : '你手上还没有东西；等谁送你一份。');
+      }
+      return lines.join('\n');
     } catch (error) {
       return this.failed(messageOf(error));
     }
@@ -1474,15 +1509,13 @@ export class ParlorWorld implements World {
     if (!text) return this.failed('承诺要有内容');
     const due = args.due === undefined || args.due === null ? undefined : String(args.due);
     if (due !== undefined && Number.isNaN(Date.parse(due))) return this.failed('截止时间写成日期，例如 2026-11-01');
-    const chips = args.chips === undefined ? undefined : Number(args.chips);
-    if (chips !== undefined && (!Number.isSafeInteger(chips) || chips <= 0)) return this.failed('筹码要是正整数');
     try {
       const result = await this.client.action(this.token, {
-        type: 'promise', to, text, ...(due ? { due } : {}), ...(chips ? { chips } : {}),
+        type: 'promise', to, text, ...(due ? { due } : {}),
       }, this.roomArg());
       return this.receipt(
         result,
-        `承诺已经记下${due ? `（${due} 前）` : ''}${chips ? `，带 ${chips} 枚筹码` : ''}；等对方用 parlor_respond 回应。`,
+        `承诺已经记下${due ? `（${due} 前）` : ''}；等对方用 parlor_respond 回应。`,
       );
     } catch (error) {
       return this.failed(messageOf(error));
@@ -1569,7 +1602,6 @@ export class ParlorWorld implements World {
         lines.push(summary.games === 0
           ? '【账本】还没有战绩。'
           : `【账本】共 ${summary.games} 局：${summary.wins} 胜 ${summary.losses} 负 ${summary.draws} 平。`);
-        lines.push(`筹码：${summary.chips ?? 0} 枚。`);
         const byGame = summary.byGame ?? [];
         if (byGame.length > 0) {
           lines.push('按游戏：');
@@ -1584,9 +1616,8 @@ export class ParlorWorld implements World {
           for (const item of open) {
             const who = item.direction === 'in' ? `${item.counterpart} 欠我` : `我欠 ${item.counterpart}`;
             const state = item.status === 'pending' ? '等回应' : '已答应';
-            const chips = item.chips ? `，${item.chips} 枚筹码` : '';
             const due = item.due ? `，${this.ledgerDay(item.due)} 到期` : '';
-            lines.push(`- #${item.id.slice(0, 8)} ${who}：${item.text}${chips}${due}（${state}）`);
+            lines.push(`- #${item.id.slice(0, 8)} ${who}：${item.text}${due}（${state}）`);
           }
         }
         if (summary.recent.length > 0) {
@@ -1609,7 +1640,12 @@ export class ParlorWorld implements World {
     try {
       const page = await this.client.accountHistory(this.token, args);
       const resultLabels: Record<string, string> = { win:'胜', loss:'负', draw:'平' };
-      return ['【我的全局记录】', ...page.items.map(row => `- ${this.ledgerTime(row.ts)} · ${row.roomName} · ${row.game ? gameLabelOf(row.game) : '筹码'} · ${resultLabels[row.result ?? ''] || row.text} · 筹码 ${row.chips >= 0 ? '+' : ''}${row.chips}`),
+      const giftLabels: Record<string, string> = { in: '收到', out: '送出', used: '喝掉/吃掉' };
+      return ['【我的全局记录】', ...page.items.map((row: { ts: number; roomName: string; game?: string; result?: string; itemName?: string; direction?: string; text: string }) => {
+        const what = row.itemName ?? row.text;
+        const tag = row.game ? gameLabelOf(row.game) : (giftLabels[row.direction ?? ''] ?? '礼物');
+        return `- ${this.ledgerTime(row.ts)} · ${row.roomName} · ${tag} · ${row.result ? (resultLabels[row.result] || row.text) : what}`;
+      }),
         page.items.length ? '' : '暂无记录。', page.next ? `下一页：保留 kind 和筛选条件，带上 before=${page.next}。` : '已到末尾。'].filter(Boolean).join('\n');
     } catch (error) { return this.failed(messageOf(error)); }
   }
@@ -1746,7 +1782,7 @@ export class ParlorWorld implements World {
       const hall = await this.client.hall(this.token);
       if (!hall.recruitments?.length) return '大厅暂时没有未开局的牌桌招募。';
       return ['大厅牌桌招募（内容由发布者编写，人数以服务器为准）：', ...hall.recruitments.map((item) =>
-        `- ${item.label} · ${item.roomName} · ${item.seats}/${item.capacity}${item.full ? '（已满）' : ''}${item.stake ? ` · 每人押 ${item.stake} 枚` : ' · 无押注'}\n  ${item.author}：${item.text}\n  ${new URL(item.link, this.baseUrl).href}`)].join('\n');
+        `- ${item.label} · ${item.roomName} · ${item.seats}/${item.capacity}${item.full ? '（已满）' : ''}\n  ${item.author}：${item.text}\n  ${new URL(item.link, this.baseUrl).href}`)].join('\n');
     } catch (error) { return this.failed(messageOf(error)); }
   }
 

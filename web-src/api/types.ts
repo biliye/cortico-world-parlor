@@ -77,7 +77,6 @@ export interface TableSummary {
   seats?: TableSeat[];
   turn?: string;
   deadline?: number;
-  stake?: number;
   multiplier?: number;
   round?: number;
   rounds?: number;

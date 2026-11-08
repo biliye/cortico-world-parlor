@@ -16,7 +16,6 @@ import { lockCooRows, lockRoomRow, lockTableRow } from './storage/locks.ts';
 import { EventDb } from './event-db.ts';
 import { HostError } from './host-error.ts';
 import { LedgerDb } from './ledger-db.ts';
-import { MAX_CHIPS } from './ledger.ts';
 import { MailDb } from './mail-db.ts';
 import { serverClock } from './clock.ts';
 import { gameById, gameIds, gameLabelOf } from './games/registry.ts';
@@ -43,7 +42,7 @@ const AUTO_TICK_MS = 1_000;
 const MAX_TABLE_TEXT = 400;
 /** 一房同时未结束的桌数上限（30 人分 10 桌斗地主）。 */
 export const MAX_LIVE_TABLES = 10;
-/** 停机超过这么久，已开局的桌作废、押注原路退回。 */
+/** 停机超过这么久，已开局的桌作废（只留一条 refund 终态）。 */
 export const MAX_DOWNTIME_MS = 30 * 60_000;
 /** 恢复后给真人的最短重连时间。 */
 const MIN_HUMAN_RESUME_MS = 10_000;
@@ -82,7 +81,6 @@ interface LiveTable {
   engine: TableEngine;
   hostSeatId: string;
   hostName: string;
-  stake: number;
   createdAt: number;
   startedAt?: number;
   openDeadlineAt: number;
@@ -99,7 +97,6 @@ interface TableRow {
   game: string;
   status: string;
   host_seat_id: string | null;
-  stake: number;
   /** SQLite 的 TEXT 是字符串，PostgreSQL 的 JSONB 读出来是对象；统一走 jsonValue。 */
   state_json: unknown;
   engine_version: string | null;
@@ -185,15 +182,6 @@ const clampText = (value: unknown): string => {
   if (!text) throw new HostError('invalid', '消息不能为空');
   if (text.length > MAX_TABLE_TEXT) throw new HostError('invalid', `一句话最多 ${MAX_TABLE_TEXT} 个字`);
   return text;
-};
-
-const stakeOf = (value: unknown): number => {
-  if (value === undefined || value === null || value === '') return 0;
-  const amount = Number(value);
-  if (!Number.isSafeInteger(amount) || amount < 0 || amount > MAX_CHIPS) {
-    throw new HostError('invalid', `押注要是 0 到 ${MAX_CHIPS} 之间的整数`);
-  }
-  return amount;
 };
 
 const statusLabel = (status: TableStatus): string => ({
@@ -438,7 +426,7 @@ export class TableHost {
     } finally { release(); }
   }
 
-  async open(cooId: string, input: { game?: string; stake?: unknown; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean; seatCount?: unknown } = {}, requestId?: string): Promise<TableOpenResult> {
+  async open(cooId: string, input: { game?: string; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean; seatCount?: unknown } = {}, requestId?: string): Promise<TableOpenResult> {
     // 开桌还没有 tableId，用房间级键；开桌与「数桌上限」要串行。
     const releaseOpen = await this.lockTable('#room');
     try {
@@ -461,19 +449,8 @@ export class TableHost {
     if (seatCount !== undefined && (id !== 'werewolf' || !isWerewolfSeatCount(seatCount))) {
       throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
     }
-    const stake = stakeOf(input.stake);
-    // 无押注玩法：网页、Coo 工具和直接 HTTP 都在这里被同一道检查挡住。
-    if (stake > 0 && def.allowsStake === false) {
-      throw new HostError('invalid', `${def.label}只用局内金币，不能押筹码`);
-    }
-    if (stake > 0) {
-      const balance = await this.ledger.balanceOf(cooId);
-      if (balance < stake) {
-        throw new HostError('invalid', `你只有 ${balance} 枚筹码，押不起 ${stake} 枚`);
-      }
-    }
     const openKey = {
-      type: 'table_open', game: id, stake,
+      type: 'table_open', game: id,
       ...(input.matchOpen ? { matchOpen: true } : {}),
       ...(input.requireHuman ? { requireHuman: true } : {}),
       ...(seatCount !== undefined && seatCount !== WEREWOLF_SEAT_COUNT ? { seatCount } : {}),
@@ -515,7 +492,6 @@ export class TableHost {
       engine,
       hostSeatId: seat.id,
       hostName: seat.name,
-      stake,
       createdAt: now,
       openDeadlineAt: now + this.openMs,
       revision: 1,
@@ -536,8 +512,8 @@ export class TableHost {
         ts: now,
         from: 'system',
         scope: { kind: 'room' },
-        text: `${seat.name} 开了一张${def.label}桌${stake > 0 ? `（每人押 ${stake} 枚筹码）` : ''}。`,
-        data: { game: def.id, stake, tableId: table.id },
+        text: `${seat.name} 开了一张${def.label}桌。`,
+        data: { game: def.id, tableId: table.id },
       });
       await this.finishReceipt(receipt, engine);
       await this.storeReceipt(cooId, requestId, table.id, openKey, receipt, now);
@@ -604,12 +580,6 @@ export class TableHost {
     if (await lockTableRow(this.db, table.id) !== table.revision) {
       throw new HostError('conflict', '这张桌子已经变化，请刷新后重试');
     }
-    if (table.stake > 0) {
-      const balance = await this.ledger.balanceOf(cooId);
-      if (balance < table.stake) {
-        throw new HostError('invalid', `这张桌子每人押 ${table.stake} 枚，你只有 ${balance} 枚`);
-      }
-    }
     const now = this.now();
     const draft = await this.draft(table);
     let event: TableEvent;
@@ -664,7 +634,6 @@ export class TableHost {
         const current = await this.db.prepare('SELECT * FROM table_discovery WHERE table_id = ?').get(table.id) as { match_open: number; recruit_text: string; author_coo_id: string | null; updated_at: number } | undefined;
         const isHost = seat.id === table.hostSeatId;
         if (input.matchOpen !== undefined && !isHost) throw new HostError('forbidden', '只有开桌的人或 Coo 可以切换开放匹配');
-        if (input.matchOpen === true && table.stake > 0) throw new HostError('invalid', '快速匹配只支持无押注牌桌，押注桌可以分享到大厅招募');
         if (input.text !== undefined && !table.engine.has(seat.id)) throw new HostError('forbidden', '坐在这张桌上才可以发布招募');
         if (input.text !== undefined && current?.recruit_text && current.author_coo_id !== cooId && !isHost) {
           throw new HostError('forbidden', '这张桌已有招募，请由作者或桌主修改');
@@ -737,7 +706,7 @@ export class TableHost {
         throw new HostError('conflict', '这一桌已经被推进过；刷新后再来');
       }
       if (closing) {
-        // 开桌的人退桌 = 收桌；没开局就没有押注要退。
+        // 开桌的人退桌 = 收桌；没开局就什么都不用结算。
         await this.markTableSeatsLeft(table.id, now);
         await this.clearActivePlayers(table.id);
         await this.updateTableRow(table.id, 'abandoned', now, { endedAt: now, endReason: 'closed' });
@@ -792,10 +761,6 @@ export class TableHost {
     if (seat.id !== table.hostSeatId) throw new HostError('forbidden', '只有开桌的人可以开始');
     const replay = await this.replayReceipt(cooId, requestId, { type: 'table_start', tableId: table.id });
     if (replay) return { ...replay, seats: replay.seats ?? [] };
-    const players = await this.realPlayers(table);
-    if (table.stake > 0 && players.length < 2) {
-      throw new HostError('invalid', '押注桌至少要两个真人；陪练不押注');
-    }
     const now = this.now();
     const draft = await this.draft(table);
     let step: TableStep;
@@ -811,28 +776,6 @@ export class TableHost {
       const revisionInDb = await lockTableRow(this.db, table.id);
       if (revisionInDb !== undefined && revisionInDb !== table.revision) {
         throw new HostError('conflict', '这一桌已经被推进过；刷新后再来');
-      }
-      if (table.stake > 0) {
-        // 查余额与扣押注在同一个事务里，并锁住所有付款的身份行。
-        await lockCooRows(this.db, players.map((player) => player.cooId));
-        for (const player of players) {
-          const balance = await this.ledger.balanceOf(player.cooId);
-          if (balance < table.stake) {
-            throw new HostError('invalid', `${player.name} 只有 ${balance} 枚筹码，押不起 ${table.stake} 枚`);
-          }
-        }
-        const pot = table.stake * players.length;
-        await this.ledger.record({
-          kind: 'ante',
-          room: this.roomId,
-          from: 'room',
-          effectId: `${table.id}/ante`,
-          participants: players.map((player) => player.cooId),
-          text: `开局：${players.map((player) => player.name).join('、')} 各押 ${table.stake} 枚筹码（底池 ${pot} 枚）。`,
-          visibility: 'room',
-          transfers: players.map((player) => ({ from: player.cooId as string, to: 'room' as const, amount: table.stake })),
-          data: { game: draft.game, gameLabel: draft.label, stake: table.stake, pot, tableId: table.id },
-        });
       }
       await this.insertBotSeats(table, draft, now);
       await this.recordStep(table, draft, step, now);
@@ -946,7 +889,7 @@ export class TableHost {
           ? draft.autoPlay(turnId, now)
           : draft.tick(now);
       } catch (error) {
-        // 长局里一次代打抛错不能把客厅锁死：整桌作废并退回押注，让人看得见。
+        // 长局里一次代打抛错不能把客厅锁死：整桌作废，让人看得见。
         console.error('parlor: 牌桌超时代打失败', error);
         await this.abort(table, 'error', `${table.engine.label}桌推进出错，这局作废。`);
         continue;
@@ -1037,7 +980,7 @@ export class TableHost {
 
   /**
    * 把这个人从这一房所有未结束的桌里标成托管：他的回合由脚本代打，
-   * 结算仍归他（筹码照算），一人一桌的锁保留到结算。
+   * 结算仍算他一份，一人一桌的锁保留到结算。
    */
   async markAuto(cooId: string): Promise<string[]> {
     const seat = await this.seats.activeSeat(cooId);
@@ -1226,28 +1169,6 @@ export class TableHost {
       ? data.winners.filter((id): id is string => typeof id === 'string')
       : [];
     const winners = [...new Set(winnerSeatIds.map((id) => seatToCoo.get(id)).filter((id): id is string => !!id))];
-    const stake = table.stake;
-    const pot = stake > 0 ? stake * participants.length : 0;
-    let transfers: Array<{ from: string; to: string; amount: number }> | undefined;
-    let chipText = '';
-    if (pot > 0) {
-      if (winners.length > 0) {
-        const share = Math.floor(pot / winners.length);
-        const rest = pot - share * winners.length;
-        transfers = winners
-          .map((cooId, index) => ({ from: 'room', to: cooId, amount: share + (index === 0 ? rest : 0) }))
-          .filter((transfer) => transfer.amount > 0);
-        const names: string[] = [];
-        for (const cooId of winners) {
-          const seatId = rows.find((row) => row.coo_id === cooId)!.seat_id;
-          names.push((await this.seatById(seatId))?.name ?? '席位');
-        }
-        chipText = ` 底池 ${pot} 枚归 ${names.join('、')}。`;
-      } else {
-        transfers = participants.map((cooId) => ({ from: 'room', to: cooId, amount: stake }));
-        chipText = ` 没人赢，底池 ${pot} 枚退回。`;
-      }
-    }
     const landlordId = typeof data.landlord === 'string' ? data.landlord : undefined;
     const landlordName = landlordId === undefined ? undefined : (await this.seatById(landlordId))?.name;
     const entry = await this.ledger.record({
@@ -1258,15 +1179,13 @@ export class TableHost {
       game: table.engine.game,
       participants,
       winners,
-      text: `${event.text}${chipText}`,
+      text: event.text,
       visibility: 'room',
-      ...(transfers && transfers.length > 0 ? { transfers } : {}),
       data: {
         game: table.engine.game,
         gameLabel: table.engine.label,
         tableId: table.id,
         tie: data.tie === true,
-        ...(stake > 0 ? { stake, pot } : {}),
         ...(typeof data.multiplier === 'number' ? { multiplier: data.multiplier } : {}),
         ...(data.spring === true ? { spring: true } : {}),
         ...(data.antiSpring === true ? { antiSpring: true } : {}),
@@ -1279,7 +1198,7 @@ export class TableHost {
     await this.db.prepare(
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
-    ).run(table.id, entry.id, now, JSON.stringify({ winners, participants, stake, pot }));
+    ).run(table.id, entry.id, now, JSON.stringify({ winners, participants }));
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
     if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN
@@ -1288,7 +1207,7 @@ export class TableHost {
     await this.clearActivePlayers(table.id);
   }
 
-  /** 开桌超时/引擎出错/长停机：整桌作废；已经收过押注的按开局明细原路退回。 */
+  /** 开桌超时/引擎出错/长停机：整桌作废，只留一条终态。 */
   private async abort(table: LiveTable, reason: 'timeout' | 'error' | 'offline' | 'restart', text: string): Promise<void> {
     const now = this.now();
     await withTransaction(this.db, async () => {
@@ -1307,63 +1226,15 @@ export class TableHost {
   }
 
   /**
-   * 押注原路退回：读开局那条 ante 的实际扣款明细（不是 stake×人数），
-   * effectId 幂等，终态表挡住第二次退款。
+   * 牌桌作废：只留一个终态标记，免得以后被当成「还没结算」。
+   * 0.38.0 起没有押注，也就不再有退款与退注通知——作废只是这局不算数。
    */
-  private async refund(table: { id: string; game: string; engine: TableEngine; stake: number }, reason: string, now: number): Promise<void> {
+  private async refund(table: { id: string }, reason: string, now: number): Promise<void> {
     if (await this.finalization(table.id)) return;
-    const ante = await this.ledger.byEffectId(`${table.id}/ante`);
-    const rows = ante ? await this.ledger.transfersOf(ante.id) : [];
-    const byCoo = new Map<string, number>();
-    for (const transfer of rows) {
-      if (transfer.fromKind !== 'coo' || !transfer.fromCooId) continue;
-      byCoo.set(transfer.fromCooId, (byCoo.get(transfer.fromCooId) ?? 0) + transfer.amount);
-    }
-    if (byCoo.size === 0) {
-      // 没收到过押注的桌：也要留一个终态，避免以后被当成「还没结算」。
-      await this.db.prepare(
-        `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
-         VALUES (?, 'refund', NULL, ?, ?)`,
-      ).run(table.id, now, JSON.stringify({ reason, refunded: [] }));
-      return;
-    }
-    const participants = [...byCoo.keys()];
-    let entry;
-    try {
-      entry = await this.ledger.record({
-        kind: 'note',
-        room: this.roomId,
-        from: 'room',
-        effectId: `${table.id}/refund`,
-        participants,
-        text: '牌桌作废，押的筹码按开局明细原路退回。',
-        visibility: 'room',
-        transfers: participants.map((cooId) => ({ from: 'room' as const, to: cooId, amount: byCoo.get(cooId)! })),
-        data: { game: table.game, gameLabel: table.engine.label, stake: table.stake, reason, tableId: table.id },
-      });
-    } catch (error) {
-      // 退款失败必须让整个事务回滚，不能把桌子标成「已退款」。
-      throw new HostError('conflict', `押注退回失败：${(error as Error).message}`);
-    }
     await this.db.prepare(
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
-       VALUES (?, 'refund', ?, ?, ?)`,
-    ).run(table.id, entry.id, now, JSON.stringify({ reason, refunded: participants.map((cooId) => ({ cooId, amount: byCoo.get(cooId) })) }));
-    for (const cooId of participants) {
-      try {
-        await this.mail.appendOnce(`${table.id}/refund/${cooId}`, {
-          room: this.roomId,
-          to: cooId,
-          kind: 'ledger',
-          action: 'refund',
-          fromName: '客厅',
-          text: `${table.engine.label}桌作废了，押的 ${byCoo.get(cooId)} 枚筹码已经退回。`,
-          ...(entry.id ? { entryId: entry.id } : {}),
-        });
-      } catch (error) {
-        console.error('parlor: 退注通知没写进信箱', error);
-      }
-    }
+       VALUES (?, 'refund', NULL, ?, ?)`,
+    ).run(table.id, now, JSON.stringify({ reason }));
   }
 
   // —— 恢复 ——
@@ -1392,7 +1263,6 @@ export class TableHost {
           engine,
           hostSeatId: ended.host_seat_id ?? engine.host,
           hostName: await this.seatName(ended.host_seat_id ?? engine.host),
-          stake: ended.stake,
           createdAt: ended.created_at,
           ...(ended.started_at !== null ? { startedAt: ended.started_at } : {}),
           openDeadlineAt: ended.deadline_at ?? ended.created_at + this.openMs,
@@ -1421,7 +1291,7 @@ export class TableHost {
       if (row.frozen_at !== null) continue;
       if (!row.state_json) {
         await this.abortRow(row, row.status === 'open' ? 'closed' : 'restart',
-          row.status === 'open' ? '没有开局就停机的旧桌子，已经收起来了。' : '升级前的旧牌局没有存档，这局作废、押注退回。', now);
+          row.status === 'open' ? '没有开局就停机的旧桌子，已经收起来了。' : '升级前的旧牌局没有存档，这局作废。', now);
         continue;
       }
       let engine: TableEngine;
@@ -1441,7 +1311,6 @@ export class TableHost {
         engine,
         hostSeatId: row.host_seat_id ?? engine.host,
         hostName: await this.seatName(row.host_seat_id ?? engine.host),
-        stake: row.stake,
         createdAt: row.created_at,
         ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
         openDeadlineAt: row.deadline_at ?? row.updated_at + this.openMs,
@@ -1460,7 +1329,7 @@ export class TableHost {
       }
       if (downtime > this.recovery.maxDowntimeMs) {
         await this.abort(live, 'offline',
-          `${engine.label}桌因为服务停机超过 ${Math.round(this.recovery.maxDowntimeMs / 60_000)} 分钟，这局作废、押注退回。`);
+          `${engine.label}桌因为服务停机超过 ${Math.round(this.recovery.maxDowntimeMs / 60_000)} 分钟，这局作废。`);
         continue;
       }
       engine.rearm(now, downtime, this.recovery.minHumanMs);
@@ -1494,7 +1363,6 @@ export class TableHost {
       engine: { label: gameLabelOf(row.game) } as TableEngine,
       hostSeatId: row.host_seat_id ?? '',
       hostName: '',
-      stake: row.stake,
       createdAt: row.created_at,
       openDeadlineAt: 0,
       revision: row.revision,
@@ -1503,7 +1371,7 @@ export class TableHost {
       autoSeats: new Set(),
     };
     await withTransaction(this.db, async () => {
-      if (row.status !== 'open' && row.stake > 0) await this.refund(stub, reason, now);
+      if (row.status !== 'open') await this.refund(stub, reason, now);
       await this.markTableSeatsLeft(row.id, now);
       await this.clearActivePlayers(row.id);
       await this.updateTableRow(row.id, 'abandoned', now, { endedAt: now, endReason: reason });
@@ -1540,7 +1408,6 @@ export class TableHost {
       engine: this.frozenStub(row),
       hostSeatId: row.host_seat_id ?? '',
       hostName: await this.seatName(row.host_seat_id ?? ''),
-      stake: row.stake,
       createdAt: row.created_at,
       ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
       openDeadlineAt: 0,
@@ -1631,7 +1498,6 @@ export class TableHost {
       recruitAuthor: discovery?.author_coo_id ?? '',
       ...(engine.status === 'open' ? { openDeadline: table.openDeadlineAt } : {}),
       ...(table.frozen ? { frozen: true } : {}),
-      ...(table.stake > 0 ? { stake: table.stake } : {}),
       text: table.frozen
         ? `${table.engine.label}桌恢复失败，已经隔离；等运营者处理。`
         : engine.publicText(),
@@ -1645,7 +1511,6 @@ export class TableHost {
       game: table.game,
       status: table.engine.status,
       host_seat_id: table.hostSeatId,
-      stake: table.stake,
       state_json: table.stateJson,
       engine_version: `${table.game}/${table.engine.stateVersion}`,
       revision: table.revision,
@@ -1704,7 +1569,7 @@ export class TableHost {
     return (await this.seatById(seatId))?.name ?? '';
   }
 
-  /** 开局那一刻的真人席位（脚本陪练不算；押注只收这些人）。 */
+  /** 开局那一刻的真人席位（脚本陪练不算）。 */
   private async realPlayers(table: LiveTable): Promise<Array<{ seatId: string; cooId: string; name: string }>> {
     const view = table.engine.public() as { seats?: Array<{ id?: unknown; name?: unknown }> };
     const names = new Map<string, string>();
@@ -1845,10 +1710,10 @@ export class TableHost {
   private async insertTableRow(table: LiveTable, status: string, now: number, stateJson: string): Promise<void> {
     const epoch = await this.roomEpoch();
     await this.db.prepare(
-      `INSERT INTO tables(id, room_id, room_epoch, game, status, host_seat_id, stake, state_json,
+      `INSERT INTO tables(id, room_id, room_epoch, game, status, host_seat_id, state_json,
          engine_version, turn_seq, revision, state_version, deadline_at, created_at, started_at,
          ended_at, end_reason, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
     ).run(
       table.id,
       this.roomId,
@@ -1856,7 +1721,6 @@ export class TableHost {
       table.game,
       status,
       table.hostSeatId,
-      table.stake,
       stateJson,
       `${table.game}/${table.engine.stateVersion}`,
       table.revision,

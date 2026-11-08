@@ -55,12 +55,6 @@ export interface LegacyEvent {
   data?: Record<string, unknown>;
 }
 
-interface LegacyTransfer {
-  from: string;
-  to: string;
-  amount: number;
-}
-
 interface LegacyLedgerEntry {
   id: string;
   ts: number;
@@ -76,7 +70,6 @@ interface LegacyLedgerEntry {
   game?: string;
   ref?: string;
   due?: number;
-  transfers?: LegacyTransfer[];
   effectId?: string;
 }
 
@@ -209,17 +202,6 @@ const normalizeCoo = (value: unknown, roomId: string): string => {
   const legacy = /^legacy:([^:]+):(.+)$/.exec(value);
   if (legacy) return legacyCooId(legacy[1], legacy[2]);
   return isCoo(value) ? value : '';
-};
-
-const oldBalance = (entries: LegacyLedgerEntry[], cooId: string): number => {
-  let total = 0;
-  for (const entry of entries) {
-    for (const transfer of entry.transfers ?? []) {
-      if (transfer.to === cooId) total += transfer.amount;
-      if (transfer.from === cooId) total -= transfer.amount;
-    }
-  }
-  return total;
 };
 
 const oldUnread = (mail: LegacyMail | null, cooId: string): number => {
@@ -442,17 +424,13 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
       };
       const insertEntry = db.prepare(
         `INSERT INTO ledger_entries(id, ts, room_id, kind, visibility, from_kind, from_coo_id,
-           to_kind, to_coo_id, game, text, data_json, due_at, ref_entry_id, effect_id, is_refill)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+           to_kind, to_coo_id, game, text, data_json, due_at, ref_entry_id, effect_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
       );
       const insertParticipant = db.prepare(
         'INSERT INTO ledger_participants(entry_id, coo_id, position) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
       );
       const insertWinner = db.prepare('INSERT INTO ledger_winners(entry_id, coo_id) VALUES (?, ?) ON CONFLICT DO NOTHING');
-      const insertTransfer = db.prepare(
-        `INSERT INTO ledger_transfers(entry_id, from_kind, from_coo_id, to_kind, to_coo_id, amount)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      );
       const entryRooms = new Set([roomId]);
       for (const entry of entries) {
         const entryRoom = typeof entry.room === 'string' && entryRooms.has(entry.room) ? entry.room : roomId;
@@ -465,10 +443,6 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
         if (toCoo) await ensureLedgerCoo(toCoo, typeof entry.data?.toName === 'string' ? entry.data.toName : '');
         for (const cooId of entry.participants ?? []) await ensureLedgerCoo(normalizeCoo(cooId, roomId), '');
         for (const cooId of entry.winners ?? []) await ensureLedgerCoo(normalizeCoo(cooId, roomId), '');
-        for (const transfer of entry.transfers ?? []) {
-          await ensureLedgerCoo(normalizeCoo(transfer.from, roomId), '');
-          await ensureLedgerCoo(normalizeCoo(transfer.to, roomId), '');
-        }
         await insertEntry.run(
           entry.id,
           Number(entry.ts) || now(),
@@ -484,7 +458,6 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
           entry.data === undefined ? null : JSON.stringify(entry.data),
           typeof entry.due === 'number' ? entry.due : null,
           entry.effectId || null,
-          entry.data?.refill === true ? 1 : 0,
         );
         let position = 0;
         for (const raw of entry.participants ?? []) {
@@ -497,20 +470,6 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
           const cooId = normalizeCoo(raw, roomId);
           if (!cooId) continue;
           await insertWinner.run(entry.id, cooId);
-        }
-        for (const transfer of entry.transfers ?? []) {
-          if (!Number.isSafeInteger(transfer.amount) || transfer.amount <= 0) continue;
-          const from = transfer.from === 'room' ? 'room' : normalizeCoo(transfer.from, roomId);
-          const to = transfer.to === 'room' ? 'room' : normalizeCoo(transfer.to, roomId);
-          if (!from || !to) continue;
-          await insertTransfer.run(
-            entry.id,
-            from === 'room' ? 'room' : 'coo',
-            from === 'room' ? null : from,
-            to === 'room' ? 'room' : 'coo',
-            to === 'room' ? null : to,
-            transfer.amount,
-          );
         }
         counts.ledgerEntries += 1;
       }
@@ -555,9 +514,9 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
       if (activity && activity.table && activity.table.status && activity.table.status !== 'ended') {
         const tableId = `legacy-${roomId}-monopoly`;
         await db.prepare(
-          `INSERT INTO tables(id, room_id, room_epoch, game, status, host_seat_id, stake,
+          `INSERT INTO tables(id, room_id, room_epoch, game, status, host_seat_id,
              state_json, turn_seq, created_at, started_at, ended_at, end_reason, updated_at)
-           VALUES (?, ?, ?, 'monopoly', 'abandoned', ?, 0, ?, 0, ?, ?, ?, 'migration', ?)
+           VALUES (?, ?, ?, 'monopoly', 'abandoned', ?, ?, 0, ?, ?, ?, 'migration', ?)
            ON CONFLICT DO NOTHING`,
         ).run(
           tableId,
@@ -580,28 +539,8 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
         counts.events += 1;
       }
 
-      // 8. 核对：余额、未读、席位令牌。任何一项不等就抛错回滚。
-      const balanceChecks: MigrationCheck[] = [];
-      const cooIds = new Set<string>([
-        ...Object.keys(ledger?.identities ?? {}),
-        ...(ledger?.entries ?? []).flatMap((entry) => [
-          ...(entry.from && entry.from !== 'room' ? [entry.from] : []),
-          ...(entry.to && entry.to !== 'room' ? [entry.to] : []),
-          ...(entry.participants ?? []),
-        ]),
-      ]);
-      for (const cooId of cooIds) {
-        if (!isCoo(cooId)) continue;
-        const old = oldBalance(ledger?.entries ?? [], cooId);
-        const current = ((await db.prepare(
-          `SELECT (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE to_coo_id = ?)
-                - (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE from_coo_id = ?) AS balance`,
-        ).get(cooId, cooId)) as { balance: number }).balance;
-        const check = { name: cooId, old, now: current, match: old === current };
-        balanceChecks.push(check);
-        if (!check.match) throw new Error(`余额核对不过：${cooId} 旧 ${old} / 新 ${current}`);
-      }
-
+      // 8. 核对：未读、席位令牌。任何一项不等就抛错回滚。
+      // 0.38.0 起没有筹码，原先的余额核对一并去掉。
       const unreadChecks: MigrationCheck[] = [];
       for (const cooId of new Set((mail?.items ?? []).map((item) => normalizeCoo(item.to, roomId)))) {
         if (!cooId) continue;
@@ -640,7 +579,6 @@ export async function migrateLegacyJson(options: MigrationOptions): Promise<Migr
         JSON.stringify({ warnings }),
       );
 
-      report.balances = balanceChecks;
       report.unread = unreadChecks;
       report.tokenChecks = tokenChecks;
     });

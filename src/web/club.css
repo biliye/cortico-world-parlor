@@ -289,3 +289,21 @@ input::placeholder,textarea::placeholder { color:#92a69a; }
   .announce-text { flex:1 1 100%; white-space:normal; }
   .announce-banner .announce-dismiss { min-height:34px; }
 }
+
+/* —— 茶点（礼物）：茶单、存货与喝掉/吃掉 —— */
+.chips.gift-open { cursor:pointer; color:var(--accent); }
+.chips.gift-open:hover { color:var(--accent-text); }
+.gift-field { display:grid;gap:4px;margin-bottom:10px;font-size:12px;color:var(--muted); }
+.gift-field select,.gift-field input { box-sizing:border-box;width:100%;min-width:0; }
+.gift-grid { display:grid;gap:10px;margin:14px 0; }
+.gift-row { display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px; }
+.gift-card {
+  display:grid;gap:2px;justify-items:start;text-align:left;padding:10px;cursor:pointer;
+  border:1px solid var(--line-2);border-radius:10px;background:var(--panel-2);color:var(--text);
+}
+.gift-card.is-on { border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset; }
+.gift-icon { font-size:20px;line-height:1; }
+.gift-name { font-weight:600;font-size:13px; }
+.gift-card small { font-size:11px;line-height:1.35; }
+.gift-held-box { margin-top:6px; }
+.gift-held { display:flex;justify-content:space-between;align-items:center;gap:12px;margin:6px 0; }

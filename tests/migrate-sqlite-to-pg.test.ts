@@ -56,7 +56,7 @@ const seedSource = async (file: string): Promise<{ db: Db; host: RoomHost; table
   await host.join(A, { name: '阿岚' });
   await host.join(B, { name: '小满' });
   await host.say(A, '晚上好');
-  await host.gift(A, '小满', '一点心意', 5);
+  await host.gift(A, '小满', 'longjing', '一点心意');
   const promised = await host.promise(A, '小满', '明天一起打牌', now + 3_600_000);
   await host.respond(B, promised.entry.id, 'accept');
   await db.prepare('INSERT INTO global_handles(coo_id, handle) VALUES (?, ?)').run(A, 'mg000001');
@@ -64,8 +64,8 @@ const seedSource = async (file: string): Promise<{ db: Db; host: RoomHost; table
   await db.prepare(
     'INSERT INTO identity_tickets(token_hash, coo_id, audience, expires_at) VALUES (?, ?, ?, ?)',
   ).run('hash-ticket-1', A, 'https://parlor.example', now + 86_400_000);
-  // 一局骰子：开局押注、出牌、结算，产生回执、事件、受众与账本条目。
-  const opened = await host.openTable(A, { game: 'dice', stake: 5 }, 'open-1');
+  // 一局骰子：开局、出牌、结算，产生回执、事件、受众与账本条目。
+  const opened = await host.openTable(A, { game: 'dice' }, 'open-1');
   await host.joinTable(B, opened.tableId, 'join-1');
   await host.startTable(A, opened.tableId, 'start-1');
   const revision = (await host.snapshot(A, { limit: 1 })).tablePrivate?.revision as number;

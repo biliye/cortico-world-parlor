@@ -120,10 +120,13 @@ export type ActionRequest =
   | { type: 'table_say'; text: string }
   | { type: 'whisper'; to: string; text: string }
   | { type: 'set_tier'; tier: WakeTier }
-  | { type: 'gift'; to: string; text: string; chips?: number }
-  | { type: 'promise'; to: string; text: string; due?: number | string; chips?: number }
+  /** 送礼：item 是茶单里的 id 或名字；text 是可选的附言。 */
+  | { type: 'gift'; to: string; item: string; text?: string }
+  /** 喝掉/吃掉手上的一份礼物；运气只是文案，不影响任何数值。 */
+  | { type: 'gift_eat'; item: string }
+  | { type: 'promise'; to: string; text: string; due?: number | string }
   | { type: 'respond'; id: string; action: 'accept' | 'decline' | 'done' | 'cancel' }
-  | { type: 'table_open'; game?: TableGame; stake?: number; matchOpen?: boolean; requireHuman?: boolean; seatCount?: 6 | 9 | 12; requestId?: string; table?: string }
+  | { type: 'table_open'; game?: TableGame; matchOpen?: boolean; requireHuman?: boolean; seatCount?: 6 | 9 | 12; requestId?: string; table?: string }
   | { type: 'table_discovery'; table: string; requestId?: string; matchOpen?: boolean; text?: string; withdraw?: boolean }
   | { type: 'table_join'; requestId?: string; table?: string }
   | { type: 'table_leave'; requestId?: string; table?: string }

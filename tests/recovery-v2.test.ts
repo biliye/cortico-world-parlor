@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorldServer } from '../src/room/world-server.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
-import { START_CHIPS } from '../src/room/ledger.ts';
+import { type Db } from '../src/room/db.ts';
 
 const O = 'coo-rc000001';
 const U = 'coo-rc000002';
@@ -101,33 +101,37 @@ const invitationTo = async (app: WorldServer, room: string, cooId: string, token
 };
 
 describe('恢复与故障', () => {
-  it('长停机只退一次；重复重启不会重复补偿', async () => {
+  it('长停机作废只留一条终态；重复重启不会重复补偿', async () => {
     const file = fileDb();
     const t0 = 1_770_000_000_000;
+    const refunds = async (db: Db): Promise<number> => (
+      (await db.prepare("SELECT COUNT(*) AS n FROM table_finalizations WHERE kind = 'refund'").get()) as { n: number }
+    ).n;
     const app = await start(file, () => t0);
     const u = await enter(app, U, '小U');
     const v = await enter(app, V, '小V');
-    const opened = await post(app.url, '/v1/action', { type: 'table_open', game: 'dice', stake: 5, requestId: 'open' }, bearer(u));
+    const opened = await post(app.url, '/v1/action', { type: 'table_open', game: 'dice', requestId: 'open' }, bearer(u));
     const id = opened.body.tableId as string;
-    await post(app.url, '/v1/action', { type: 'table_join', table: id, requestId: 'join' }, bearer(v));
-    await post(app.url, '/v1/action', { type: 'table_start', table: id, requestId: 'start' }, bearer(u));
-    expect(await new LedgerDb(app.dbHandle).balanceOf(U)).toBe(START_CHIPS - 5);
+    const joined = await post(app.url, '/v1/action', { type: 'table_join', table: id, requestId: 'join' }, bearer(v));
+    expect(joined.status).toBe(200);
+    const started = await post(app.url, '/v1/action', { type: 'table_start', table: id, requestId: 'start' }, bearer(u));
+    expect(started.status).toBe(200);
+    // 还没作废：一条 refund 都没有。
+    expect(await refunds(app.dbHandle)).toBe(0);
 
     await app.close();
     server = undefined;
 
-    // 停机 31 分钟：作废退款一次。
+    // 停机 31 分钟：作废一次，留下一条 refund 终态。
     const later = t0 + 31 * 60_000;
     const restarted = await start(file, () => later);
-    expect(await new LedgerDb(restarted.dbHandle).balanceOf(U)).toBe(START_CHIPS);
-    expect(await new LedgerDb(restarted.dbHandle).balanceOf(V)).toBe(START_CHIPS);
+    expect(await refunds(restarted.dbHandle)).toBe(1);
     await restarted.close();
     server = undefined;
 
-    // 再停再起：旧桌已经 abandoned，不会再退第二次。
+    // 再停再起：旧桌已经 abandoned，不会再写第二条。
     const again = await start(file, () => later + 31 * 60_000);
-    expect(await new LedgerDb(again.dbHandle).balanceOf(U)).toBe(START_CHIPS);
-    expect(await new LedgerDb(again.dbHandle).balanceOf(V)).toBe(START_CHIPS);
+    expect(await refunds(again.dbHandle)).toBe(1);
   });
 
   it('坏快照只隔离那一桌，不猜、不重发牌', async () => {

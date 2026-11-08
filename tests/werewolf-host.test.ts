@@ -212,7 +212,7 @@ const pump = async (fixture: Fixture, onEvent?: (type: string, text: string) => 
     const priv = await fixture.host.tablePrivate(seat.id) as unknown as Priv | null;
     const pub = await fixture.host.tablePublic() as { status?: string; turn?: string } | null;
     if (!priv || pub?.status === 'ended') return;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     for (const cooId of await aliveCoos(fixture)) {
       const seatRow = (await fixture.host.seatOf(cooId))!;
       const view = await fixture.host.tablePrivate(seatRow.id) as unknown as Priv | null;
@@ -236,7 +236,7 @@ const pump = async (fixture: Fixture, onEvent?: (type: string, text: string) => 
     }
     // 没人可动时推时钟走过当前窗口（发言阅读期 / 投票 / 夜间）；步长盖过最长的单一窗口。
     fixture.clock.now += 65_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
   }
   throw new Error('泵没有收敛');
 };
@@ -284,7 +284,7 @@ describe('狼人杀 · 宿主层', () => {
     await startTable(fixture, tableId);
     // 看身份 → 首夜。
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const priv = await privOf(fixture, COOS[0]);
     expect(priv.phase).toBe('night');
 
@@ -314,9 +314,9 @@ describe('狼人杀 · 宿主层', () => {
     expect(conflict.error).toContain('不同的动作');
     // 301 字发言被拒后，同一窗口还能正常交（快进两段夜，落在第一位发言者的窗口里）。
     fixture.clock.now += 120_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     fixture.clock.now += 120_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     let speaker: string | undefined;
     for (const cooId of COOS) {
       const view = await privOf(fixture, cooId);
@@ -342,7 +342,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
 
     const wolves: string[] = [];
     for (const cooId of COOS) {
@@ -419,7 +419,7 @@ describe('狼人杀 · 宿主层', () => {
     void observer;
     // 看身份过后照样锁着；终局后恢复。
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     await expect(fixture.host.tableSay(COOS[1], '夜里说', tableId)).rejects.toThrow(/游戏动作/);
     await fixture.close();
   });
@@ -434,7 +434,7 @@ describe('狼人杀 · 宿主层', () => {
       .run(fixture.clock.now - 10 * 60_000, offlineCoo);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now); // 进入首夜
+    await fixture.host.tickClock(); // 进入首夜
     // 若掉线者是首夜行动者，会有提醒信；非行动者等它轮到时才有。
     const mailRows = async (): Promise<Array<{ text: string }>> => (
       (await fixture.db.prepare('SELECT text FROM mail WHERE coo_id = ?').all(offlineCoo)) as Array<{ text: string }>
@@ -445,7 +445,8 @@ describe('狼人杀 · 宿主层', () => {
       expect((await mailRows()).every((row) => !row.text.includes('狼人') || row.text.includes('不含任何身份'))).toBe(true);
       // 同一窗口不重发：再触发一轮 tick 不加信。
       const count = (await mailRows()).length;
-      await fixture.host.tickClock(fixture.clock.now + 1000);
+      fixture.clock.now += 1000;
+      await fixture.host.tickClock();
       expect((await mailRows()).length).toBe(count);
     }
     // 推进到白天发言，全员轮流：掉线者轮到时一定有信。
@@ -462,7 +463,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const rolesBefore: Array<string | undefined> = [];
     for (const cooId of COOS) rolesBefore.push((await privOf(fixture, cooId)).role);
     const wolves: string[] = [];
@@ -509,7 +510,7 @@ describe('狼人杀 · 宿主层', () => {
       }
     }
     clock2.now += 120_000;
-    await host2.tickClock(clock2.now);
+    await host2.tickClock();
     const after = (await host2.tablePrivate((await host2.seatOf(COOS[0]))!.id)) as unknown as Priv;
     expect(['night', 'speech', 'ended']).toContain(after.phase ?? '');
     expect(privWolf.deadline).not.toBe(deadlineBefore);
@@ -524,7 +525,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     await fixture.close();
 
     const clock2 = { now: fixture.clock.now + 31 * 60_000 };
@@ -573,11 +574,11 @@ describe('狼人杀 · 宿主层', () => {
     expect((revealPriv.deadline ?? 0) - startedAt).toBe(15_000);
     // 快进两段夜，落到第一位发言者的窗口。
     fixture.clock.now += 16_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     fixture.clock.now += 61_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     fixture.clock.now += 61_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const seat = (await fixture.host.seatOf(COOS[0]))!;
     const pub = await fixture.host.tablePublic() as { status?: string; turn?: string };
     expect(pub.status).toBe('playing');
@@ -604,7 +605,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now); // 首夜
+    await fixture.host.tickClock(); // 首夜
     expect((await privOf(fixture, COOS[0])).phase).toBe('night');
 
     // 同一客厅再开一张斗地主桌：另两个人坐，第三席由脚本陪练补。
@@ -691,7 +692,7 @@ describe('狼人杀 · 宿主层', () => {
     const ddzStatus = async (): Promise<string> => ((await fixture.host.tablePublic(ddzId)) as { status?: string }).status ?? '';
     for (let i = 0; i < 400 && (await ddzStatus()) !== 'ended'; i++) {
       fixture.clock.now += 61_000;
-      await fixture.host.tickClock(fixture.clock.now);
+      await fixture.host.tickClock();
     }
     expect(await ddzStatus()).toBe('ended');
     expect(((await fixture.host.tablePublic(tableId)) as { status?: string }).status).toBe('playing');
@@ -707,7 +708,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now); // 首夜
+    await fixture.host.tickClock(); // 首夜
     const wolves: string[] = [];
     for (const cooId of COOS) {
       if ((await privOf(fixture, cooId)).role === 'wolf') wolves.push(cooId);
@@ -749,7 +750,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     // 同房再开一张骰子桌。
     const dice = await fixture.host.openTable(EXTRA_COOS[0], { game: 'dice' });
     const diceId = dice.tableId;
@@ -785,7 +786,7 @@ describe('狼人杀 · 宿主层', () => {
     const tableId = await openWerewolf(fixture);
     await startTable(fixture, tableId);
     fixture.clock.now += 20_000;
-    await fixture.host.tickClock(fixture.clock.now); // 进行中
+    await fixture.host.tickClock(); // 进行中
     // 三个口在局中都被拒。
     await expect(fixture.host.tableSay(COOS[1], '局中桌聊', tableId)).rejects.toThrow(/游戏动作/);
     await expect(fixture.host.say(COOS[1], '局中房间发言')).rejects.toThrow(/狼人杀/);

@@ -121,7 +121,8 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     expect(moved?.tokenHash).toBe(hashSeatToken(token));
     await expect(room.seatByToken(token)).rejects.toThrow();
     expect((await app.runLifecycle()).moved).toBe(0);
-    expect(await new LedgerDb(app.dbHandle).balanceOf(A)).toBe(1000);
+    // 迁厅只动席位，不动账本条目。
+    expect(await new LedgerDb(app.dbHandle).count()).toBe(0);
   });
   it('本人成功聊天续时，持续 SSE 不作为活动；满大厅时源席位完整保留', async () => {
     now += 299 * 60_000;
@@ -147,19 +148,22 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     expect(result).toEqual({ moved:0, archived:0 });
     expect((await getRoom(app.dbHandle, 'r-life'))?.archivedAt).toBeNull();
   });
-  it('48 小时归档保留余额和结果，在大厅查询自己的跨厅记录且不能读别人的流水', async () => {
+  it('48 小时归档保留战绩与礼物流水，在大厅查询自己的跨厅记录且不能读别人的流水', async () => {
     const ledger = new LedgerDb(app.dbHandle, { now:() => now });
-    await ledger.record({ kind:'ante', room:'r-life', from:'room', participants:[A], effectId:'game-test/ante', text:'开局押注', visibility:'room', transfers:[{from:A,to:'room',amount:100}] });
-    await ledger.record({ kind:'game', game:'ddz', room:'r-life', from:'room', participants:[A], winners:[A], effectId:'game-test/result', data:{tableId:'game-test'}, text:'地主胜', visibility:'room', transfers:[{from:'room',to:A,amount:300}] });
-    const before = await ledger.balanceOf(A);
+    await ledger.record({ kind:'game', game:'ddz', room:'r-life', from:'room', participants:[A], winners:[A], effectId:'game-test/result', data:{tableId:'game-test'}, text:'地主胜', visibility:'room' });
+    await ledger.record({ kind:'gift', room:'r-life', from:'room', to:A, text:'一份龙井', visibility:'private', data:{itemId:'longjing',itemName:'龙井'} });
+    const before = await ledger.count();
     now += 48 * HOUR;
     expect((await app.runLifecycle()).archived).toBe(1);
     expect((await getRoom(app.dbHandle, 'r-life'))?.archivedAt).not.toBeNull();
-    expect(await ledger.balanceOf(A)).toBe(before);
+    // 归档不裁条目：战绩与礼物都还在。
+    expect(await ledger.count()).toBe(before);
     const page = await personalHistory(app.dbHandle, A);
-    expect(page.items[0]).toMatchObject({ room:'r-life', result:'win', chips:200 });
+    expect(page.items[0]).toMatchObject({ room:'r-life', result:'win' });
+    expect((await personalHistory(app.dbHandle, A, { kind:'gifts' })).items[0])
+      .toMatchObject({ itemId:'longjing', direction:'in' });
     expect((await personalHistory(app.dbHandle, B)).items).toEqual([]);
-    expect((await personalHistory(app.dbHandle, B, { kind:'chips' })).items).toEqual([]);
+    expect((await personalHistory(app.dbHandle, B, { kind:'gifts' })).items).toEqual([]);
     expect((await ledger.summaryFor(A)).games).toBe(1);
   });
   it('真实业务活动阻止归档，系统自动迁厅不会给原客厅续时', async () => {
@@ -182,7 +186,7 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     expect((await personalHistory(app.dbHandle, A, { game:'dice', room:'r-life' })).items).toHaveLength(1);
     await expect(personalHistory(app.dbHandle, A, { from:100, until:99 })).rejects.toThrow();
   });
-  it('HTTP 位置查询跟随迁厅，旧厅拒绝访问；承诺新写入返回停用而不扣款', async () => {
+  it('HTTP 位置查询跟随迁厅，旧厅拒绝访问；承诺新写入返回停用且不写条目', async () => {
     const {url} = await app.listen();
     now += 5 * HOUR;
     await app.runLifecycle();
@@ -191,10 +195,12 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     expect(current.status).toBe(200);
     expect((await current.json() as {room:string}).room).toBe('hall');
     expect((await fetch(url + '/v1/rooms/r-life/room', { headers })).status).toBe(401);
-    const before = await new LedgerDb(app.dbHandle).balanceOf(A);
-    const response = await fetch(url + '/v1/rooms/hall/action', { method:'POST', headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({type:'promise',to:'另一位',text:'不再创建',chips:100}) });
+    const ledger = new LedgerDb(app.dbHandle);
+    const before = await ledger.count();
+    const response = await fetch(url + '/v1/rooms/hall/action', { method:'POST', headers:{...headers,'content-type':'application/json'}, body:JSON.stringify({type:'promise',to:'另一位',text:'不再创建'}) });
     expect(response.status).toBe(410);
-    expect(await new LedgerDb(app.dbHandle).balanceOf(A)).toBe(before);
+    // 停用的功能不写任何条目。
+    expect(await ledger.count()).toBe(before);
     expect((await fetch(url + '/v1/me/history', { headers })).status).toBe(200);
   });
 });

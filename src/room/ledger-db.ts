@@ -1,26 +1,20 @@
 /**
  * 全局账本的 store。
  *
- * 与旧的 LedgerStore（JSON）同一组语义：只追加条目，余额由 ledger_transfers
- * 现算，承诺状态由指向它的 accept/decline/cancel/settle/default 按 ord 现算。
- * 区别只在于落库：不设 entryLimit（裁掉一条 grant/transfer 会直接改余额），
- * 并把 participants/winners/transfers 拆到各自的表。
+ * 与旧的 LedgerStore（JSON）同一组语义：只追加条目，承诺状态由指向它的
+ * accept/decline/cancel/settle/default 按 ord 现算，礼物存货由收到的 `gift`
+ * 减去喝掉/吃掉的 `gift_used` 现算。区别只在于落库：不设 entryLimit。
  *
- * 事务交给调用方组合（进厅/送礼+账本+信箱），record 自己只在外层没有事务时
+ * 事务交给调用方组合（进厅、送礼+账本+信箱），record 自己只在外层没有事务时
  * 才开一个。外层是否有事务由适配器按异步链判断（db.isTransaction）。
  *
- * 余额检查与扣款在 PostgreSQL 下要放在同一个事务里、并对涉及的 coos 行加锁，
- * 由 RoomHost 的调用方负责；store 这里只保证「写」是原子的。
+ * 0.38.0 起筹码整条移除：`ledger_transfers` 表已删，余额不再存在。
+ * `grant` / `ante` 只作为历史 kind 保留（能读、能展示），不再写。
  */
 import { randomUUID } from 'node:crypto';
 import { migrate, withTransaction, type Db } from './db.ts';
 import {
-  REFILL_BELOW,
-  REFILL_GAP_MS,
-  REFILL_TO,
-  START_CHIPS,
   gameOf,
-  type ChipTransfer,
   type GameTally,
   type LedgerEntry,
   type LedgerEntryView,
@@ -30,13 +24,9 @@ import {
   type OpenLedgerItem,
   type PromiseStatus,
 } from './ledger.ts';
-import { isUniqueViolation } from './storage/errors.ts';
 import { jsonObject } from './storage/json.ts';
 
-export type LedgerRecordInput = Omit<LedgerEntry, 'id' | 'ts'> & {
-  /** 显式标成补发；默认看 `data.refill === true`。 */
-  isRefill?: boolean;
-};
+export type LedgerRecordInput = Omit<LedgerEntry, 'id' | 'ts'>;
 
 export interface LedgerDbOptions {
   now?: () => number;
@@ -72,15 +62,6 @@ interface EntryRow {
   due_at: number | null;
   ref_entry_id: string | null;
   effect_id: string | null;
-  is_refill: number;
-}
-
-interface TransferRow {
-  from_kind: string;
-  from_coo_id: string | null;
-  to_kind: string;
-  to_coo_id: string | null;
-  amount: number;
 }
 
 interface OpenRow {
@@ -107,29 +88,15 @@ const labelOf = (game: string, data: Record<string, unknown> | undefined): strin
   return game === 'unknown' ? '其他' : game;
 };
 
-/** 这条记录让某个 cooId 增减了多少筹码。 */
-const netOf = (entry: LedgerEntry, cooId: string): number => {
-  let net = 0;
-  for (const transfer of entry.transfers ?? []) {
-    if (transfer.to === cooId) net += transfer.amount;
-    if (transfer.from === cooId) net -= transfer.amount;
-  }
-  return net;
-};
-
-const viewOf = (entry: LedgerEntry, cooId?: string): LedgerEntryView => {
-  const net = cooId ? netOf(entry, cooId) : 0;
-  return {
-    id: entry.id,
-    ts: entry.ts,
-    room: entry.room,
-    kind: entry.kind,
-    text: entry.text,
-    ...(entry.data ? { data: entry.data } : {}),
-    ...(entry.kind === 'game' ? { game: gameOf(entry) } : {}),
-    ...(net !== 0 ? { chips: net } : {}),
-  };
-};
+const viewOf = (entry: LedgerEntry): LedgerEntryView => ({
+  id: entry.id,
+  ts: entry.ts,
+  room: entry.room,
+  kind: entry.kind,
+  text: entry.text,
+  ...(entry.data ? { data: entry.data } : {}),
+  ...(entry.kind === 'game' ? { game: gameOf(entry) } : {}),
+});
 
 export class LedgerDb {
   readonly db: Db;
@@ -149,18 +116,17 @@ export class LedgerDb {
   }
 
   /**
-   * 追加一条记录，写 entry + participants/winners/transfers，返回带 id/ts 的条目。
+   * 追加一条记录，写 entry + participants/winners，返回带 id/ts 的条目。
    * 同一个 effectId 只写一次：已有就原样返回旧的（长局重放/崩溃恢复）。
    */
   record(input: LedgerRecordInput): Promise<LedgerEntry> {
-    const { isRefill, ...fields } = input;
     return this.atomic(async () => {
-      if (fields.effectId) {
-        const existing = await this.byEffectId(fields.effectId);
+      if (input.effectId) {
+        const existing = await this.byEffectId(input.effectId);
         if (existing) return existing;
       }
-      const entry: LedgerEntry = { ...fields, id: randomUUID(), ts: this.now() };
-      await this.insert(entry, isRefill ?? entry.data?.refill === true);
+      const entry: LedgerEntry = { ...input, id: randomUUID(), ts: this.now() };
+      await this.insert(entry);
       return entry;
     });
   }
@@ -173,29 +139,6 @@ export class LedgerDb {
   async byEffectId(effectId: string): Promise<LedgerEntry | undefined> {
     const row = await this.db.prepare('SELECT * FROM ledger_entries WHERE effect_id = ?').get(effectId);
     return row ? this.entryOf(row as unknown as EntryRow) : undefined;
-  }
-
-  /** 一条记录的实际筹码转移（退款按开局明细原路退回时用）。 */
-  async transfersOf(entryId: string): Promise<Array<{
-    fromKind: 'coo' | 'room'; fromCooId?: string;
-    toKind: 'coo' | 'room'; toCooId?: string;
-    amount: number;
-  }>> {
-    const rows = await this.db.prepare(
-      `SELECT from_kind, from_coo_id, to_kind, to_coo_id, amount
-         FROM ledger_transfers WHERE entry_id = ? ORDER BY id`,
-    ).all(entryId) as Array<{
-      from_kind: 'coo' | 'room'; from_coo_id: string | null;
-      to_kind: 'coo' | 'room'; to_coo_id: string | null;
-      amount: number;
-    }>;
-    return rows.map((row) => ({
-      fromKind: row.from_kind,
-      ...(row.from_coo_id ? { fromCooId: row.from_coo_id } : {}),
-      toKind: row.to_kind,
-      ...(row.to_coo_id ? { toCooId: row.to_coo_id } : {}),
-      amount: row.amount,
-    }));
   }
 
   /** 按完整 id 或唯一前缀找条目；前缀撞了就返回 undefined。 */
@@ -212,18 +155,41 @@ export class LedgerDb {
     return hits.length === 1 ? this.entryOf(hits[0] as unknown as EntryRow) : undefined;
   }
 
-  /** 余额：所有 transfers 里进出这个 cooId 的和；`room` 只发行，不计余额。 */
-  async balanceOf(cooId: string): Promise<number> {
-    const row = await this.db.prepare(
-      `SELECT
-         (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE to_coo_id = ?) -
-         (SELECT COALESCE(SUM(amount), 0) FROM ledger_transfers WHERE from_coo_id = ?) AS balance`,
-    ).get(cooId, cooId) as { balance: number };
-    return row.balance;
+  /**
+   * 手上的礼物：收到的 `gift` 减去自己喝掉/吃掉的 `gift_used`，按 itemId 聚合。
+   * 没有库存表——存货是条目现算的，和余额当初的写法同源。
+   */
+  async heldGifts(cooId: string): Promise<Record<string, number>> {
+    const rows = await this.db.prepare(
+      `SELECT kind, data_json FROM ledger_entries
+        WHERE (kind = 'gift' AND to_coo_id = ?) OR (kind = 'gift_used' AND from_coo_id = ?)`,
+    ).all(cooId, cooId) as Array<{ kind: string; data_json: unknown }>;
+    const held: Record<string, number> = {};
+    for (const row of rows) {
+      const data = parseData(row.data_json);
+      const itemId = data?.itemId;
+      if (typeof itemId !== 'string' || !itemId) continue;
+      held[itemId] = (held[itemId] ?? 0) + (row.kind === 'gift' ? 1 : -1);
+    }
+    for (const [itemId, count] of Object.entries(held)) if (count <= 0) delete held[itemId];
+    return held;
   }
 
-  /**
-   * 一条 promise/debt 现在的状态：按 ord 取最后一条指向它的
+  /** 某一种礼物手上还有几份。 */
+  async heldCount(cooId: string, itemId: string): Promise<number> {
+    return (await this.heldGifts(cooId))[itemId] ?? 0;
+  }
+
+  /** 时间窗内已经喝掉/吃掉了几份（运气文案的过量判定用）。 */
+  async usedSince(cooId: string, since: number): Promise<number> {
+    const row = await this.db.prepare(
+      `SELECT COUNT(*) AS n FROM ledger_entries
+        WHERE kind = 'gift_used' AND from_coo_id = ? AND ts >= ?`,
+    ).get(cooId, since) as { n: number };
+    return row.n;
+  }
+
+  /** 一条 promise/debt 现在的状态：按 ord 取最后一条指向它的
    * accept/decline/cancel/settle/default；没有就是 pending。
    * 传入 id 也可以；不是 promise/debt 返回 null。
    */
@@ -273,7 +239,6 @@ export class LedgerDb {
       const data = parseData(row.data_json);
       const direction = row.from_coo_id === cooId ? 'out' : 'in';
       const name = direction === 'out' ? data?.toName : data?.fromName;
-      const chips = data?.chips;
       open.push({
         id: row.id,
         kind: row.kind as 'promise' | 'debt',
@@ -282,7 +247,6 @@ export class LedgerDb {
         counterpart: typeof name === 'string' && name ? name : '某个席位',
         text: row.text,
         ...(typeof row.due_at === 'number' ? { due: row.due_at } : {}),
-        ...(typeof chips === 'number' && chips > 0 ? { chips } : {}),
       });
     }
     return open;
@@ -299,60 +263,6 @@ export class LedgerDb {
         WHERE from_coo_id = ? AND kind IN ('gift','promise') AND ts >= ?`,
     ).get(cooId, since) as { n: number };
     return row.n;
-  }
-
-  /** 新身份第一次进房间发筹码；唯一索引保证一个 coo 只有一条非 refill grant。 */
-  async ensureGrant(cooId: string, room: string): Promise<LedgerEntry | null> {
-    if (!cooId) return null;
-    return this.atomic(async () => {
-      const existing = await this.db.prepare(
-        "SELECT 1 AS hit FROM ledger_entries WHERE kind = 'grant' AND to_coo_id = ? AND is_refill = 0 LIMIT 1",
-      ).get(cooId);
-      if (existing) return null;
-      try {
-        return await this.record({
-          kind: 'grant',
-          room,
-          from: 'room',
-          to: cooId,
-          text: `房间给了 ${START_CHIPS} 枚筹码。`,
-          visibility: 'private',
-          transfers: [{ from: 'room', to: cooId, amount: START_CHIPS }],
-          data: { fromName: '房间', chips: START_CHIPS },
-        });
-      } catch (error) {
-        // 并发兜底：唯一索引顶掉时按「已经发过」处理。
-        if (isUniqueViolation(error)) return null;
-        throw error;
-      }
-    });
-  }
-
-  /** 余额见底时补一点，两次之间至少隔 REFILL_GAP_MS；返回新发的条目。 */
-  async maybeRefill(cooId: string, room: string, now = this.now()): Promise<LedgerEntry | null> {
-    if (!cooId) return null;
-    return this.atomic(async () => {
-      const balance = await this.balanceOf(cooId);
-      if (balance >= REFILL_BELOW) return null;
-      const last = await this.db.prepare(
-        `SELECT ts FROM ledger_entries
-          WHERE kind = 'grant' AND to_coo_id = ? AND is_refill = 1
-          ORDER BY ord DESC LIMIT 1`,
-      ).get(cooId) as { ts: number } | undefined;
-      if (last && now - last.ts < REFILL_GAP_MS) return null;
-      const amount = Math.max(0, REFILL_TO - balance);
-      if (amount === 0) return null;
-      return this.record({
-        kind: 'grant',
-        room,
-        from: 'room',
-        to: cooId,
-        text: `房间给你补了 ${amount} 枚筹码（余额不足 ${REFILL_BELOW}）。`,
-        visibility: 'private',
-        transfers: [{ from: 'room', to: cooId, amount }],
-        data: { fromName: '房间', chips: amount, refill: true },
-      });
-    });
   }
 
   /**
@@ -418,23 +328,19 @@ export class LedgerDb {
         GROUP BY e.game ORDER BY COUNT(*) DESC, e.game`).all(cooId, cooId, cooId, cooId) as GameTally[];
       const byGame = groups.map(g => ({ game: g.game, label: labelOf(g.game, {gameLabel:g.label}), games: Number(g.games), wins: Number(g.wins), losses: Number(g.losses), draws: Number(g.draws) }));
       const total = byGame.reduce((a,g) => ({ games:a.games+g.games,wins:a.wins+g.wins,losses:a.losses+g.losses,draws:a.draws+g.draws }), { games:0,wins:0,losses:0,draws:0 });
-      // Keep the existing summary contract: latest five entries of any kind,
-      // and each entry's own net transfer, not a game's ante+result aggregate.
-      const recentRows = await this.db.prepare(`SELECT e.*,
-        COALESCE((SELECT SUM(CASE WHEN tr.to_coo_id=? THEN tr.amount ELSE 0 END - CASE WHEN tr.from_coo_id=? THEN tr.amount ELSE 0 END)
-          FROM ledger_transfers tr WHERE tr.entry_id=e.id),0) AS chips
+      // Keep the existing summary contract: latest five entries of any kind.
+      const recentRows = await this.db.prepare(`SELECT e.*
         FROM ledger_entries e WHERE e.from_coo_id=? OR e.to_coo_id=?
           OR EXISTS(SELECT 1 FROM ledger_participants p WHERE p.entry_id=e.id AND p.coo_id=?)
           OR EXISTS(SELECT 1 FROM ledger_winners w WHERE w.entry_id=e.id AND w.coo_id=?)
-        ORDER BY e.ord DESC LIMIT 5`).all(cooId, cooId, cooId, cooId, cooId, cooId) as (EntryRow & {chips:number})[];
+        ORDER BY e.ord DESC LIMIT 5`).all(cooId, cooId, cooId, cooId) as unknown as EntryRow[];
       const recent: LedgerEntryView[] = recentRows.map(row => {
         const data = parseData(row.data_json);
         return { id:row.id, ts:Number(row.ts), room:row.room_id ?? '', kind:row.kind as LedgerKind, text:row.text,
           ...(data ? {data} : {}), ...(row.kind === 'game' ? {game:row.game || (typeof data?.game === 'string' ? data.game : 'unknown')} : {}),
-          ...(Number(row.chips) !== 0 ? {chips:Number(row.chips)} : {}),
         };
       });
-      return { cooId, ...total, byGame, chips: await this.balanceOf(cooId), open: [], recent };
+      return { cooId, ...total, byGame, open: [], recent };
     }
     const rows = await this.db.prepare(
       `SELECT e.id, e.game, e.data_json,
@@ -490,7 +396,7 @@ export class LedgerDb {
     const recent: LedgerEntryView[] = [];
     for (const row of recentRows) {
       const entry = await this.byId(row.id);
-      if (entry) recent.push(viewOf(entry, cooId));
+      if (entry) recent.push(viewOf(entry));
     }
 
     return {
@@ -502,7 +408,6 @@ export class LedgerDb {
       byGame: [...byGame.values()].sort((left, right) => (
         right.games - left.games || left.game.localeCompare(right.game)
       )),
-      chips: await this.balanceOf(cooId),
       open: await this.openFor(cooId),
       recent,
     };
@@ -533,7 +438,7 @@ export class LedgerDb {
     return this.db.isTransaction ? fn() : withTransaction(this.db, fn);
   }
 
-  private async insert(entry: LedgerEntry, isRefill: boolean): Promise<void> {
+  private async insert(entry: LedgerEntry): Promise<void> {
     const fromKind = entry.from === 'room' ? 'room' : 'coo';
     const toKind = entry.to === undefined || entry.to === ''
       ? 'none'
@@ -541,8 +446,8 @@ export class LedgerDb {
     await this.db.prepare(
       `INSERT INTO ledger_entries(
          id, ts, room_id, kind, visibility, from_kind, from_coo_id, to_kind, to_coo_id,
-         game, text, data_json, due_at, ref_entry_id, effect_id, is_refill
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         game, text, data_json, due_at, ref_entry_id, effect_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       entry.id,
       entry.ts,
@@ -559,7 +464,6 @@ export class LedgerDb {
       typeof entry.due === 'number' && Number.isFinite(entry.due) ? entry.due : null,
       entry.ref ?? null,
       entry.effectId || null,
-      isRefill ? 1 : 0,
     );
 
     const participants = new Set(entry.participants ?? []);
@@ -585,30 +489,6 @@ export class LedgerDb {
         await statement.run(entry.id, cooId);
       }
     }
-
-    for (const transfer of entry.transfers ?? []) await this.insertTransfer(entry.id, transfer);
-  }
-
-  private async insertTransfer(entryId: string, transfer: ChipTransfer): Promise<void> {
-    if (!Number.isSafeInteger(transfer.amount) || transfer.amount <= 0) {
-      throw new Error(`筹码转移的数额必须是正整数：${String(transfer.amount)}`);
-    }
-    if (!transfer.to) {
-      throw new Error('筹码转移必须有一个目标');
-    }
-    const fromKind = transfer.from === 'room' ? 'room' : 'coo';
-    const toKind = transfer.to === 'room' ? 'room' : 'coo';
-    await this.db.prepare(
-      `INSERT INTO ledger_transfers(entry_id, from_kind, from_coo_id, to_kind, to_coo_id, amount)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(
-      entryId,
-      fromKind,
-      fromKind === 'coo' ? transfer.from : null,
-      toKind,
-      toKind === 'coo' ? transfer.to : null,
-      transfer.amount,
-    );
   }
 
   private async entryOf(row: EntryRow): Promise<LedgerEntry> {
@@ -619,13 +499,6 @@ export class LedgerDb {
     const winners = (await this.db
       .prepare('SELECT coo_id FROM ledger_winners WHERE entry_id = ? ORDER BY coo_id')
       .all(row.id) as { coo_id: string }[]).map((item) => item.coo_id);
-    const transfers = (await this.db
-      .prepare('SELECT from_kind, from_coo_id, to_kind, to_coo_id, amount FROM ledger_transfers WHERE entry_id = ? ORDER BY id')
-      .all(row.id) as unknown as TransferRow[]).map((item) => ({
-      from: item.from_kind === 'room' ? 'room' : item.from_coo_id ?? '',
-      to: item.to_kind === 'room' ? 'room' : item.to_coo_id ?? '',
-      amount: item.amount,
-    }));
     const data = parseData(row.data_json);
 
     const entry: LedgerEntry = {
@@ -641,7 +514,6 @@ export class LedgerDb {
     else if (row.to_kind === 'coo' && row.to_coo_id) entry.to = row.to_coo_id;
     if (participants.length > 0) entry.participants = participants;
     if (winners.length > 0) entry.winners = winners;
-    if (transfers.length > 0) entry.transfers = transfers;
     if (data) entry.data = data;
     if (row.game) entry.game = row.game;
     if (row.ref_entry_id) entry.ref = row.ref_entry_id;

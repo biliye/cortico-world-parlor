@@ -309,7 +309,7 @@ describe('客厅 World', () => {
     expect(text).toContain('这一轮你先出');
   });
 
-  it('礼物工具继续可用，承诺工具退出且账户能查看筹码', async () => {
+  it('礼物工具改成物品化，承诺工具退出且账户能查看战绩', async () => {
     await startServer();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     const ctx = makeContext(secrets);
@@ -324,14 +324,15 @@ describe('客厅 World', () => {
     const friend = await client.join('inv', { name: '阿岚' });
 
     const gift = toolForOperation(world, 'parlor_gift')!;
-    expect(String(await gift.handler({ to: '阿岚', text: '一杯奶茶', chips: 30 }, {} as ToolCallContext)))
-      .toContain('30 枚筹码');
+    expect(String(await gift.handler(
+      { op: 'send', params: { to: '阿岚', item: 'longjing', text: '一杯奶茶' } }, {} as ToolCallContext,
+    ))).toContain('礼物已经送到');
 
     expect(world.tools().some(tool => ['parlor_promise','parlor_respond'].includes(tool.name))).toBe(false);
     const friendMail = await client.mail(friend.token, 10);
     expect(friendMail.items.some(item=>item.kind==='gift')).toBe(true);
     const ledger=toolForOperation(world, 'parlor_ledger')!;
-    expect(String(await ledger.handler({},{} as ToolCallContext))).toContain('筹码：');
+    expect(String(await ledger.handler({},{} as ToolCallContext))).toContain('【账本】');
   });
 
   it('打一局后 parlor_ledger 能看到战绩，身份文件落盘', async () => {

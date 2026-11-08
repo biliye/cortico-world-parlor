@@ -5,27 +5,25 @@
  * 两条原则：
  * 1. 不存状态，只存条目。承诺的状态（等回/已答应/已了结/已失约）由指向它的
  *    转移条目（accept/decline/cancel/settle/default）按时间现算。
- * 2. 筹码也只是条目上的转移：余额 = 所有 transfers 里进出这个 cooId 的和。
- *    没有余额字段，也就没有两处数字对不上的问题。
+ * 2. 礼物的「手上有几份」也是现算：收到的 `gift` 条目减去喝掉/吃掉的
+ *    `gift_used` 条目。没有库存字段，也就没有两处数字对不上的问题。
+ *
+ * 0.38.0 起筹码已整条移除（`ledger_transfers` 表、余额、发放与补给全部下线）。
+ * `grant` / `ante` 只作为历史 kind 保留，能读能展示，生产代码不再写。
  */
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type LedgerKind =
-  | 'game' | 'ante' | 'gift' | 'promise' | 'debt' | 'settle' | 'default' | 'note'
-  | 'accept' | 'decline' | 'cancel' | 'grant';
+  | 'game' | 'gift' | 'gift_used' | 'promise' | 'debt' | 'settle' | 'default' | 'note'
+  | 'accept' | 'decline' | 'cancel'
+  /** 历史 kind：0.38.0 前发的筹码与开局押注，只读。 */
+  | 'grant' | 'ante';
 export type LedgerVisibility = 'room' | 'private';
 export type PromiseStatus = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'settled' | 'defaulted';
 
-/** 一次筹码移动；`from: 'room'` 表示房间（发行/回收），不是任何人。 */
-export interface ChipTransfer {
-  from: string;
-  to: string;
-  amount: number;
-}
-
-/** 存盘与内核之间用的完整条目；对外的视图会去掉 cooId 列表与转移明细。 */
+/** 存盘与内核之间用的完整条目；对外的视图会去掉 cooId 列表。 */
 export interface LedgerEntry {
   id: string;
   ts: number;
@@ -48,13 +46,11 @@ export interface LedgerEntry {
   ref?: string;
   /** promise 的到期时间（epoch ms）。没有期限的承诺不会自动失约。 */
   due?: number;
-  /** 这条记录涉及的筹码转移；只在存盘/内核里用，视图不带。 */
-  transfers?: ChipTransfer[];
   /** 幂等键：同一个 effectId 只会写进账本一次（长局重放/崩溃恢复用）。 */
   effectId?: string;
 }
 
-/** 发给 World / 家长页的条目：不带别人的 cooId，也不带转移明细。 */
+/** 发给 World / 家长页的条目：不带别人的 cooId。 */
 export interface LedgerEntryView {
   id: string;
   ts: number;
@@ -63,8 +59,6 @@ export interface LedgerEntryView {
   text: string;
   data?: Record<string, unknown>;
   game?: string;
-  /** 只看自己的时候，这一条让自己增减了多少筹码。 */
-  chips?: number;
 }
 
 /** 单种游戏的战绩；账本按条目里的 game 现算，不存计数器。 */
@@ -89,7 +83,6 @@ export interface OpenLedgerItem {
   counterpart: string;
   text: string;
   due?: number;
-  chips?: number;
 }
 
 export interface LedgerSummary {
@@ -100,8 +93,6 @@ export interface LedgerSummary {
   draws: number;
   /** 按游戏拆开的战绩，局数多的在前。 */
   byGame: GameTally[];
-  /** 当前筹码余额（所有条目上的转移现算）。 */
-  chips: number;
   /** 未了结的承诺；没有期限、没人答应的也在里面。 */
   open: OpenLedgerItem[];
   recent: LedgerEntryView[];
@@ -136,25 +127,20 @@ interface LedgerState {
 }
 
 const KINDS: readonly LedgerKind[] = [
-  'game', 'ante', 'gift', 'promise', 'debt', 'settle', 'default', 'note',
-  'accept', 'decline', 'cancel', 'grant',
+  'game', 'gift', 'gift_used', 'promise', 'debt', 'settle', 'default', 'note',
+  'accept', 'decline', 'cancel',
+  // 历史 kind，只读：0.38.0 前发的筹码与开局押注。生产代码不再写。
+  'grant', 'ante',
 ];
 const DEFAULT_ENTRY_LIMIT = 5000;
 const DEFAULT_IDENTITY_LIMIT = 500;
 const COO_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const SECRET_HASH = /^[0-9a-f]{64}$/;
 
-/** 新身份第一次进房间发的筹码。 */
-export const START_CHIPS = 1000;
-/** 余额低于这个数才补，补到这个数，两次之间至少隔一段。 */
-export const REFILL_BELOW = 100;
-export const REFILL_TO = 300;
-export const REFILL_GAP_MS = 6 * 60 * 60 * 1000;
-/** 防刷屏：未了结承诺、每小时新社交条目、单条字数、单笔筹码。 */
+/** 防刷屏：未了结承诺、每小时新社交条目、单条字数。 */
 export const MAX_OPEN_PROMISES = 5;
 export const MAX_SOCIAL_PER_HOUR = 10;
 export const MAX_SOCIAL_TEXT = 200;
-export const MAX_CHIPS = 1_000_000;
 export const MAX_DUE_MS = 90 * 24 * 60 * 60 * 1000;
 
 export const UNKNOWN_GAME = 'unknown';
@@ -166,13 +152,6 @@ export const isCooSecret = (value: unknown): value is string => (
 );
 
 const hashSecret = (secret: string): string => createHash('sha256').update(secret).digest('hex');
-
-const isTransfer = (value: unknown): value is ChipTransfer => {
-  if (!value || typeof value !== 'object') return false;
-  const transfer = value as Partial<ChipTransfer>;
-  return typeof transfer.from === 'string' && typeof transfer.to === 'string'
-    && Number.isSafeInteger(transfer.amount) && (transfer.amount ?? 0) > 0;
-};
 
 const isEntry = (value: unknown): value is LedgerEntry => {
   if (!value || typeof value !== 'object') return false;
@@ -200,17 +179,7 @@ function labelOf(entry: LedgerEntry): string {
   return game === UNKNOWN_GAME ? '其他' : game;
 }
 
-/** 这条记录让某个 cooId 增减了多少筹码。 */
-function netFor(entry: LedgerEntry, cooId: string): number {
-  let net = 0;
-  for (const transfer of entry.transfers ?? []) {
-    if (transfer.to === cooId) net += transfer.amount;
-    if (transfer.from === cooId) net -= transfer.amount;
-  }
-  return net;
-}
-
-const view = (entry: LedgerEntry, cooId?: string): LedgerEntryView => ({
+const view = (entry: LedgerEntry): LedgerEntryView => ({
   id: entry.id,
   ts: entry.ts,
   room: entry.room,
@@ -218,7 +187,6 @@ const view = (entry: LedgerEntry, cooId?: string): LedgerEntryView => ({
   text: entry.text,
   ...(entry.data ? { data: entry.data } : {}),
   ...(entry.kind === 'game' ? { game: gameOf(entry) } : {}),
-  ...(cooId && netFor(entry, cooId) !== 0 ? { chips: netFor(entry, cooId) } : {}),
 });
 
 /** 一条 promise 的状态。按追加顺序取最后一条指向它的转移。 */
@@ -260,7 +228,6 @@ export class LedgerStore {
             participants: Array.isArray(entry.participants) ? entry.participants.filter((id) => typeof id === 'string') : undefined,
             winners: Array.isArray(entry.winners) ? entry.winners.filter((id) => typeof id === 'string') : undefined,
             ...(Number.isFinite(entry.due) ? { due: Number(entry.due) } : { due: undefined }),
-            ...(Array.isArray(entry.transfers) ? { transfers: entry.transfers.filter(isTransfer) } : { transfers: undefined }),
           }));
       }
       if (raw.identities && typeof raw.identities === 'object') {
@@ -358,7 +325,6 @@ export class LedgerStore {
       if (status !== 'pending' && status !== 'accepted') continue;
       const direction = entry.from === cooId ? 'out' : 'in';
       const name = direction === 'out' ? entry.data?.toName : entry.data?.fromName;
-      const chips = entry.data?.chips;
       open.push({
         id: entry.id,
         kind: entry.kind,
@@ -367,7 +333,6 @@ export class LedgerStore {
         counterpart: typeof name === 'string' && name ? name : '某个席位',
         text: entry.text,
         ...(typeof entry.due === 'number' ? { due: entry.due } : {}),
-        ...(typeof chips === 'number' && chips > 0 ? { chips } : {}),
       });
     }
     return open.sort((left, right) => (left.due ?? Number.MAX_SAFE_INTEGER) - (right.due ?? Number.MAX_SAFE_INTEGER));
@@ -386,48 +351,35 @@ export class LedgerStore {
     )).length;
   }
 
-  /** 筹码余额：所有条目上的转移现算；`room` 是发行方，不计余额。 */
-  balanceOf(cooId: string): number {
-    let total = 0;
-    for (const entry of this.entries) total += netFor(entry, cooId);
-    return total;
+  /**
+   * 手上还剩几份礼物：收到的 `gift` 减去自己喝掉/吃掉的 `gift_used`。
+   * 按 itemId 聚合成 `{ itemId: 份数 }`，没有库存字段，也没有两处数字。
+   */
+  heldGifts(cooId: string): Record<string, number> {
+    const held: Record<string, number> = {};
+    for (const entry of this.entries) {
+      if (entry.kind !== 'gift' && entry.kind !== 'gift_used') continue;
+      const itemId = entry.data?.itemId;
+      if (typeof itemId !== 'string' || !itemId) continue;
+      const delta = entry.kind === 'gift' && entry.to === cooId ? 1
+        : entry.kind === 'gift_used' && entry.from === cooId ? -1 : 0;
+      if (delta === 0) continue;
+      held[itemId] = (held[itemId] ?? 0) + delta;
+    }
+    for (const [itemId, count] of Object.entries(held)) if (count <= 0) delete held[itemId];
+    return held;
   }
 
-  /** 新身份第一次进房间时发筹码；已经发过就返回 null。 */
-  ensureGrant(cooId: string, room: string): LedgerEntry | null {
-    if (!cooId) return null;
-    if (this.entries.some((entry) => entry.kind === 'grant' && entry.to === cooId)) return null;
-    return this.record({
-      kind: 'grant',
-      room,
-      from: 'room',
-      to: cooId,
-      text: `房间给了 ${START_CHIPS} 枚筹码。`,
-      visibility: 'private',
-      transfers: [{ from: 'room', to: cooId, amount: START_CHIPS }],
-      data: { fromName: '房间', chips: START_CHIPS },
-    });
+  /** 某一种礼物手上还有几份。 */
+  heldCount(cooId: string, itemId: string): number {
+    return this.heldGifts(cooId)[itemId] ?? 0;
   }
 
-  /** 余额见底时补一点，隔一段时间最多一次；返回新发的条目。 */
-  maybeRefill(cooId: string, room: string, now = this.now()): LedgerEntry | null {
-    if (this.balanceOf(cooId) >= REFILL_BELOW) return null;
-    const last = this.entries
-      .filter((entry) => entry.kind === 'grant' && entry.to === cooId && entry.data?.refill === true)
-      .at(-1);
-    if (last && now - last.ts < REFILL_GAP_MS) return null;
-    const amount = Math.max(0, REFILL_TO - this.balanceOf(cooId));
-    if (amount === 0) return null;
-    return this.record({
-      kind: 'grant',
-      room,
-      from: 'room',
-      to: cooId,
-      text: `房间给你补了 ${amount} 枚筹码（余额不足 ${REFILL_BELOW}）。`,
-      visibility: 'private',
-      transfers: [{ from: 'room', to: cooId, amount }],
-      data: { fromName: '房间', chips: amount, refill: true },
-    });
+  /** 时间窗内已经喝掉/吃掉了几份（运气文案的过量判定用）。 */
+  usedSince(cooId: string, since: number): number {
+    return this.entries.filter((entry) => (
+      entry.kind === 'gift_used' && entry.from === cooId && entry.ts >= since
+    )).length;
   }
 
   /**
@@ -511,9 +463,8 @@ export class LedgerStore {
       byGame: [...byGame.values()].sort((left, right) => (
         right.games - left.games || left.game.localeCompare(right.game)
       )),
-      chips: this.balanceOf(cooId),
       open: this.openFor(cooId),
-      recent: mine.slice(-5).reverse().map((entry) => view(entry, cooId)),
+      recent: mine.slice(-5).reverse().map((entry) => view(entry)),
     };
   }
 

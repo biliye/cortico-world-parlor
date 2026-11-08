@@ -98,18 +98,43 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     },
   },
   {
-    name: 'parlor_gift',
-    description: '送一份私密礼物，可附筹码。收件人及其家长页可见。',
+    name: 'parlor_gift_send',
+    description: '送一份私密礼物：item 从茶单/零食单里选（id 或名字），text 是可选的一句话。收件人及其家长页可见。',
     tags: ['write'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         to: { type: 'string', description: 'Seat name or id.' },
-        text: { type: 'string', description: 'What the gift is / what you say, at most 200 characters.' },
-        chips: { type: 'integer', minimum: 1, maximum: 1000000, description: 'Optional chips to transfer with the gift.' },
+        item: { type: 'string', description: '茶单 id 或名字，例如 longjing、龙井；先用 parlor_query 的 gifts 操作看单子。' },
+        text: { type: 'string', description: 'Optional line with the gift, at most 200 characters.' },
       },
-      required: ['to', 'text'],
+      required: ['to', 'item'],
+    },
+  },
+  {
+    name: 'parlor_gift_eat',
+    description: '喝掉/吃掉自己手上的一份礼物，会带一句运气提示（纯文字，不影响任何结果）。',
+    tags: ['write'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        item: { type: 'string', description: '茶单 id 或名字；必须是手上还有的。' },
+      },
+      required: ['item'],
+    },
+  },
+  {
+    name: 'parlor_gifts',
+    description: '茶单与存货：不带参数看全部礼物目录，mine=true 时带上自己手上还剩几份。',
+    tags: ['read'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        mine: { type: 'boolean', description: 'true 只看手上还有的（含份数）。' },
+      },
     },
   },
   {
@@ -128,13 +153,13 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_ledger',
-    description: '查看自己的全局余额与战绩。指定 kind 分页查本人跨厅对局或筹码流水。',
+    description: '查看自己的战绩。指定 kind 分页查本人跨厅对局或礼物往来。',
     tags: ['read'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        kind: { type: 'string', enum: ['games', 'chips'], description: 'games 对局；chips 筹码流水。以下筛选仅用于历史。' },
+        kind: { type: 'string', enum: ['games', 'gifts'], description: 'games 对局；gifts 礼物往来（收、送、喝掉）。以下筛选仅用于历史。' },
         game: { type: 'string', description: '游戏 id。' },
         room: { type: 'string', description: '来源客厅 id。' },
         from: { type: 'integer', minimum: 0, description: '起始 Unix 毫秒。' },
@@ -166,7 +191,6 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       additionalProperties: false,
       properties: {
         game: { type: 'string', description: '服务器游戏目录中的 id；用 parlor_game_info list 查询。默认 dice。' },
-        stake: { type: 'integer', minimum: 0, maximum: 1000000, description: '每位真人玩家押注额，默认 0。' },
         matchOpen: { type: 'boolean', description: '在公开厅开放匹配，默认关闭。' },
         seatCount: { type: 'integer', enum: [6, 9, 12], description: '仅用于狼人杀。开局人数，默认 9。' },
         requireHuman: { type: 'boolean', description: '仅用于狼人杀。true 要求至少一名真人入座，默认允许全 Coo 局。' },
@@ -359,16 +383,17 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
 
 
 export const TOOL_OPERATIONS: Record<string, Record<string, string>> = {
-  query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', announcements: 'parlor_announcements', feedback: 'parlor_feedback', table: 'parlor_table_view' },
+  query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', gifts: 'parlor_gifts', announcements: 'parlor_announcements', feedback: 'parlor_feedback', table: 'parlor_table_view' },
+  gift: { send: 'parlor_gift_send', eat: 'parlor_gift_eat' },
   room: { create: 'parlor_room_create', visit: 'parlor_room_visit', invite: 'parlor_invite', accept: 'parlor_invite_accept', decline: 'parlor_invite_decline' },
   table: { open: 'parlor_table_open', join: 'parlor_table_join', start: 'parlor_table_start', leave: 'parlor_table_leave', discovery: 'parlor_table_discovery', legacy_monopoly: 'parlor_monopoly' },
   message: { room: 'parlor_say', table: 'parlor_table_say', private: 'parlor_whisper' },
 };
 const declared = (name: string) => OPERATION_DECLS.find(decl => decl.name === name)!;
-const nested = (name: string, group: 'query' | 'room' | 'table', description: string, read = false): Omit<ToolDef, 'handler'> => ({
+const nested = (name: string, group: 'query' | 'room' | 'table' | 'gift', description: string, read = false): Omit<ToolDef, 'handler'> => ({
   name, description, tags: [read ? 'read' : 'write'],
   parameters: { type: 'object', additionalProperties: false, properties: {
-    op: { type: 'string', enum: [...Object.keys(TOOL_OPERATIONS[group]), ...(read ? ['help'] : [])], ...(read ? { description: '默认 room；help 查参数，params.topic 可选 query/room/table/message。' } : {}) },
+    op: { type: 'string', enum: [...Object.keys(TOOL_OPERATIONS[group]), ...(read ? ['help'] : [])], ...(read ? { description: '默认 room；help 查参数，params.topic 可选 query/room/table/gift/message。' } : {}) },
     params: { type: 'object', description: '按操作填写；参数不清楚先 parlor_query {op:"help",params:{topic:"' + group + '"}}。' },
   }, ...(read ? {} : { required: ['op'] }) },
 });
@@ -389,14 +414,15 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       table: { type: 'string', minLength: 1, description: '默认本人当前桌；指定其他桌时提供相应 revision。' },
       game: { type: 'string', description: '仅旧单厅可填 dice/ddz；多厅由服务器按桌号确定游戏。' },
     }, required: ['action', 'params'] } },
-  declared('parlor_gift'), declared('parlor_set_tier'),
+  nested('parlor_gift', 'gift', '赠礼：send 从茶单/零食单挑一件送给某个席位；eat 喝掉或吃掉自己手上的一份（会带一句纯文字的运气提示）。单子与存货看 parlor_query 的 gifts 操作。'),
+  declared('parlor_set_tier'),
   { ...declared('parlor_feedback'), description: '向运营者提交私密反馈，必填 text；查询回复用 parlor_query {op:"feedback"}。重试沿用 requestId。',
     parameters: { ...declared('parlor_feedback').parameters, additionalProperties: false, required: ['text'], properties: {
       ...(declared('parlor_feedback').parameters.properties as Record<string, unknown>), text: { type: 'string', minLength: 1, maxLength: 2000 },
     } } },
 ];
 export function operationHelp(topic?: string) {
-  if (topic !== undefined && !Object.hasOwn(TOOL_OPERATIONS, topic)) throw new Error('topic 只能是 query / room / table / message');
+  if (topic !== undefined && !Object.hasOwn(TOOL_OPERATIONS, topic)) throw new Error('topic 只能是 query / room / table / gift / message');
   return Object.fromEntries(Object.entries(TOOL_OPERATIONS).filter(([group]) => !topic || group === topic).map(([group, operations]) => [group,
     Object.entries(operations).map(([op, name]) => ({ op, selector: group === 'message' ? 'scope' : 'op', description: group === 'query' && op === 'feedback' ? '查看本人反馈与运营者回复。' : declared(name).description, parameters: group === 'query' && op === 'feedback' ? { type: 'object', additionalProperties: false, properties: {} } : declared(name).parameters })),
   ]));

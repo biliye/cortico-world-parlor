@@ -72,11 +72,6 @@ export interface GameDefinition {
    */
   revisionMode: 'strict' | 'window';
   /**
-   * 这张桌子能不能押筹码。缺省 true（沿用原有游戏语义）；
-   * `false` 的游戏在开桌校验里直接拒绝非零押注，网页也不显示押注控件。
-   */
-  allowsStake?: boolean;
-  /**
    * 动作回执是否附上本人的最新私视图。狼人杀与快局大富翁需要：
    * 一个动作之后紧接着要在同一回合里做下一步，不能让 Coo 干等下一次叫醒。
    */
@@ -261,8 +256,8 @@ const monopoly2d: GameDefinition = {
   id: 'monopoly2d',
   label: '快局大富翁',
   icon: 'board',
-  openHint: '（4 席，坐满后由开桌的人开始；只用局内金币，不押筹码）四人 6 轮 24 手，掷骰、买地、收租、抽事件卡，最后按金币加地产估值排名。',
-  rules: ['四人六轮共二十四手，轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则收租或触发事件。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '仅用局内金币，不接受押注；终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
+  openHint: '（4 席，坐满后由开桌的人开始）四人 6 轮 24 手，掷骰、买地、收租、抽事件卡，最后按金币加地产估值排名。',
+  rules: ['四人六轮共二十四手，轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则收租或触发事件。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
   create: (ctx) => new Monopoly2dTable({
     host: ctx.host,
     now: ctx.now,
@@ -271,7 +266,6 @@ const monopoly2d: GameDefinition = {
   actionType: 'monopoly2d_action',
   toAction: (body) => ({ move: body.move, turnNo: body.turnNo }),
   revisionMode: 'strict',
-  allowsStake: false,
   attachPrivateOnAct: true,
   actionKey: 'move',
   availableActions: (view) => view.canAct === true && Array.isArray(view.moves)
@@ -320,7 +314,6 @@ const gomoku: GameDefinition = {
   create: ({ host, turnMs }) => new GomokuTable(host, turnMs),
   actionType: 'gomoku_action',
   revisionMode: 'strict',
-  allowsStake: false,
   toAction: ({ row, col }) => ({ row, col }),
   singleAction: 'place',
   availableActions: (view) => view.canAct === true ? ['place'] : [],

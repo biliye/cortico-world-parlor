@@ -68,14 +68,12 @@ describe('牌桌注册表', () => {
     expect(names.has('parlor_game_action')).toBe(true);
   });
 
-  it('快局大富翁：无押注、严格版本、动作参数只认 roll/buy/pass 与回合号', () => {
+  it('快局大富翁：严格版本、动作参数只认 roll/buy/pass 与回合号', () => {
     const game = gameById('monopoly2d')!;
     expect(game).toBeTruthy();
     expect(game.actionType).toBe('monopoly2d_action');
 
     expect(game.revisionMode).toBe('strict');
-    expect(game.allowsStake).toBe(false);
-    expect(gameById('ddz')!.allowsStake).not.toBe(false);
 
     expect(game.action.toBody({ move: 'roll', turnNo: 3 }))
       .toEqual({ type: 'monopoly2d_action', move: 'roll', turnNo: 3 });

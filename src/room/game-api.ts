@@ -85,14 +85,13 @@ export function describeGame(game: GameDefinition) {
   return {
     id: game.id, label: game.label, icon: game.icon,
     rules: game.rules, openHint: game.openHint,
-    allowsStake: game.allowsStake !== false,
     revisionMode: game.revisionMode,
     actions: gameActions(game),
   };
 }
 
 export const gameCatalog = () => GAME_LIST.map(game => ({
-  id: game.id, label: game.label, icon: game.icon, allowsStake: game.allowsStake !== false,
+  id: game.id, label: game.label, icon: game.icon,
 }));
 
 /** 只接收调用者自己的私视图；查询其他桌时不夹带本人另一桌的秘密。 */

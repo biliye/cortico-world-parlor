@@ -13,7 +13,7 @@ const ui = {
   roomSeat: document.getElementById('room-seat'),
   roomLive: document.getElementById('room-live'),
   statMsgs: document.getElementById('stat-msgs'),
-  statChips: document.getElementById('stat-chips'),
+  statWins: document.getElementById('stat-wins'),
   statUnread: document.getElementById('stat-unread'),
   statGames: document.getElementById('stat-games'),
   people: document.getElementById('room-people'),
@@ -21,7 +21,7 @@ const ui = {
   tableText: document.getElementById('table-text'),
   tablePrivate: document.getElementById('table-private'),
   privateNote: document.getElementById('private-note'),
-  chips: document.getElementById('chips'),
+  recordTag: document.getElementById('record-tag'),
   ledgerLine: document.getElementById('ledger-line'),
   ledgerRoom: document.getElementById('ledger-room'),
   meter: document.getElementById('meter'),
@@ -246,7 +246,7 @@ function render(view) {
   ui.latest.textContent = view.at ? `服务器 ${clock(view.now)}` : '';
 
   ui.statMsgs.textContent = String(events.length);
-  ui.statChips.textContent = ledger && ledger.chips !== undefined ? String(ledger.chips) : '—';
+  ui.statWins.textContent = ledger && ledger.wins !== undefined ? String(ledger.wins) : '—';
   ui.statUnread.textContent = String(view.mailUnread || 0);
   ui.statGames.textContent = ledger && ledger.games ? String(ledger.games) : '0';
 
@@ -355,7 +355,7 @@ function renderAlerts(view) {
 
 function renderLedger(view) {
   const ledger = view.ledger;
-  ui.chips.textContent = ledger && ledger.chips !== undefined ? `${ledger.chips} 枚` : '—';
+  ui.recordTag.textContent = ledger && ledger.games ? `${ledger.wins} 胜 / ${ledger.games} 局` : '—';
   ui.ledgerLine.textContent = ledger && ledger.games > 0
     ? `共 ${ledger.games} 局，${ledger.wins} 胜 ${ledger.losses} 负 ${ledger.draws} 平。`
     : '还没有战绩。';

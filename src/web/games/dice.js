@@ -59,19 +59,6 @@ export function mountDice(root, ctx) {
       if (!used.has(slot)) felt.append(el('div', 'tseat-empty tseat-pos-' + slot, '空位'));
     }
 
-    if (table.stake > 0 && seats.length > 1) {
-      const pot = el('div', 'pot');
-      const stack = el('div', 'chip-stack chip-stack-pot');
-      stack.setAttribute('aria-hidden', 'true');
-      for (const cls of ['chip-cream', 'chip-red', 'chip-green', 'chip-blue']) {
-        stack.append(el('i', 'chip ' + cls));
-      }
-      const meta = el('div', 'pot-meta');
-      meta.append(el('span', '', '彩头'), el('strong', '', String(table.stake * seats.length)));
-      pot.append(stack, meta);
-      felt.append(pot);
-    }
-
     felt.append(cup());
 
     const tray = diceTray(table, priv, me, seated);

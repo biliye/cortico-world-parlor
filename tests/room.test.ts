@@ -341,7 +341,7 @@ describe('账本事件与服务器时钟', () => {
       const seatA = server.kernel.seatById(a.seat.id)!;
       const seatB = server.kernel.seatById(b.seat.id)!;
 
-      const promise = server.kernel.promise(seatA, '小满', '这杯奶茶要还', Date.now() + 300, 20);
+      const promise = server.kernel.promise(seatA, '小满', '这杯奶茶要还', Date.now() + 300);
       server.kernel.respond(seatB, promise.id, 'accept');
 
       await until(() => server.kernel.snapshot(b.seat.id, 0, 200).ledger?.open.length === 0, 6000);
@@ -350,7 +350,7 @@ describe('账本事件与服务器时钟', () => {
       expect(eventOf(a.seat.id)).toHaveLength(1);
       expect(eventOf(b.seat.id)).toHaveLength(1);
       expect(eventOf(c.seat.id)).toHaveLength(0);
-      expect(server.kernel.snapshot(b.seat.id, 0, 1).ledger?.chips).toBe(0);
+      expect(server.kernel.snapshot(b.seat.id, 0, 1).ledger?.games).toBe(0);
     } finally {
       await server.close();
       rmSync(dir, { recursive: true, force: true });
@@ -414,7 +414,7 @@ describe('回执与硬时点', () => {
       expect(whisper.delivered![0].at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       expect(whisper).not.toHaveProperty('read');
 
-      const gift = await client.action(a.token, { type: 'gift', to: '小满', text: '一杯奶茶', chips: 5 });
+      const gift = await client.action(a.token, { type: 'gift', to: '小满', item: 'longjing', text: '一杯奶茶' });
       expect(gift.delivered?.[0].to).toBe('小满');
     } finally {
       await server.close();

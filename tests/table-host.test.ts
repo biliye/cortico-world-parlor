@@ -6,7 +6,6 @@ import { type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
-import { START_CHIPS } from '../src/room/ledger.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
 const A = 'coo-aaaaaaaa';
@@ -100,7 +99,7 @@ describe('客厅牌桌（骰子）', () => {
     expect(after.events).toEqual(before.events);
     for (let i = 0; i < 400 && (await host.tablePublic(tableId))?.status !== 'ended'; i++) {
       clock.now += 61_000;
-      await host.tickClock(clock.now);
+      await host.tickClock();
     }
     expect((await host.tablePublic(tableId))?.status).toBe('ended');
     const end = (await host.history(A, { since: 0, limit: 200 })).find(e => e.type === 'parlor.table.end');
@@ -177,37 +176,30 @@ describe('客厅牌桌（骰子）', () => {
     expect((await host.tablePublic())?.text).toContain('结束');
   });
 
-  it('押注：开局各扣一份，赢家拿走底池', async () => {
+  it('一局骰子结完：只记一条战绩，没有押注也没有底池', async () => {
     fixture = await setup();
     const { host, clock } = fixture;
     await enter(host, A, '阿岚');
     await enter(host, B, '小满');
-    await host.openTable(A, { game: 'dice', stake: 5 });
+    await host.openTable(A, { game: 'dice' });
     await host.joinTable(B);
     await host.startTable(A);
-
-    const ledger = new LedgerDb(fixture.db);
-    expect(await ledger.balanceOf(A)).toBe(START_CHIPS - 5);
-    expect(await ledger.balanceOf(B)).toBe(START_CHIPS - 5);
 
     clock.now += 100;
     await act(host, A, { type: 'stand' }, 'stand-a');
     clock.now += 100;
     await act(host, B, { type: 'stand' }, 'stand-b');
 
+    const ledger = new LedgerDb(fixture.db);
     const summary = await ledger.summaryFor(A);
     expect(summary.games).toBe(1);
     expect(summary.byGame[0]).toMatchObject({ game: 'dice', label: '骰子', games: 1 });
-    // 骰点真实随机，平局时两位赢家各分回 5；非平局才有一赢一输。
-    const balances = [await ledger.balanceOf(A), await ledger.balanceOf(B)].sort((x, y) => x - y);
     const result = await host.tablePublic();
     const winners = Array.isArray(result?.winners) ? result.winners : [];
     expect(winners.length).toBeGreaterThan(0);
-    const expected = winners.length === 2
-      ? [START_CHIPS, START_CHIPS]
-      : [START_CHIPS - 5, START_CHIPS + 5];
-    expect(balances).toEqual(expected);
-    expect(expected).toContain(summary.chips);
+    // 牌桌不产生任何持有量：谁也没押，谁也没分底池。
+    expect(await ledger.heldGifts(A)).toEqual({});
+    expect(await ledger.heldGifts(B)).toEqual({});
   });
 
   it('游戏锁：未开局也锁，退桌/收桌后才放行', async () => {
@@ -371,16 +363,15 @@ describe('客厅牌桌（斗地主）与桌聊', () => {
 });
 
 describe('重启与持久化', () => {
-  it('短停机续局：牌、轮次和扣款都不变，还能接着打', async () => {
+  it('短停机续局：牌与轮次都不变，还能接着打', async () => {
     const file = fileDb();
     fixture = await setup(file);
     const { host } = fixture;
     await enter(host, A, '阿岚');
     await enter(host, B, '小满');
-    await host.openTable(A, { game: 'dice', stake: 5 });
+    const opened = await host.openTable(A, { game: 'dice' });
     await host.joinTable(B);
     await host.startTable(A);
-    expect(await new LedgerDb(fixture.db).balanceOf(A)).toBe(START_CHIPS - 5);
 
     // 模拟进程重启：关库、重开、新的 RoomHost（引擎已不在内存里）。
     await fixture.close();
@@ -388,8 +379,7 @@ describe('重启与持久化', () => {
     const restarted = await RoomHost.create(db, 'lobby', { now: () => 1_760_000_100_000 });
     fixture = { db, host: restarted, clock: { now: 1_760_000_100_000 }, close: () => closeTestDb(db) };
 
-    const ledger = new LedgerDb(db);
-    expect(await ledger.balanceOf(A)).toBe(START_CHIPS - 5);
+    expect(opened.tableId).toBeTruthy();
     expect((await restarted.tablePublic())?.status).toBe('playing');
     expect((await restarted.snapshot(A, { limit: 1 })).tablePrivate?.text).toContain('你的点数');
     const events = await restarted.history(A, { since: 0, limit: 200 });
@@ -401,13 +391,13 @@ describe('重启与持久化', () => {
     expect((await restarted.tablePublic())?.status).toBe('ended');
   });
 
-  it('停机超过 30 分钟：这局作废，按开局明细退回', async () => {
+  it('停机超过 30 分钟：这局作废，写一条 refund 终态', async () => {
     const file = fileDb();
     fixture = await setup(file);
     const { host } = fixture;
     await enter(host, A, '阿岚');
     await enter(host, B, '小满');
-    await host.openTable(A, { game: 'dice', stake: 5 });
+    const opened = await host.openTable(A, { game: 'dice' });
     await host.joinTable(B);
     await host.startTable(A);
 
@@ -417,13 +407,13 @@ describe('重启与持久化', () => {
     const restarted = await RoomHost.create(db, 'lobby', { now: () => later });
     fixture = { db, host: restarted, clock: { now: later }, close: () => closeTestDb(db) };
 
-    const ledger = new LedgerDb(db);
-    expect(await ledger.balanceOf(A)).toBe(START_CHIPS);
-    expect(await ledger.balanceOf(B)).toBe(START_CHIPS);
     expect(await restarted.tablePublic()).toBeUndefined();
     const events = await restarted.history(A, { since: 0, limit: 200 });
     expect(events.some((event) => event.text.includes('停机超过'))).toBe(true);
-    expect((await restarted.readMail(A, 10, false)).items.some((item) => item.text.includes('退回'))).toBe(true);
+    // 作废只留一条终态：没有钱要退，也没有新的账本条目。
+    const fin = await db.prepare('SELECT kind FROM table_finalizations WHERE table_id = ?').get(opened.tableId) as { kind: string };
+    expect(fin.kind).toBe('refund');
+    expect((await new LedgerDb(db).summaryFor(A)).games).toBe(0);
   });
 
   it('快照带着牌桌、私视图与账本摘要', async () => {
@@ -438,7 +428,7 @@ describe('重启与持久化', () => {
     const snapshot = await host.snapshot(A, {});
     expect(snapshot.table).toMatchObject({ game: 'dice', status: 'playing', host: expect.any(String) });
     expect(snapshot.tablePrivate?.text).toContain('你的点数');
-    expect(snapshot.ledger?.chips).toBe(START_CHIPS);
+    expect(snapshot.ledger?.games).toBe(0);
     expect(Array.isArray(snapshot.ledgerRoom)).toBe(true);
   });
 });
@@ -446,7 +436,7 @@ describe('重启与持久化', () => {
 describe('客厅牌桌（快局大富翁）', () => {
   const D = 'coo-dddddddd';
 
-  it('拒绝押注，四人开局后能落库一手并拒绝旧版本', async () => {
+  it('四人开局后能落库一手并拒绝旧版本', async () => {
     fixture = await setup();
     const { host, clock, db } = fixture;
     await db.prepare(
@@ -457,10 +447,6 @@ describe('客厅牌桌（快局大富翁）', () => {
     await enter(host, B, '小满');
     await enter(host, C, '小柚');
     await enter(host, D, '小禾');
-
-    // 无押注玩法：直接 HTTP 或工具都走这一道检查。
-    await expect(host.openTable(A, { game: 'monopoly2d', stake: 5 }, 'm2d-stake'))
-      .rejects.toThrow(/局内金币/);
 
     const opened = await host.openTable(A, { game: 'monopoly2d' }, 'm2d-open');
     await host.joinTable(B);

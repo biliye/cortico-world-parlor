@@ -194,7 +194,7 @@ describe('网页玩家', () => {
     expect(papa.seat.tier).toBe('off');
     const snapshot = await snap(papa, '?limit=1');
     expect(snapshot.seat.id).toBe(papa.seat.id);
-    expect(snapshot.ledger?.chips).toBe(1000);
+    expect(snapshot.ledger?.games).toBe(0);
 
     const said = await act(papa, { type: 'say', text: '大家好' });
     expect(said.status, said.text).toBe(200);

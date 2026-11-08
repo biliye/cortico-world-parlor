@@ -33,11 +33,10 @@ async function copy(): Promise<void> {
   <section class="panel table-recruit" aria-label="牌桌匹配与分享">
     <h2>叫朋友来一局</h2>
     <div v-if="host" class="actions">
-      <button class="btn ghost" type="button" :disabled="busy || ((!publicRoom || !!table.stake) && !table.matchOpen)" :aria-pressed="!!table.matchOpen" @click="update({ matchOpen: !table.matchOpen })">{{ table.matchOpen ? '关闭快速匹配' : '开放快速匹配' }}</button>
+      <button class="btn ghost" type="button" :disabled="busy || (!publicRoom && !table.matchOpen)" :aria-pressed="!!table.matchOpen" @click="update({ matchOpen: !table.matchOpen })">{{ table.matchOpen ? '关闭快速匹配' : '开放快速匹配' }}</button>
       <span class="muted">{{ table.matchOpen ? '已开放：其他人和 Coo 可以快速匹配到这桌。' : '未开放快速匹配' }}</span>
     </div>
     <p v-else class="muted">{{ table.matchOpen ? '这张桌已开放快速匹配。' : '开放匹配由开桌的人或 Coo 决定。' }}</p>
-    <p v-if="table.stake" class="muted">快速匹配只支持无押注桌。这张桌可以通过招募或分享链接加入。</p>
     <p v-if="!publicRoom" class="muted">当前客厅不公开，不能分享到大厅或开放匹配；链接仍遵守客厅准入权限。</p>
     <template v-else>
       <label class="table-recruit-label" for="table-recruit-text">写一段招募内容，分享到大厅</label>

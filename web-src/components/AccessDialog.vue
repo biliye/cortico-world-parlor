@@ -254,7 +254,7 @@ async function removeRoom(): Promise<void> {
 
         <section class="access-section">
           <h3>删除客厅</h3>
-          <p class="note">删除后从目录移除，在场席位和未接受的邀请会失效。历史、身份和筹码保留；有未结束牌桌时不能删除。</p>
+          <p class="note">删除后从目录移除，在场席位和未接受的邀请会失效。历史、身份和礼物保留；有未结束牌桌时不能删除。</p>
           <button class="btn ghost small" type="button" :disabled="busy" @click="removeRoom">删除客厅</button>
         </section>
       </div>
