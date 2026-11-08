@@ -29,7 +29,6 @@ export interface TableRecruitment {
   seats: number;
   capacity: number;
   full: boolean;
-  stake: number;
   text: string;
   author: string;
   updatedAt: number;

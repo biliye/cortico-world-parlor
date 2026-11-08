@@ -15,7 +15,7 @@
 import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 6;
+export const PG_SCHEMA_VERSION = 7;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -444,5 +444,22 @@ export const PG_MIGRATIONS: PgMigration[] = [
     ALTER TABLE tables DROP CONSTRAINT tables_game_check;
     ALTER TABLE tables ADD CONSTRAINT tables_game_check
       CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku'));
+  ` },
+  /**
+   * 0.38.0：筹码整条下线。转移明细、开局押注额与「非 refill 发放」的唯一索引一起删。
+   *
+   * 这一步不可逆：v7 之后回退到 0.37.x 会因 schema 版本更高被拒开，
+   * 必须同时恢复发布前那份 `pg-before.dump`（见发布手册）。
+   * 迁移前请先把 `ledger_transfers` 导出留档：
+   *   \copy (SELECT * FROM ledger_transfers) TO 'ledger_transfers-before-drop.csv' CSV HEADER;
+   *
+   * 不动 `ledger_entries.kind` 的取值：历史行里还有 grant / ante，
+   * 收紧约束会让迁移当场失败。
+   */
+  { version: 7, name: 'drop-chips', sql: `
+    DROP INDEX IF EXISTS ux_ledger_grant_once;
+    ALTER TABLE ledger_entries DROP COLUMN IF EXISTS is_refill;
+    ALTER TABLE tables DROP COLUMN IF EXISTS stake;
+    DROP TABLE IF EXISTS ledger_transfers;
   ` },
 ];

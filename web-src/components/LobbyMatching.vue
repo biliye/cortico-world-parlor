@@ -28,8 +28,8 @@ async function join(target: { game: string } | { room: string; table: string }):
 function joinRecruit(item: TableRecruitment): void {
   void join({ room: item.room, table: item.tableId });
 }
-function stakeText(item: TableRecruitment): string {
-  return item.stake ? '每人押 ' + item.stake + ' 枚筹码' : '无押注';
+function tableNote(): string {
+  return '不押东西，坐下就能打';
 }
 </script>
 
@@ -69,7 +69,7 @@ function stakeText(item: TableRecruitment): string {
                 <span class="row-state">{{ item.full ? '已满员' : '等人中' }}</span>
               </p>
               <p class="row-text">{{ item.text }}</p>
-              <p class="row-meta">{{ item.author }} · {{ item.roomName }} · {{ stakeText(item) }}</p>
+              <p class="row-meta">{{ item.author }} · {{ item.roomName }} · {{ tableNote() }}</p>
             </div>
             <div class="row-actions">
               <a class="row-link" :href="item.link">看看牌桌 ↗</a>

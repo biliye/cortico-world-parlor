@@ -10,6 +10,7 @@ import Icon from './Icon.vue';
 import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
 import AccountPanel from './AccountPanel.vue';
+import GiftPanel from './GiftPanel.vue';
 import { initialOf } from '../lib/text.ts';
 import { chatExpanded, chooseTab, closeSheet, setWerewolfChatTable, sheetOpen, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
@@ -27,6 +28,7 @@ const boardChatInToolbar = computed(() => view.value === 'table'
   && (activeTable.value?.game === 'monopoly2d' || activeTable.value?.game === 'gomoku'));
 const switcherOpen = ref(false);
 const accountOpen = ref(false);
+const giftOpen = ref(false);
 
 const sections = [
   { id: 'all', label: '发现', long: '发现客厅', icon: 'lamp' },
@@ -123,8 +125,11 @@ onMounted(() => {
         </span>
         <span v-if="!connected" class="conn-chip">{{ connectionText }}</span>
         <div class="top-right">
-          <button class="tool" type="button" @click="accountOpen = true" title="我的筹码、战绩与历史对局">
+          <button class="tool" type="button" @click="accountOpen = true" title="我的战绩、礼物流水与历史对局">
             <Icon name="users" /><span class="tool-label">账户</span>
+          </button>
+          <button class="tool" type="button" @click="giftOpen = true" title="茶点：送一份茶或小零食，也可以喝掉/吃掉">
+            <Icon name="tea" /><span class="tool-label">茶点</span>
           </button>
           <button class="tool" type="button" @click="openMail">
             <Icon name="mail" /><span class="tool-label">信箱</span>
@@ -151,6 +156,7 @@ onMounted(() => {
     <DmWindow />
     <RoomSwitcher v-model:open="switcherOpen" />
     <AccountPanel v-model:open="accountOpen" />
+    <GiftPanel v-model:open="giftOpen" />
     <div class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
     <button v-if="!chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleChat(true)">
       <Icon name="chat" />有话慢慢聊

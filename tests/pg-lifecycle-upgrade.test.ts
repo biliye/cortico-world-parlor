@@ -6,10 +6,11 @@ import { createRoom } from '../src/room/room-seat-db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
 import { openStorage, parseStorageKind } from '../src/room/storage/open.ts';
+import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
-it('PG v3 升到 v4 给旧房间/席位完整宽限，保留身份、令牌、余额，重跑不延长宽限',async()=>{
+it('PG v3 升到 v4 给旧房间/席位完整宽限，保留身份、令牌、账本条目，重跑不延长宽限',async()=>{
   db=await openTestDb();
   const id='coo-upgrade-aaa';
   const accounts=new CooAccountDb(db);
@@ -17,7 +18,7 @@ it('PG v3 升到 v4 给旧房间/席位完整宽限，保留身份、令牌、�
   await createRoom(db,{id:'r-upgrade',ownerCooId:id,name:'旧客厅'},1);
   const host=await RoomHost.create(db,'r-upgrade',{now:()=>1});
   const joined=await host.join(id,{name:'旧玩家'});
-  const balance=await new LedgerDb(db).balanceOf(id);
+  const entries=await new LedgerDb(db).count();
   // Reconstruct the published v3 columns, then exercise the real versioned migration.
   await db.exec(`ALTER TABLE rooms DROP COLUMN business_active_at;ALTER TABLE rooms DROP COLUMN archive_reason;
     ALTER TABLE room_seats DROP COLUMN business_active_at;ALTER TABLE room_seats DROP COLUMN location_capable;
@@ -30,7 +31,7 @@ it('PG v3 升到 v4 给旧房间/席位完整宽限，保留身份、令牌、�
   const seat=await db.prepare('SELECT business_active_at,token_hash FROM room_seats WHERE id=?').get(joined.seat.id) as {business_active_at:number;token_hash:string};
   expect(Number(seat.business_active_at)).toBeGreaterThanOrEqual(started);
   expect(seat.token_hash).toBe(joined.seat.tokenHash);
-  expect(await new LedgerDb(db).balanceOf(id)).toBe(balance);
+  expect(await new LedgerDb(db).count()).toBe(entries);
   await migrate(db);
   expect((await db.prepare('SELECT business_active_at FROM rooms WHERE id=?').get('r-upgrade') as typeof room).business_active_at).toBe(room.business_active_at);
 });
@@ -56,9 +57,9 @@ const downgradeToV4 = async (d:Db): Promise<void> => {
     UPDATE meta SET value='4' WHERE key='schema_version';`);
 };
 
-it('空库直接建到 v6，tables.game 放行快局大富翁和五子棋，未知值仍被拒绝', async () => {
+it('空库直接建到最新版本，tables.game 放行快局大富翁和五子棋，未知值仍被拒绝', async () => {
   db = await openTestDb();
-  expect(await schemaVersion(db)).toBe(6);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   const id = 'coo-v5-fresh';
   await new CooAccountDb(db).registerCoo(id, 'upgrade-secret-0123456789', 'pet', '新玩家');
   await createRoom(db, { id: 'r-v5-fresh', ownerCooId: id, name: '新客厅' }, 4);
@@ -69,7 +70,7 @@ it('空库直接建到 v6，tables.game 放行快局大富翁和五子棋，未�
     .rejects.toThrow(/tables_game_check/);
 });
 
-it('v4 库经 v5 升到 v6：旧桌原样保留，新玩法放行，重复启动不重复改约束', async () => {
+it('v4 库经 v5 升到最新版本：旧桌原样保留，新玩法放行，重复启动不重复改约束', async () => {
   db = await openTestDb();
   const id = 'coo-v5-upgrade';
   await new CooAccountDb(db).registerCoo(id, 'upgrade-secret-0123456789', 'pet', '旧玩家');
@@ -83,7 +84,7 @@ it('v4 库经 v5 升到 v6：旧桌原样保留，新玩法放行，重复启动
     .rejects.toThrow(/tables_game_check/);
 
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(6);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   const legacy = await db.prepare('SELECT game,room_id FROM tables WHERE id=?').get('t-v5-legacy') as {game:string;room_id:string};
   expect(legacy).toEqual({ game: 'monopoly', room_id: 'r-v5-upgrade' });
   await insertTable(db, 't-v5-after', 'r-v5-upgrade', 'monopoly2d');
@@ -91,14 +92,14 @@ it('v4 库经 v5 升到 v6：旧桌原样保留，新玩法放行，重复启动
   await expect(insertTable(db, 't-v5-still-bad', 'r-v5-upgrade', 'nope'))
     .rejects.toThrow(/tables_game_check/);
 
-  // 重复启动：版本已经到 6，迁移段跳过。
+  // 重复启动：版本已经是最新，迁移段跳过。
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(6);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   await db.prepare('DELETE FROM tables WHERE id=?').run('t-v5-after');
   await insertTable(db, 't-v5-again', 'r-v5-upgrade', 'monopoly2d');
 });
 
-it('v5 单独升级到 v6：保留快局大富翁桌并开放五子棋', async () => {
+it('v5 单独升级到最新版本：保留快局大富翁桌并开放五子棋', async () => {
   db = await openTestDb();
   const id = 'coo-v6-upgrade';
   await new CooAccountDb(db).registerCoo(id, 'upgrade-secret-0123456789', 'pet', '旧玩家');
@@ -109,7 +110,7 @@ it('v5 单独升级到 v6：保留快局大富翁桌并开放五子棋', async (
   await insertTable(db, 't-v6-monopoly', 'r-v6-upgrade', 'monopoly2d');
   await expect(insertTable(db, 't-v6-gomoku', 'r-v6-upgrade', 'gomoku')).rejects.toThrow(/tables_game_check/);
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(6);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   expect(await db.prepare('SELECT game FROM tables WHERE id=?').get('t-v6-monopoly')).toEqual({ game: 'monopoly2d' });
   await insertTable(db, 't-v6-gomoku', 'r-v6-upgrade', 'gomoku');
 });

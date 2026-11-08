@@ -16,7 +16,7 @@ import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 /** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
-export const SQLITE_SCHEMA_VERSION = 8;
+export const SQLITE_SCHEMA_VERSION = 9;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -202,6 +202,13 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   // 所有普通客厅固定 30 席，含归档厅；大厅不动。
   handle.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity <> ?')
     .run(MAX_USER_ROOM_CAPACITY, 'room', MAX_USER_ROOM_CAPACITY);
+
+  // —— schema 9：筹码下线 ——
+  // 老库还留着转移明细表与「非 refill 发放」唯一索引，一并清掉。
+  // `is_refill` / `tables.stake` 两列故意不删：SQLite 的 DROP COLUMN 对带索引的列
+  // 不稳，而且这两列都有默认值、新代码不再读写，留着不影响任何行为。
+  handle.exec('DROP INDEX IF EXISTS ux_ledger_grant_once');
+  handle.exec('DROP TABLE IF EXISTS ledger_transfers');
 
   const stmt = handle.prepare(
     'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',

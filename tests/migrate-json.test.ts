@@ -46,13 +46,13 @@ describe('旧 JSON 迁移到 SQLite', () => {
 
     await ca.action(a.token, { type: 'say', text: '大家好' });
     await ca.action(a.token, { type: 'whisper', to: '小满', text: '只给你' });
-    await ca.action(a.token, { type: 'table_open', game: 'dice', stake: 5 });
+    await ca.action(a.token, { type: 'table_open', game: 'dice' });
     await cb.action(b.token, { type: 'table_join' });
     await ca.action(a.token, { type: 'table_start' });
     await ca.action(a.token, { type: 'table_action', action: 'stand' });
     await cb.action(b.token, { type: 'table_action', action: 'stand' });
-    await ca.action(a.token, { type: 'gift', to: '小满', text: '一点心意', chips: 10 });
-    await ca.action(a.token, { type: 'promise', to: '小满', text: '借你 20', chips: 20 });
+    await ca.action(a.token, { type: 'gift', to: '小满', item: 'longjing', text: '一点心意' });
+    await ca.action(a.token, { type: 'promise', to: '小满', text: '借你 20' });
 
     const peek = await cb.mail(b.token, 10, true);
     const letter = peek.items.find((item) => item.text.includes('借你 20'));

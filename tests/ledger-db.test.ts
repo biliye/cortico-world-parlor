@@ -4,12 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withTransaction, type Db } from '../src/room/db.ts';
 import { LedgerDb, type LedgerRecordInput } from '../src/room/ledger-db.ts';
-import {
-  REFILL_GAP_MS,
-  REFILL_TO,
-  START_CHIPS,
-  type LedgerEntry,
-} from '../src/room/ledger.ts';
+import { type LedgerEntry } from '../src/room/ledger.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
 const A = 'coo-aaaaaaaa';
@@ -57,7 +52,7 @@ const game = (
 });
 
 const promise = async (
-  options: { from?: string; to?: string; due?: number; chips?: number; room?: string } = {},
+  options: { from?: string; to?: string; due?: number; room?: string } = {},
 ): Promise<LedgerEntry> => store.record({
   kind: 'promise',
   room: options.room ?? 'lobby',
@@ -66,64 +61,73 @@ const promise = async (
   text: '一杯奶茶',
   visibility: 'private',
   ...(options.due !== undefined ? { due: options.due } : {}),
-  data: { fromName: '阿岚', toName: '小满', ...(options.chips ? { chips: options.chips } : {}) },
+  data: { fromName: '阿岚', toName: '小满' },
+});
+
+/** 一条按物品记的礼物/喝掉条目——持有量就是靠这些条目现算的。 */
+const item = (
+  kind: 'gift' | 'gift_used',
+  from: string,
+  itemId: string,
+  to?: string,
+): Promise<LedgerEntry> => store.record({
+  kind,
+  room: 'lobby',
+  from,
+  ...(to ? { to } : {}),
+  text: kind === 'gift' ? `一份${itemId}` : `喝掉了${itemId}`,
+  visibility: 'private',
+  data: { itemId, itemName: itemId },
 });
 
 describe('全局账本 SQLite store', () => {
-  it('PG 摘要 recent 保持最近五条混合流水及单条净额，对局分页另算含底注净额', async () => {
-    await store.ensureGrant(A,'lobby');
-    await store.record({kind:'ante',room:'lobby',from:A,participants:[A],text:'底注',visibility:'private',effectId:'recent-game/ante',transfers:[{from:A,to:'room',amount:100}]});
-    await store.record({...game('lobby',[A],[A]),game:'ddz',text:'结算',effectId:'recent-game/result',data:{tableId:'recent-game'},transfers:[{from:'room',to:A,amount:300}]});
-    await store.record({kind:'gift',room:'a',from:A,to:B,text:'送礼',visibility:'private',transfers:[{from:A,to:B,amount:25}]});
-    await store.record({kind:'note',room:'b',from:'room',to:A,text:'作废退款',visibility:'private',transfers:[{from:'room',to:A,amount:100}]});
+  it('PG 摘要 recent 保持最近五条混合流水，礼物流水按件算', async () => {
+    await item('gift', A, 'longjing', B);
+    await store.record({
+      ...game('lobby', [A], [A]), text: '结算', effectId: 'recent-game/result', data: { tableId: 'recent-game' },
+    });
+    await store.record({ kind: 'note', room: 'b', from: 'room', to: A, text: '房间留言', visibility: 'private' });
+
     const summary = await store.summaryFor(A);
-    expect(summary.recent.map(row=>[row.kind,row.chips])).toEqual([['note',100],['gift',-25],['game',300],['ante',-100],['grant',1000]]);
-    expect(summary.chips).toBe(1275);
-    const {personalHistory} = await import('../src/room/personal-account.ts');
-    expect((await personalHistory(db,A)).items[0].chips).toBe(200);
-    expect(summary.recent.every(row=>!('from_coo_id' in row) && !('transfers' in row))).toBe(true);
-    await store.record({kind:'gift',room:'a',from:B,to:A,text:'回礼',visibility:'private',transfers:[{from:B,to:A,amount:5}]});
-    expect((await store.summaryFor(A)).recent.map(row=>row.kind)).toEqual(['gift','note','gift','game','ante']);
+    expect(summary.recent.map((row) => row.kind)).toEqual(['note', 'game', 'gift']);
+    expect(summary.recent.every((row) => !('transfers' in row))).toBe(true);
+
+    const { personalHistory } = await import('../src/room/personal-account.ts');
+    expect((await personalHistory(db, A, { kind: 'gifts' })).items[0])
+      .toMatchObject({ kind: 'gift', itemId: 'longjing', itemName: 'longjing', direction: 'out' });
+
+    await item('gift', B, 'moli', A);
+    expect((await store.summaryFor(A)).recent.map((row) => row.kind)).toEqual(['gift', 'note', 'game', 'gift']);
+    // 收与送在流水上是两个方向，都不带任何金额。
+    const gifts = await personalHistory(db, A, { kind: 'gifts' });
+    expect(gifts.items[0]).toMatchObject({ kind: 'gift', itemId: 'moli', direction: 'in' });
+    expect(gifts.items.every((row) => !('chips' in row))).toBe(true);
   });
   it('旧对局缺少游戏信息时，全局战绩显示其他', async () => {
-    await store.record({...game('lobby',[A],[A]),game:undefined,data:{}});
-    expect((await store.summaryFor(A)).byGame).toMatchObject([{game:'unknown',label:'其他',games:1}]);
+    await store.record({ ...game('lobby', [A], [A]), game: undefined, data: {} });
+    expect((await store.summaryFor(A)).byGame).toMatchObject([{ game: 'unknown', label: '其他', games: 1 }]);
   });
-  it('余额由 transfers 现算：房间发行进来，礼物与了结出去', async () => {
-    const grant = await store.ensureGrant(A, 'lobby');
-    expect(grant).not.toBeNull();
-    expect(grant).toMatchObject({ kind: 'grant', from: 'room', to: A, visibility: 'private' });
-    expect(await store.balanceOf(A)).toBe(START_CHIPS);
-    expect(await store.balanceOf(B)).toBe(0);
+  it('持有量由条目现算：收到的礼物减去喝掉的，喝成负数就从持有里消失', async () => {
+    expect(await store.heldGifts(B)).toEqual({});
+    await item('gift', A, 'longjing', B);
+    await item('gift', A, 'longjing', B);
+    await item('gift', A, 'guihuagao', B);
+    expect(await store.heldGifts(B)).toEqual({ longjing: 2, guihuagao: 1 });
+    expect(await store.heldCount(B, 'longjing')).toBe(2);
+    // 送礼的人手上不多。
+    expect(await store.heldGifts(A)).toEqual({});
+    expect(await store.heldCount(A, 'longjing')).toBe(0);
 
-    await store.record({
-      kind: 'gift', room: 'lobby', from: A, to: B, text: '先给你 40', visibility: 'private',
-      transfers: [{ from: A, to: B, amount: 40 }],
-    });
-    expect(await store.balanceOf(A)).toBe(START_CHIPS - 40);
-    expect(await store.balanceOf(B)).toBe(40);
+    await item('gift_used', B, 'longjing');
+    expect(await store.heldCount(B, 'longjing')).toBe(1);
+    expect(await store.usedSince(B, 0)).toBe(1);
+    expect(await store.usedSince(B, 5000)).toBe(0);
 
-    await store.record({
-      kind: 'settle', room: 'lobby', from: A, to: B, text: '再结 60', visibility: 'private',
-      transfers: [{ from: A, to: B, amount: 60 }],
-    });
-    expect(await store.balanceOf(A)).toBe(START_CHIPS - 100);
-    expect(await store.balanceOf(B)).toBe(100);
-    expect(await store.balanceOf(C)).toBe(0);
-
-    const rows = await db.prepare("SELECT COUNT(*) AS n FROM ledger_transfers WHERE from_kind = 'room'").get() as { n: number };
-    expect(rows.n).toBe(1);
-
-    // 底池（押给房间）也是一种合法转移：to_kind='room'、to_coo_id=NULL。
-    await store.record({
-      kind: 'ante', room: 'lobby', from: A, text: '押注', visibility: 'room',
-      transfers: [{ from: A, to: 'room', amount: 5 }],
-    });
-    expect(await store.balanceOf(A)).toBe(START_CHIPS - 105);
-    const toRoom = await db.prepare(
-      "SELECT to_kind, to_coo_id FROM ledger_transfers WHERE from_coo_id = ? AND to_kind = 'room'",
-    ).get(A) as { to_kind: string; to_coo_id: string | null };
-    expect(toRoom).toEqual({ to_kind: 'room', to_coo_id: null });
+    await item('gift_used', B, 'longjing');
+    await item('gift_used', B, 'longjing');
+    expect(await store.heldGifts(B)).toEqual({ guihuagao: 1 });
+    expect(await store.heldCount(B, 'longjing')).toBe(0);
+    expect(await store.usedSince(B, 0)).toBe(3);
   });
 
   it('participants 按写入顺序读回，不依赖 rowid', async () => {
@@ -141,11 +145,11 @@ describe('全局账本 SQLite store', () => {
 
     await store.record({
       kind: 'settle', ref: first.id, room: 'lobby', from: B, to: A, text: '结了', visibility: 'private',
-      transfers: [{ from: A, to: B, amount: 50 }],
     });
     expect(await store.promiseStatus(first)).toBe('settled');
-    expect(await store.balanceOf(A)).toBe(-50);
-    expect(await store.balanceOf(B)).toBe(50);
+    // 了结不产生任何金额。
+    expect(await store.heldGifts(A)).toEqual({});
+    expect(await store.heldGifts(B)).toEqual({});
 
     const declined = await promise();
     await store.record({ kind: 'decline', ref: declined.id, room: 'lobby', from: B, to: A, text: '不', visibility: 'private' });
@@ -165,36 +169,19 @@ describe('全局账本 SQLite store', () => {
     expect((await store.find(first.id.slice(0, first.id.length - 1)))?.id).toBe(first.id);
   });
 
-  it('ensureGrant 一个 coo 只发一次；maybeRefill 见底补到 300 且隔 6 小时', async () => {
-    const now = 1000;
-    expect(await store.ensureGrant(A, 'lobby')).not.toBeNull();
-    expect(await store.ensureGrant(A, 'lobby')).toBeNull();
-    expect(await store.balanceOf(A)).toBe(START_CHIPS);
-
-    // 唯一索引兜底：绕过 ensureGrant 直接插第二条非 refill grant 也会被拒。
-    await expect(db.prepare(
-      `INSERT INTO ledger_entries(id, ts, room_id, kind, visibility, from_kind, to_kind, to_coo_id, text, is_refill)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    ).run('dup-grant', 1, 'lobby', 'grant', 'private', 'room', 'coo', A, '重复')).rejects.toThrow(/UNIQUE|duplicate key/i);
-
+  it('0.37 及以前的礼物没有 itemId，不算持有；新条目按 itemId 聚合', async () => {
+    await store.record({ kind: 'gift', room: 'lobby', from: A, to: B, text: '一杯奶茶', visibility: 'private' });
+    expect(await store.heldGifts(B)).toEqual({});
+    // 跨客厅也合并：持有量跟着人走，不跟着房间走。
     await store.record({
-      kind: 'gift', room: 'lobby', from: A, to: B, text: '全给你', visibility: 'private',
-      transfers: [{ from: A, to: B, amount: START_CHIPS }],
+      kind: 'gift', room: 'a', from: A, to: B, text: '龙井', visibility: 'private',
+      data: { itemId: 'longjing', itemName: '龙井' },
     });
-    expect(await store.balanceOf(A)).toBe(0);
-
-    expect(await store.maybeRefill(A, 'lobby', now)).not.toBeNull();
-    expect(await store.balanceOf(A)).toBe(REFILL_TO);
-    expect(await store.maybeRefill(A, 'lobby', now)).toBeNull();
-
     await store.record({
-      kind: 'gift', room: 'lobby', from: A, to: B, text: '又花光了', visibility: 'private',
-      transfers: [{ from: A, to: B, amount: REFILL_TO }],
+      kind: 'gift', room: 'b', from: C, to: B, text: '龙井', visibility: 'private',
+      data: { itemId: 'longjing', itemName: '龙井' },
     });
-    expect(await store.balanceOf(A)).toBe(0);
-    expect(await store.maybeRefill(A, 'lobby', now + REFILL_GAP_MS - 1)).toBeNull();
-    expect(await store.maybeRefill(A, 'lobby', now + REFILL_GAP_MS)).not.toBeNull();
-    expect(await store.balanceOf(A)).toBe(REFILL_TO);
+    expect(await store.heldGifts(B)).toEqual({ longjing: 2 });
   });
 
   it('expire 只扫指定客厅，重复调用不重复记', async () => {
@@ -219,25 +206,22 @@ describe('全局账本 SQLite store', () => {
     expect(await store.promiseStatus(inB)).toBe('defaulted');
   });
 
-  it('summaryFor 按 coo 汇总局数/胜负平/余额/未了结（跨客厅）', async () => {
+  it('summaryFor 按 coo 汇总局数/胜负平/礼物/未了结（跨客厅）', async () => {
     await store.record(game('lobby', [A, B], [A]));
     await store.record(game('b', [A, B], [B]));
     await store.record(game('lobby', [A, B], [A, B], true));
-    await store.record({
-      kind: 'gift', room: 'lobby', from: A, to: B, text: '20 枚', visibility: 'private',
-      transfers: [{ from: A, to: B, amount: 20 }],
-    });
+    await item('gift', A, 'longjing', B);
     await promise({ from: B, to: A });
 
     expect(await store.summaryFor(A)).toMatchObject({
-      cooId: A, games: 3, wins: 1, losses: 1, draws: 1, chips: -20,
+      cooId: A, games: 3, wins: 1, losses: 1, draws: 1,
     });
     expect((await store.summaryFor(A)).open).toEqual([]); // retired promises do not appear in the personal account
     expect(await store.summaryFor(B)).toMatchObject({
-      games: 3, wins: 1, losses: 1, draws: 1, chips: 20,
+      games: 3, wins: 1, losses: 1, draws: 1,
     });
     expect(await store.summaryFor(C)).toMatchObject({
-      cooId: C, games: 0, wins: 0, losses: 0, draws: 0, chips: 0, open: [],
+      cooId: C, games: 0, wins: 0, losses: 0, draws: 0, open: [],
     });
   });
 
@@ -249,44 +233,46 @@ describe('全局账本 SQLite store', () => {
     expect(await store.count()).toBe(0);
 
     await expect(store.record({
-      kind: 'gift', room: 'lobby', from: A, to: B, text: '转给不存在的人', visibility: 'private',
-      transfers: [{ from: A, to: 'coo-missing', amount: 10 }],
+      kind: 'gift', room: 'lobby', from: A, to: 'coo-missing', text: '送给不存在的人', visibility: 'private',
+      data: { itemId: 'longjing', itemName: '龙井' },
     })).rejects.toThrow(/FOREIGN KEY|foreign key/i);
     expect(await store.count()).toBe(0);
-    expect(((await db.prepare('SELECT COUNT(*) AS n FROM ledger_transfers').get()) as { n: number }).n).toBe(0);
     expect(((await db.prepare('SELECT COUNT(*) AS n FROM ledger_participants').get()) as { n: number }).n).toBe(0);
   });
 
-  it('文件库关了再开：余额、承诺状态、未了结与转移明细都还在', async () => {
+  it('文件库关了再开：持有量、承诺状态、未了结都还在', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'parlor-ledger-db-'));
     try {
       const file = join(dir, 'parlor.sqlite');
       const first = new LedgerDb(await openTestDb(file), { now: () => 1000 });
       await seed(first.db);
-      await first.ensureGrant(A, 'lobby');
       const created = await first.record({
         kind: 'promise', room: 'lobby', from: A, to: B, text: '一杯奶茶', visibility: 'private',
-        due: 9000, data: { fromName: '阿岚', toName: '小满', chips: 40 },
+        due: 9000, data: { fromName: '阿岚', toName: '小满' },
       });
       await first.record({ kind: 'accept', ref: created.id, room: 'lobby', from: B, to: A, text: '好', visibility: 'private' });
       await first.record({
-        kind: 'gift', room: 'lobby', from: A, to: B, text: '先给你 20', visibility: 'private',
-        transfers: [{ from: A, to: B, amount: 20 }],
+        kind: 'gift', room: 'lobby', from: A, to: B, text: '一份龙井', visibility: 'private',
+        data: { itemId: 'longjing', itemName: '龙井' },
+      });
+      await first.record({
+        kind: 'gift_used', room: 'lobby', from: B, text: '喝掉了龙井', visibility: 'private',
+        data: { itemId: 'puer', itemName: '普洱' },
       });
       await closeTestDb(first.db);
 
       const second = new LedgerDb(await openTestDb(file), { now: () => 2000 });
       try {
-        expect(await second.balanceOf(A)).toBe(START_CHIPS - 20);
-        expect(await second.balanceOf(B)).toBe(20);
+        expect(await second.heldCount(B, 'longjing')).toBe(1);
+        expect(await second.usedSince(B, 0)).toBe(1);
         expect(await second.promiseStatus((await second.find(created.id))!)).toBe('accepted');
         expect(await second.openFor(A)).toHaveLength(1);
         expect((await second.openFor(A))[0]).toMatchObject({
-          id: created.id, status: 'accepted', direction: 'out', counterpart: '小满', due: 9000, chips: 40,
+          id: created.id, status: 'accepted', direction: 'out', counterpart: '小满', due: 9000,
         });
-        expect((await second.summaryFor(A)).chips).toBe(START_CHIPS - 20);
+        expect(await second.heldCount(A, 'longjing')).toBe(0);
         const entry = (await second.byId(created.id))!;
-        expect(entry.transfers).toBeUndefined();
+        expect(entry.ref).toBeUndefined();
         expect((await second.byId((await second.openFor(A))[0].id))?.ref).toBeUndefined();
       } finally {
         await closeTestDb(second.db);
@@ -296,19 +282,20 @@ describe('全局账本 SQLite store', () => {
     }
   });
 
-  it('同一个 effectId 只记一次，返回旧条目且不重复转移', async () => {
+  it('同一个 effectId 只记一次，返回旧条目', async () => {
     const input: LedgerRecordInput = {
-      kind: 'gift', room: 'lobby', from: A, to: B, text: '10 枚', visibility: 'private',
-      effectId: 'fx-1', transfers: [{ from: A, to: B, amount: 10 }],
+      kind: 'gift', room: 'lobby', from: A, to: B, text: '一份龙井', visibility: 'private',
+      effectId: 'fx-1', data: { itemId: 'longjing', itemName: '龙井' },
     };
     const first = await store.record(input);
     const again = await store.record({ ...input, text: '重复投递' });
 
     expect(again.id).toBe(first.id);
-    expect(again.text).toBe('10 枚');
+    expect(again.text).toBe('一份龙井');
     expect(again.effectId).toBe('fx-1');
     expect(await store.count()).toBe(1);
-    expect(await store.balanceOf(B)).toBe(10);
+    // 幂等：重放不会再送一份。
+    expect(await store.heldCount(B, 'longjing')).toBe(1);
     expect((await store.byEffectId('fx-1'))?.id).toBe(first.id);
   });
 

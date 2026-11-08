@@ -29,7 +29,7 @@ export interface ReplayResponse {
  * 能不能玩需要新能力的游戏（狼人杀要 ≥ 0.29.0）。
  * 它跟 npm 包版本解耦——发新版时在这里抬一格即可（有测试盯着别忘）。
  */
-export const PARLOR_CLIENT_VERSION = '0.37.5';
+export const PARLOR_CLIENT_VERSION = '0.38.0';
 
 export class ParlorHttpError extends Error {
   readonly status: number;
@@ -203,6 +203,17 @@ export class ParlorClient {
     return this.parse<{ ledger: unknown }>(response);
   }
 
+  /** 茶单与本人存货（礼物，纯展示，不影响任何数值）。 */
+  async gifts(token: string, mine = false, roomId?: string): Promise<{
+    items: Array<{ id: string; kind: string; kindLabel?: string; name: string; desc?: string; count?: number }>;
+  }> {
+    const response = await fetch(`${this.path('gifts', roomId)}${mine ? '?mine=1' : ''}`, {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
   async location(token: string): Promise<{ room: string | null; seat: RoomSnapshot['seat'] | null }> {
     const response = await fetch(this.url('/v1/me/location'), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
     return this.parse(response);
@@ -210,7 +221,11 @@ export class ParlorClient {
   async accountHistory(token: string, query: Record<string, unknown>) {
     const params = new URLSearchParams(Object.entries(query).filter(([,v]) => v !== undefined).map(([k,v]): [string,string] => [k,String(v)]));
     const response = await fetch(this.url('/v1/me/history') + '?' + params, { headers: await this.headers({ authorization: `Bearer ${token}` }), signal: AbortSignal.timeout(15_000) });
-    return this.parse<{ items: { id:string;ts:number;roomName:string;game:string;text:string;chips:number;result?:string }[]; next:number|null }>(response);
+    return this.parse<{ items: Array<{
+      id: string; ts: number; roomName: string; kind: string; game?: string;
+      result?: string; itemId?: string; itemName?: string;
+      direction?: 'in' | 'out' | 'used'; text: string;
+    }>; next: number | null }>(response);
   }
 
   /** 身份级回放：按历次到访区间的并集，不需要席位。 */

@@ -1,4 +1,6 @@
 import { touchActivity } from './activity.ts';
+import { GIFTS, resolveGift, type GiftItem } from './gifts/catalog.ts';
+import { LUCK_WINDOW_MS, rollLuck, type LuckOutcome } from './gifts/luck.ts';
 /**
  * 一个客厅的运行时：席位、聊天、私聊、信箱、账本与牌桌。
  *
@@ -27,7 +29,7 @@ import {
 import { serverClock } from './clock.ts';
 import { HostError, type HostErrorCode } from './host-error.ts';
 import {
-  isCooId, MAX_CHIPS, MAX_DUE_MS, MAX_OPEN_PROMISES, MAX_SOCIAL_PER_HOUR, MAX_SOCIAL_TEXT,
+  isCooId, MAX_DUE_MS, MAX_OPEN_PROMISES, MAX_SOCIAL_PER_HOUR, MAX_SOCIAL_TEXT,
   type LedgerEntry,
 } from './ledger.ts';
 import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt } from './table-host.ts';
@@ -103,15 +105,6 @@ const cleanSocial = (value: unknown): string => {
   return text;
 };
 
-const chipsOf = (value: unknown): number | undefined => {
-  if (value === undefined || value === null || value === '') return undefined;
-  const amount = Number(value);
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > MAX_CHIPS) {
-    throw new HostError('invalid', `筹码要是 1 到 ${MAX_CHIPS} 之间的整数`);
-  }
-  return amount;
-};
-
 const dueOf = (value: unknown, now: number): number | undefined => {
   if (value === undefined || value === null || value === '') return undefined;
   const ms = typeof value === 'number' ? value : Date.parse(String(value));
@@ -149,9 +142,6 @@ const wrapSeatError = (error: unknown): never => {
   throw error;
 };
 
-/** 补给扫描的最短间隔：补给本身是 6 小时一次的节奏，30 秒一拍足够。 */
-const REFILL_SCAN_MS = 30_000;
-
 export class RoomHost {
   readonly roomId: string;
   private readonly events: EventDb;
@@ -162,9 +152,6 @@ export class RoomHost {
   private readonly makeToken: () => string;
   /** 客厅发言与桌内发言共用同一个间隔，防止交替发绕过限速。 */
   private readonly lastSay = new Map<string, number>();
-  /** 下一次扫余额补给的时刻；补给节奏是 6 小时一次，扫描不必每秒。 */
-  private nextRefillAt = 0;
-
   private readonly db: Db;
 
   private constructor(
@@ -281,8 +268,6 @@ export class RoomHost {
       } catch (error) {
         return wrapSeatError(error);
       }
-      // 新身份第一次进客厅发筹码；已有身份不会重复发（唯一索引兜底）。
-      await this.ledger.ensureGrant(cooId, this.roomId);
       const event = await this.events.append(this.roomId, {
         type: 'parlor.joined',
         ts: now,
@@ -671,7 +656,6 @@ export class RoomHost {
     if (input.matchOpen && (await this.requireRoom()).visibility !== 'public') {
       throw new HostError('forbidden', '只有公开客厅里的牌桌可以开放快速匹配');
     }
-    if (input.matchOpen && Number(input.stake) > 0) throw new HostError('invalid', '快速匹配只支持无押注牌桌，押注桌可以分享到大厅招募');
     return this.tableHost.open(cooId, input, requestId);
   }
 
@@ -753,15 +737,9 @@ export class RoomHost {
     return this.events.prune(this.roomId, beforeTs, keep);
   }
 
-  /** 网关每秒调一次：开桌超时、牌局超时代打、承诺到期、余额补给。 */
-  async tickClock(now = this.now()): Promise<void> {
+  /** 网关每秒调一次：开桌超时、牌局超时代打。承诺到期由网关侧 expireLedger 扫。 */
+  async tickClock(): Promise<void> {
     await this.tableHost.tick();
-
-    // 补给是 6 小时的节奏，没必要每秒对每个席位查一次余额：按 30 秒一拍扫。
-    if (now >= this.nextRefillAt) {
-      this.nextRefillAt = now + REFILL_SCAN_MS;
-      await this.refillLedger(now);
-    }
   }
 
   /**
@@ -769,10 +747,7 @@ export class RoomHost {
    * 都没有就是 undefined——网关据此决定睡到什么时候。
    */
   async nextWakeAt(now = this.now()): Promise<number | undefined> {
-    let next = this.tableHost.nextWakeAt(now);
-    const occupied = await this.db.prepare('SELECT 1 FROM room_seats WHERE room_id=? AND released_at IS NULL LIMIT 1').get(this.roomId);
-    if (occupied && (next === undefined || this.nextRefillAt < next)) next = this.nextRefillAt;
-    return next;
+    return this.tableHost.nextWakeAt(now);
   }
 
   /** 最早一条还没了结的承诺什么时候到期；一条索引查询。 */
@@ -791,37 +766,82 @@ export class RoomHost {
 
   // —— 账本：礼物 / 承诺 / 回应 ——
 
-  async gift(cooId: string, to: string, text: string, chips?: unknown): Promise<{ entry: LedgerEntry; delivered?: DeliveryReceipt[] }> {
+  /**
+   * 送礼：从茶单/零食单里选一件，可附一句话。
+   * 礼物是私密条目，只有收礼的人（和家长页）看得见；收到就算「手上有了一份」，
+   * 存货由条目现算，没有库存表。
+   */
+  async gift(cooId: string, to: string, item: unknown, text?: unknown): Promise<{ entry: LedgerEntry; item: GiftItem; toName: string; delivered?: DeliveryReceipt[] }> {
     const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能写账本');
     const target = await this.requireTarget(seat, to);
-    const body = cleanSocial(text);
-    const amount = chipsOf(chips);
+    const picked = resolveGift(item);
+    if (!picked.item) throw new HostError('invalid', picked.error ?? '这份礼物不在茶单里');
+    const gift = picked.item;
+    const note = text === undefined || text === null || String(text).trim() === '' ? '' : cleanSocial(text);
     await this.checkSocialBudget(cooId);
-    // 「查余额 → 扣款」必须在同一个事务里、并锁住双方身份行：
-    // PostgreSQL 下两个并发礼物否则会各自通过余额检查而超支。
     return withTransaction(this.db, async () => {
       await lockCooRows(this.db, [cooId, target.cooId]);
-      if (amount !== undefined) {
-        const balance = await this.ledger.balanceOf(cooId);
-        if (balance < amount) throw new HostError('invalid', `你只有 ${balance} 枚筹码`);
-      }
       const entry = await this.ledger.record({
         kind: 'gift',
         room: this.roomId,
         from: cooId,
         to: target.cooId,
-        text: body,
+        text: note || `送了一份${gift.name}`,
         visibility: 'private',
-        data: { fromName: seat.name, toName: target.name, ...(amount ? { chips: amount } : {}) },
-        ...(amount ? { transfers: [{ from: cooId, to: target.cooId, amount }] } : {}),
+        data: { fromName: seat.name, toName: target.name, itemId: gift.id, itemName: gift.name },
       });
       await touchActivity(this.db, this.roomId, cooId, this.now());
-      const delivered = await this.notify(target.cooId, `收到一份礼物：${body}${amount ? `（${amount} 枚筹码）` : ''}`, {
-        kind: 'gift', action: 'gift', from: seat.name, entryId: entry.id, toName: target.name,
-      });
-      return { entry, delivered: [delivered] };
+      const delivered = await this.notify(
+        target.cooId,
+        `收到一份礼物：${gift.icon}${gift.name}${note ? `——「${note}」` : ''}`,
+        { kind: 'gift', action: 'gift', from: seat.name, entryId: entry.id, toName: target.name, itemId: gift.id },
+      );
+      return { entry, item: gift, toName: target.name, delivered: [delivered] };
     });
+  }
+
+  /**
+   * 喝掉 / 吃掉一份手上的礼物。
+   *
+   * 记一条 `gift_used`，存货由「收到的 gift 减去用掉的 gift_used」现算。
+   * 附带掷一次**纯文字**运气：不进牌局、不改概率、不写任何数值，
+   * 两小时内第 3 份起算过量，文案转成「运气下降」（吃太多晕碳之类）。
+   */
+  async consumeGift(cooId: string, item: unknown, rng?: () => number): Promise<{
+    entry: LedgerEntry; item: GiftItem; luck: LuckOutcome; remaining: number;
+  }> {
+    const seat = await this.requireSeat(cooId);
+    if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能喝掉礼物');
+    const picked = resolveGift(item);
+    if (!picked.item) throw new HostError('invalid', picked.error ?? '这份礼物不在茶单里');
+    const gift = picked.item;
+    const verb = gift.kind === 'tea' ? '喝掉' : '吃掉';
+    return withTransaction(this.db, async () => {
+      // 先数后写要在同一个事务里，并对身份行加锁：否则两份并发能把存货吃成负数。
+      await lockCooRows(this.db, [cooId]);
+      const held = await this.ledger.heldCount(cooId, gift.id);
+      if (held <= 0) {
+        throw new HostError('invalid', `你手上没有${gift.name}；用 parlor_query {op:"gifts"} 看还有些什么`);
+      }
+      const recent = await this.ledger.usedSince(cooId, this.now() - LUCK_WINDOW_MS);
+      const luck = rollLuck({ item: gift, recent, ...(rng !== undefined ? { rng } : {}) });
+      const entry = await this.ledger.record({
+        kind: 'gift_used',
+        room: this.roomId,
+        from: cooId,
+        text: `${verb}了一份${gift.name}。${luck.text}`,
+        visibility: 'private',
+        data: { itemId: gift.id, itemName: gift.name, tone: luck.tone, delta: luck.delta, luckText: luck.text },
+      });
+      return { entry, item: gift, luck, remaining: held - 1 };
+    });
+  }
+
+  /** 茶单 + 我手上还剩几份；给 Coo 与网页共用。 */
+  async giftStock(cooId: string): Promise<Array<GiftItem & { count: number }>> {
+    const held = await this.ledger.heldGifts(cooId);
+    return GIFTS.map((item) => ({ ...item, count: held[item.id] ?? 0 }));
   }
 
   async promise(
@@ -829,13 +849,11 @@ export class RoomHost {
     to: string,
     text: string,
     due?: unknown,
-    chips?: unknown,
   ): Promise<{ entry: LedgerEntry; delivered?: DeliveryReceipt[] }> {
     const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能写账本');
     const target = await this.requireTarget(seat, to);
     const body = cleanSocial(text);
-    const amount = chipsOf(chips);
     const dueAt = dueOf(due, this.now());
     await this.checkSocialBudget(cooId);
     // 「数未了结 → 写入」也要在同一个事务里，否则并发承诺可以绕过上限。
@@ -853,15 +871,11 @@ export class RoomHost {
         text: body,
         visibility: 'private',
         ...(dueAt !== undefined ? { due: dueAt } : {}),
-        data: {
-          fromName: seat.name,
-          toName: target.name,
-          ...(amount ? { chips: amount } : {}),
-        },
+        data: { fromName: seat.name, toName: target.name },
       });
       const delivered = await this.notify(
         target.cooId,
-        `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}${amount ? `，${amount} 枚筹码` : ''}。用 parlor_respond 回。`,
+        `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}。用 parlor_respond 回。`,
         { kind: 'promise', action: 'promise', from: seat.name, entryId: entry.id, toName: target.name },
       );
       return { entry, delivered: [delivered] };
@@ -903,17 +917,9 @@ export class RoomHost {
       } else {
         if (promise.to !== cooId) throw new HostError('forbidden', '只有被承诺的人（债权人）能说了结');
         if (status !== 'accepted') throw new HostError('conflict', `这条承诺现在是「${this.statusLabel(status)}」，不能了结`);
-        const chips = typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
-        if (chips > 0) {
-          const balance = promise.from ? await this.ledger.balanceOf(promise.from) : 0;
-          if (balance < chips) {
-            throw new HostError('invalid', `${otherName} 现在只有 ${balance} 枚筹码，还不够 ${chips} 枚`);
-          }
-        }
       }
 
       const kind = action === 'done' ? 'settle' : action;
-      const amount = action === 'done' && typeof promise.data?.chips === 'number' ? promise.data.chips : 0;
       const prefix = { accept: '已答应', decline: '已拒绝', cancel: '已撤回', done: '已了结' }[action];
       const entry = await this.ledger.record({
         kind,
@@ -923,21 +929,13 @@ export class RoomHost {
         ...(counterpartCoo ? { to: counterpartCoo } : {}),
         text: `${prefix}：${promise.text}`,
         visibility: 'private',
-        data: {
-          fromName: seat.name,
-          toName: otherName,
-          promiseText: promise.text,
-          ...(amount ? { chips: amount } : {}),
-        },
-        ...(amount && promise.from
-          ? { transfers: [{ from: promise.from, to: promise.to ?? cooId, amount }] }
-          : {}),
+        data: { fromName: seat.name, toName: otherName, promiseText: promise.text },
       });
       const text = {
         accept: `答应了你的承诺：${promise.text}`,
         decline: `没答应这条承诺：${promise.text}`,
         cancel: `撤回了承诺：${promise.text}`,
-        done: `说了结这条承诺：${promise.text}${amount ? `（${amount} 枚筹码已划给你）` : ''}`,
+        done: `说了结这条承诺：${promise.text}`,
       }[action];
       const delivered = counterpartCoo
         ? await this.notify(counterpartCoo, `${seat.name} ${text}`, {
@@ -964,22 +962,6 @@ export class RoomHost {
           kind: 'promise', action: 'default', entryId: entry.ref ?? entry.id,
         });
       }
-    }
-    return created;
-  }
-
-  /** 余额见底的人由客厅补一点（每段间隔最多一次），并私下告诉他。 */
-  async refillLedger(now = this.now()): Promise<LedgerEntry[]> {
-    const created: LedgerEntry[] = [];
-    for (const seat of await this.seats()) {
-      if (seat.kind === 'observer') continue;
-      const entry = await this.ledger.maybeRefill(seat.cooId, this.roomId, now);
-      if (!entry) continue;
-      created.push(entry);
-      const amount = typeof entry.data?.chips === 'number' ? entry.data.chips : 0;
-      await this.notify(seat.cooId, `客厅给你补了 ${amount} 枚筹码，现在有 ${await this.ledger.balanceOf(seat.cooId)} 枚。`, {
-        kind: 'grant', action: 'refill', entryId: entry.id,
-      });
     }
     return created;
   }

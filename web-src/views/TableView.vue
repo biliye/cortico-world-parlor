@@ -75,7 +75,6 @@ const metaParts = computed(() => {
   if (!current) return [];
   const parts: string[] = [STATUS_LABELS[current.status] || current.status];
   if (seats.value.length) parts.push(seats.value.length + ' 人');
-  if (current.stake) parts.push('每局 ' + current.stake);
   if (current.game === 'ddz' && current.multiplier) parts.push('倍数 ×' + current.multiplier);
   if (current.game === 'monopoly' && current.round) parts.push('第 ' + current.round + '/' + (current.rounds || 12) + ' 轮');
   return parts;

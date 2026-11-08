@@ -185,13 +185,10 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   due_at INTEGER,
   ref_entry_id TEXT REFERENCES ledger_entries(id),
   effect_id TEXT,
-  is_refill INTEGER NOT NULL DEFAULT 0 CHECK (is_refill IN (0,1)),
   CHECK ((from_kind = 'coo') = (from_coo_id IS NOT NULL)),
   CHECK ((to_kind = 'coo') = (to_coo_id IS NOT NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ledger_effect ON ledger_entries(effect_id) WHERE effect_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS ux_ledger_grant_once
-  ON ledger_entries(to_coo_id) WHERE kind = 'grant' AND is_refill = 0;
 CREATE INDEX IF NOT EXISTS ix_ledger_room ON ledger_entries(room_id, visibility, ts);
 CREATE INDEX IF NOT EXISTS ix_ledger_from ON ledger_entries(from_coo_id, ts);
 CREATE INDEX IF NOT EXISTS ix_ledger_to ON ledger_entries(to_coo_id, ts);
@@ -215,20 +212,7 @@ CREATE TABLE IF NOT EXISTS ledger_winners (
 );
 CREATE INDEX IF NOT EXISTS ix_ledger_winners_coo ON ledger_winners(coo_id, entry_id);
 
-CREATE TABLE IF NOT EXISTS ledger_transfers (
-  id INTEGER PRIMARY KEY,
-  entry_id TEXT NOT NULL REFERENCES ledger_entries(id) ON DELETE CASCADE,
-  from_kind TEXT NOT NULL CHECK (from_kind IN ('coo','room')),
-  from_coo_id TEXT REFERENCES coos(id),
-  to_kind TEXT NOT NULL CHECK (to_kind IN ('coo','room')),
-  to_coo_id TEXT REFERENCES coos(id),
-  amount INTEGER NOT NULL CHECK (amount > 0),
-  CHECK ((from_kind = 'coo') = (from_coo_id IS NOT NULL)),
-  CHECK ((to_kind = 'coo') = (to_coo_id IS NOT NULL))
-);
-CREATE INDEX IF NOT EXISTS ix_transfer_from ON ledger_transfers(from_coo_id);
-CREATE INDEX IF NOT EXISTS ix_transfer_to ON ledger_transfers(to_coo_id);
-CREATE INDEX IF NOT EXISTS ix_transfer_entry ON ledger_transfers(entry_id);
+-- 0.38.0 起没有筹码，也就没有转移明细表（ledger_transfers 已删）。
 
 CREATE TABLE IF NOT EXISTS mail (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -9,7 +9,7 @@ import { versionAtLeast } from './games/werewolf.ts';
 import { WEREWOLF_MIN_CLIENT } from './games/werewolf-table.ts';
 import { tableCapacity, type TableEntryInput, type TableEntryResponse, type TableEntryResult, type TableRecruitment } from './table-discovery-db.ts';
 
-interface Candidate { id: string; room_id: string; room_name: string; game: string; stake: number; created_at: number; n: number }
+interface Candidate { id: string; room_id: string; room_name: string; game: string; created_at: number; n: number }
 interface EntryReceipt { coo_id: string; source_token_hash: string; result_token_hash: string; body_key: string; receipt_json: string }
 
 /** 选择桌、换厅、入桌和回执在同一事务内提交；桌队列一直持有到 COMMIT。 */
@@ -26,7 +26,7 @@ export class TableDiscovery {
 
   async recruits(): Promise<TableRecruitment[]> {
     const rows = await this.db.prepare(
-      `SELECT t.id, t.room_id, r.name AS room_name, t.game, t.stake, t.created_at,
+      `SELECT t.id, t.room_id, r.name AS room_name, t.game, t.created_at,
               d.recruit_text, d.author_coo_id, d.updated_at, c.display_name AS author
          FROM table_discovery d JOIN tables t ON t.id=d.table_id JOIN rooms r ON r.id=t.room_id
          LEFT JOIN coos c ON c.id=d.author_coo_id
@@ -41,7 +41,7 @@ export class TableDiscovery {
       if (!table || table.status !== 'open' || table.frozen || !capacity || Number(table.openDeadline) <= this.now()) continue;
       const seats = Array.isArray(table.seats) ? table.seats.length : 0;
       result.push({ tableId: row.id, room: row.room_id, roomName: row.room_name, game: row.game,
-        label: table.label, seats, capacity, full: seats >= capacity, stake: Number(row.stake),
+        label: table.label, seats, capacity, full: seats >= capacity,
         text: row.recruit_text, author: row.author || '来客', updatedAt: Number(row.updated_at),
         link: `/play?${new URLSearchParams({ room: row.room_id, view: 'table', table: row.id })}` });
     }
@@ -96,7 +96,7 @@ export class TableDiscovery {
               if (!direct) {
                 const eligible = await this.db.prepare(
                   `SELECT 1 FROM table_discovery d JOIN tables t ON t.id=d.table_id JOIN rooms r ON r.id=t.room_id
-                    WHERE t.id=? AND d.match_open=1 AND t.status='open' AND t.stake=0 AND t.frozen_at IS NULL
+                    WHERE t.id=? AND d.match_open=1 AND t.status='open' AND t.frozen_at IS NULL
                       AND t.deadline_at>? AND r.visibility='public' AND r.archived_at IS NULL`,
                 ).get(candidate.id, this.now());
                 if (!eligible) throw new HostError('conflict', '这张桌子已经停止匹配');
@@ -134,11 +134,11 @@ export class TableDiscovery {
       ? "CASE CAST(t.state_json->>'seatCount' AS TEXT) WHEN '6' THEN 6 WHEN '12' THEN 12 ELSE 9 END"
       : '?';
     return await this.db.prepare(
-      `SELECT t.id, t.room_id, r.name AS room_name, t.game, t.stake, t.created_at,
+      `SELECT t.id, t.room_id, r.name AS room_name, t.game, t.created_at,
               (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL) AS n
          FROM tables t JOIN rooms r ON r.id=t.room_id LEFT JOIN table_discovery d ON d.table_id=t.id
         WHERE t.status='open' AND t.frozen_at IS NULL AND t.deadline_at>? AND r.archived_at IS NULL
-          AND ${input.table ? 't.id=? AND t.room_id=?' : `d.match_open=1 AND t.game=? AND t.stake=0 AND r.visibility='public'
+          AND ${input.table ? 't.id=? AND t.room_id=?' : `d.match_open=1 AND t.game=? AND r.visibility='public'
             AND (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL)<${capacity}
             AND (r.id=? OR (SELECT COUNT(*) FROM room_seats rs WHERE rs.room_id=r.id AND rs.released_at IS NULL AND rs.kind<>'observer')<r.capacity)`}
         ORDER BY n DESC, t.created_at, t.id LIMIT 30`,

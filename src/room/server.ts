@@ -167,7 +167,6 @@ export class ParlorServer {
       try {
         this.kernel.tickTable(Date.now());
         this.kernel.expireLedger(Date.now());
-        this.kernel.refillLedger(Date.now());
       } catch { /* 一局坏掉不影响房间 */ }
     }, 1000);
     this.tableClock.unref?.();
@@ -433,17 +432,13 @@ export class ParlorServer {
     return auth;
   }
 
-  /** 老席位第一次带 cooId 来时把它绑上；已经是真身份的就只补发筹码。 */
+  /** 老席位第一次带 cooId 来时把它绑上；已经是真身份的不再重复处理。 */
   private bindIdentity(req: IncomingMessage, seat: StoredSeat): void {
     const identity = identityOf(req);
     if (!identity) return;
     const claim = this.ledger.claimIdentity(identity.cooId, identity.cooSecret);
     if (claim !== 'ok') return;
-    if (seat.cooId && !seat.cooId.startsWith('legacy:')) {
-      // 老座位在 0.6.0 之前就绑过身份：补上第一次进房的筹码。
-      this.ledger.ensureGrant(identity.cooId, this.kernel.id);
-      return;
-    }
+    if (seat.cooId && !seat.cooId.startsWith('legacy:')) return;
     if (this.kernel.bindCooId(seat, identity.cooId)) this.schedulePersist();
   }
 
@@ -505,10 +500,15 @@ export class ParlorServer {
       case 'table_say': event = this.kernel.tableSay(seat, body.text); break;
       case 'whisper': delivered = this.kernel.whisper(seat, body.to, body.text).delivered; break;
       case 'set_tier': this.kernel.setTier(seat, body.tier); break;
-      case 'gift': delivered = this.kernel.gift(seat, body.to, body.text, body.chips).delivered; break;
-      case 'promise': delivered = this.kernel.promise(seat, body.to, body.text, body.due, body.chips).delivered; break;
+      case 'gift': delivered = this.kernel.gift(seat, body.to, body.item, body.text).delivered; break;
+      case 'gift_eat': {
+        const eaten = this.kernel.consumeGift(seat, body.item);
+        text = `${eaten.luck.line}（还剩 ${eaten.remaining} 份）`;
+        break;
+      }
+      case 'promise': delivered = this.kernel.promise(seat, body.to, body.text, body.due).delivered; break;
       case 'respond': delivered = this.kernel.respond(seat, body.id, body.action).delivered; break;
-      case 'table_open': this.kernel.openTable(seat, body.game, body.stake); break;
+      case 'table_open': this.kernel.openTable(seat, body.game); break;
       case 'table_join': this.kernel.joinTable(seat); break;
       case 'table_start': {
         const receipt = this.kernel.startTable(seat);
@@ -779,7 +779,6 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     const me = snapshot.ledger;
     if (!me) ledger.append(ledgerRow('还没有账本。', 'tier'));
     else {
-      if (me.chips !== undefined) ledger.append(ledgerRow('筹码：' + me.chips + ' 枚'));
       if (me.games === 0) ledger.append(ledgerRow('还没有战绩。', 'tier'));
       else {
         ledger.append(ledgerRow('共 ' + me.games + ' 局：' + me.wins + ' 胜 ' + me.losses + ' 负 ' + me.draws + ' 平'));
@@ -794,9 +793,8 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
         for (const item of open) {
           const who = item.direction === 'in' ? '对方欠我' : '我欠对方';
           const state = item.status === 'pending' ? '（等回应）' : '（已答应）';
-          const chips = item.chips ? '，' + item.chips + ' 枚' : '';
           const due = item.due ? '，' + dueDay(item.due) + ' 到期' : '';
-          ledger.append(ledgerRow('#' + item.id.slice(0, 8) + ' ' + who + ' ' + item.counterpart + '：' + item.text + chips + due + state));
+          ledger.append(ledgerRow('#' + item.id.slice(0, 8) + ' ' + who + ' ' + item.counterpart + '：' + item.text + due + state));
         }
       }
     }

@@ -107,7 +107,7 @@ describe('并发正确性', () => {
     }
   });
 
-  it('并发礼物不超支：余额 100，10 笔各 100 只有 1 笔成功', async () => {
+  it('并发送礼：十笔各成一条，持有量按条目算就是十份', async () => {
     await seedCoo('coo-giver');
     await seedCoo('coo-taker');
     await seedRoom('room-gift', 8, 'coo-giver');
@@ -115,26 +115,16 @@ describe('并发正确性', () => {
     await host.join('coo-giver', { name: '送礼的' });
     await host.join('coo-taker', { name: '收礼的' });
 
-    // 把送礼人的余额压到 100：先记一笔 900 的支出。
-    const ledger = new LedgerDb(db);
-    await ledger.record({
-      kind: 'ante',
-      room: 'room-gift',
-      from: 'coo-giver',
-      to: 'room',
-      text: '测试前先花掉 900 枚',
-      visibility: 'private',
-      transfers: [{ from: 'coo-giver', to: 'room', amount: 900 }],
-      data: { fromName: '送礼的', chips: 900 },
-    });
-    expect(await ledger.balanceOf('coo-giver')).toBe(100);
+    // 没有余额也没有底池：并发送礼只看每小时 10 条的社交限额，这十笔都在限额内。
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, () => host.gift('coo-giver', '收礼的', 'longjing')),
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(10);
 
-    const attempts = Array.from({ length: 10 }, () => host.gift('coo-giver', '收礼的', '一份礼物', 100));
-    const results = await Promise.allSettled(attempts);
-    const ok = results.filter((result) => result.status === 'fulfilled').length;
-    expect(ok).toBe(1);
-    expect(await ledger.balanceOf('coo-giver')).toBe(0);
-    expect(await ledger.balanceOf('coo-taker')).toBe(1100);
+    const ledger = new LedgerDb(db);
+    expect(await ledger.count()).toBe(10);
+    expect(await ledger.heldCount('coo-taker', 'longjing')).toBe(10);
+    expect(await ledger.heldCount('coo-giver', 'longjing')).toBe(0);
   });
 
   it('事务中途失败整笔回滚：事件、seq、收件人都不留', async () => {

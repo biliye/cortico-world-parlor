@@ -5,12 +5,12 @@ import {
   el, clear, icon, initialOf, fmtClock, fmtDateTime, fmtLeft, clockSpan, btn, playerClass,
   isNearBottom, readable, GAME_LABELS, STATUS_LABELS, KIND_LABELS,
 } from './common.js';
-import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=0.37.5';
+import { ENABLED_GAMES, GAMES, gameOf, gameLabel, gameIcon, heroGame } from './games/registry.js?v=0.38.0';
 import { createClubState, conversationKey, readRoute, routeUrl } from './club-state.js';
 import { createRoomCarousel } from './room-carousel.js';
-import { supportLink } from './support-link.js?v=0.37.5';
-import { mountAnnouncementBanner } from './announcement-banner.js?v=0.37.5';
-import { startAnnouncementWatch } from './announcements.js?v=0.37.5';
+import { supportLink } from './support-link.js?v=0.38.0';
+import { mountAnnouncementBanner } from './announcement-banner.js?v=0.38.0';
+import { startAnnouncementWatch } from './announcements.js?v=0.38.0';
 
 const club = createClubState({
   getItem: key => sessionStorage.getItem(key),
@@ -60,6 +60,10 @@ const state = {
   ledgerTimer: null,
   ledgerBusy: false,
   ledgerQueued: false,
+  /** 茶单与本人存货（/gifts 一次取回，含没货的条目）。 */
+  gifts: [],
+  giftTimer: null,
+  giftBusy: false,
   mounted: null,
   shell: false,
   busy: false,
@@ -503,6 +507,7 @@ async function refreshSnapshot() {
   state.snap = snapshot;
   state.offset = snapshot.now - Date.now();
   normalizeWatch();
+  scheduleGiftRefresh();
 }
 
 function scheduleRefresh(delay = 120) {
@@ -664,7 +669,7 @@ function scheduleTableRefresh(delay = 120) {
   }, delay);
 }
 
-/** 筹码只在开局押注、结算、礼物这几处变；单独取一次账本，不拖整份快照。 */
+/** 账本单独取一次，不拖整份快照；礼物存货另走一次 /gifts。 */
 async function refreshLedger() {
   if (!state.cfg || !state.snap) return;
   if (state.ledgerBusy) {
@@ -698,7 +703,7 @@ function scheduleLedgerRefresh(delay = 200) {
   }, delay);
 }
 
-/** 账本变化才动筹码的地方：牌局结算、作废退款。 */
+/** 账本会变的地方：牌局结算与作废。 */
 function touchesLedger(type) {
   return type === 'parlor.table.end' || type === 'parlor.table.cancel';
 }
@@ -800,7 +805,6 @@ async function act(body) {
       if (typeof receipt.seq === 'number') state.appliedSeq = Math.max(state.appliedSeq, receipt.seq);
       applyTablePatch(receipt);
       renderTableParts();
-      // 开局押注会立刻扣筹码：账本单独补一次，别为它拉整份快照。
       if (payload.type === 'table_start') scheduleLedgerRefresh(0);
     } else {
       await refreshSnapshot();
@@ -905,7 +909,7 @@ function handleEvent(event) {
   const type = event.type || '';
   if (type === 'parlor.say' || type === 'parlor.table.say') return;
   const seatChange = type === 'parlor.joined' || type === 'parlor.left';
-  // 结算/作废会改筹码；账本单独取，不跟牌桌增量绑在一起。
+  // 结算/作废会改账本；账本单独取，不跟牌桌增量绑在一起。
   if (touchesLedger(type)) scheduleLedgerRefresh();
   if (type.startsWith('parlor.table.') || type.startsWith('parlor.monopoly.')) {
     // 桌事件只补当前桌：别人的出牌、超时代打、开局与结算都走这条。
@@ -1162,10 +1166,13 @@ function buildShell() {
   const topName = el('span', 'top-me-name');
   const topSub = el('span', 'top-me-sub');
   topMeText.append(topName, topSub);
-  const chips = el('span', 'chips');
-  chips.append(icon('coin'));
+  const chips = el('button', 'chips gift-open');
+  chips.type = 'button';
+  chips.title = '茶点：送一份茶或小零食，也能喝掉/吃掉';
+  chips.append(icon('tea'));
   const chipsText = el('span', '', '0');
   chips.append(chipsText);
+  chips.addEventListener('click', () => { void openGifts(); });
   topMe.append(topAvatar, topMeText, chips);
 
   const menuBtn = el('button', 'icon-btn menu-btn');
@@ -1218,7 +1225,7 @@ function buildShell() {
   seatCopy.append(el('span', 'eyebrow', '我的席位'), seatName, seatSub);
   seatTop.append(seatAvatar, seatCopy);
   const stats = el('div', 'seat-stats');
-  const statChips = statCell('筹码');
+  const statChips = statCell('礼物');
   const statWins = statCell('今晚');
   const statGames = statCell('局数');
   stats.append(statChips.box, statWins.box, statGames.box);
@@ -1245,7 +1252,7 @@ function buildShell() {
   ledgerHead.append(el('h2', '', '账本'), el('span', 'muted', '最近'));
   const ledgerTotal = el('div', 'ledger-total');
   const ledgerNet = el('strong', '', '0');
-  ledgerTotal.append(ledgerNet, el('span', '', '今晚的小收获 · 枚'));
+  ledgerTotal.append(ledgerNet, el('span', '', '累计胜场'));
   const split = el('div', 'ledger-split');
   split.setAttribute('aria-label', '按游戏分项');
   const ledgerList = el('ul', 'ledger-list');
@@ -1486,7 +1493,7 @@ function buildShell() {
   infoHead.append(el('h2', '', '牌桌信息'));
   const infoGrid = el('dl', 'info-grid');
   const infoGame = infoCell(infoGrid, '游戏');
-  const infoStake = infoCell(infoGrid, '每局');
+  const infoSeats = infoCell(infoGrid, '席位');
   const infoStatus = infoCell(infoGrid, '状态');
   const infoTurn = infoCell(infoGrid, '轮到');
   const ruleNote = el('p', 'rule-note');
@@ -1529,7 +1536,7 @@ function buildShell() {
     hallPeopleCount, hallPeopleRow, hallRoomsList, hallCreateName, hallCreateVis, hallCreateCap, hallCreateBtn,
     chatPanel, markRead, backRoom, tabRoom, tabTable, tabMail,
     logRoom, logTable, mailList, composer, scopeText, sayInput, sendBtn, mailNote,
-    infoGame, infoStake, infoStatus, infoTurn, ruleNote, infoClock,
+    infoGame, infoSeats, infoStatus, infoTurn, ruleNote, infoClock,
     navHall, navRoom, navTable, navChat, backdrop,
   });
   ui.featured = null;
@@ -1720,7 +1727,7 @@ function renderTopbar() {
   ui.topName.textContent = snap.seat.name;
   const online = (snap.online || []).includes(snap.seat.id);
   ui.topSub.textContent = (KIND_LABELS[snap.seat.kind] || snap.seat.kind) + ' · ' + (online ? '在线' : '离线');
-  ui.chipsText.textContent = snap.ledger && snap.ledger.chips !== undefined ? String(snap.ledger.chips) : '0';
+  ui.chipsText.textContent = String(giftCount());
 }
 
 function renderSeatCard() {
@@ -1737,7 +1744,7 @@ function renderSeatCard() {
   const wins = ledger ? ledger.wins : 0;
   const losses = ledger ? ledger.losses : 0;
   const draws = ledger ? ledger.draws : 0;
-  ui.statChips.value.textContent = String(ledger ? ledger.chips : 0);
+  ui.statChips.value.textContent = String(giftCount());
   ui.statWins.value.textContent = wins + ' 胜';
   ui.statGames.value.textContent = String(games);
   ui.progressLeft.textContent = games > 0
@@ -1757,12 +1764,8 @@ function renderLedger() {
     ui.split.append(el('p', 'muted', '还没有账本。'));
     return;
   }
-  const dayStart = startOfToday();
-  const net = (ledger.recent || [])
-    .filter((entry) => entry.kind !== 'grant' && entry.ts >= dayStart && typeof entry.chips === 'number')
-    .reduce((sum, entry) => sum + entry.chips, 0);
-  ui.ledgerNet.textContent = (net > 0 ? '+' : net < 0 ? '-' : '') + Math.abs(net);
-  ui.ledgerNet.classList.toggle('neg', net < 0);
+  ui.ledgerNet.textContent = String(ledger.wins || 0);
+  ui.ledgerNet.classList.remove('neg');
 
   const byGame = (ledger.byGame || []).slice(0, 4);
   const max = byGame.reduce((top, row) => Math.max(top, row.games), 1);
@@ -1789,9 +1792,6 @@ function renderLedger() {
     const li = el('li');
     li.append(el('span', 'ledger-time', fmtClock(entry.ts).slice(0, 5)));
     li.append(el('span', 'ledger-line', readable(entry.text || '')));
-    if (typeof entry.chips === 'number' && entry.chips !== 0) {
-      li.append(el('b', entry.chips > 0 ? 'good' : 'bad', (entry.chips > 0 ? '+' : '') + entry.chips));
-    }
     ui.ledgerList.append(li);
   }
 }
@@ -1950,7 +1950,6 @@ function renderTableHead() {
   parts.push(STATUS_LABELS[table.status] || table.status);
   const seatCount = (table.seats || []).length;
   if (seatCount) parts.push(seatCount + ' 人');
-  if (table.stake) parts.push('每局 ' + table.stake);
   if (table.game === 'monopoly' && table.round) parts.push('第 ' + table.round + '/' + (table.rounds || 12) + ' 轮');
   if (table.game === 'ddz' && table.multiplier) parts.push('倍数 x' + table.multiplier);
   copy.append(el('p', '', parts.join(' · ')));
@@ -3198,6 +3197,195 @@ document.addEventListener('keydown', event => {
 
 /* —— 换客厅 —— */
 
+/* —— 茶点：送一份茶或小零食，也能把收到的喝掉/吃掉 —— */
+
+const GIFT_VERB = { tea: '喝掉', snack: '吃掉' };
+
+function giftCount() {
+  return (state.gifts || []).reduce((sum, item) => sum + (Number(item.count) || 0), 0);
+}
+
+async function loadGifts() {
+  if (!state.cfg) return;
+  const room = (state.snap && state.snap.id) || currentRoom();
+  if (!room) return;
+  try {
+    const body = await api('/v1/rooms/' + encodeURIComponent(room) + '/gifts');
+    state.gifts = body && Array.isArray(body.items) ? body.items : [];
+  } catch {
+    return; // 拿不到就沿用上一份，不打扰人
+  }
+  renderTopbar();
+  renderSeatCard();
+  renderGifts();
+}
+
+function scheduleGiftRefresh(delay = 1500) {
+  if (!state.cfg || state.giftTimer) return;
+  state.giftTimer = setTimeout(() => {
+    state.giftTimer = null;
+    void loadGifts();
+  }, delay);
+}
+
+let giftDialog = null;
+let giftGrid = null;
+let giftHeldList = null;
+let giftStatus = null;
+let giftTarget = null;
+let giftNote = null;
+let giftSend = null;
+let giftPicked = '';
+
+function ensureGiftDialog() {
+  if (giftDialog) return;
+  giftDialog = el('dialog', 'rooms-dialog');
+  giftDialog.setAttribute('aria-label', '茶点');
+  const box = el('div', 'rooms-box');
+  const head = el('div', 'rooms-head');
+  const close = btn('关闭', () => giftDialog.close(), { ghost: true, small: true });
+  head.append(el('h2', '', '茶点'), close);
+  giftStatus = el('p', 'rooms-status muted', '礼物就是茶或者一份小零食，没有价签，也不押任何东西。');
+  const form = el('div', 'rooms-create');
+  const targetRow = el('label', 'gift-field', '送给');
+  giftTarget = el('select');
+  targetRow.append(giftTarget);
+  const noteRow = el('label', 'gift-field', '一句话');
+  giftNote = el('input');
+  giftNote.type = 'text';
+  giftNote.maxLength = 120;
+  giftNote.placeholder = '不写也行';
+  noteRow.append(giftNote);
+  giftSend = btn('送出', () => { void sendGift(); }, { small: true, primary: true });
+  form.append(targetRow, noteRow, giftSend);
+
+  giftGrid = el('div', 'gift-grid');
+  const heldBox = el('div', 'gift-held-box');
+  heldBox.append(el('h3', '', '我手上的'));
+  giftHeldList = el('div', 'gift-held-list');
+  heldBox.append(giftHeldList, el('p', 'muted', '连着喝/吃太多，运气那行会变——只是说说，不影响任何结果。'));
+
+  box.append(head, giftStatus, form, giftGrid, heldBox);
+  giftDialog.append(box);
+  giftDialog.addEventListener('click', (event) => {
+    if (event.target === giftDialog) giftDialog.close();
+  });
+  document.body.append(giftDialog);
+}
+
+function renderGifts() {
+  if (!giftGrid) return;
+  clear(giftGrid);
+  const items = state.gifts || [];
+  if (!items.length) {
+    giftGrid.append(el('p', 'muted', '还没读到茶单。'));
+  }
+  for (const group of [{ label: '茶', kind: 'tea' }, { label: '小零食', kind: 'snack' }]) {
+    const list = items.filter((item) => item.kind === group.kind);
+    if (!list.length) continue;
+    giftGrid.append(el('h3', '', group.label));
+    const row = el('div', 'gift-row');
+    for (const item of list) {
+      const card = el('button', 'gift-card' + (giftPicked === item.id ? ' is-on' : ''));
+      card.type = 'button';
+      card.title = item.desc || '';
+      card.append(el('span', 'gift-icon', item.icon || '🍵'));
+      card.append(el('span', 'gift-name', item.name || item.id));
+      card.append(el('small', 'muted', item.count ? '手上 ' + item.count : (item.desc || '')));
+      card.addEventListener('click', () => {
+        giftPicked = item.id;
+        renderGifts();
+      });
+      row.append(card);
+    }
+    giftGrid.append(row);
+  }
+
+  clear(giftHeldList);
+  const held = items.filter((item) => Number(item.count) > 0);
+  if (!held.length) {
+    giftHeldList.append(el('p', 'muted', '手上还没有茶点。'));
+  }
+  for (const item of held) {
+    const line = el('div', 'gift-held');
+    line.append(el('span', '', (item.icon || '🍵') + ' ' + (item.name || item.id) + ' × ' + item.count));
+    const eat = btn(GIFT_VERB[item.kind] || '喝掉', () => { void consumeGift(item); }, { ghost: true, small: true });
+    line.append(eat);
+    giftHeldList.append(line);
+  }
+}
+
+/** 收礼人下拉：这一间除自己以外的人，按名字送（服务器认名字也认 id）。 */
+function renderGiftTargets() {
+  if (!giftTarget) return;
+  const mine = state.snap && state.snap.seat ? state.snap.seat.id : '';
+  const seats = (state.snap && state.snap.seats ? state.snap.seats : [])
+    .filter((seat) => seat.id !== mine && seat.kind !== 'observer');
+  const before = giftTarget.value;
+  clear(giftTarget);
+  for (const seat of seats) {
+    const option = el('option', '', seat.name);
+    option.value = seat.name;
+    giftTarget.append(option);
+  }
+  const keep = seats.some((seat) => seat.name === before);
+  giftTarget.value = keep ? before : (seats[0] ? seats[0].name : '');
+  const ready = seats.length > 0 && (state.gifts || []).length > 0;
+  giftSend.disabled = !ready || state.giftBusy;
+  if (!seats.length) giftStatus.textContent = '这一间还没有别人，先把茶点留着。';
+}
+
+async function openGifts() {
+  ensureGiftDialog();
+  renderGifts();
+  renderGiftTargets();
+  if (typeof giftDialog.showModal === 'function') {
+    if (!giftDialog.open) giftDialog.showModal();
+  } else {
+    giftDialog.setAttribute('open', '');
+  }
+  await loadGifts();
+  renderGiftTargets();
+}
+
+async function sendGift() {
+  const to = giftTarget ? giftTarget.value : '';
+  const item = (state.gifts || []).find((entry) => entry.id === giftPicked);
+  if (!to) { showToast('先选一个人', 'bad'); return; }
+  if (!item) { showToast('先选一件茶点', 'bad'); return; }
+  if (state.giftBusy) return;
+  state.giftBusy = true;
+  if (giftSend) giftSend.disabled = true;
+  try {
+    const receipt = await act({ type: 'gift', to, item: item.id, text: giftNote ? giftNote.value.trim() : '' });
+    if (receipt && typeof receipt.notice === 'string') showToast(receipt.notice);
+    if (giftNote) giftNote.value = '';
+    await loadGifts();
+    renderGiftTargets();
+  } catch {
+    /* act 已经弹过错误 */
+  } finally {
+    state.giftBusy = false;
+    if (giftSend) giftSend.disabled = false;
+    renderGiftTargets();
+  }
+}
+
+async function consumeGift(item) {
+  if (!item || state.giftBusy) return;
+  state.giftBusy = true;
+  try {
+    const receipt = await act({ type: 'gift_eat', item: item.id });
+    if (receipt && typeof receipt.notice === 'string') showToast(receipt.notice);
+    await loadGifts();
+  } catch {
+    /* act 已经弹过错误 */
+  } finally {
+    state.giftBusy = false;
+    renderGiftTargets();
+  }
+}
+
 let roomsDialog = null;
 let roomsList = null;
 let roomsStatus = null;
@@ -3502,7 +3690,7 @@ function renderAccess(data) {
 
   const deleteSection = el('section', 'access-section');
   deleteSection.append(el('h3', '', '删除客厅'));
-  deleteSection.append(el('p', 'note', '删除后从目录移除，在场席位和未接受的邀请会失效。历史、身份和筹码保留；有未结束牌桌时不能删除。'));
+  deleteSection.append(el('p', 'note', '删除后从目录移除，在场席位和未接受的邀请会失效。历史、身份和礼物保留；有未结束牌桌时不能删除。'));
   const deleteBtn = btn('删除客厅', () => { void deleteRoom(data.room, deleteBtn); }, {
     danger: true, small: true,
   });
@@ -3659,7 +3847,9 @@ function renderTableInfo() {
   const signup = snap.monopoly && snap.monopoly.signup;
   const names = namesMap();
   ui.infoGame.textContent = table ? (table.label || gameLabel(table.game)) : (signup ? '大富翁（报名）' : '—');
-  ui.infoStake.textContent = table ? (table.stake ? table.stake + ' 枚' : '不押') : '—';
+  ui.infoSeats.textContent = table
+    ? (Array.isArray(table.seats) ? table.seats.length : 0) + ' / ' + (table.capacity || 4)
+    : '—';
   ui.infoStatus.textContent = table
     ? (STATUS_LABELS[table.status] || table.status)
     : (signup ? '报名中' : '空闲');
@@ -3690,7 +3880,7 @@ function renderJoin(message = '') {
     app.append(join);
     return;
   }
-  panel.append(el('p', 'sub', '用自己的席位和 Coo 同桌。你的战绩、筹码和信箱是单独的一份，不会记到她头上。'));
+  panel.append(el('p', 'sub', '用自己的席位和 Coo 同桌。你的战绩、礼物和信箱是单独的一份，不会记到她头上。'));
 
   const nameField = el('div', 'field');
   nameField.append(el('label', '', '你的名字'));

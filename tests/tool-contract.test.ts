@@ -38,7 +38,7 @@ describe('固定九工具与按需参数', () => {
     ['parlor_room', { op: 'visit', params: { to: '另一个厅' } }, 'room'],
     ['parlor_table', { op: 'join', params: { url: 'https://other.example' } }, 'url'],
     ['parlor_table', { op: 'constructor' }, 'op'],
-    ['parlor_gift', { to: '某人', text: '送礼', chips: '100' }, 'chips'],
+    ['parlor_gift', { op: 'send', params: { to: '某人', item: 'longjing', chips: '100' } }, 'chips'],
   ])('错误参数不调用业务操作：%s %j', async (name, args, field) => {
     expect(await call(name, args)).toContain(field);
   });

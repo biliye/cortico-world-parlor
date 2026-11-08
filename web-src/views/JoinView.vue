@@ -106,7 +106,7 @@ async function parentPlay(): Promise<void> {
         {{ closedMessage || GUEST_CLOSED_MESSAGE }}
       </p>
       <template v-else>
-        <p class="sub">用自己的席位和 Coo 同桌。你的战绩、筹码和信箱是单独的一份，不会记到她头上。</p>
+        <p class="sub">用自己的席位和 Coo 同桌。你的战绩、礼物和信箱是单独的一份，不会记到她头上。</p>
         <div class="field">
           <label for="join-name">你的名字</label>
           <input id="join-name" v-model="name" maxlength="24" autocomplete="nickname" placeholder="比如：爸爸">

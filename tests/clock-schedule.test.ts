@@ -75,21 +75,20 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     expect(before.deadline_at).toBe(fixture.clock.now + 45_000);
 
     fixture.clock.now += 1_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     expect(await tableRow(fixture.db, tableId)).toEqual(before);
 
     fixture.clock.now += 44_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const after = await tableRow(fixture.db, tableId);
     expect(after.revision).toBeGreaterThan(before.revision);
     expect(after.updated_at).toBe(fixture.clock.now);
   });
 
-  it('客厅的下一拍就是桌上最紧的那个截止（比补给扫描还紧时）', async () => {
+  it('客厅的下一拍就是桌上最紧的那个截止', async () => {
     fixture = await setup(10_000);
     const tableId = await startDice(fixture);
-    // 先让时钟走一拍（第一次补给扫描会把补给拍排到 30 秒后）。
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const row = await tableRow(fixture.db, tableId);
     expect(await fixture.host.nextWakeAt(fixture.clock.now)).toBe(row.deadline_at);
   });
@@ -98,14 +97,14 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     fixture = await setup();
     await fixture.host.join(A, { name: '阿岚' });
     const opened = await fixture.host.openTable(A, { game: 'dice' }, 'open-2');
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const wake = await fixture.host.nextWakeAt(fixture.clock.now) as number;
-    // 默认开桌等人 10 分钟；中间还有一次 30 秒的补给扫描，所以睡不到开桌那一刻。
+    // 默认开桌等人 10 分钟；没有补给扫描了，下一拍就是开桌截止本身。
     expect(wake).toBeGreaterThan(fixture.clock.now);
     expect(wake).toBeLessThanOrEqual(fixture.clock.now + 10 * 60_000);
     // 两分钟后 tick：还没到点，桌子还在。
     fixture.clock.now += 2 * 60_000;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     expect(await fixture.host.tablePublic(undefined, A)).toBeTruthy();
     expect(opened.tableId).toBeTruthy();
   });
@@ -118,17 +117,17 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     const promised = await fixture.host.promise(A, '小满', '二十秒内收桌子', due);
     // 对方答应之后，到期没结才会追加 default。
     await fixture.host.respond(B, promised.entry.id, 'accept');
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const wake = await fixture.host.nextWakeAt(fixture.clock.now);
     expect(wake === undefined ? Infinity : wake).toBeGreaterThan(due);
     // 还没到点：账本里不该有 default
     fixture.clock.now = due - 1;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const early = await fixture.db.prepare("SELECT COUNT(*) AS n FROM ledger_entries WHERE kind = 'default'").get() as { n: number };
     expect(early.n).toBe(0);
     // 到点：追加一条 default
     fixture.clock.now = due;
-    await fixture.host.tickClock(fixture.clock.now);
+    await fixture.host.tickClock();
     const late = await fixture.db.prepare("SELECT COUNT(*) AS n FROM ledger_entries WHERE kind = 'default'").get() as { n: number };
     expect(late.n).toBe(0);
   });
