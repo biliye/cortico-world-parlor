@@ -13,7 +13,8 @@ import { dirname } from 'node:path';
 import { isCooId } from './ledger.ts';
 
 export const ACCOUNT_FILE = 'accounts.json';
-export const DEFAULT_ACCOUNT_LIMIT = 500;
+/** 与 coo-account-db.ts 的 DEFAULT_ACCOUNT_LIMIT 保持一致（JSON 原型与真库同一口径）。 */
+export const DEFAULT_ACCOUNT_LIMIT = 5000;
 export const MAX_DISPLAY_NAME = 24;
 
 const OWNER_KEY_BYTES = 24;
@@ -147,7 +148,7 @@ export class AccountStore {
     if (!isCooId(cooId)) throw new Error('cooId 格式不对');
     const existing = this.byCooId(cooId);
     if (existing) return { account: existing, created: false };
-    if (this.accounts.length >= this.limit) throw new Error('家长账户表满了');
+    if (this.accounts.length >= this.limit) throw new Error(`客厅的家长账户已满（上限 ${this.limit} 位家人），暂时接待不了新的家人；请联系房主扩容`);
 
     const ownerKey = makeOwnerKey();
     const account: ParentAccount = {

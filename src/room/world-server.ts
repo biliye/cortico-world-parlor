@@ -17,7 +17,7 @@ import { gzipSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
-import { CooAccountDb, type ParentAccount } from './coo-account-db.ts';
+import { AccountLimitError, CooAccountDb, parentAccountName, type ParentAccount } from './coo-account-db.ts';
 import { migrate, withTransaction, type Db } from './db.ts';
 import { openStorage, type StorageKind } from './storage/open.ts';
 import { HALL_CAPACITY } from './schema.ts';
@@ -71,6 +71,8 @@ export interface WorldServerOptions {
   allowGuestJoin?: boolean;
   /** 真人席位离线多少小时后释放；默认 6，0 = 关。 */
   offlineReleaseHours?: number;
+  /** 家长账户上限（应用层容量，不是库级约束）；默认 DEFAULT_ACCOUNT_LIMIT。 */
+  accountLimit?: number;
   /** Coo 的 pet 席位离线多少小时后释放；默认 6，0 = 关。 */
   cooOfflineReleaseHours?: number;
   cooIdleMinutes?: number;
@@ -200,6 +202,8 @@ const headerValue = (req: IncomingMessage, name: string): string => {
 
 const statusOf = (error: unknown): number => {
   if (error instanceof HttpError) return error.status;
+  // 账户表满 = 服务端容量问题，回 503（可等房主扩容后再试），不要报成 500「服务端出错」。
+  if (error instanceof AccountLimitError) return 503;
   if (error instanceof HostError) {
     if (error.code === 'not_found') return 404;
     if (error.code === 'forbidden') return 403;
@@ -312,7 +316,10 @@ export class WorldServer {
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
-    this.coo = new CooAccountDb(this.db, { now: this.now });
+    this.coo = new CooAccountDb(this.db, {
+      now: this.now,
+      ...(options.accountLimit !== undefined ? { limit: options.accountLimit } : {}),
+    });
     this.identityAuthority = options.identityAuthority === 'self' ? 'self'
       : options.identityAuthority ? identityOrigin(options.identityAuthority) : undefined;
     this.publicUrl = options.publicUrl ? identityOrigin(options.publicUrl) : undefined;
@@ -1861,6 +1868,10 @@ export class WorldServer {
       // second end event forever and lose body-based invite/name/kind/tier.
       roomId = relocation?.return_room_id || roomId;
       await this.assertRoomEntry(roomId, cooId);
+      // 先建/取家长账户，再落座：账户表满时直接 503，**不留下一个没人认领的席位**
+      // （老顺序是先落座后建账户，失败一次就多一排僵尸席位，客户端退避重连还会继续加）。
+      // 建账户时席位还不存在，所以把「<席位名>的家长」直接算好传进去，默认名保持原样。
+      const account = await this.coo.ensureAccount(cooId, name ? parentAccountName(name) : undefined);
       const host = await this.host(roomId);
       // 同一身份丢了令牌时续用原席位；身份认证与房间准入已在上面核过。
       const joined = await host.seatOf(cooId) ? await host.reissueSeatToken(cooId) : await host.join(cooId, {
@@ -1870,7 +1881,6 @@ export class WorldServer {
       });
       await this.db.prepare('UPDATE coo_sessions SET return_room_id=NULL WHERE coo_id=?').run(cooId);
       this.pokeClock();
-      const account = await this.coo.ensureAccount(cooId);
       json(res, 200, {
         room: roomId,
         ownerToken: '',
