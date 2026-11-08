@@ -99,9 +99,9 @@ describe('时钟按需调度：没到点的桌不推进', () => {
     const opened = await fixture.host.openTable(A, { game: 'dice' }, 'open-2');
     await fixture.host.tickClock();
     const wake = await fixture.host.nextWakeAt(fixture.clock.now) as number;
-    // 默认开桌等人 10 分钟；没有补给扫描了，下一拍就是开桌截止本身。
+    // 默认开桌等人 30 分钟（table-host 的 OPEN_MS）；没有补给扫描了，下一拍就是开桌截止本身。
     expect(wake).toBeGreaterThan(fixture.clock.now);
-    expect(wake).toBeLessThanOrEqual(fixture.clock.now + 10 * 60_000);
+    expect(wake).toBeLessThanOrEqual(fixture.clock.now + 30 * 60_000);
     // 两分钟后 tick：还没到点，桌子还在。
     fixture.clock.now += 2 * 60_000;
     await fixture.host.tickClock();

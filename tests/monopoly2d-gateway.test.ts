@@ -163,12 +163,8 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
       { token: tokens.D, cooId: D },
     ];
 
-    // 无押注玩法：直接 HTTP 也拦住，不靠网页藏按钮。
-    const staked = await act(app, tokens.A, { type: 'table_open', game: 'monopoly2d', stake: 5, requestId: 'm2d-stake' });
-    expect(staked.status).toBe(400);
-    expect(JSON.stringify(staked.body)).toContain('局内金币');
-
-    const opened = await act(app, tokens.A, { type: 'table_open', game: 'monopoly2d', requestId: 'm2d-open' });
+    // 0.38.0 起押注整条下线：不再有「局内金币」这类拦截，stake 字段即使出现也只是被忽略。
+    const opened = await act(app, tokens.A, { type: 'table_open', game: 'monopoly2d', stake: 5, requestId: 'm2d-open' });
     expect(opened.status).toBe(200);
     const table = opened.body.tableId as string;
     for (const [index, token] of [tokens.B, tokens.C, tokens.D].entries()) {

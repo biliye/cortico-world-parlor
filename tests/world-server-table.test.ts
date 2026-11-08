@@ -326,14 +326,25 @@ describe('WorldServer 社交与回放', () => {
     const b = await enter(app, B, '小满');
     const c = await enter(app, C, '小柚');
 
-    const gifted = await act(app, a, { type: 'gift', to: '小满', text: '一点心意', chips: 10 });
+    // 0.38.0 起礼物是物件：item 从茶单里选，不再有筹码。
+    const gifted = await act(app, a, { type: 'gift', to: '小满', item: 'longjing', text: '一点心意' });
     expect(gifted.status).toBe(200);
     expect((gifted.body.delivered as { to: string }[])[0].to).toBe('小满');
+    expect(String(gifted.body.notice)).toContain('龙井');
 
-    const bSnapshot = await get(app.url, '/v1/room', b);
-    expect((bSnapshot.body.ledger as { chips: number }).chips).toBe(1010);
-    const cSnapshot = await get(app.url, '/v1/room', c);
-    expect((cSnapshot.body.ledger as { chips: number }).chips).toBe(1000);
+    // 收礼的人手上多一份；第三人手上没有。
+    const bStock = await get(app.url, '/v1/rooms/lobby/gifts?mine=1', b);
+    expect(bStock.status, JSON.stringify(bStock.body)).toBe(200);
+    expect(bStock.body.items as { id: string; count: number }[]).toContainEqual(expect.objectContaining({ id: 'longjing', count: 1 }));
+    const cStock = await get(app.url, '/v1/rooms/lobby/gifts?mine=1', c);
+    expect(cStock.body.items as unknown[]).toHaveLength(0);
+
+    // 喝掉：存货清零，回执带一句纯文字运气提示，运气不写进任何数值。
+    const eaten = await act(app, b, { type: 'gift_eat', item: 'longjing' });
+    expect(eaten.status).toBe(200);
+    expect(String(eaten.body.notice)).toContain('运气');
+    expect((await get(app.url, '/v1/rooms/lobby/gifts?mine=1', b)).body.items as unknown[]).toHaveLength(0);
+    expect((await act(app, b, { type: 'gift_eat', item: 'longjing' })).status).toBe(400);
 
     const bMail = await get(app.url, '/v1/mail?peek=1', b);
     expect((bMail.body.items as { text: string }[]).some((item) => item.text.includes('一点心意'))).toBe(true);
@@ -341,11 +352,11 @@ describe('WorldServer 社交与回放', () => {
     expect((cMail.body.items as { text: string }[]).some((item) => item.text.includes('一点心意'))).toBe(false);
   });
 
-  it('承诺与回应返回停用，不修改筹码或投递新承诺', async () => {
+  it('承诺与回应返回停用，账本里也不再有任何余额', async () => {
     const app=await start(); const a=await enter(app,A,'阿岚'); const b=await enter(app,B,'小满');
     expect((await act(app,a,{type:'promise',to:'小满',text:'借你20',chips:20})).status).toBe(410);
     expect((await act(app,b,{type:'respond',id:'old-promise',action:'done'})).status).toBe(410);
-    for (const token of [a,b]) expect(((await get(app.url,'/v1/room',token)).body.ledger as {chips:number}).chips).toBe(1000);
+    for (const token of [a,b]) expect('chips' in ((await get(app.url,'/v1/room',token)).body.ledger as Record<string,unknown>)).toBe(false);
   });
 
   it('回放：公开事件人人有，私聊只有当事人有', async () => {

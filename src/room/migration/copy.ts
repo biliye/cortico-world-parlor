@@ -85,7 +85,7 @@ export const copyAll = async (
   for (const table of MIGRATION_TABLES) {
     const declared = audit.counts[table.name];
     if (declared === undefined) { counts[table.name] = 0; continue; }
-    const columns_ = sourceColumnsOf(audit, table.name);
+    const columns_ = sourceColumnsOf(audit, table.name).filter((column) => (columns.get(table.name) ?? []).includes(column));
     if (columns_.length === 0) { counts[table.name] = 0; continue; }
     const jsonSet = new Set(table.json ?? []);
     const statement = source.prepare(

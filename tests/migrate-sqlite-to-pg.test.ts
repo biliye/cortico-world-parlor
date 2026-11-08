@@ -193,11 +193,10 @@ describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
     const file = join(dir!, 'parlor.db');
     const { db, tableId } = await seedSource(file);
     const before = {
-      balance: (await db.prepare(
-        `SELECT COALESCE(SUM(CASE WHEN to_kind = 'coo' AND to_coo_id = ? THEN amount ELSE 0 END), 0)
-              - COALESCE(SUM(CASE WHEN from_kind = 'coo' AND from_coo_id = ? THEN amount ELSE 0 END), 0) AS v
-           FROM ledger_transfers`,
-      ).get(A, A) as { v: number }).v,
+      // 0.38.0 起没有余额可核：改成数这个人的账本条目（送礼、承诺、牌局都还在搬）。
+      ledger: (await db.prepare(
+        'SELECT COUNT(*) AS n FROM ledger_entries WHERE from_coo_id = ? OR to_coo_id = ?',
+      ).get(A, A) as { n: number }).n,
       mail: (await db.prepare('SELECT COUNT(*) AS n FROM mail WHERE coo_id = ?').get(A) as { n: number }).n,
     };
     await db.close();
@@ -217,7 +216,7 @@ describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
     expect(report.sequences?.['mail.seq']).toBeGreaterThan(0);
     expect(report.runId).toBeTruthy();
     expect(tableId).toContain('t-');
-    expect(before.balance).toBeGreaterThan(0);
+    expect(before.ledger).toBeGreaterThan(0);
     expect(before.mail).toBeGreaterThan(0);
   });
 

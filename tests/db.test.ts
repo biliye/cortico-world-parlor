@@ -266,17 +266,14 @@ describe('SQLite 地基', () => {
     expect(row.kind).toBe('invite');
   });
 
-  it('账本 grant 只发一次；refill 可另记', async () => {
-    await coo('coo-aaaaaaaa');
-    await room('lobby', 'coo-aaaaaaaa');
-    const grant = async (id: string, refill: number): Promise<void> => {
-      await db.prepare(
-        'INSERT INTO ledger_entries(id, ts, room_id, kind, visibility, from_kind, to_kind, to_coo_id, text, is_refill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(id, 1, 'lobby', 'grant', 'private', 'room', 'coo', 'coo-aaaaaaaa', '筹码', refill);
-    };
-    await grant('g1', 0);
-    await expect(grant('g2', 0)).rejects.toThrow(/UNIQUE|duplicate key/i);
-    await expect(grant('g3', 1)).resolves.not.toThrow();
+  it('schema 7：筹码时代的表与列都不在了', async () => {
+    const rel = await db.prepare("SELECT to_regclass('public.ledger_transfers') AS rel").get() as { rel: string | null };
+    expect(rel.rel).toBeNull();
+    const pgColumns = async (table: string): Promise<string[]> => (
+      (await db.prepare('SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?').all(table)) as { name: string }[]
+    ).map((row) => row.name);
+    expect(await pgColumns('ledger_entries')).not.toContain('is_refill');
+    expect(await pgColumns('tables')).not.toContain('stake');
   });
 });
 

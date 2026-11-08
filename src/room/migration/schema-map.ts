@@ -48,7 +48,6 @@ export const MIGRATION_TABLES: TableMap[] = [
   },
   { name: 'ledger_participants', key: ['entry_id', 'coo_id'] },
   { name: 'ledger_winners', key: ['entry_id', 'coo_id'] },
-  { name: 'ledger_transfers', key: ['id'], identity: 'id' },
   { name: 'mail', key: ['seq'], identity: 'seq' },
   { name: 'tables', key: ['id'], json: ['state_json'] },
   { name: 'table_seats', key: ['table_id', 'seat_id'] },
@@ -91,11 +90,35 @@ export const targetColumns = (): Map<string, string[]> => {
     }
     out.set(name, columns);
   }
+  // 迁移之后的真实形状：已下线的表不出现，已下线的列不算目标列。
+  for (const name of [...out.keys()]) {
+    if (OBSOLETE_TABLES.has(name)) { out.delete(name); continue; }
+    const drop = OBSOLETE_COLUMNS[name];
+    if (drop?.length) out.set(name, (out.get(name) ?? []).filter((column) => !drop.includes(column)));
+  }
   return out;
 };
 
 /** 表名 → 映射。 */
 export const TABLE_BY_NAME = new Map(MIGRATION_TABLES.map((table) => [table.name, table]));
+
+/**
+ * 已经下线、不搬的表：老来源库（schema ≤ 8）里还留着，允许存在但不再复制、也不再核验。
+ * 0.38.0 起没有任何余额，`ledger_transfers` 在 PG 侧由迁移 7 删除。
+ */
+export const OBSOLETE_TABLES: ReadonlySet<string> = new Set(['ledger_transfers']);
+
+/**
+ * 已经下线、但老来源库可能仍然保留的列。
+ *
+ * SQLite 侧故意不删 `tables.stake` / `ledger_entries.is_refill`（带索引的列 DROP 不稳），
+ * PG 侧由迁移 7 删掉。两边就此不同步，所以比对与搬运都按这份清单把列排除掉：
+ * 既不报「目标缺列」，也不把这两列塞进 INSERT。
+ */
+export const OBSOLETE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  ledger_entries: ['is_refill'],
+  tables: ['stake'],
+};
 
 /**
  * 逐行过滤：返回 true = 这一行不搬。

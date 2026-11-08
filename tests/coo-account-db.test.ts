@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withTransaction, type Db } from '../src/room/db.ts';
 import {
+  AccountLimitError,
   CooAccountDb,
   type CooKind,
 } from '../src/room/coo-account-db.ts';
@@ -243,7 +244,10 @@ describe('持久化、事务与上限', () => {
   it('账户上限：满了拒绝，不留下半截数据', async () => {
     const limited = new CooAccountDb(db, { now: () => 1_000, limit: 1 });
     await limited.ensureAccount(COO);
-    await expect(limited.ensureAccount(COO_B)).rejects.toThrow(/满了/);
+    // 单独的错误类型：网关据此回 503（容量问题）而不是 500（服务端出错）。
+    await expect(limited.ensureAccount(COO_B)).rejects.toBeInstanceOf(AccountLimitError);
+    // 报错说清楚上限与下一步，别再只丢一句「表满了」。
+    await expect(limited.ensureAccount(COO_B)).rejects.toThrow(/上限 1 位家人.*扩容/);
     expect(await limited.count()).toBe(1);
     expect(await limited.findCoo(COO_B)).toBeUndefined();
   });

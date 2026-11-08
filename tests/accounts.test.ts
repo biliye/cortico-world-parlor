@@ -116,7 +116,7 @@ describe('家长账户与全局 ownerKey', () => {
     const store = new AccountStore({ limit: 2 });
     store.ensureAccount(COO);
     store.ensureAccount('d3953d2f-0000-4000-8000-000000000002');
-    expect(() => store.ensureAccount('d3953d2f-0000-4000-8000-000000000003')).toThrow(/满了/);
+    expect(() => store.ensureAccount('d3953d2f-0000-4000-8000-000000000003')).toThrow(/已满（上限 2 位家人）/);
   });
 
   it('对外的账户视图不带 ownerKeyHash', () => {

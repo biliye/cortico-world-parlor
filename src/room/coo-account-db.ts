@@ -14,7 +14,29 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { migrate, withTransaction, type Db } from './db.ts';
 import { isCooId, isCooSecret, type ClaimResult } from './ledger.ts';
 
-export const DEFAULT_ACCOUNT_LIMIT = 500;
+/**
+ * 家长账户的默认容量。
+ *
+ * 这是**应用层**的一个上限（accounts 表没有库级 CHECK），只用来兜住异常增长；
+ * 0.37.5 及以前是 500，把自己钉死在「一个客厅最多 500 位家人」上——Coo 身份 882 个、
+ * 账户已经 500 条、连续多天新增 15～131 条，于是新的 Coo 全都进不来。
+ * 现在按「够用很多年」取 5000，并允许用 `--account-limit` / `PARLOR_ACCOUNT_LIMIT` 覆盖。
+ */
+export const DEFAULT_ACCOUNT_LIMIT = 5000;
+
+/**
+ * 账户表满：这是**容量**问题，不是请求写错了。
+ * 单独一个类型，网关才能回 503 并给一句人话，而不是把内部文案原样 500 弹给用户。
+ */
+export class AccountLimitError extends Error {
+  readonly limit: number;
+
+  constructor(limit: number) {
+    super(`客厅的家长账户已满（上限 ${limit} 位家人），暂时接待不了新的家人；请联系房主扩容`);
+    this.name = 'AccountLimitError';
+    this.limit = limit;
+  }
+}
 export const MAX_DISPLAY_NAME = 24;
 /** ownerKey 是 24 字节随机；SHA-256 足够，不拿它当低熵密码。 */
 export const OWNER_KEY_BYTES = 24;
@@ -113,6 +135,17 @@ const cleanName = (value: unknown): string => (
 );
 
 const hashKey = (key: string): string => createHash('sha256').update(key).digest('hex');
+
+/**
+ * 默认账户名的唯一出处：「<孩子名>的家长」。
+ *
+ * 建账户的时机可能早于落座（join 先建账户再落座，避免留下僵尸席位），
+ * 那时库里还查不到席位名，所以调用方要把孩子名直接传进来，走同一个约定。
+ */
+export const parentAccountName = (child: string): string => {
+  const name = child.trim();
+  return name ? cleanName(`${name}的家长`) : '家长';
+};
 
 const sameHash = (a: string, b: string): boolean => {
   if (!HEX64.test(a) || !HEX64.test(b)) return false;
@@ -329,7 +362,7 @@ export class CooAccountDb {
     return await atomically(this.db, async () => {
       const existing = await this.byCooId(cooId);
       if (existing) return { account: existing, created: false };
-      if (await this.count() >= this.limit) throw new Error('家长账户表满了');
+      if (await this.count() >= this.limit) throw new AccountLimitError(this.limit);
 
       const name = cleanName(displayName) || (await this.defaultAccountName(cooId));
       const now = this.now();
@@ -363,7 +396,7 @@ export class CooAccountDb {
     ).get(cooId) as { name: string } | undefined;
     const coo = await this.cooRow(cooId);
     const child = (seat?.name || coo?.display_name || '').trim();
-    return child ? cleanName(`${child}的家长`) : '家长';
+    return parentAccountName(child);
   }
 
   /** 用 ownerKey 找账户；找不到/格式不对/账户或 coo 被禁用返回 null。 */

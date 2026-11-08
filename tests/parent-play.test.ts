@@ -114,7 +114,8 @@ describe('家长下场', () => {
     const snap = await getWith(app.url, '/v1/room', { authorization: `Bearer ${firstToken}` });
     expect(snap.status).toBe(200);
     expect((snap.body.seat as { id: string }).id).toBe(playerSeat.id);
-    expect((snap.body.ledger as { chips: number }).chips).toBe(1000);
+    // 0.38.0 起没有筹码：快照里只剩战绩，不再有余额字段。
+    expect('chips' in (snap.body.ledger as Record<string, unknown>)).toBe(false);
 
     // 第二次下场：同一个玩家身份，换一张新令牌；旧令牌作废。
     const second = await post(app.url, '/v1/parent/play', {}, { cookie });

@@ -7,7 +7,8 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { ADDED_TABLE_VERSIONS, MIGRATION_TABLES, targetColumns } from './schema-map.ts';
+import { ADDED_TABLE_VERSIONS, MIGRATION_TABLES, OBSOLETE_COLUMNS, OBSOLETE_TABLES, targetColumns } from './schema-map.ts';
+import { SQLITE_SCHEMA_VERSION } from '../storage/migrate.ts';
 
 // Vite 5 的 builtin 列表还不认识 node:sqlite，走 getBuiltinModule 绕过打包器解析。
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
@@ -79,7 +80,7 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
     if (!present.has(table.name) && !ADDED_TABLE_VERSIONS[table.name]) issues.push({ code: 'missing_table', table: table.name, detail: '来源库没有这张表' });
   }
   for (const name of present) {
-    if (!expected.has(name)) issues.push({ code: 'unknown_table', table: name, detail: '来源库多出一张迁移工具不认识的表' });
+    if (!expected.has(name) && !OBSOLETE_TABLES.has(name)) issues.push({ code: 'unknown_table', table: name, detail: '来源库多出一张迁移工具不认识的表' });
   }
 
   const columns: Record<string, string[]> = {};
@@ -88,7 +89,8 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
     const actual = sourceColumns(db, table.name);
     columns[table.name] = actual;
     const want = expected.get(table.name) ?? [];
-    const extra = actual.filter((column) => !want.includes(column));
+    const drop = OBSOLETE_COLUMNS[table.name] ?? [];
+    const extra = actual.filter((column) => !want.includes(column) && !drop.includes(column));
     const missing = want.filter((column) => !actual.includes(column));
     if (extra.length) issues.push({ code: 'unknown_column', table: table.name, detail: `多出列：${extra.join(', ')}` });
     if (missing.length) issues.push({ code: 'missing_column', table: table.name, detail: `缺列：${missing.join(', ')}` });
@@ -103,8 +105,8 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
   for (const [name, addedIn] of Object.entries(ADDED_TABLE_VERSIONS)) {
     if (schemaVersion >= addedIn && !present.has(name)) issues.push({ code: 'missing_table', table: name, detail: '来源库没有这张表' });
   }
-  if (schemaVersion > 8) {
-    issues.push({ code: 'newer_schema_version', detail: `来源 schema_version=${schemaVersion}，比这一版认识的 8 更新` });
+  if (schemaVersion > SQLITE_SCHEMA_VERSION) {
+    issues.push({ code: 'newer_schema_version', detail: `来源 schema_version=${schemaVersion}，比这一版认识的 ${SQLITE_SCHEMA_VERSION} 更新` });
   }
 
   // —— 外键完整性 ——

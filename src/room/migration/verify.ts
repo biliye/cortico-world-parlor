@@ -4,7 +4,7 @@
  * 两层：
  * 1. 逐行摘要：两边按主键同序读出来，把每一行规范成同一个字符串（JSON 按键排序、
  *    数字统一成字符串），算一条 sha256。行数一样不代表内容一样，这一层才管内容。
- * 2. 语义对照：余额、胜负、未读、活跃席位、房间 seq、事件受众、回执、身份号与票据——
+ * 2. 语义对照：胜负、未读、活跃席位、房间 seq、事件受众、回执、身份号与票据——
  *    每条都写成同一句可移植 SQL，两边各跑一次，逐项比。差异打印成「谁、哪一项、两边各是多少」，
  *    而不是只丢一句「不一致」。
  */
@@ -203,19 +203,10 @@ export const digestTarget = async (
 
 /**
  * 语义对照：每条是一句可移植 SQL，返回 (k, v)；两边各跑一遍，逐项比。
- * 这些是「人会去看的东西」——账本余额、战绩、未读、席位、房间进度、回执、身份号。
+ * 这些是「人会去看的东西」——战绩、未读、席位、房间进度、回执、身份号。
+ * 0.38.0 起没有余额，原来的「账本余额（按身份）」对照随 `ledger_transfers` 一起删除。
  */
 export const CONTRAST_CHECKS: ContrastCheck[] = [
-  {
-    name: '账本余额（按身份）',
-    sql: `SELECT k, SUM(v) AS v FROM (
-            SELECT to_coo_id AS k, amount AS v FROM ledger_transfers
-             WHERE to_kind = 'coo' AND to_coo_id IS NOT NULL
-            UNION ALL
-            SELECT from_coo_id AS k, -amount AS v FROM ledger_transfers
-             WHERE from_kind = 'coo' AND from_coo_id IS NOT NULL
-          ) GROUP BY k ORDER BY k`,
-  },
   {
     name: '局数与胜场（按身份）',
     sql: `SELECT p.coo_id AS k, COUNT(*) AS v

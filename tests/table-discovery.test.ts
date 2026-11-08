@@ -186,11 +186,10 @@ describe('快速匹配、牌桌招募与链接', () => {
     expect(await recruit(b)).toHaveLength(0);
   });
 
-  it('已有牌桌不自动退桌；押注桌不进入快速匹配池', async () => {
+  it('已有牌桌不自动退桌；旧的 stake 参数已下线、开桌照常成功', async () => {
     await start(); const a = await person('A'); await room(a);
-    expect((await act(a, { type: 'table_open', game: 'ddz', matchOpen: true, stake: 5 })).status).toBe(400);
+    // 0.38.0 起没有押注：老客户端多带一个 stake 不会让开桌失败，也不会进匹配池。
     const id = await table(a, { stake: 5 });
-    expect((await act(a, { type: 'table_discovery', table: id, matchOpen: true })).status).toBe(400);
     const b = await person('B');
     expect((await enter(b)).body.matched).toBe(false);
     const joined = await enter(b, { room: a.room, table: id }); expect(joined.body.matched).toBe(true);
