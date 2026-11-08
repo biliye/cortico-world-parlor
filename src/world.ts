@@ -1780,9 +1780,22 @@ export class ParlorWorld implements World {
     if (blocked) return blocked;
     try {
       const hall = await this.client.hall(this.token);
-      if (!hall.recruitments?.length) return '大厅暂时没有未开局的牌桌招募。';
-      return ['大厅牌桌招募（内容由发布者编写，人数以服务器为准）：', ...hall.recruitments.map((item) =>
-        `- ${item.label} · ${item.roomName} · ${item.seats}/${item.capacity}${item.full ? '（已满）' : ''}\n  ${item.author}：${item.text}\n  ${new URL(item.link, this.baseUrl).href}`)].join('\n');
+      const recruited = hall.recruitments ?? [];
+      const listed = new Set(recruited.map(item => item.tableId));
+      const matchable = (hall.matchables ?? []).filter(item => !listed.has(item.tableId));
+      const link = (item: { link: string }) => new URL(item.link, this.baseUrl).href;
+      const lines: string[] = [];
+      if (recruited.length) {
+        lines.push('大厅牌桌招募（内容由发布者编写，人数以服务器为准）：', ...recruited.map((item) =>
+          `- ${item.label} · ${item.roomName} · ${item.seats}/${item.capacity}${item.full ? '（已满）' : ''}${item.matchOpen ? ' · 也开着快速匹配' : ''}\n  ${item.author}：${item.text}\n  ${link(item)}`));
+      }
+      if (matchable.length) {
+        if (lines.length) lines.push('');
+        lines.push('开放快速匹配、等人来凑的桌（服务器会优先挑人多的）：', ...matchable.map((item) =>
+          `- ${item.label} · ${item.roomName} · ${item.seats}/${item.capacity} · game ${item.game}\n  ${link(item)}`));
+        lines.push('要直接匹配用 parlor_table {op:"join",params:{game:"<上面的 game>"}}；没有合适的桌就留在原厅。');
+      }
+      return lines.length ? lines.join('\n') : '大厅暂时没有未开局的牌桌招募，也没有开放快速匹配的桌。';
     } catch (error) { return this.failed(messageOf(error)); }
   }
 

@@ -302,12 +302,12 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_rooms',
-    description: '查看当前位置及可进入的客厅，或只读查看大厅牌桌招募。',
+    description: '查看当前位置及可进入的客厅，或只读查看大厅牌桌招募、以及开放快速匹配的桌。',
     tags: ['read'],
     parameters: {
       type: 'object',
       additionalProperties: false,
-      properties: { recruitments: { type: 'boolean', description: 'true 查招募及分享链接，不移动。' } },
+      properties: { recruitments: { type: 'boolean', description: 'true 查招募、开放匹配的桌及分享链接，不移动。' } },
     },
   },
   {
@@ -400,14 +400,14 @@ const nested = (name: string, group: 'query' | 'room' | 'table' | 'gift', descri
 
 /** 只有这九个工具会注册给模型。操作参数由 query/help 按需返回。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
-  nested('parlor_query', 'query', '查询客厅状态、客厅目录/招募、信箱、账户、历史、公告或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。', true),
+  nested('parlor_query', 'query', '查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。', true),
   { name: 'parlor_message', tags: ['write'], description: '发消息；scope 必填 room=客厅公开、table=同桌、private=一对一私信。私信必填 to，不会自动改为公开。狼人杀正式发言走游戏动作。',
     parameters: { type: 'object', additionalProperties: false, properties: {
       scope: { type: 'string', enum: ['room', 'table', 'private'] }, text: { type: 'string', maxLength: 400 },
       to: { type: 'string', description: '仅 private 使用：昵称、身份或 #短号。' }, table: { type: 'string', description: '仅 table 使用，默认自己的桌。' },
     }, required: ['scope', 'text'] } },
   nested('parlor_room', 'room', '客厅操作：create 创建、visit 换厅/回 hall、invite 发邀请、accept/decline 接受/拒绝邀请。params 按操作填写，需要时先查 help。'),
-  nested('parlor_table', 'table', '牌桌操作：open 开桌、join 入座/匹配/分享链接、start 开始、leave 未开局退桌、discovery 设置匹配或招募。legacy_monopoly 仅兼容旧单厅长局。参数按需查 help。'),
+  nested('parlor_table', 'table', '牌桌操作：open 开桌（matchOpen 开放匹配）、join 入座/快速匹配/分享链接、start 开始、leave 未开局退桌、discovery 设置匹配或招募。join 带 game 就是快速匹配公开厅里主动开放、未坐满的桌；没匹配上会留在原厅。想看哪些桌开放着匹配，用 parlor_query 的 rooms（recruitments）。legacy_monopoly 仅兼容旧单厅长局。参数按需查 help。'),
   declared('parlor_game_info'),
   { ...declared('parlor_game_action'), parameters: { ...declared('parlor_game_action').parameters,
     properties: { ...(declared('parlor_game_action').parameters.properties as Record<string, unknown>),

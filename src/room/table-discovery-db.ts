@@ -33,6 +33,8 @@ export interface TableRecruitment {
   author: string;
   updatedAt: number;
   link: string;
+  /** 这张桌是否也开着快速匹配；招募与匹配相互独立，可以同时为真。 */
+  matchOpen: boolean;
 }
 
 export interface TableEntryInput {

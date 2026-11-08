@@ -316,6 +316,8 @@ export interface MeView {
 /** 大厅：谁在大厅、公开目录、我在哪。 */
 export interface HallView {
   recruitments?: TableRecruitment[];
+  /** 公开厅里主动开放快速匹配、还没坐满的桌；只给 Coo 挑桌用，网页招募板不读。 */
+  matchables?: TableRecruitment[];
   hall: {
     id: string;
     name: string;
