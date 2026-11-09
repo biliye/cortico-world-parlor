@@ -292,20 +292,37 @@ describe('狼人杀 · 秘密出口矩阵', () => {  it('B1：狼聊暗号与身
     expect(wolfTokens).toHaveLength(3);
     const seatNoById = new Map((await privOf(childToken))!.seats!.map((entry) => [entry.id, entry.seatNo]));
     const wolfSeatNos = wolfTokens.map((token) => seatNoById.get(seatIdOfToken.get(token)!)!);
-    const killTarget = [1, 2, 3, 4, 5, 6, 7, 8, 9].find((no) => !wolfSeatNos.includes(no))!;
+    const killTarget = wolfSeatNos[0];
 
     // 狼交暗号与刀票；正向对照：暗号真的进了狼自己的私视图。
     const wolfPriv = await privOf(wolfTokens[0]);
     expect(wolfPriv!.myMove).toBe('wolf_chat');
+    const client = new ParlorClient(app.url);
+    const wolfActions = async () => {
+      const state = await client.games(wolfTokens[0], { op: 'state', table: tableId }, 'lobby');
+      return (state.availableActions as Array<{ action: string }>).map((entry) => entry.action);
+    };
+    expect(await wolfActions()).toEqual(['wolf_chat', 'wolf_kill']);
     const chat = await act(app, wolfTokens[0], {
       type: 'werewolf_action', windowId: wolfPriv!.windowId, move: 'wolf_chat', text: CODE, requestId: 'b1-chat',
     });
     expect(chat.status, JSON.stringify(chat.body)).toBe(200);
+    expect(await wolfActions()).toEqual(['wolf_chat', 'wolf_kill']);
     const kill = await act(app, wolfTokens[0], {
       type: 'werewolf_action', windowId: wolfPriv!.windowId, move: 'wolf_kill', target: killTarget, requestId: 'b1-kill',
     });
     expect(kill.status, JSON.stringify(kill.body)).toBe(200);
-    expect(JSON.stringify((await privOf(wolfTokens[0]))!.wolfChat)).toContain(CODE);
+    expect(await wolfActions()).toEqual(['wolf_chat']);
+    const secondCode = '交票之后再对一次暗号';
+    const secondBody = {
+      type: 'game_action', table: tableId, action: 'wolf_chat',
+      params: { windowId: wolfPriv!.windowId, text: secondCode }, requestId: 'b1-chat-2',
+    };
+    const second = await act(app, wolfTokens[0], secondBody);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect((await act(app, wolfTokens[0], secondBody)).body).toEqual(second.body);
+    expect(await wolfActions()).toEqual([]);
+    expect((await privOf(wolfTokens[1]))!.wolfChat?.map((entry) => entry.text)).toEqual([CODE, secondCode]);
 
     // 非狼读者：优先村民。断言口径：暗号绝不出现；狼专属字段（狼聊/刀票/队友/锁定刀口）绝不出现；
     // role 字段只允许读者自己的身份——服务端把每个席位自己的身份写进它自己的唤醒事件，这是设计内行为。
@@ -314,7 +331,9 @@ describe('狼人杀 · 秘密出口矩阵', () => {  it('B1：狼聊暗号与身
     const readerRole = roleOfToken.get(reader)!;
     const assertNoSecret = (blob: string, label: string) => {
       expect(blob, `${label}：读到了狼聊暗号`).not.toContain(CODE);
+      expect(blob, `${label}：读到了补发的狼聊`).not.toContain(secondCode);
       expect(blob, `${label}：读到了狼聊记录`).not.toContain('"wolfChat"');
+      expect(blob, `${label}：读到了狼聊额度`).not.toContain('"wolfChatRemaining"');
       expect(blob, `${label}：读到了刀票`).not.toContain('"killVotes"');
       expect(blob, `${label}：读到了狼队名单`).not.toContain('"teammates"');
       expect(blob, `${label}：读到了锁定刀口`).not.toContain('"lockedKill"');

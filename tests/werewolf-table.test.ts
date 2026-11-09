@@ -364,7 +364,7 @@ describe('狼人杀引擎', () => {
     expect(nightEvents[0].data).toEqual({ game: 'werewolf', day: 1, tableId: nightEvents[0].data?.tableId });
   });
 
-  it('夜A：狼聊与刀票互相可见（仅狼）、150 字限制、不能刀狼、重复槽拒绝；平票空刀', () => {
+  it('夜A：狼聊每人两条、每条 150 字，刀票与狼聊仅狼可见', () => {
     const rig = makeRig(11, 1);
     startGame(rig);
     const wolves = rig.ids.filter((id) => roleOf(rig, id) === 'wolf');
@@ -373,20 +373,28 @@ describe('狼人杀引擎', () => {
 
     // 非狼不能交刀票。
     expect(() => act(rig, nonWolfAlive[0], { move: 'wolf_kill', target: seatNo(nonWolfAlive[1]) })).toThrow(/狼人/);
-    // 狼不能刀狼。
-    expect(() => act(rig, wolves[0], { move: 'wolf_kill', target: seatNo(wolves[1]) })).toThrow(/非狼人/);
     // 狼聊 150 字上限。
     expect(() => act(rig, wolves[0], { move: 'wolf_chat', text: '嗷'.repeat(151) })).toThrow(/150/);
     collect(rig, act(rig, wolves[0], { move: 'wolf_chat', text: '今晚刀 9 号位试水' }));
-    // 同一槽不能重复。
-    expect(() => act(rig, wolves[0], { move: 'wolf_chat', text: '再说一条' })).toThrow(/已经交过/);
+    // 旧版夜间存档里只有一条狼聊，恢复后仍可补发一条。
+    const restored = makeRig(11, 1);
+    restored.table.restoreState(JSON.parse(JSON.stringify(rig.table.exportState())));
+    rig.table = restored.table;
+    expect(view(rig, wolves[0]).wolfChatRemaining).toBe(1);
     // 刀票可见性：交完刀后，其他狼的视图里有刀票记录；预言家/村民视图里没有。
     const wolfTargetNo = seatNo(nonWolfAlive[1]);
     collect(rig, act(rig, wolves[0], { move: 'wolf_kill', target: wolfTargetNo }));
+    expect(() => act(rig, wolves[0], { move: 'wolf_kill' })).toThrow(/已经交过/);
+    collect(rig, act(rig, wolves[0], { move: 'wolf_chat', text: '刀票交了' }));
+    expect(view(rig, wolves[0]).canAct).toBe(false);
+    expect(() => act(rig, wolves[0], { move: 'wolf_chat', text: '第三条' })).toThrow(/已经交过/);
     const mate = wolves[1];
+    expect(view(rig, mate).wolfChat.map((entry: { text: string }) => entry.text)).toEqual(['今晚刀 9 号位试水', '刀票交了']);
+    expect(view(rig, mate).wolfChatRemaining).toBe(2);
     expect(view(rig, mate).killVotes).toEqual([{ seatNo: seatNo(wolves[0]), target: wolfTargetNo }]);
     expect(view(rig, seer).killVotes).toBeUndefined();
     expect(view(rig, seer).wolfChat).toBeUndefined();
+    expect(view(rig, seer).wolfChatRemaining).toBeUndefined();
     // 预言家查验：狼人/好人二值，可重复进历史。
     const wolfNo = seatNo(wolves[0]);
     collect(rig, act(rig, seer, { move: 'inspect', target: wolfNo }));
@@ -399,6 +407,31 @@ describe('狼人杀引擎', () => {
     collect(rig, rig.table.tick(rig.clock.now));
     const witch = idWithRole(rig, 'witch');
     expect(view(rig, witch).knownKill).toBe(wolfTargetNo);
+    expect(view(rig, mate).wolfChatRemaining).toBeUndefined();
+    expect(() => act(rig, mate, { move: 'wolf_chat', text: '已锁刀' })).toThrow(/女巫/);
+  });
+
+  it('自刀和投狼队友能锁定同一个刀口，女巫可救，最后一狼自刀后好人胜利', () => {
+    const rig = makeRig(23, 1, false, 6);
+    startGame(rig);
+    const [wolf, mate] = rig.ids.filter((id) => roleOf(rig, id) === 'wolf');
+    const witch = idWithRole(rig, 'witch');
+    const target = seatNo(wolf);
+    runNightA(rig, { kill: target });
+    expect(view(rig, witch).knownKill).toBe(target);
+    runNightB(rig, { choice: 'save' });
+    expect(view(rig, wolf).alive).toBe(true);
+
+    runSpeeches(rig, () => '');
+    runVote(rig, { [target]: seatNo(mate) });
+    runSpeeches(rig, () => '');
+    expect(view(rig, mate).alive).toBe(false);
+    expect(() => act(rig, wolf, { move: 'wolf_kill', target: seatNo(mate) })).toThrow(/还存活/);
+    runNightA(rig, { kill: target });
+    expect(view(rig, wolf).lockedKill).toBe(target);
+    runNightB(rig, { choice: 'none' });
+    expect((rig.table.public() as AnyView).result.outcome).toBe('good');
+    expect((rig.table.exportState() as AnyView).deaths).toContainEqual(expect.objectContaining({ seatNo: target, cause: 'wolf' }));
   });
 
   it('夜A 平票或全弃 = 空刀；女巫无刀口不能救；用掉解药后不再知道刀口', () => {

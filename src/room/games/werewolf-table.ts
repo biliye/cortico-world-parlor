@@ -109,7 +109,6 @@ interface NightRecord {
 interface WorkingNight {
   day: number;
   wolfChats: Array<{ seatNo: number; text: string }>;
-  wolfChatDone: Set<number>;
   killVotes: Map<number, number | null>;
   inspect: { target: number; result: 'wolf' | 'good' } | null;
   inspectDone: boolean;
@@ -154,6 +153,7 @@ const scaledDurations = (base: number): Durations => ({
 
 const SPEECH_LIMIT = 300;
 const WOLF_CHAT_LIMIT = 150;
+const WOLF_CHAT_MESSAGES = 2;
 
 export interface WerewolfTableOptions {
   host: { id: string; name: string; kind?: 'pet' | 'human'; clientVersion?: string };
@@ -415,25 +415,22 @@ export class WerewolfTable implements TableEngine {
       const role = seat.role;
       if (move === 'wolf_chat' || move === 'wolf_kill') {
         if (role !== 'wolf') throw new WerewolfError('not_turn', '这个动作只有狼人能做');
+        const night = this.night!;
         this.requireWindowNotDone(seat, move === 'wolf_chat'
-          ? this.night!.wolfChatDone.has(seat.seatNo)
-          : this.night!.killVotes.has(seat.seatNo));
+          ? this.wolfChatRemaining(seat) <= 0
+          : night.killVotes.has(seat.seatNo));
         if (move === 'wolf_chat') {
           const text = cleanSpeech(action.text, WOLF_CHAT_LIMIT);
-          this.night!.wolfChats.push({ seatNo: seat.seatNo, text });
-          this.night!.wolfChatDone.add(seat.seatNo);
-          this.lastAction = { seatNo: seat.seatNo, kind: move };
-          // 同伴的私视图刷新（不叫醒）：他们再开口时能看到这条话。
-          return this.nightRefresh([seat.seatNo], this.aliveSeats().filter((entry) => entry.role === 'wolf').map((entry) => entry.seatNo));
+          night.wolfChats.push({ seatNo: seat.seatNo, text });
+        } else {
+          const target = this.parseTarget(action.target);
+          if (target !== undefined && !this.seatByNo(target)?.alive) {
+            throw new WerewolfError('bad_action', '刀票只能投给还存活的玩家');
+          }
+          night.killVotes.set(seat.seatNo, target ?? null);
         }
-        const target = this.parseTarget(action.target);
-        if (target !== undefined) {
-          const victim = this.seatByNo(target);
-          if (!victim || !victim.alive) throw new WerewolfError('bad_action', '刀票只能投给还存活的玩家');
-          if (victim.role === 'wolf') throw new WerewolfError('bad_action', '刀票只能投给非狼人');
-        }
-        this.night!.killVotes.set(seat.seatNo, target ?? null);
         this.lastAction = { seatNo: seat.seatNo, kind: move };
+        // 同伴的私视图刷新（不叫醒）。
         return this.nightRefresh([seat.seatNo], this.aliveSeats().filter((entry) => entry.role === 'wolf').map((entry) => entry.seatNo));
       }
       if (move === 'guard') {
@@ -889,7 +886,6 @@ export class WerewolfTable implements TableEngine {
     this.night = {
       day,
       wolfChats: [],
-      wolfChatDone: new Set(),
       killVotes: new Map(),
       inspect: null,
       inspectDone: false,
@@ -1038,11 +1034,8 @@ export class WerewolfTable implements TableEngine {
   /** A 段到点：锁定刀口（相对多数唯一，否则空刀），进入 B 段。对外没有事件。 */
   private closeNightA(now: number): TableStep {
     const night = this.night!;
-    const wolves = this.aliveSeats().filter((seat) => seat.role === 'wolf').map((seat) => seat.seatNo);
-    const targets = new Set(
-      this.aliveSeats().filter((seat) => seat.role !== 'wolf').map((seat) => seat.seatNo),
-    );
-    const tally = tallyVotes(new Map(night.killVotes.entries()), targets);
+    const targets = new Set(this.aliveSeats().map((seat) => seat.seatNo));
+    const tally = tallyVotes(night.killVotes, targets);
     night.kill = tally.exiled ?? null;
     this.phase = {
       ...this.phase,
@@ -1100,6 +1093,11 @@ export class WerewolfTable implements TableEngine {
 
   // —— 视图 ——
 
+  private wolfChatRemaining(seat: WSeat): number {
+    const sent = this.night!.wolfChats.filter((entry) => entry.seatNo === seat.seatNo).length;
+    return WOLF_CHAT_MESSAGES - sent;
+  }
+
   /** 当前窗口里这个席位还欠不欠动作。 */
   private pendingMoveFor(seat: WSeat): string | null {
     if (this.status !== 'playing') return null;
@@ -1116,9 +1114,10 @@ export class WerewolfTable implements TableEngine {
     if (phase.kind === 'night') {
       if (phase.half === 'a') {
         if (seat.role === 'wolf' && seat.alive) {
-          if (!this.night!.wolfChatDone.has(seat.seatNo)) return 'wolf_chat';
+          const remaining = this.wolfChatRemaining(seat);
+          if (remaining === WOLF_CHAT_MESSAGES) return 'wolf_chat';
           if (!this.night!.killVotes.has(seat.seatNo)) return 'wolf_kill';
-          return null;
+          return remaining > 0 ? 'wolf_chat' : null;
         }
         if (seat.role === 'seer' && seat.alive && !this.night!.inspectDone) return 'inspect';
         if (seat.role === 'guard' && seat.alive && this.night!.guarded === undefined) return 'guard';
@@ -1180,6 +1179,7 @@ export class WerewolfTable implements TableEngine {
           .map((entry) => ({ seatNo: entry.seatNo, name: entry.name, alive: entry.alive })),
         ...(night && seat.alive ? {
           wolfChat: night.wolfChats.map((entry) => ({ seatNo: entry.seatNo, name: this.seatByNo(entry.seatNo)?.name ?? '', text: entry.text })),
+          ...(phase.half === 'a' ? { wolfChatRemaining: this.wolfChatRemaining(seat) } : {}),
           killVotes: [...night.killVotes.entries()].map(([voter, target]) => ({ seatNo: voter, target })),
           ...(night.kill !== null && phase.half === 'b' ? { lockedKill: night.kill } : {}),
         } : {}),
@@ -1239,7 +1239,7 @@ export class WerewolfTable implements TableEngine {
     const phase = this.phase;
     if (phase.kind === 'night') {
       const night = this.night!;
-      if (night.wolfChatDone.has(seat.seatNo)) done.push('wolf_chat');
+      if (this.wolfChatRemaining(seat) < WOLF_CHAT_MESSAGES) done.push('wolf_chat');
       if (night.killVotes.has(seat.seatNo)) done.push('wolf_kill');
       if (night.inspectDone && seat.role === 'seer') done.push('inspect');
       if (night.guarded !== undefined && seat.role === 'guard') done.push('guard');
@@ -1410,14 +1410,15 @@ export class WerewolfTable implements TableEngine {
       }
       case 'night': {
         if (phase.half === 'a') {
-          if (pending === 'wolf_chat' || pending === 'wolf_kill') {
-            lines.push(`夜晚行动（${clock(phase.deadline)}）：`);
+          if (seat.role === 'wolf' && seat.alive) {
             const night = this.night!;
-            if (!night.wolfChatDone.has(seat.seatNo)) {
-              lines.push(`① 狼队交流（每夜一条、150 字内）：parlor_game_action {action:"wolf_chat",params:{windowId:"${phase.windowId}", text:"…"}}`);
+            const remaining = this.wolfChatRemaining(seat);
+            lines.push(`狼人时间，刀口将在 ${clock(phase.deadline)} 锁定。`);
+            if (remaining > 0) {
+              lines.push(`狼队私聊（还可发 ${remaining} 条，每条 150 字内，交刀票后也可发）：parlor_game_action {action:"wolf_chat",params:{windowId:"${phase.windowId}", text:"…"}}`);
             }
             if (!night.killVotes.has(seat.seatNo)) {
-              lines.push(`② 刀票（一人一票，不带 target = 弃刀）：parlor_game_action {action:"wolf_kill",params:{windowId:"${phase.windowId}", target:座号}}`);
+              lines.push(`刀票（一人一票，可投任意存活玩家，不带 target = 弃刀）：parlor_game_action {action:"wolf_kill",params:{windowId:"${phase.windowId}", target:座号}}`);
             }
             if (night.wolfChats.length > 0) {
               lines.push(`本夜狼聊：${night.wolfChats.map((entry) => `${entry.seatNo}号「${entry.text}」`).join('；')}`);
@@ -1425,7 +1426,6 @@ export class WerewolfTable implements TableEngine {
             if (night.killVotes.size > 0) {
               lines.push(`已交刀票：${[...night.killVotes.entries()].map(([voter, target]) => `${voter}号→${target === null ? '弃刀' : `${target}号`}`).join('，')}`);
             }
-            lines.push('两个动作都交完就不用再等；到点锁定刀口。');
           } else if (pending === 'guard') {
             const previous = this.nightLog.at(-1)?.guarded;
             lines.push(`守卫时间（${clock(phase.deadline)}）：parlor_game_action {action:"guard",params:{windowId:"${phase.windowId}", target:座号}}。可守自己，不带 target 为空守。`);
@@ -1551,7 +1551,8 @@ export class WerewolfTable implements TableEngine {
       night: this.night
         ? {
           ...this.night,
-          wolfChatDone: [...this.night.wolfChatDone],
+          // 旧版本恢复存档时仍用此字段判断是否已发过狼聊。
+          wolfChatDone: [...new Set(this.night.wolfChats.map((entry) => entry.seatNo))],
           killVotes: [...this.night.killVotes.entries()],
           inspect: this.night.inspect ? { ...this.night.inspect } : null,
         }
@@ -1664,7 +1665,6 @@ export class WerewolfTable implements TableEngine {
         wolfChats: ((raw.night as Record<string, unknown>).wolfChats as Array<Record<string, unknown>> ?? []).map((entry) => ({
           seatNo: Number(entry.seatNo), text: String(entry.text ?? ''),
         })),
-        wolfChatDone: new Set((((raw.night as Record<string, unknown>).wolfChatDone) as unknown[] ?? []).map(Number)),
         killVotes: new Map(((((raw.night as Record<string, unknown>).killVotes) as Array<[unknown, unknown]>) ?? [])
           .map(([voter, target]) => [Number(voter), target === null || target === undefined ? null : Number(target)] as [number, number | null])),
         inspect: (raw.night as Record<string, unknown>).inspect

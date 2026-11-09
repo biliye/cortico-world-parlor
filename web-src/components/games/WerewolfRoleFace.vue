@@ -9,7 +9,7 @@ const ROLE_FACTIONS: Record<string, string> = {
   wolf: '狼人阵营', villager: '好人阵营', seer: '好人阵营', witch: '好人阵营', hunter: '好人阵营', guard: '好人阵营',
 };
 const ROLE_SKILLS: Record<string, string> = {
-  wolf: '每晚与同伴交流并交一张刀票；最高票且唯一的存活非狼人出局，平票或弃刀则空刀。',
+  wolf: '每晚可发两条狼队私聊，交一张刀票。可刀任意存活玩家，包括自己和队友。唯一最高票成为刀口，平票或没有有效票则空刀。',
   villager: '没有夜间技能，靠白天发言与投票找出狼人。',
   seer: '每晚最多查验一名其他存活玩家，只得到「狼人 / 好人」。',
   witch: '各一瓶解药与毒药，每夜最多用一瓶；解药尚在才得知刀口；首夜可自救，不能自毒。',
