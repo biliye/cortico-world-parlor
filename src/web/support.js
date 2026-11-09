@@ -6,6 +6,11 @@ let feedbackRequest = null;
 let announcementRequest = null;
 let newsRequest = null;
 let editingNewsId = '';
+// 编辑时要带回「编辑者看到的那一期」：createdAt 识别删掉重发，revision 识别并发编辑。
+let editingNewsCreatedAt = 0;
+let editingNewsRevision = 1;
+// 表单只显示 HH:MM；记下回填值，没动过时间就不提交 publishAt，免得把秒数悄悄抹成 :00。
+let editingNewsTime = '';
 const status = text => { $('status').textContent = text; };
 const beijingToday = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 async function api(path, body, operator = false, method) {
@@ -140,7 +145,7 @@ async function loadNewsList() {
       remove.addEventListener('click', () => {
         if (!confirm(`删除 ${item.issueDate} 这一期？大厅小报会立刻下掉；已经推给 Coo 的文本收不回来。\n\n删掉之后同一天可以重发一条。`)) return;
         void perform(remove, async () => {
-          const data = await api(`operator/news?id=${encodeURIComponent(item.id)}`, undefined, true, 'DELETE');
+          const data = await api(`operator/news?id=${encodeURIComponent(item.id)}&createdAt=${encodeURIComponent(item.createdAt)}`, undefined, true, 'DELETE');
           if (editingNewsId === item.id) cancelNewsEdit();
           status(data.deleted ? '已删除，原文留在留痕里。' : '这一期本来就不在了。');
           await loadNewsList();
@@ -200,16 +205,26 @@ $('announcement-form').addEventListener('submit', event => {
 function resetNewsForm() {
   $('news-date').value = beijingToday(); $('news-date').disabled = false;
   $('news-title').value = ''; $('news-summary').value = ''; $('news-body').value = '';
-  $('news-time').value = '10:00'; $('news-autopush').checked = true; newsRequest = null;
+  $('news-time').value = '10:00'; $('news-time').disabled = false; $('news-time').removeAttribute('title');
+  $('news-autopush').checked = true; newsRequest = null;
+  editingNewsCreatedAt = 0; editingNewsRevision = 1; editingNewsTime = '';
 }
 /** 把已有的一期灌回表单：改稿时不换日期，只换内容与可见设置。 */
 function fillNewsForm(item) {
   editingNewsId = item.id;
+  editingNewsCreatedAt = Number(item.createdAt ?? 0);
+  editingNewsRevision = Number(item.revision ?? 1);
   $('news-mode').hidden = false; $('news-mode-id').textContent = item.id;
   $('news-date').value = item.issueDate; $('news-date').disabled = true;
   $('news-title').value = item.title; $('news-summary').value = item.summary; $('news-body').value = item.body;
   // publishAt 是毫秒时间戳；按北京时间折回 HH:MM，别用本地时区。
-  $('news-time').value = new Date(item.publishAt + 8 * 3600000).toISOString().slice(11, 16);
+  editingNewsTime = new Date(item.publishAt + 8 * 3600000).toISOString().slice(11, 16);
+  $('news-time').value = editingNewsTime;
+  // 已可见的新闻不能改期：改晚会让 Coo 的 publishAt 游标再收到同一个 id，等于重推。
+  const visible = item.publishAt <= Date.now();
+  $('news-time').disabled = visible;
+  if (visible) $('news-time').title = '已可见，不能改期；要换时间只能删掉重发';
+  else $('news-time').removeAttribute('title');
   $('news-autopush').checked = Boolean(item.autoPush);
   $('news-submit').textContent = '保存修改'; $('news-cancel').hidden = false;
   newsRequest = null;
@@ -235,14 +250,19 @@ $('news-form').addEventListener('submit', event => {
   const autoPush = $('news-autopush').checked;
   const time = $('news-time').value;
   if (!title || !summary || !body) { status('标题、摘要、正文都要填。'); return; }
-  const publishAt = time ? Date.parse(`${(issueDate || beijingToday())}T${time}:00+08:00`) : undefined;
-  if (time && !Number.isFinite(publishAt)) { status('日期或可见时刻格式不对。'); return; }
+  // 回填只到分钟；没动过时间就不提交 publishAt，否则会把原来的秒数抹成 :00。
+  const timeChanged = !editingNewsId || time !== editingNewsTime;
+  const publishAt = time && timeChanged ? Date.parse(`${(issueDate || beijingToday())}T${time}:00+08:00`) : undefined;
+  if (time && timeChanged && !Number.isFinite(publishAt)) { status('日期或可见时刻格式不对。'); return; }
 
   // 改稿：只 PATCH 内容与可见设置，日期与编号不动。
   if (editingNewsId) {
     if (!confirm(`保存对 ${editingNewsId} 的修改？\n\n改完不会重新推给 Coo，但大厅小报下一次刷新就是新文本。`)) return;
     void perform(event.submitter, async () => {
-      const payload = { id: editingNewsId, title, summary, body, autoPush, ...(publishAt ? { publishAt } : {}) };
+      const payload = {
+        id: editingNewsId, createdAt: editingNewsCreatedAt, revision: editingNewsRevision,
+        title, summary, body, autoPush, ...(publishAt ? { publishAt } : {}),
+      };
       const data = await api('operator/news', payload, true, 'PATCH');
       status(data.changed ? `已保存：${data.news.id}（第 ${data.news.revision} 版）` : '没有变化，未改动。');
       cancelNewsEdit(); await loadNewsList();

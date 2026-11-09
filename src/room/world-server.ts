@@ -940,10 +940,15 @@ export class WorldServer {
           json(res, 200, { news: result.item, changed: result.changed }); return;
         }
         // 删：物理删除，当天可以重发；原文进留痕表，`deleted: null` 表示本来就没有。
+        // `createdAt` 必填：同一天重发沿用同一个 id，只带 id 的旧请求会误删新稿。
         if (path === 'operator/news' && method === 'DELETE') {
           const id = (url.searchParams.get('id') ?? '').trim();
           if (!id) throw new HttpError(400, '需要新闻 id');
-          json(res, 200, { ok: true, deleted: await support.deleteNews(id) }); return;
+          const createdAt = Number(url.searchParams.get('createdAt'));
+          if (!Number.isFinite(createdAt) || createdAt <= 0) {
+            throw new HttpError(400, '需要 createdAt（本次发布的创建时刻）');
+          }
+          json(res, 200, { ok: true, deleted: await support.deleteNews(id, createdAt) }); return;
         }
         if (path === 'operator/audit' && method === 'GET') {
           json(res, 200, { audit: await support.auditList(Number(url.searchParams.get('limit') ?? 20)) }); return;

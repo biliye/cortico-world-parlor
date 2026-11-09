@@ -208,29 +208,38 @@ describe('统一 inbox 网关（真实 PG）', () => {
 describe('运营侧编辑与删除（真实 PG，HTTP 层）', () => {
   it('PATCH 改新闻：玩家立刻读到新文本，响应里带 changed；无钥匙 403、不存在 404', async () => {
     const { client, token } = await start();
-    await publish({ issueDate: '2026-11-09', title: '原标题', summary: '摘要', body: '原正文' });
+    const created = await publish({ issueDate: '2026-11-09', title: '原标题', summary: '摘要', body: '原正文' });
+    const news = created.body.news as { createdAt: number; revision: number };
 
-    const edited = await operator('news', { id: 'news-2026-11-09', title: '新标题', body: '新正文' }, OPERATOR, 'PATCH');
+    const edited = await operator('news', {
+      id: 'news-2026-11-09', createdAt: news.createdAt, revision: news.revision, title: '新标题', body: '新正文',
+    }, OPERATOR, 'PATCH');
     expect(edited.status).toBe(200);
     expect(edited.body).toMatchObject({ changed: true, news: { title: '新标题', body: '新正文', revision: 2 } });
 
     // 整条没变化：不涨版本，changed=false。
-    const same = await operator('news', { id: 'news-2026-11-09', title: '新标题', body: '新正文' }, OPERATOR, 'PATCH');
+    const same = await operator('news', {
+      id: 'news-2026-11-09', createdAt: news.createdAt, revision: 2, title: '新标题', body: '新正文',
+    }, OPERATOR, 'PATCH');
     expect(same.body).toMatchObject({ changed: false, news: { revision: 2 } });
 
     const seen = await client.news(token) as { news: Record<string, any> };
     expect(seen.news).toMatchObject({ title: '新标题', body: '新正文' });
 
     expect((await operator('news', { id: 'news-2026-11-09', title: 'x' }, 'wrong-key', 'PATCH')).status).toBe(403);
-    expect((await operator('news', { id: 'news-nope', title: 'x' }, OPERATOR, 'PATCH')).status).toBe(404);
+    expect((await operator('news', { id: 'news-nope', createdAt: 1, revision: 1, title: 'x' }, OPERATOR, 'PATCH')).status).toBe(404);
     expect((await operator('news', { title: '缺 id' }, OPERATOR, 'PATCH')).status).toBe(400);
+    // 没有「这一期」的指纹就不给改：否则同一天重发后旧请求会落到新稿上。
+    expect((await operator('news', { id: 'news-2026-11-09', title: 'x' }, OPERATOR, 'PATCH')).status).toBe(400);
   });
 
   it('DELETE 删新闻：玩家读不到、同一天可重发；重复删返回 deleted:null', async () => {
     const { client, token } = await start();
-    await publish({ issueDate: '2026-11-09', title: '要删的', summary: '摘要', body: '正文' });
+    const created = await publish({ issueDate: '2026-11-09', title: '要删的', summary: '摘要', body: '正文' });
+    const createdAt = (created.body.news as { createdAt: number }).createdAt;
 
-    const removed = await operator('news?id=news-2026-11-09', undefined, OPERATOR, 'DELETE');
+    expect((await operator('news?id=news-2026-11-09', undefined, OPERATOR, 'DELETE')).status).toBe(400);
+    const removed = await operator(`news?id=news-2026-11-09&createdAt=${createdAt}`, undefined, OPERATOR, 'DELETE');
     expect(removed.status).toBe(200);
     expect(removed.body).toMatchObject({ ok: true, deleted: { id: 'news-2026-11-09', body: '正文' } });
 
@@ -238,14 +247,19 @@ describe('运营侧编辑与删除（真实 PG，HTTP 层）', () => {
     expect(asSeat.news).toEqual([]);
 
     // 重试幂等：再删一次返回 deleted:null，不当成错误。
-    const twice = await operator('news?id=news-2026-11-09', undefined, OPERATOR, 'DELETE');
+    const twice = await operator(`news?id=news-2026-11-09&createdAt=${createdAt}`, undefined, OPERATOR, 'DELETE');
     expect(twice.status).toBe(200);
     expect(twice.body).toEqual({ ok: true, deleted: null });
 
-    // 唯一索引释放：同一天重发一条新内容。
+    // 唯一索引释放：同一天重发一条新内容。时钟往前推一毫秒，
+    // 让重发的 createdAt 与上一期不同（真实请求之间也不会落在同一毫秒）。
+    clock = NOW + 1_000;
     const again = await publish({ issueDate: '2026-11-09', title: '重发的一期', summary: 's', body: 'b' });
     expect(again.status).toBe(200);
     expect(again.body.news).toMatchObject({ id: 'news-2026-11-09', title: '重发的一期' });
+    // 旧 createdAt 的删除请求只能报冲突，不能把重发的新稿删掉。
+    const stale = await operator(`news?id=news-2026-11-09&createdAt=${createdAt}`, undefined, OPERATOR, 'DELETE');
+    expect(stale.status).toBe(409);
   });
 
   it('公告也可改可删；运营钥匙能读列表，玩家侧同步变化，删除留痕可查', async () => {

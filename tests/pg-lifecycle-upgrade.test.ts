@@ -188,7 +188,8 @@ it('v8 升到 v9：新闻与公告各加两列、留痕表建起来，老数据�
   expect(Number(news.updated_at)).toBe(0);
 
   // 迁移完就能编辑，版本从 1 涨到 2；留痕表也写得进去。
-  const edited = await new SupportDb(db, () => 2).editNews({ id: 'news-2026-11-09', title: '新标题' });
+  const edited = await new SupportDb(db, () => 2)
+    .editNews({ id: 'news-2026-11-09', createdAt: 1, revision: 1, title: '新标题' });
   expect(edited.item).toMatchObject({ title: '新标题', revision: 2, updatedAt: 2 });
   const audit = await new SupportDb(db, () => 2).auditList(5);
   expect(audit).toHaveLength(1);
