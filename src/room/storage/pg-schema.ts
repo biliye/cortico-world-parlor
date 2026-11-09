@@ -12,10 +12,10 @@
  * 迁移按版本号走：PG 有自己的一套编号，不沿用来源 SQLite 的 schema_version。
  */
 
-import { NEWS_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 8;
+export const PG_SCHEMA_VERSION = 11;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -467,5 +467,33 @@ export const PG_MIGRATIONS: PgMigration[] = [
   { version: 8, name: 'news-and-recruit-version', sql: `
     ${NEWS_SCHEMA_SQL}
     ALTER TABLE table_discovery ADD COLUMN IF NOT EXISTS recruit_version BIGINT NOT NULL DEFAULT 0;
+  ` },
+  // 同样是纯增量：两张表各加两列（都有默认值），再补一张改动留痕表。
+  // 回退到 0.39.0 只需把 meta.schema_version 改回 8——多出来的列与表老程序不读。
+  { version: 9, name: 'support-edit-delete', sql: `
+    ALTER TABLE news_items ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE news_items ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+    ${SUPPORT_ADMIN_SCHEMA_SQL}
+  ` },
+  /**
+   * 每次发布一个唯一标识：同一天删掉重发沿用同一个 `id`，`created_at` 也可能撞在
+   * 同一毫秒，只有它能把「上一期」与「重发的新稿」分开。老行按 id 派生，稳定且互不相同。
+   * 纯增量：多一列有默认值，退回上一版（schema 9）只需把 meta.schema_version 改回 9。
+   */
+  { version: 10, name: 'news-publish-id', sql: `
+    ALTER TABLE news_items ADD COLUMN IF NOT EXISTS publish_id TEXT NOT NULL DEFAULT '';
+    UPDATE news_items SET publish_id = 'legacy-' || id WHERE publish_id = '';
+  ` },
+  /**
+   * 公告也有每次发布的唯一标识：`id` 是运营自己选的 requestId，删掉后还能用同一个
+   * requestId 重发，`revision` 又从 1 开始；只有它能把「这一条」与「上一条」分开。
+   * 老行按 id 派生，稳定且互不相同。纯增量：回退到上一版（schema 10）只需把
+   * meta.schema_version 改回 10——多出来的列老程序不读。
+   */
+  { version: 11, name: 'announcement-publish-id', sql: `
+    ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS publish_id TEXT NOT NULL DEFAULT '';
+    UPDATE support_announcements SET publish_id = 'legacy-' || id WHERE publish_id = '';
   ` },
 ];

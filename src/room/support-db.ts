@@ -40,14 +40,69 @@ CREATE TABLE IF NOT EXISTS news_items (
 CREATE INDEX IF NOT EXISTS ix_news_publish ON news_items(publish_at DESC, id DESC);
 `;
 
+/**
+ * 运营改动留痕。编辑与删除都写一条，删除后还能从这里把原文找回来：
+ * 删公告、删新闻都是物理删除——留着 `deleted_at` 会让「一天一版」的唯一索引
+ * 把当天重发堵死，所以删除走硬删，历史交给这张表。
+ * `before_json` / `after_json` 存整条记录（新闻含正文）；用 TEXT 而不是 JSONB，
+ * 因为这份 DDL 在 SQLite 与 PG 上共用。
+ */
+export const SUPPORT_ADMIN_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS support_audit (
+  id TEXT PRIMARY KEY,
+  at BIGINT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('news.edit','news.delete','announcement.edit','announcement.delete')),
+  target_id TEXT NOT NULL,
+  before_json TEXT,
+  after_json TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_support_audit_at ON support_audit(at DESC, id DESC);
+`;
+
 export interface Feedback {
   id: string; coo_id: string; name: string; text: string; created_at: number; reply: string; status: string;
 }
-export interface Announcement { id: string; text: string; created_at: number }
+export interface Announcement {
+  id: string; text: string; created_at: number;
+  /** schema 9 起：编辑次数与最后编辑时刻（老行按 1 / 0 读）。 */
+  revision?: number;
+  updated_at?: number;
+}
+/**
+ * 运营侧看到的公告：多带一个 `publishId`。
+ *
+ * 公告的 `id` 是运营自己选的 requestId，删掉之后还能用同一个 requestId 重发，
+ * 而 `revision` 又从 1 开始——旧标签页手里的 `revision=1` 会正好命中新的一条。
+ * 每次发布一个 `publishId`，改与删都带上它，才能把「这一条」和「上一条」分开。
+ */
+export interface AnnouncementAdmin extends Announcement {
+  revision: number;
+  updated_at: number;
+  publishId: string;
+}
 
 /** 列表与推送只用摘要，正文留给主动查，避免每分钟给所有 Coo 传全文。 */
-export interface NewsSummary { id: string; issueDate: string; title: string; summary: string; publishAt: number }
-export interface NewsItem extends NewsSummary { body: string; autoPush: boolean; createdAt: number }
+export interface NewsSummary {
+  id: string; issueDate: string; title: string; summary: string; publishAt: number;
+  /** 编辑次数，从 1 起；运营列表拿它标「改过几次」。 */
+  revision: number;
+}
+export interface NewsItem extends NewsSummary {
+  body: string; autoPush: boolean; createdAt: number;
+  /**
+   * 这一次发布的唯一标识，每次 INSERT 生成一个 UUID。
+   * 同一天删掉重发会沿用同一个 `id`（`news-YYYY-MM-DD`），`createdAt` 也可能撞在同一毫秒，
+   * 所以「改 / 删的是不是运营看到的那一期」只认它；`createdAt` 只用于展示。
+   */
+  publishId: string;
+  /** 最后一次编辑时刻；从未编辑过是 0。 */
+  updatedAt: number;
+}
+/** 运营列表多带发布标识与创建时刻：同一天删掉重发后 `id` 不变，靠它们识别「不是同一期」。 */
+export interface NewsAdminSummary extends NewsSummary {
+  createdAt: number;
+  publishId: string;
+}
 
 /** 复合游标：同一毫秒发布多条时按 id 继续比较，不会互相吞掉。 */
 export interface NewsCursor { publishAt: number; id: string }
@@ -65,9 +120,38 @@ export interface NewsInput {
   body?: unknown; publishAt?: unknown; autoPush?: unknown;
 }
 
+/** 编辑只认这几个字段；没给的保持原样，`id` / `issueDate` 不在其中。 */
+export interface NewsEditInput {
+  id?: unknown; title?: unknown; summary?: unknown;
+  body?: unknown; publishAt?: unknown; autoPush?: unknown;
+  /**
+   * 编辑者手上那一期的 `publishId` 与 `revision`。
+   * 同一天删掉重发会沿用同一个 `id`，只比 `revision` 不够——重发也从第 1 版开始；
+   * `publishId` 变了就说明「不是同一期」，必须让运营刷新。
+   * 不用 `createdAt`：两次发布可以落在同一毫秒，它不是唯一标识。
+   */
+  publishId?: unknown; revision?: unknown;
+}
+
+export type AuditAction = 'news.edit' | 'news.delete' | 'announcement.edit' | 'announcement.delete';
+
+export interface AuditEntry {
+  id: string; at: number; action: AuditAction; targetId: string;
+  /** 改动前整条记录；删除类操作就靠它找回原文。 */
+  before: unknown;
+  /** 改动后整条记录；删除为 null。 */
+  after: unknown;
+}
+
+interface AuditRow {
+  id: string; at: number | string; action: AuditAction; target_id: string;
+  before_json?: string | null; after_json?: string | null;
+}
+
 interface NewsRow {
   id: string; issue_date: string; title: string; summary: string;
   publish_at: number | string; body?: string; auto_push?: number | boolean; created_at?: number | string;
+  revision?: number | string; updated_at?: number | string; publish_id?: string | null;
 }
 
 const BEIJING_OFFSET_MS = 8 * 3_600_000;
@@ -83,6 +167,7 @@ const validDate = (date: string): boolean => (
 const newsSummary = (row: NewsRow): NewsSummary => ({
   id: row.id, issueDate: row.issue_date, title: row.title,
   summary: row.summary, publishAt: Number(row.publish_at),
+  revision: Number(row.revision ?? 1),
 });
 
 const newsItem = (row: NewsRow): NewsItem => ({
@@ -90,6 +175,28 @@ const newsItem = (row: NewsRow): NewsItem => ({
   body: row.body ?? '',
   autoPush: Number(row.auto_push ?? 1) === 1,
   createdAt: Number(row.created_at ?? 0),
+  publishId: row.publish_id ?? '',
+  revision: Number(row.revision ?? 1),
+  updatedAt: Number(row.updated_at ?? 0),
+});
+const newsAdminSummary = (row: NewsRow): NewsAdminSummary => ({
+  ...newsSummary(row),
+  createdAt: Number(row.created_at ?? 0),
+  publishId: row.publish_id ?? '',
+});
+
+interface AnnouncementRow {
+  id: string; text: string; created_at: number | string;
+  revision?: number | string; updated_at?: number | string; publish_id?: string | null;
+}
+/** 运营侧公告统一从这里出：`created_at` 在 PG 上是 bigint 字符串，顺便折成毫秒数。 */
+const announcementAdmin = (row: AnnouncementRow): AnnouncementAdmin => ({
+  id: row.id,
+  text: row.text,
+  created_at: Number(row.created_at ?? 0),
+  revision: Number(row.revision ?? 1),
+  updated_at: Number(row.updated_at ?? 0),
+  publishId: row.publish_id || `legacy-${row.id}`,
 });
 
 /** 新闻正文上限与反馈/公告不同，单独校验；不要放宽共用的 supportText。 */
@@ -150,14 +257,19 @@ export class SupportDb {
       .all() as unknown as Announcement[];
   }
 
-  async announce(value: unknown, id: unknown): Promise<Announcement> {
+  async announce(value: unknown, id: unknown): Promise<AnnouncementAdmin> {
     const text = supportText(value);
     if (typeof id !== 'string' || !/^[\w-]{1,100}$/.test(id)) throw new HostError('invalid', '需要有效的 requestId');
-    await this.db.prepare('INSERT INTO support_announcements(id, text, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING')
-      .run(id, text, this.now());
-    const item = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as unknown as Announcement;
-    if (item.text !== text) throw new HostError('conflict', '同一个 requestId 的正文不能变');
-    return item;
+    // 每次发布一个唯一标识：同一个 requestId 在删掉之后还能重发，`revision` 又从 1 开始。
+    // 同一个 requestId 重试（没删过）会命中 ON CONFLICT，库里那行才是这次发布。
+    await this.db.prepare(
+      'INSERT INTO support_announcements(id, text, created_at, publish_id) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
+    ).run(id, text, this.now(), randomUUID());
+    const row = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as
+      AnnouncementRow | undefined;
+    if (!row) throw new HostError('conflict', '公告没写成，请重试');
+    if (row.text !== text) throw new HostError('conflict', '同一个 requestId 的正文不能变');
+    return announcementAdmin(row);
   }
 
   /**
@@ -190,10 +302,13 @@ export class SupportDb {
     const publishAt = input.publishAt === undefined ? fallback : Number(input.publishAt);
     if (!Number.isFinite(publishAt) || publishAt <= 0) throw new HostError('invalid', '可见时刻要是毫秒时间戳');
 
+    // 每次 INSERT 一个发布标识：同一天删掉重发会沿用同一个 `id`，`createdAt` 也可能
+    // 落在同一毫秒，只有它能把「上一期」和「重发的新稿」分开。
+    const publishId = randomUUID();
     await this.db.prepare(
-      `INSERT INTO news_items(id, issue_date, title, summary, body, publish_at, auto_push, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-    ).run(id, issueDate, title, summary, body, publishAt, autoPush ? 1 : 0, now);
+      `INSERT INTO news_items(id, issue_date, title, summary, body, publish_at, auto_push, created_at, publish_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+    ).run(id, issueDate, title, summary, body, publishAt, autoPush ? 1 : 0, now, publishId);
     const row = await this.db.prepare('SELECT * FROM news_items WHERE issue_date = ?')
       .get(issueDate) as NewsRow | undefined;
     if (!row) {
@@ -213,6 +328,240 @@ export class SupportDb {
       throw new HostError('conflict', '同一天的新闻不能改标题、摘要、正文、可见时刻或推送设置');
     }
     return existing;
+  }
+
+  /* ——— 运营侧：改与删 ——— */
+
+  /** 运营取单条（含未到可见时刻的预录），编辑表单要回填正文。 */
+  async newsAdminById(id: string): Promise<NewsItem | undefined> {
+    const row = await this.db.prepare('SELECT * FROM news_items WHERE id = ?').get(id) as NewsRow | undefined;
+    return row ? newsItem(row) : undefined;
+  }
+
+  /**
+   * 改一条已发布的新闻。
+   *
+   * - 只改 title / summary / body / publishAt / autoPush；`id` 与 `issueDate` 不动，
+   *   「一天一版」的结构不能被编辑打破（要换日期就删掉重发）。
+   * - 字段没给就不动；整条都没变化时**不加版本号**，这样表单重提一次不会白涨 revision。
+   * - 已推送出去的内容收不回来：Coo 的游标按 `publish_at` 走，改正文不会重推；
+   *   大厅小报按列表轮询，下一次拉取就是新文本。
+   * - **已可见的新闻不能改 `publishAt`**：游标存的就是旧的 `publish_at`，改晚之后
+   *   同一 `id` 会再次落进 `publish_at > 游标` 的窗口，等于给所有 Coo 重推一遍。
+   *   只有还没到可见时刻的预录稿可以改期。要改已可见的排期只能删掉重发。
+   * - 同一天删掉重发会沿用同一个 `id`，所以写操作要带 `publishId`（本次发布的唯一
+   *   标识）与 `revision`（编辑者看到的版本）：前者挡住「重试旧请求删/改到新一稿」，
+   *   后者挡住两个人同时编辑时的丢字段。两者都在事务内再校验一次。
+   */
+  async editNews(input: NewsEditInput): Promise<{ item: NewsItem; changed: boolean }> {
+    const id = typeof input.id === 'string' ? input.id.trim() : '';
+    if (!id) throw new HostError('invalid', '需要新闻 id');
+    const expectedPublishId = typeof input.publishId === 'string' ? input.publishId.trim() : '';
+    if (!expectedPublishId) {
+      throw new HostError('invalid', '需要 publishId（本次发布的唯一标识）');
+    }
+    const expectedRevision = Number(input.revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      throw new HostError('invalid', '需要 revision（编辑者看到的版本号）');
+    }
+    return withTransaction(this.db, async () => {
+      const row = await this.db.prepare('SELECT * FROM news_items WHERE id = ?').get(id) as NewsRow | undefined;
+      if (!row) throw new HostError('not_found', '没有这条新闻');
+      const before = newsItem(row);
+      // 同一个 id 已经被删掉重发过：手上这份内容属于上一期，不能落到新一稿上。
+      if (before.publishId !== expectedPublishId) {
+        throw new HostError('conflict', '这一期已经被重发过，请刷新后再改');
+      }
+      const title = input.title === undefined ? before.title : newsText(input.title, 60, '标题');
+      const summary = input.summary === undefined ? before.summary : newsText(input.summary, 200, '摘要');
+      const body = input.body === undefined ? before.body : newsText(input.body, 4000, '正文');
+      const publishAt = input.publishAt === undefined ? before.publishAt : Number(input.publishAt);
+      if (!Number.isFinite(publishAt) || publishAt <= 0) throw new HostError('invalid', '可见时刻要是毫秒时间戳');
+      const autoPush = input.autoPush === undefined
+        ? before.autoPush
+        : input.autoPush === true || input.autoPush === 'true';
+      // 与发布同一条规矩：日期早于今天的条目不能开自动推送，否则一次编辑就能把旧闻补推给所有人。
+      if (autoPush && !before.autoPush && row.issue_date < beijingDate(this.now())) {
+        throw new HostError('conflict', '历史补录不能开启自动推送');
+      }
+      const at = this.now();
+      // 已经可见却要改可见时刻：Coo 的游标按 publishAt 存，改晚就会重推。
+      // 预录稿（`publishAt > now`）不受影响，它们还没进过任何人的游标。
+      if (publishAt !== before.publishAt && before.publishAt <= at) {
+        throw new HostError('conflict', '已可见的新闻不能改可见时刻；只有未到可见时刻的预录稿可以改期');
+      }
+      if (title === before.title && summary === before.summary && body === before.body
+        && publishAt === before.publishAt && autoPush === before.autoPush) {
+        return { item: before, changed: false };
+      }
+      // 目标内容与库里不同，说明不是「上一次请求已经成功」的重提；版本被别的事务推过就拒绝。
+      if (before.revision !== expectedRevision) {
+        throw new HostError('conflict', '这条新闻刚被改过，请刷新后再试');
+      }
+      const revision = before.revision + 1;
+      // 条件更新是最后一道闸：读与写之间真的挤进另一个事务时，这里的影响行数会是 0。
+      const result = await this.db.prepare(
+        `UPDATE news_items SET title = ?, summary = ?, body = ?, publish_at = ?, auto_push = ?,
+           revision = ?, updated_at = ? WHERE id = ? AND revision = ? AND publish_id = ?`,
+      ).run(title, summary, body, publishAt, autoPush ? 1 : 0, revision, at, id, expectedRevision, expectedPublishId);
+      if (!result.changes) throw new HostError('conflict', '这条新闻刚被改过，请刷新后再试');
+      const after: NewsItem = { ...before, title, summary, body, publishAt, autoPush, revision, updatedAt: at };
+      await this.audit('news.edit', id, before, after, at);
+      return { item: after, changed: true };
+    });
+  }
+
+  /**
+   * 删一条新闻：物理删除，`UNIQUE(issue_date)` 随之释放，当天可以重发一条。
+   * 原文进 `support_audit`，需要找回时从那里取。
+   * 找不到时返回 null（重试幂等），不当成错误。
+   *
+   * `publishId` 是这次发布的唯一标识：同一天删掉重发会沿用同一个 `id`，
+   * 旧标签页/重试请求如果只带 id，会把刚重发的新稿删掉。带上它之后，
+   * 删的必须是运营当时看到的那一期；不是同一期就报冲突，让页面刷新。
+   *
+   * 删除用 `DELETE … RETURNING` 一条语句完成，不再「先读再删」：两步之间挤进来的
+   * 编辑会让留痕只记到旧版本，被删掉的最新正文就再也找不回来了。
+   */
+  async deleteNews(id: string, publishId: string): Promise<NewsItem | null> {
+    const key = id.trim();
+    if (!key) throw new HostError('invalid', '需要新闻 id');
+    const expectedPublishId = typeof publishId === 'string' ? publishId.trim() : '';
+    if (!expectedPublishId) {
+      throw new HostError('invalid', '需要 publishId（本次发布的唯一标识）');
+    }
+    return withTransaction(this.db, async () => {
+      // 实际删掉的那一行才进留痕：并发编辑提交后的最新版本也在这里。
+      const rows = await this.db.prepare(
+        'DELETE FROM news_items WHERE id = ? AND publish_id = ? RETURNING *',
+      ).all(key, expectedPublishId) as NewsRow[];
+      const row = rows[0];
+      if (!row) {
+        // 库里还有这一期、但不是当初看到的那一期：让页面刷新，不要静默返回「已删」。
+        const left = await this.db.prepare('SELECT id FROM news_items WHERE id = ?').get(key);
+        if (left) throw new HostError('conflict', '这一期已经被重发过，请刷新后再删');
+        return null;
+      }
+      const before = newsItem(row);
+      await this.audit('news.delete', key, before, null, this.now());
+      return before;
+    });
+  }
+
+  /**
+   * 改一条公告。公告按 id 去重、横幅按 id 记「知道了」，所以改完不会重新弹横幅。
+   *
+   * `revision` 必须是运营页面实际看到的那一版：服务端「读到的版本」不能当条件，
+   * 否则两个标签页同时打开第 1 版，后保存的那个会把先保存的悄悄覆盖成第 3 版。
+   * `publishId` 必须是这一条发布时返回的标识：同一条被删掉后重发，版本又从 1 开始，
+   * 只有它能拦住旧标签页手里的 `revision=1`。
+   */
+  async editAnnouncement(
+    id: string, value: unknown, revision: unknown, publishId: unknown,
+  ): Promise<{ item: AnnouncementAdmin; changed: boolean }> {
+    const text = supportText(value);
+    const expectedRevision = Number(revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      throw new HostError('invalid', '需要 revision（编辑者看到的版本号）');
+    }
+    const expectedPublishId = typeof publishId === 'string' ? publishId.trim() : '';
+    if (!expectedPublishId) throw new HostError('invalid', '需要 publishId（发布时返回的标识）');
+    return withTransaction(this.db, async () => {
+      const row = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as
+        AnnouncementRow | undefined;
+      if (!row) throw new HostError('not_found', '没有这条公告');
+      // 同一段文本重提：不涨版本，也不因为 revision 过期就报冲突（重试幂等）。
+      if (row.text === text) return { item: announcementAdmin(row), changed: false };
+      // 先认发布标识再看版本：删掉重发之后，旧页面手里的 revision=1 会正好命中新的一条。
+      if ((row.publish_id ?? '') !== expectedPublishId) {
+        throw new HostError('conflict', '这条公告已经被删掉重发过，请刷新后再改');
+      }
+      if (Number(row.revision ?? 1) !== expectedRevision) {
+        throw new HostError('conflict', '这条公告刚被改过，请刷新后再试');
+      }
+      const at = this.now();
+      const nextRevision = expectedRevision + 1;
+      // 与新闻同一条规矩：两个人同时改，后提交的那个不能拿旧文本覆盖先提交的。
+      const result = await this.db.prepare(
+        `UPDATE support_announcements SET text = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND revision = ? AND publish_id = ?`,
+      ).run(text, nextRevision, at, id, expectedRevision, expectedPublishId);
+      if (!result.changes) throw new HostError('conflict', '这条公告刚被改过，请刷新后再试');
+      const before = announcementAdmin(row);
+      const after: AnnouncementAdmin = { ...before, text, revision: nextRevision, updated_at: at };
+      await this.audit('announcement.edit', id, before, after, at);
+      return { item: after, changed: true };
+    });
+  }
+
+  /**
+   * 删一条公告：物理删除；下一轮 60 秒轮询里横幅与列表就会消失。
+   * 与新闻相同，带上运营看到的 `revision` 与 `publishId` 并一条语句删完——否则旧标签页
+   * 能删掉别人刚改出来的新版，或者删掉用同一个 requestId 重发的下一条。
+   */
+  async deleteAnnouncement(id: string, revision: unknown, publishId: unknown): Promise<AnnouncementAdmin | null> {
+    const key = id.trim();
+    if (!key) throw new HostError('invalid', '需要公告 id');
+    const expectedRevision = Number(revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      throw new HostError('invalid', '需要 revision（删除者看到的版本号）');
+    }
+    const expectedPublishId = typeof publishId === 'string' ? publishId.trim() : '';
+    if (!expectedPublishId) throw new HostError('invalid', '需要 publishId（发布时返回的标识）');
+    return withTransaction(this.db, async () => {
+      const rows = await this.db.prepare(
+        'DELETE FROM support_announcements WHERE id = ? AND revision = ? AND publish_id = ? RETURNING *',
+      ).all(key, expectedRevision, expectedPublishId) as AnnouncementRow[];
+      const row = rows[0];
+      if (!row) {
+        const left = await this.db.prepare('SELECT publish_id FROM support_announcements WHERE id = ?').get(key) as
+          { publish_id?: string | null } | undefined;
+        if (left) {
+          if ((left.publish_id ?? '') !== expectedPublishId) {
+            throw new HostError('conflict', '这条公告已经被删掉重发过，请刷新后再删');
+          }
+          throw new HostError('conflict', '这条公告刚被改过，请刷新后再删');
+        }
+        return null;
+      }
+      const before = announcementAdmin(row);
+      await this.audit('announcement.delete', key, before, null, this.now());
+      return before;
+    });
+  }
+
+  /** 运营列表：与玩家侧同一批数据，但带 `revision` 与 `publishId`，运营钥匙校验过的路由用。 */
+  async announcementAdminList(limit: number): Promise<AnnouncementAdmin[]> {
+    const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 50) : 20;
+    const rows = await this.db.prepare(
+      'SELECT * FROM support_announcements ORDER BY created_at DESC, id DESC LIMIT ?',
+    ).all(size) as AnnouncementRow[];
+    return rows.map(announcementAdmin);
+  }
+
+  /** 改动留痕：最近的编辑 / 删除记录，含改前原文。 */
+  async auditList(limit: number): Promise<AuditEntry[]> {
+    const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 50) : 20;
+    const rows = await this.db.prepare(
+      'SELECT * FROM support_audit ORDER BY at DESC, id DESC LIMIT ?',
+    ).all(size) as AuditRow[];
+    return rows.map((row) => ({
+      id: row.id, at: Number(row.at), action: row.action, targetId: row.target_id,
+      before: row.before_json ? JSON.parse(row.before_json) as unknown : null,
+      after: row.after_json ? JSON.parse(row.after_json) as unknown : null,
+    }));
+  }
+
+  private async audit(
+    action: AuditAction, targetId: string, before: unknown, after: unknown, at: number,
+  ): Promise<void> {
+    await this.db.prepare(
+      'INSERT INTO support_audit(id, at, action, target_id, before_json, after_json) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(
+      randomUUID(), at, action, targetId,
+      before === null || before === undefined ? null : JSON.stringify(before),
+      after === null || after === undefined ? null : JSON.stringify(after),
+    );
   }
 
   /**
@@ -250,13 +599,14 @@ export class SupportDb {
   }
 
   /** 运营列表：含未到可见时刻的预录条目，供运营钥匙校验过的路由使用。 */
-  async newsAdminList(limit: number): Promise<NewsSummary[]> {
+  async newsAdminList(limit: number): Promise<NewsAdminSummary[]> {
     const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 20) : 10;
+    // revision 必须真的查出来：`newsSummary` 缺省按 1 兜底，漏选就会让列表永远显示「第 1 版」。
     const rows = await this.db.prepare(
-      `SELECT id, issue_date, title, summary, publish_at FROM news_items
+      `SELECT id, issue_date, title, summary, publish_at, revision, created_at, publish_id FROM news_items
         ORDER BY issue_date DESC, publish_at DESC, id DESC LIMIT ?`,
     ).all(size) as NewsRow[];
-    return rows.map(newsSummary);
+    return rows.map(newsAdminSummary);
   }
 
   async newsById(id: string): Promise<NewsItem | undefined> {
