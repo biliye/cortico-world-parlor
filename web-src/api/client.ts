@@ -20,6 +20,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 身份票据或回跳凭据本身失效：重试不会变好，只能回上一页重新点一次入场。
+ * 网络失败（断网、超时）不走这个类型——那种要保留票据让「再试一次」继续用。
+ */
+export class IdentityExpiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IdentityExpiredError';
+  }
+}
+
 /** 单客厅接口改走 /v1/rooms/:id/...；信箱顺带取全局（跨厅邀请在里面）。 */
 export function roomPath(path: string): string {
   const room = currentRoom();
@@ -154,12 +165,21 @@ export function beginGlobalEntry(authority: string, input: { invite?: string; na
 /** 统一身份回跳：用地址栏里的票据换席位。 */
 export async function finishGlobalEntry(ticket: string, state: string): Promise<void> {
   const pending = JSON.parse(sessionStorage.getItem('parlor-identity-pending') || 'null');
-  if (!pending || pending.state !== state) throw new Error('身份连接已失效，请重新加入');
-  const body = await api<JoinResult>('/v1/global/player/join', {
-    method: 'POST',
-    headers: { 'x-parlor-identity': ticket },
-    body: JSON.stringify({ invite: pending.invite, room: pending.room || 'hall', parent: pending.parent === true }),
-  });
+  if (!pending || pending.state !== state) throw new IdentityExpiredError('这次的身份连接已失效，请回上一页重新点一次入场');
+  let body: JoinResult;
+  try {
+    body = await api<JoinResult>('/v1/global/player/join', {
+      method: 'POST',
+      headers: { 'x-parlor-identity': ticket },
+      body: JSON.stringify({ invite: pending.invite, room: pending.room || 'hall', parent: pending.parent === true }),
+    });
+  } catch (error) {
+    // 401 / 403 是票据被拒（过期、换过设备、家长链接不放行）：重试只会拿到同一句。
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      throw new IdentityExpiredError('这次的身份票据已经失效，请回上一页重新点一次入场');
+    }
+    throw error;
+  }
   sessionStorage.removeItem('parlor-identity-pending');
   saveSeat({
     room: body.room,

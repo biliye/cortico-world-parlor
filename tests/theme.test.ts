@@ -20,35 +20,45 @@ const memory = () => {
 };
 
 describe('会馆外观偏好', () => {
-  it('三套外观：默认深色，按顺序切换，刷新恢复选择', () => {
+  it('两套外观：默认深色，深浅来回切，刷新恢复选择', () => {
     const { values, storage } = memory();
     const first = boot(storage);
+    expect(first.window.parlorTheme.themes).toEqual(['dark', 'light']);
     expect(first.root.dataset.theme).toBe('dark');
     first.window.parlorTheme.toggle();
     expect(first.root.dataset.theme).toBe('light');
     expect(first.meta.content).toBe('#f5f7ef');
     first.window.parlorTheme.toggle();
-    expect(first.root.dataset.theme).toBe('cream');
-    expect(first.meta.content).toBe('#fff8ee');
-    expect(values.get('parlor-theme-v1')).toBe('cream');
+    expect(first.root.dataset.theme).toBe('dark');
+    expect(values.get('parlor-theme-v1')).toBe('dark');
     const refreshed = boot(storage);
-    expect(refreshed.root.dataset.theme).toBe('cream');
+    expect(refreshed.root.dataset.theme).toBe('dark');
     refreshed.window.parlorTheme.toggle();
-    expect(boot(storage).root.dataset.theme).toBe('dark');
+    expect(refreshed.root.dataset.theme).toBe('light');
   });
 
-  it('选单可以直接选任意一套，重复选同一套不广播', () => {
+  it('只认深色与浅色，重复选同一套不广播，已下线的奶油不会被选中', () => {
     const { storage } = memory();
     const app = boot(storage);
-    app.window.parlorTheme.set('cream');
-    expect(app.root.dataset.theme).toBe('cream');
+    app.window.parlorTheme.set('light');
+    expect(app.root.dataset.theme).toBe('light');
     const before = app.events.length;
-    app.window.parlorTheme.set('cream');
+    app.window.parlorTheme.set('light');
     app.window.parlorTheme.set('sepia');
-    expect(app.root.dataset.theme).toBe('cream');
+    app.window.parlorTheme.set('cream');
+    expect(app.root.dataset.theme).toBe('light');
     expect(app.events).toHaveLength(before);
     app.window.parlorTheme.set('dark');
     expect(app.root.dataset.theme).toBe('dark');
+  });
+
+  it('旧浏览器存着 cream：折到浅色并改写存储，免得每次回落到系统色', () => {
+    const { values, storage } = memory();
+    values.set('parlor-theme-v1', 'cream');
+    const app = boot(storage);
+    expect(app.root.dataset.theme).toBe('light');
+    expect(app.meta.content).toBe('#f5f7ef');
+    expect(values.get('parlor-theme-v1')).toBe('light');
   });
 
   it('存储不可用时仍能切换，不影响页面启动', () => {
@@ -56,7 +66,7 @@ describe('会馆外观偏好', () => {
     app.window.parlorTheme.toggle();
     expect(app.window.parlorTheme.value).toBe('light');
     app.window.parlorTheme.toggle();
-    expect(app.window.parlorTheme.value).toBe('cream');
+    expect(app.window.parlorTheme.value).toBe('dark');
     expect(app.events).toHaveLength(3);
   });
 });

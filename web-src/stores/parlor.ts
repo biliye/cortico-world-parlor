@@ -3,7 +3,7 @@
  * 并发闸门照旧：同一时刻只允许一次快照刷新、一次目录请求；SSE 断了 3 秒后重连。
  */
 import { computed, ref } from 'vue';
-import { api, beginGlobalEntry, finishGlobalEntry, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
+import { api, beginGlobalEntry, finishGlobalEntry, IdentityExpiredError, parentPlay, scopedPath, takeKeyFromHash } from '../api/client.ts';
 import { seatChanged } from '../lib/seat-switch.ts';
 import { decideExpiredSeat } from '../lib/seat-errors.ts';
 import { SEAT_EXPIRED_MESSAGE } from '../lib/join.ts';
@@ -30,6 +30,23 @@ export const log = ref<ChatEvent[]>([]);
 export const roomTransition = ref<{ from: string; to: string; name: string; error: string } | null>(null);
 
 let stream: EventSource | null = null;
+/**
+ * 地址栏里那把家长钥匙的页内副本。
+ *
+ * `#key=` 取到就立刻从地址栏抹掉（不进历史、不会被复制外发），但第一次请求可能根本没到
+ * 服务器（断网、超时）。旧页在这里留了一份内存副本供重试，Vue 照做：**只有换到席位、
+ * 或已经转交统一身份之后才清掉**，否则失败一次就再也拼不回这把钥匙。
+ */
+let entryKey = '';
+/**
+ * 统一身份回跳票据的页内副本（`#identity=…&state=…`）。
+ *
+ * 和钥匙一样，地址栏一进来就抹掉，但换席位请求可能断在网络上；旧页在 `catch` 里
+ * 直接渲染离线页，票据就丢了，重试一次请求都不发。这里留到换到席位为止。
+ * 票据本身失效（`IdentityExpiredError`）则立刻清掉——再试也是同一句，得回上一页重新授权。
+ */
+let identityTicket = '';
+let identityState = '';
 let reconnectTimer: number | undefined;
 let reconnectFailures = 0;
 let locationTask: { key: string; promise: Promise<boolean> } | undefined;
@@ -817,20 +834,48 @@ export async function boot(): Promise<boolean> {
   const useEntryRoom = explicitEntry || (navigation?.type !== 'reload' && navigation?.type !== 'back_forward' && !history.state?.parlor);
   const target = new URLSearchParams(entrySearch);
   const wanted = useEntryRoom ? target.get('room') || '' : '';
-  if (identityArgs.has('identity')) {
+  const hashIdentity = identityArgs.get('identity') || '';
+  if (hashIdentity) {
+    identityTicket = hashIdentity;
+    identityState = identityArgs.get('state') || '';
     history.replaceState(null, '', location.pathname + location.search);
-    await finishGlobalEntry(identityArgs.get('identity') || '', identityArgs.get('state') || '');
+  }
+  // 与钥匙同一条规矩：地址栏里新粘的票据优先；已有席位时不拿内存里的旧票据替用户换身份。
+  // 回跳票据留在内存里，断网导致第一次请求没到服务器时，「再试一次」还能用同一张票。
+  const ticket = hashIdentity || (seat.value ? '' : identityTicket);
+  if (ticket) {
+    try {
+      await finishGlobalEntry(ticket, hashIdentity ? identityArgs.get('state') || '' : identityState);
+      // 换到席位才算这张票用完了；断网失败要留着，否则重试一次请求都不发。
+      identityTicket = '';
+      identityState = '';
+    } catch (error) {
+      // 票据/授权本身失效：留着只会一直报同一句，清掉并让加入页引导重新授权。
+      if (error instanceof IdentityExpiredError) {
+        identityTicket = '';
+        identityState = '';
+      }
+      if (!seat.value) throw error;
+      showToast((error as Error).message || '统一身份没换成席位', 'bad');
+    }
   }
   // 面板给的 #key= 链接：一次请求换会话 + 领席位，用完从地址栏抹掉。
   // 换不到但旧席位还在时，沿用旧席位继续（与旧版一致），只在没有旧席位时把错误抛给加入页。
-  const key = takeKeyFromHash();
+  // 地址栏抹掉后钥匙留在 entryKey 里：断网时第一次请求可能没到服务器，重试还要用它。
+  // 已经有席位就不再替用户换身份（比如重试失败后改用邀请码入场）；地址栏里新粘的 key 仍然优先。
+  const key = takeKeyFromHash() || (seat.value ? '' : entryKey);
   if (key) {
+    entryKey = key;
     try {
       const played = await parentPlay(key);
       if (played.globalEntry) {
         beginGlobalEntry(played.globalEntry, { room: played.room || 'hall', parent: true });
+        // 已经转交统一身份：回来时用 sessionStorage 里的 pending，不再需要这把钥匙。
+        entryKey = '';
         return false;
       }
+      // 换到席位才算这把钥匙用完了；失败时留着，下一次 boot() 还能再试一次。
+      entryKey = '';
     } catch (error) {
       if (!seat.value) throw error;
       showToast((error as Error).message || '这个家长链接没换成席位', 'bad');

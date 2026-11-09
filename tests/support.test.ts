@@ -57,7 +57,7 @@ describe('私密反馈与运营广播', () => {
     expect(mine.body.feedback[0]).toMatchObject({ text: '<script>页面有问题</script>', reply: '已经记录，待修复', status: 'closed' });
     expect((await request('announcements', human.token)).body.announcements[0].text).toBe('明晚维护');
     expect((await fetch(`${server.url}/support`)).status).toBe(200);
-    for (const asset of ['support.js', 'support.css', 'support-link.js']) expect((await fetch(`${server.url}/play/assets/${asset}`)).status).toBe(200);
+    for (const asset of ['support.js', 'support.css']) expect((await fetch(`${server.url}/play/assets/${asset}`)).status).toBe(200);
   });
 
   it('反馈和广播按请求号去重；限制正文与频率；普通用户不能广播', async () => {

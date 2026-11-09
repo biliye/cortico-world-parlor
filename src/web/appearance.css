@@ -1,6 +1,6 @@
 /* Appearance changes only colors: game instances, drafts and focus remain in place.
-   三套外观：深色的 token 在 club.css 的 :root 里（基座）；浅色与奶油共用一套结构覆盖，
-   各自只换 token。牌桌（斗地主绿绒、狼人杀夜色）留自己的配色，不跟着纸面走。 */
+   两套外观：深色的 token 在 club.css 的 :root 里（基座）；浅色另给一套 token 覆盖。
+   牌桌（斗地主绿绒、狼人杀夜色）留自己的配色，不跟着纸面走。 */
 
 /* —— 外观选单 —— */
 .theme-picker { position:relative; display:inline-flex; align-items:center; gap:6px; color:var(--muted); }
@@ -25,14 +25,12 @@ select option { background:var(--panel-solid); color:var(--text); }
 .join .panel { position:relative; }
 .join .theme-picker { position:absolute; right:18px; top:18px; }
 
-/* —— 浅色与奶油共用的 token（结构一样，只换色） —— */
-html:is([data-theme="light"],[data-theme="cream"]) {
+/* —— 浅色外观的 token（结构不变，只换色） —— */
+html[data-theme="light"] {
   color-scheme:light;
   --chrome:var(--panel-solid); --chrome-row:var(--panel-2); --chrome-active:var(--panel-3);
   --chrome-hover:var(--panel-3);
   --field:var(--panel-solid); --edge:var(--line); --accent-wash:var(--panel-2);
-}
-html[data-theme="light"] {
   --bg:#f5f7ef; --wall:#f5f7ef; --topbar-bg:#fcfdf7;
   --panel:#ffffff; --panel-solid:#ffffff; --panel-2:#edf2e5; --panel-3:#e8efdd;
   --text:#293d32; --muted:#5b6f60; --dim:#65776a; --ink:#293d32; --ink-2:#52695d;
@@ -46,77 +44,60 @@ html[data-theme="light"] {
   --accent-hover:#355a26; --accent-text:#446c31; --accent-text-strong:#365e26;
   --night-bg:#f0eff7; --night-edge:#c7bfd7;
 }
-/* 奶油：老客厅那套暖色（浅木、白瓷、淡桃），当另一套浅色外观用。 */
-html[data-theme="cream"] {
-  --bg:#fff8ee; --wall:#fff8ee; --topbar-bg:#fffaf3;
-  --panel:#fffaf3; --panel-solid:#fffaf3; --panel-2:#fff1e3; --panel-3:#ffead8;
-  --text:#3d3035; --muted:#7b666c; --dim:#8a7278; --ink:#3d3035; --ink-2:#6d5b60;
-  --line:#eddacb; --line-soft:#f4e6d9; --scroll:#dcc3ae;
-  --accent:#ef8a7e; --accent-light:#ffb3a3; --accent-ink:#3a2327; --accent-2:#2f7b6b;
-  --accent-soft:#ef8a7e1a; --accent-border:#ef8a7e59; --accent-glow:#ef8a7e40;
-  --good:#3f9a7c; --good-soft:#4fae8d18; --bad:#c85f5f; --warm:#c98a2e;
-  --cool:#4d84bd; --rose:#c4707f; --violet:#8f77b8; --focus:#c9635a;
-  --card-bg:#fffaf3; --card-border:#f0d9c4; --sheet-bg:#fff8ee;
-  --paper-1:#fffaf3; --paper-2:#f8efe6;
-  --accent-hover:#e0766b; --accent-text:#a8503f; --accent-text-strong:#8c3f31;
-  --night-bg:#f6eef2; --night-edge:#e6d3dc;
-}
 
-html:is([data-theme="light"],[data-theme="cream"]) body::after { display:none; }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.brand,.left-rail,.right-rail,.chat-panel,.mobile-nav) { background:var(--chrome); }
-html:is([data-theme="light"],[data-theme="cream"]) .brand-mark { color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.club-nav .btn.is-active,.table-row.is-active,.table-row:hover) { background:var(--chrome-active); color:var(--accent-text-strong); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.seat-stats>div,.member-chip,.table-icon,.game-icon) { background:var(--chrome-row); color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.ghost-btn:hover,.icon-btn:hover) { background:var(--chrome-active); color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) .btn { background:var(--chrome-row); border-color:var(--edge); color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) .btn.ghost { background:transparent; }
-html:is([data-theme="light"],[data-theme="cream"]) .btn:hover:not(:disabled) { background:var(--chrome-hover); border-color:var(--accent-border); }
-html:is([data-theme="light"],[data-theme="cream"]) .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
-html:is([data-theme="light"],[data-theme="cream"]) .btn.primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); color:var(--accent-ink); }
-html:is([data-theme="light"],[data-theme="cream"]) input,
-html:is([data-theme="light"],[data-theme="cream"]) select,
-html:is([data-theme="light"],[data-theme="cream"]) textarea { background:var(--field); border-color:var(--edge); color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) input::placeholder,
-html:is([data-theme="light"],[data-theme="cream"]) textarea::placeholder { color:var(--dim); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.eyebrow,.club-page-nav .btn,.club-breadcrumb,.club-breadcrumb .btn) { color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) .banner { background:var(--accent-wash); color:var(--text); }
+html[data-theme="light"] body::after { display:none; }
+html[data-theme="light"] :is(.brand,.left-rail,.right-rail,.chat-panel,.mobile-nav) { background:var(--chrome); }
+html[data-theme="light"] .brand-mark { color:var(--accent-text); }
+html[data-theme="light"] :is(.club-nav .btn.is-active,.table-row.is-active,.table-row:hover) { background:var(--chrome-active); color:var(--accent-text-strong); }
+html[data-theme="light"] :is(.seat-stats>div,.member-chip,.table-icon,.game-icon) { background:var(--chrome-row); color:var(--accent-text); }
+html[data-theme="light"] :is(.ghost-btn:hover,.icon-btn:hover) { background:var(--chrome-active); color:var(--text); }
+html[data-theme="light"] .btn { background:var(--chrome-row); border-color:var(--edge); color:var(--text); }
+html[data-theme="light"] .btn.ghost { background:transparent; }
+html[data-theme="light"] .btn:hover:not(:disabled) { background:var(--chrome-hover); border-color:var(--accent-border); }
+html[data-theme="light"] .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+html[data-theme="light"] .btn.primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); color:var(--accent-ink); }
+html[data-theme="light"] input,
+html[data-theme="light"] select,
+html[data-theme="light"] textarea { background:var(--field); border-color:var(--edge); color:var(--text); }
+html[data-theme="light"] input::placeholder,
+html[data-theme="light"] textarea::placeholder { color:var(--dim); }
+html[data-theme="light"] :is(.eyebrow,.club-page-nav .btn,.club-breadcrumb,.club-breadcrumb .btn) { color:var(--accent-text); }
+html[data-theme="light"] .banner { background:var(--accent-wash); color:var(--text); }
 
-html:is([data-theme="light"],[data-theme="cream"]) :is(.club-hero,.club-welcome) { background:var(--accent-wash); border-color:var(--edge); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.club-hero-copy>p,.club-hero-copy .club-hero-meta,.club-welcome p) { color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) .is-large .club-scene-label { color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.club-room-card,.club-table-card,.game-card-hero,.game-card-live,.hall-create) { background:var(--field); border-color:var(--edge); }
-html:is([data-theme="light"],[data-theme="cream"]) .club-table-card.is-night { background:var(--night-bg); border-color:var(--night-edge); }
-html:is([data-theme="light"],[data-theme="cream"]) .club-room-foot { color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) .club-room-card:hover { border-color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) .club-filters .btn.is-active { background:var(--chrome-active); border-color:var(--accent-border); color:var(--accent-text-strong); }
-html:is([data-theme="light"],[data-theme="cream"]) .club-empty { border-color:var(--edge); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.club-stay strong,.members .panel-head h2) { color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) .club-favorite { background:var(--chrome-active)!important; border-color:var(--accent-border); color:var(--accent-text); }
+html[data-theme="light"] :is(.club-hero,.club-welcome) { background:var(--accent-wash); border-color:var(--edge); }
+html[data-theme="light"] :is(.club-hero-copy>p,.club-hero-copy .club-hero-meta,.club-welcome p) { color:var(--accent-text); }
+html[data-theme="light"] .is-large .club-scene-label { color:var(--accent-text); }
+html[data-theme="light"] :is(.club-room-card,.club-table-card,.game-card-hero,.game-card-live,.hall-create) { background:var(--field); border-color:var(--edge); }
+html[data-theme="light"] .club-table-card.is-night { background:var(--night-bg); border-color:var(--night-edge); }
+html[data-theme="light"] .club-room-foot { color:var(--accent-text); }
+html[data-theme="light"] .club-room-card:hover { border-color:var(--accent-text); }
+html[data-theme="light"] .club-filters .btn.is-active { background:var(--chrome-active); border-color:var(--accent-border); color:var(--accent-text-strong); }
+html[data-theme="light"] .club-empty { border-color:var(--edge); }
+html[data-theme="light"] :is(.club-stay strong,.members .panel-head h2) { color:var(--text); }
+html[data-theme="light"] .club-favorite { background:var(--chrome-active)!important; border-color:var(--accent-border); color:var(--accent-text); }
 
-html:is([data-theme="light"],[data-theme="cream"]) .msg-body p { background:var(--chrome-row); color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) .composer-row { background:var(--field); border-color:var(--edge); }
-html:is([data-theme="light"],[data-theme="cream"]) .composer-row input { background:transparent; }
-html:is([data-theme="light"],[data-theme="cream"]) .send-btn { background:var(--accent); color:var(--accent-ink); }
-html:is([data-theme="light"],[data-theme="cream"]) .chat-tab { color:var(--muted); }
-html:is([data-theme="light"],[data-theme="cream"]) .chat-tab.is-active { color:var(--accent-text); border-bottom-color:var(--accent); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.rooms-box,.access-box,.join .panel,.dm-window,.dm-head,.dm-list,.dm-thread,.mail-item) { background:var(--chrome); color:var(--text); border-color:var(--edge); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.rooms-row,.access-member,.dm-person,.dm-search,.dm-compose) { background:var(--chrome-row); border-color:var(--edge); }
-html:is([data-theme="light"],[data-theme="cream"]) :is(.rooms-row:hover,.dm-person.is-active,.dm-person:hover) { background:var(--chrome-active); }
-html:is([data-theme="light"],[data-theme="cream"]) .dm-msg { color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) .dm-msg p { background:var(--chrome-row); color:var(--text); }
-html:is([data-theme="light"],[data-theme="cream"]) .dm-msg.is-me p { background:var(--accent-wash); }
-html:is([data-theme="light"],[data-theme="cream"]) .rooms-dialog::backdrop,
-html:is([data-theme="light"],[data-theme="cream"]) .access-dialog::backdrop,
-html:is([data-theme="light"],[data-theme="cream"]) .sheet-backdrop { background:#293d3266; }
-html:is([data-theme="light"],[data-theme="cream"]) .toast { background:var(--accent-wash); border-color:var(--accent-border); color:var(--accent-text-strong); }
-html:is([data-theme="light"],[data-theme="cream"]) .toast.bad { background:#f8e0d8; border-color:#d6a79b; color:#7f3631; }
-html:is([data-theme="light"],[data-theme="cream"]) .join { background:var(--bg); }
-html:is([data-theme="light"],[data-theme="cream"]) .mobile-ticker { background:var(--accent-wash); border-color:var(--accent-border); color:var(--accent-text); }
-html:is([data-theme="light"],[data-theme="cream"]) .wait-card { background:var(--field); }
-/* 奶油这套的强调色偏亮，当正文颜色用时换成深一档的同一色系。 */
-html[data-theme="cream"] :is(.chips,.turn-kicker) { color:var(--accent-text); }
+html[data-theme="light"] .msg-body p { background:var(--chrome-row); color:var(--text); }
+html[data-theme="light"] .composer-row { background:var(--field); border-color:var(--edge); }
+html[data-theme="light"] .composer-row input { background:transparent; }
+html[data-theme="light"] .send-btn { background:var(--accent); color:var(--accent-ink); }
+html[data-theme="light"] .chat-tab { color:var(--muted); }
+html[data-theme="light"] .chat-tab.is-active { color:var(--accent-text); border-bottom-color:var(--accent); }
+html[data-theme="light"] :is(.rooms-box,.access-box,.join .panel,.dm-window,.dm-head,.dm-list,.dm-thread,.mail-item) { background:var(--chrome); color:var(--text); border-color:var(--edge); }
+html[data-theme="light"] :is(.rooms-row,.access-member,.dm-person,.dm-search,.dm-compose) { background:var(--chrome-row); border-color:var(--edge); }
+html[data-theme="light"] :is(.rooms-row:hover,.dm-person.is-active,.dm-person:hover) { background:var(--chrome-active); }
+html[data-theme="light"] .dm-msg { color:var(--text); }
+html[data-theme="light"] .dm-msg p { background:var(--chrome-row); color:var(--text); }
+html[data-theme="light"] .dm-msg.is-me p { background:var(--accent-wash); }
+html[data-theme="light"] .rooms-dialog::backdrop,
+html[data-theme="light"] .access-dialog::backdrop,
+html[data-theme="light"] .sheet-backdrop { background:#293d3266; }
+html[data-theme="light"] .toast { background:var(--accent-wash); border-color:var(--accent-border); color:var(--accent-text-strong); }
+html[data-theme="light"] .toast.bad { background:#f8e0d8; border-color:#d6a79b; color:#7f3631; }
+html[data-theme="light"] .join { background:var(--bg); }
+html[data-theme="light"] .mobile-ticker { background:var(--accent-wash); border-color:var(--accent-border); color:var(--accent-text); }
+html[data-theme="light"] .wait-card { background:var(--field); }
 
-/* —— 浅色专用的牌桌配色（奶油沿用会馆那张绿绒桌，不另调） —— */
+/* —— 浅色专用的牌桌配色（牌桌保留自己的绿绒 / 夜色，不跟纸面走） —— */
 html[data-theme="light"] .ddz-board {
   --text:#e1e9da; --muted:#b3c6a2; --accent:#d5ed9b; --accent-light:#e1f5b8;
   --accent-ink:#203329; --accent-border:#a9cc7766; --focus:#d5ed9b;
@@ -141,11 +122,11 @@ html[data-theme="light"] .wf-end-sub { color:#526458; }
 html[data-theme="light"] .wf-card-face .wf-role-mates { color:#d8cdea; }
 
 @media(max-width:1100px) {
-  html:is([data-theme="light"],[data-theme="cream"]) .chat-panel { border-color:var(--edge); }
+  html[data-theme="light"] .chat-panel { border-color:var(--edge); }
 }
 @media(max-width:700px) {
   .topbar .theme-picker .icon { display:none; }
   .topbar .theme-picker select { min-height:32px; padding:4px 22px 4px 9px; }
   .top-right { gap:6px; }
-  html:is([data-theme="light"],[data-theme="cream"]) .left-rail { background:var(--chrome); }
+  html[data-theme="light"] .left-rail { background:var(--chrome); }
 }

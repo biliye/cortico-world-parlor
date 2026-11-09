@@ -6,8 +6,9 @@ import { GUEST_CLOSED_MESSAGE, guestJoinEnabled } from '../lib/join.ts';
 import ThemePicker from '../components/ThemePicker.vue';
 import type { Health } from '../api/types.ts';
 
-const emit = defineEmits<{ entered: [] }>();
-const props = defineProps<{ initialError?: string }>();
+/** `retry` 只在入场失败时出现（`initialError`），由根组件重新走一次 boot。 */
+const emit = defineEmits<{ entered: []; retry: [] }>();
+const props = defineProps<{ initialError?: string; canRetry?: boolean }>();
 
 const name = ref('');
 const invite = ref('');
@@ -119,6 +120,8 @@ async function parentPlay(): Promise<void> {
         <button class="btn primary" type="button" :disabled="busy" @click="submit">加入客厅</button>
         <p class="note">邀请码只用来进这个房间，不会存进网址；席位令牌存在这台浏览器里。</p>
       </template>
+      <!-- 入场失败（多半是钥匙没换成席位）时给一条原地重试；入口关闭时也保留，别让人只能重开链接。 -->
+      <button v-if="props.canRetry" class="btn" type="button" :disabled="busy" @click="emit('retry')">再试一次</button>
       <div v-if="parentName" class="parent-play">
         <p class="sub">这台浏览器登录了「{{ parentName }}」，可以直接以这个身份下场。</p>
         <button class="btn primary" type="button" :disabled="busy" @click="parentPlay">以家长身份下场</button>

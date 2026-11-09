@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,9 +130,15 @@ describe('网页玩家', () => {
     expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
     expect(page.text).toContain('/play/assets/vue-loader.js');
 
-    const js = await call('/play/assets/play.js');
+    const js = await call('/play/assets/vue/main.js');
     expect(js.status).toBe(200);
     expect(js.headers.get('content-type')).toContain('text/javascript');
+    // 旧页已在 0.40.0 下线：旧脚本不再发布，带 ?legacy=1 的书签 302 回默认页。
+    expect((await call('/play/assets/play.js')).status).toBe(404);
+    const retired = await call('/play?legacy=1&room=hall', { redirect: 'manual' });
+    expect(retired.status).toBe(302);
+    expect(retired.headers.get('location')).toBe('/play?room=hall');
+    expect((await call('/play?legacy=true', { redirect: 'manual' })).headers.get('location')).toBe('/play');
     const css = await call('/play/assets/play.css');
     expect(css.status).toBe(200);
     expect(css.headers.get('content-type')).toContain('text/css');
@@ -163,17 +169,17 @@ describe('网页玩家', () => {
       req.end();
     });
 
-    const js = await raw('/play/assets/play.js', { 'accept-encoding': 'gzip' });
+    const js = await raw('/play/assets/vue/main.js', { 'accept-encoding': 'gzip' });
     expect(js.status).toBe(200);
     expect(js.headers['content-encoding']).toBe('gzip');
     expect(js.headers['cache-control']).toContain('max-age=300');
-    const plain = readFileSync(new URL('../src/web/play.js', import.meta.url));
+    const plain = readFileSync(new URL('../src/web/vue/main.js', import.meta.url));
     expect(gunzipSync(js.body).equals(plain)).toBe(true);
     expect(js.body.length).toBeLessThan(plain.length / 2);
 
     const etag = String(js.headers.etag);
     expect(etag).toMatch(/^"[\w-]{18}-gz"$/);
-    const again = await raw('/play/assets/play.js', { 'accept-encoding': 'gzip', 'if-none-match': etag });
+    const again = await raw('/play/assets/vue/main.js', { 'accept-encoding': 'gzip', 'if-none-match': etag });
     expect(again.status).toBe(304);
     expect(again.body.length).toBe(0);
 
@@ -471,13 +477,31 @@ describe('网页玩家', () => {
     expect(css).toContain('.ddz-guide');
   });
 
+  it('异步棋盘子包加载失败时有刷新兜底，样式齐全', () => {
+    // 发版会换掉带哈希的分包名：升级前开着的标签页首次进五子棋或快局大富翁会 404，
+    // 兜底文案必须真的进产物，否则牌桌区域只剩一片空白。
+    const dir = new URL('../src/web/vue/', import.meta.url);
+    const scripts = readdirSync(dir).filter((name) => name.endsWith('.js'))
+      .map((name) => readFileSync(new URL(name, dir), 'utf8'));
+    expect(scripts.some((text) => text.includes('这一桌的界面没载入成功'))).toBe(true);
+    expect(scripts.some((text) => text.includes('刷新页面'))).toBe(true);
+    const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
+    expect(css).toContain('.chunk-fallback');
+  });
+
+  it('统一身份票据失效的引导文案进了产物', () => {
+    // 票据在请求前就离开了地址栏，失效提示必须来自客户端产物本身，否则用户只看到一句 401。
+    const dir = new URL('../src/web/vue/', import.meta.url);
+    const scripts = readdirSync(dir).filter((name) => name.endsWith('.js'))
+      .map((name) => readFileSync(new URL(name, dir), 'utf8'));
+    expect(scripts.some((text) => text.includes('重新点一次入场'))).toBe(true);
+  });
+
   it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {
     const files = [
-      'src/web/play.js',
       'src/web/common.js',
       'src/web/local-history.js',
       'src/web/games/dice.js',
-      'src/web/games/ddz.js',
       'src/web/games/monopoly.js',
       'src/web/vue-loader.js',
       'src/web/vue/main.js',
