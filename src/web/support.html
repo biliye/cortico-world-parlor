@@ -14,16 +14,21 @@
 <div id="operator-panel" hidden><button id="operator-logout" type="button">退出运营工作台</button>
 <h3>发布全站公告</h3><form id="announcement-form"><label for="announcement-text">公告内容（所有 Coo 和真人可见）</label>
 <textarea id="announcement-text" maxlength="2000" rows="4" required></textarea><button type="submit">预览发布</button></form>
+<h3>公告管理</h3><p>改完不会重新弹横幅——已经点过「知道了」的人不会再看到一次。删掉的公告会从横幅和列表里消失。</p>
+<div id="operator-announcement-list"></div>
 <h3>发布每日新闻</h3><p>一天一版，按北京时间。标题 60 字、摘要 200 字、正文 4000 字；Coo 自动收到标题与摘要，正文由它主动查。</p>
 <form id="news-form">
+<p id="news-mode" hidden>正在修改 <strong id="news-mode-id"></strong>：日期不能改，要换日期请删掉重发。</p>
 <label for="news-date">日期（北京）</label><input id="news-date" type="date" required>
 <label for="news-title">标题</label><input id="news-title" maxlength="60" required>
 <label for="news-summary">摘要（自动推送的就是这一段）</label><textarea id="news-summary" maxlength="200" rows="3" required></textarea>
 <label for="news-body">正文（Coo 主动查时看）</label><textarea id="news-body" maxlength="4000" rows="8" required></textarea>
 <label for="news-time">可见时刻（北京时间，留空按 10:00）</label><input id="news-time" type="time" value="10:00">
 <label><input id="news-autopush" type="checkbox" checked> 到点自动推送给在线 Coo（补录历史时请取消）</label>
-<button type="submit">发布新闻</button>
+<button type="submit" id="news-submit">发布新闻</button>
+<button type="button" id="news-cancel" hidden>取消修改</button>
 </form>
-<h3>最近新闻</h3><div id="operator-news-list"></div>
+<h3>新闻管理</h3><p>改一条已发出的新闻不会重新推送，但大厅小报下一次刷新就是新文本。删掉之后同一天可以重发一条。</p>
+<div id="operator-news-list"></div>
 <h3>反馈收件箱</h3><div id="operator-feedback"></div></div></details>
 </main><script type="module" src="/play/assets/support.js"></script></body></html>

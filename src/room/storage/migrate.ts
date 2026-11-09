@@ -12,7 +12,7 @@ import type { Db } from './types.ts';
 import type { SqliteDb } from './sqlite.ts';
 import type { PgDb } from './postgres.ts';
 import { PG_MIGRATIONS, PG_SCHEMA_VERSION } from './pg-schema.ts';
-import { NEWS_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 /** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
@@ -148,6 +148,22 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   handle.exec(SUPPORT_SCHEMA_SQL);
   handle.exec(TABLE_DISCOVERY_SCHEMA_SQL);
   handle.exec(NEWS_SCHEMA_SQL);
+  handle.exec(SUPPORT_ADMIN_SCHEMA_SQL);
+  // 同上：老库的新闻表与公告表没有编辑留痕的两列，单独补。
+  const newsColumns = new Set(
+    (handle.prepare('PRAGMA table_info(news_items)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!newsColumns.has('revision')) handle.exec('ALTER TABLE news_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
+  if (!newsColumns.has('updated_at')) handle.exec('ALTER TABLE news_items ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0');
+  const announcementColumns = new Set(
+    (handle.prepare('PRAGMA table_info(support_announcements)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!announcementColumns.has('revision')) {
+    handle.exec('ALTER TABLE support_announcements ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!announcementColumns.has('updated_at')) {
+    handle.exec('ALTER TABLE support_announcements ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0');
+  }
   // CREATE TABLE IF NOT EXISTS 不给老库补列；招募版本列单独补。
   const discoveryColumns = new Set(
     (handle.prepare('PRAGMA table_info(table_discovery)').all() as { name: string }[]).map((row) => row.name),

@@ -33,11 +33,14 @@ async function start() {
   return { client, token: joined.token };
 }
 
-async function operator(path: string, body: unknown, key = OPERATOR) {
+async function operator(path: string, body?: unknown, key = OPERATOR, method = 'POST') {
   const response = await fetch(`${app!.url}/v1/support/operator/${path}`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    method,
+    headers: {
+      authorization: `Bearer ${key}`,
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   return { status: response.status, body: await response.json() as Record<string, any> };
 }
@@ -199,5 +202,85 @@ describe('统一 inbox 网关（真实 PG）', () => {
       expect((await fetch(`${app!.url}/v1/support/${path}`)).status).toBe(401);
     }
     expect((await publish({ issueDate: '2026-11-09', title: 't', summary: 's', body: 'b' }, 'wrong-key')).status).toBe(403);
+  });
+});
+
+describe('运营侧编辑与删除（真实 PG，HTTP 层）', () => {
+  it('PATCH 改新闻：玩家立刻读到新文本，响应里带 changed；无钥匙 403、不存在 404', async () => {
+    const { client, token } = await start();
+    await publish({ issueDate: '2026-11-09', title: '原标题', summary: '摘要', body: '原正文' });
+
+    const edited = await operator('news', { id: 'news-2026-11-09', title: '新标题', body: '新正文' }, OPERATOR, 'PATCH');
+    expect(edited.status).toBe(200);
+    expect(edited.body).toMatchObject({ changed: true, news: { title: '新标题', body: '新正文', revision: 2 } });
+
+    // 整条没变化：不涨版本，changed=false。
+    const same = await operator('news', { id: 'news-2026-11-09', title: '新标题', body: '新正文' }, OPERATOR, 'PATCH');
+    expect(same.body).toMatchObject({ changed: false, news: { revision: 2 } });
+
+    const seen = await client.news(token) as { news: Record<string, any> };
+    expect(seen.news).toMatchObject({ title: '新标题', body: '新正文' });
+
+    expect((await operator('news', { id: 'news-2026-11-09', title: 'x' }, 'wrong-key', 'PATCH')).status).toBe(403);
+    expect((await operator('news', { id: 'news-nope', title: 'x' }, OPERATOR, 'PATCH')).status).toBe(404);
+    expect((await operator('news', { title: '缺 id' }, OPERATOR, 'PATCH')).status).toBe(400);
+  });
+
+  it('DELETE 删新闻：玩家读不到、同一天可重发；重复删返回 deleted:null', async () => {
+    const { client, token } = await start();
+    await publish({ issueDate: '2026-11-09', title: '要删的', summary: '摘要', body: '正文' });
+
+    const removed = await operator('news?id=news-2026-11-09', undefined, OPERATOR, 'DELETE');
+    expect(removed.status).toBe(200);
+    expect(removed.body).toMatchObject({ ok: true, deleted: { id: 'news-2026-11-09', body: '正文' } });
+
+    const asSeat = await client.news(token, { list: true }) as { news: unknown[] };
+    expect(asSeat.news).toEqual([]);
+
+    // 重试幂等：再删一次返回 deleted:null，不当成错误。
+    const twice = await operator('news?id=news-2026-11-09', undefined, OPERATOR, 'DELETE');
+    expect(twice.status).toBe(200);
+    expect(twice.body).toEqual({ ok: true, deleted: null });
+
+    // 唯一索引释放：同一天重发一条新内容。
+    const again = await publish({ issueDate: '2026-11-09', title: '重发的一期', summary: 's', body: 'b' });
+    expect(again.status).toBe(200);
+    expect(again.body.news).toMatchObject({ id: 'news-2026-11-09', title: '重发的一期' });
+  });
+
+  it('公告也可改可删；运营钥匙能读列表，玩家侧同步变化，删除留痕可查', async () => {
+    const { client, token } = await start();
+    await operator('announcements', { text: '原来的公告', requestId: 'ann-edit-1' });
+    await operator('announcements', { text: '另一条', requestId: 'ann-edit-2' });
+
+    const list = await operator('announcements?limit=10', undefined, OPERATOR, 'GET');
+    expect(list.status).toBe(200);
+    expect(list.body.announcements.map((item: Record<string, any>) => item.id)).toEqual(['ann-edit-2', 'ann-edit-1']);
+
+    const edited = await operator('announcements', { id: 'ann-edit-1', text: '改过的公告' }, OPERATOR, 'PATCH');
+    expect(edited.status).toBe(200);
+    expect(edited.body.announcement).toMatchObject({ id: 'ann-edit-1', text: '改过的公告', revision: 2 });
+
+    const inbox = await client.inbox(token, { topics: ['announcements'], afterPublish: 0, afterId: '' });
+    const texts = (inbox.announcements ?? []).map((item) => item.text);
+    expect(texts).toContain('改过的公告');
+
+    // 留痕按时刻排序；时钟钉死时两条会撞在同一毫秒，往前推一下让顺序可判。
+    clock = NOW + 60_000;
+    const removed = await operator('announcements?id=ann-edit-2', undefined, OPERATOR, 'DELETE');
+    expect(removed.status).toBe(200);
+    expect(removed.body.deleted).toMatchObject({ id: 'ann-edit-2', text: '另一条' });
+    const after = await client.inbox(token, { topics: ['announcements'], afterPublish: 0, afterId: '' });
+    expect((after.announcements ?? []).map((item) => item.id)).toEqual(['ann-edit-1']);
+
+    const audit = await operator('audit?limit=10', undefined, OPERATOR, 'GET');
+    expect(audit.status).toBe(200);
+    expect(audit.body.audit.map((entry: Record<string, any>) => entry.action))
+      .toEqual(['announcement.delete', 'announcement.edit']);
+    expect(audit.body.audit[0].before).toMatchObject({ text: '另一条' });
+    // 运营留痕不是公开数据：席位令牌读不到。
+    expect((await fetch(`${app!.url}/v1/support/operator/audit`, {
+      headers: { authorization: `Bearer ${token}` },
+    })).status).toBe(403);
   });
 });

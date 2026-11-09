@@ -12,10 +12,10 @@
  * 迁移按版本号走：PG 有自己的一套编号，不沿用来源 SQLite 的 schema_version。
  */
 
-import { NEWS_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 8;
+export const PG_SCHEMA_VERSION = 9;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -467,5 +467,14 @@ export const PG_MIGRATIONS: PgMigration[] = [
   { version: 8, name: 'news-and-recruit-version', sql: `
     ${NEWS_SCHEMA_SQL}
     ALTER TABLE table_discovery ADD COLUMN IF NOT EXISTS recruit_version BIGINT NOT NULL DEFAULT 0;
+  ` },
+  // 同样是纯增量：两张表各加两列（都有默认值），再补一张改动留痕表。
+  // 回退到 0.39.0 只需把 meta.schema_version 改回 8——多出来的列与表老程序不读。
+  { version: 9, name: 'support-edit-delete', sql: `
+    ALTER TABLE news_items ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE news_items ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+    ${SUPPORT_ADMIN_SCHEMA_SQL}
   ` },
 ];

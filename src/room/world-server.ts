@@ -903,13 +903,50 @@ export class WorldServer {
           const body = await readJson(req);
           json(res, 200, { announcement: await support.announce(body.text, body.requestId) }); return;
         }
+        // 运营列表：玩家那条 `announcements` 走 Coo / 席位鉴权，运营钥匙调不动，
+        // 所以工作台要自己有一条读法，否则改与删都没有入口。
+        if (path === 'operator/announcements' && method === 'GET') {
+          json(res, 200, { announcements: await support.announcementAdminList(Number(url.searchParams.get('limit') ?? 20)) }); return;
+        }
+        if (path === 'operator/announcements' && method === 'PATCH') {
+          const body = await readJson(req);
+          const id = String(body.id ?? '').trim();
+          if (!id) throw new HttpError(400, '需要公告 id');
+          json(res, 200, { announcement: (await support.editAnnouncement(id, body.text)).item }); return;
+        }
+        if (path === 'operator/announcements' && method === 'DELETE') {
+          const id = (url.searchParams.get('id') ?? '').trim();
+          if (!id) throw new HttpError(400, '需要公告 id');
+          json(res, 200, { ok: true, deleted: await support.deleteAnnouncement(id) }); return;
+        }
         if (path === 'operator/news' && method === 'GET') {
+          const id = (url.searchParams.get('id') ?? '').trim();
+          if (id) {
+            const item = await support.newsAdminById(id);
+            if (!item) throw new HttpError(404, '没有这条新闻');
+            json(res, 200, { news: item }); return;
+          }
           // 运营列表含还没到可见时刻的预录条目：这条走运营钥匙，不走席位鉴权。
           json(res, 200, { news: await support.newsAdminList(Number(url.searchParams.get('limit') ?? 10)) }); return;
         }
         if (path === 'operator/news' && method === 'POST') {
           const body = await readJson(req);
           json(res, 200, { news: await support.publishNews(body) }); return;
+        }
+        // 改：只动内容与可见设置，不动 id 与日期；字段没给就保持原样。
+        if (path === 'operator/news' && method === 'PATCH') {
+          const body = await readJson(req);
+          const result = await support.editNews(body);
+          json(res, 200, { news: result.item, changed: result.changed }); return;
+        }
+        // 删：物理删除，当天可以重发；原文进留痕表，`deleted: null` 表示本来就没有。
+        if (path === 'operator/news' && method === 'DELETE') {
+          const id = (url.searchParams.get('id') ?? '').trim();
+          if (!id) throw new HttpError(400, '需要新闻 id');
+          json(res, 200, { ok: true, deleted: await support.deleteNews(id) }); return;
+        }
+        if (path === 'operator/audit' && method === 'GET') {
+          json(res, 200, { audit: await support.auditList(Number(url.searchParams.get('limit') ?? 20)) }); return;
         }
       }
       throw new HttpError(404, '没有这个反馈通道地址');

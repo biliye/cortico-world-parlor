@@ -5,6 +5,7 @@ import { CooAccountDb } from '../src/room/coo-account-db.ts';
 import { createRoom } from '../src/room/room-seat-db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
+import { SupportDb } from '../src/room/support-db.ts';
 import { openStorage, parseStorageKind } from '../src/room/storage/open.ts';
 import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 
@@ -156,4 +157,49 @@ it('v7 升到 v8：新闻表与招募版本列都是纯增量，老桌保留、�
   expect(Number((await db.prepare('SELECT COUNT(*) AS n FROM news_items').get() as { n: string | number }).n)).toBe(1);
   expect(Number((await db.prepare('SELECT recruit_version FROM table_discovery WHERE table_id=?')
     .get('t-v8-legacy') as { recruit_version: string | number }).recruit_version)).toBe(0);
+});
+
+it('v8 升到 v9：新闻与公告各加两列、留痕表建起来，老数据保留且能直接编辑', async () => {
+  db = await openTestDb();
+  await db.prepare(
+    `INSERT INTO news_items(id, issue_date, title, summary, body, publish_at, auto_push, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run('news-2026-11-09', '2026-11-09', '旧标题', '旧摘要', '旧正文', 1, 1, 1);
+  await db.prepare('INSERT INTO support_announcements(id, text, created_at) VALUES (?, ?, ?)')
+    .run('ann-v9-legacy', '旧公告', 1);
+
+  // 退回 v8 的样子：两张表都没有编辑留痕的两列，也没有留痕表。
+  await db.exec(`ALTER TABLE news_items DROP COLUMN IF EXISTS revision;
+    ALTER TABLE news_items DROP COLUMN IF EXISTS updated_at;
+    ALTER TABLE support_announcements DROP COLUMN IF EXISTS revision;
+    ALTER TABLE support_announcements DROP COLUMN IF EXISTS updated_at;
+    DROP TABLE IF EXISTS support_audit;
+    UPDATE meta SET value='8' WHERE key='schema_version';`);
+  expect(await schemaVersion(db)).toBe(8);
+
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+
+  // 老行按默认值读：revision=1、updated_at=0，正文一个字没动。
+  const news = await db.prepare('SELECT title, body, revision, updated_at FROM news_items WHERE id=?')
+    .get('news-2026-11-09') as { title: string; body: string; revision: string | number; updated_at: string | number };
+  expect(news).toMatchObject({ title: '旧标题', body: '旧正文' });
+  expect(Number(news.revision)).toBe(1);
+  expect(Number(news.updated_at)).toBe(0);
+
+  // 迁移完就能编辑，版本从 1 涨到 2；留痕表也写得进去。
+  const edited = await new SupportDb(db, () => 2).editNews({ id: 'news-2026-11-09', title: '新标题' });
+  expect(edited.item).toMatchObject({ title: '新标题', revision: 2, updatedAt: 2 });
+  const audit = await new SupportDb(db, () => 2).auditList(5);
+  expect(audit).toHaveLength(1);
+  expect(audit[0]).toMatchObject({ action: 'news.edit', targetId: 'news-2026-11-09' });
+  expect(audit[0].before).toMatchObject({ title: '旧标题' });
+
+  // 重复启动：版本已是最新，不再重复加列，数据仍在。
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  expect(Number((await db.prepare('SELECT revision FROM news_items WHERE id=?')
+    .get('news-2026-11-09') as { revision: string | number }).revision)).toBe(2);
+  expect((await db.prepare('SELECT text FROM support_announcements WHERE id=?')
+    .get('ann-v9-legacy') as { text: string }).text).toBe('旧公告');
 });
