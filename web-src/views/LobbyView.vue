@@ -2,6 +2,7 @@
 /** 大厅：发现是「舞台 + 海报墙」；我的客厅是个人席位墙；收藏是书签清单。数据仍来自 /v1/hall 与 /v1/rooms。 */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
+import HallPaper from '../components/HallPaper.vue';
 import LobbyMatching from '../components/LobbyMatching.vue';
 import LobbyScene from '../components/LobbyScene.vue';
 import { api } from '../api/client.ts';
@@ -96,6 +97,13 @@ function scrollToRooms(): void {
     return;
   }
   directoryEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** 首屏那条「今日新闻与公告」：小报没渲染（两边都空）就直接去看客厅。 */
+function scrollToNews(): void {
+  const band = document.getElementById('hall-news');
+  if (band) band.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  else scrollToRooms();
 }
 
 /** 「开一间」的空位：滚到表单并聚焦。 */
@@ -212,6 +220,7 @@ async function createRoom(): Promise<void> {
               {{ rooms.length ? '逛逛客厅' : '开一间客厅' }}<span class="cta-arrow">↗</span>
             </button>
             <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
+            <button class="ghost-link" type="button" @click="scrollToNews">今日新闻与公告 ↓</button>
           </div>
         </div>
 
@@ -260,6 +269,7 @@ async function createRoom(): Promise<void> {
                 走进「{{ model.current.name }}」<span class="cta-arrow">↗</span>
               </button>
               <button class="ghost-link" type="button" @click="scrollToRooms">逛逛其他客厅 ↓</button>
+              <button class="ghost-link" type="button" @click="scrollToNews">今日新闻与公告 ↓</button>
             </div>
           </div>
 
@@ -271,6 +281,9 @@ async function createRoom(): Promise<void> {
 
       <!-- 画面到此为止：下面这些纸面内容用实底接住，滚动时不会跟背景打架。 -->
       <div class="hall-floor">
+        <!-- 首屏与目录之间：每日新闻 + 公告栏，往下滚一屏就到。 -->
+        <HallPaper />
+
         <section id="hall-rooms" ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅">
           <header class="directory-head">
             <h2>全部客厅</h2>

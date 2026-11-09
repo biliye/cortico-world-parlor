@@ -12,6 +12,8 @@ const SEEN_KEY = 'parlor-announcements-seen';
 
 export const items = ref<Announcement[]>([]);
 export const dismissed = ref<string[]>(readList(DISMISSED_KEY));
+/** 第一次请求落地（成功或失败）就置 true；大厅小报据此判断「是不是真的没有公告」。 */
+export const loaded = ref(false);
 
 export const current = computed<Announcement | null>(() => pick(items.value, dismissed.value));
 
@@ -49,6 +51,8 @@ export async function refreshAnnouncements(force = false): Promise<void> {
     items.value = Array.isArray(data.announcements) ? data.announcements : [];
   } catch {
     /* 断网不弹提示 */
+  } finally {
+    loaded.value = true;
   }
 }
 
