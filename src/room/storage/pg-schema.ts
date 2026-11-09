@@ -480,7 +480,7 @@ export const PG_MIGRATIONS: PgMigration[] = [
   /**
    * 每次发布一个唯一标识：同一天删掉重发沿用同一个 `id`，`created_at` 也可能撞在
    * 同一毫秒，只有它能把「上一期」与「重发的新稿」分开。老行按 id 派生，稳定且互不相同。
-   * 纯增量：多一列有默认值，回退到 0.39.0 只需把 meta.schema_version 改回 9。
+   * 纯增量：多一列有默认值，退回上一版（schema 9）只需把 meta.schema_version 改回 9。
    */
   { version: 10, name: 'news-publish-id', sql: `
     ALTER TABLE news_items ADD COLUMN IF NOT EXISTS publish_id TEXT NOT NULL DEFAULT '';
