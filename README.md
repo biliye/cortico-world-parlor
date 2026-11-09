@@ -134,9 +134,10 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 - **仍共用的样式与渲染器不动**：`play.css` / `club.css` / `appearance.css` 留着，斗地主与狼人杀的 Vue 桌面沿用这些类名与配色；骰子、旧大富翁两个未迁 Vue 的渲染器继续由 `web-src/lib/legacy-games.ts` 挂进牌桌（两款都已在大厅收起，存量桌仍可看）。
 - **奶油外观收口**：`theme.js` 只认深色 / 浅色，浏览器里存着的 `cream` 自动折到浅色并改写偏好；`appearance.css` 删掉奶油 token。
 - **家长入场重试**：`#key=` 一进页面仍立刻从地址栏抹掉，但钥匙在内存里留一份，换到席位（或转交统一身份）之后才清；断网导致第一次请求没发出去时，重试仍用同一把钥匙。
+- **统一身份回跳重试**：`#identity=…&state=…` 也一样留到换到席位为止，断网后「再试一次」仍用同一张票据；票据本身失效（401 / 403 或回跳凭据对不上）则清掉副本、提示回上一页重新入场。
 - **异步棋盘子包兜底**：五子棋与快局大富翁的棋盘按需加载，发版换名后旧标签页首次进桌会 404；现在会自动重试一次，仍失败就在牌桌位置提示「这一桌的界面没载入成功」并给刷新按钮。
-- **迁移与降级（本版基线含运营侧可改可删）**：PG schema **8 → 11**（v9 两表加 `revision` / `updated_at` 并新建 `support_audit`；v10 `news_items.publish_id`；v11 `support_announcements.publish_id`）、SQLite 10 → 12，三段都是纯增量。切前照例 `pg_dump -Fc` 留档；验收看 `/healthz` 的 0.40.0 与 `schema_version=11`、`support_audit` 存在、两张表的 `publish_id` 无空串。降级不用整库恢复：退回 0.39.0 只需把 `meta.schema_version` 改回 8，回退期间写入的新闻/公告 `publish_id` 会在下次升级启动时按 id 补齐。
-- **部署注意**：旧页文件要显式删除（覆盖安装不会删已移除文件，`post-diff` 里会以 `only-install` 出现）；想给上一版 Vue 分包留过渡期，就先保留 `src/web/vue/chunk-*.js`，下次发版再清。网页刷新即用；Coo 侧无需升级。
+- **迁移与降级（本版基线含运营侧可改可删）**：PG schema **8 → 11**（v9 两表加 `revision` / `updated_at` 并新建 `support_audit`；v10 `news_items.publish_id`；v11 `support_announcements.publish_id`）、SQLite 10 → 12，三段都是纯增量。切前照例 `pg_dump -Fc` 留档；验收用 `/healthz` 的 `version` 核 0.40.0（该接口不返回 schema 版本），schema 从数据库核 `SELECT value FROM meta WHERE key = 'schema_version'` = 11，另看 `support_audit` 存在、两张表的 `publish_id` 无空串。降级不用整库恢复：退回 0.39.0 只需把 `meta.schema_version` 改回 8，回退期间写入的新闻/公告 `publish_id` 会在下次升级启动时按 id 补齐。
+- **部署注意**：旧页文件要显式删除（覆盖安装不会删已移除文件，`post-diff` 里会以 `only-install` 出现）；上一版的 `src/web/vue/chunk-*.js` 这次要保留一个版本，升级前已打开的标签页仍按旧入口引那两个分包，删了会空白。网页刷新即用；Coo 侧无需升级。
 
 ## 0.39.0：每日新闻、统一 inbox 与大厅小报
 

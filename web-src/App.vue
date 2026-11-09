@@ -8,6 +8,7 @@ import AppShell from './components/AppShell.vue';
 import RoomTransition from './components/RoomTransition.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
 import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition, onSeatStorage } from './stores/parlor.ts';
+import { IdentityExpiredError } from './api/client.ts';
 import { entryNotice, seat } from './stores/session.ts';
 import { readView, view, wantHall } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
@@ -17,6 +18,8 @@ import TableView from './views/TableView.vue';
 
 const ready = ref(false);
 const failed = ref('');
+/** 票据本身失效时不给「再试一次」——那只会重复同一句，得回上一页重新授权。 */
+const retryable = ref(false);
 let entering = false;
 const destination = computed(() => roomTransition.value?.name ||
   ((new URLSearchParams(location.search).get('room') || seat.value?.room) === 'hall' ? '大厅' : '客厅'));
@@ -34,6 +37,7 @@ async function enter(): Promise<void> {
   if (entering) return;
   entering = true;
   failed.value = '';
+  retryable.value = false;
   try {
     ready.value = await boot();
     if (ready.value) {
@@ -42,6 +46,7 @@ async function enter(): Promise<void> {
     }
   } catch (error) {
     failed.value = (error as Error).message || String(error);
+    retryable.value = !(error instanceof IdentityExpiredError);
     ready.value = false;
   } finally {
     entering = false;
@@ -90,7 +95,7 @@ watch(seat, (next) => {
 </script>
 
 <template>
-  <JoinView v-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed" @entered="enter" @retry="enter" />
+  <JoinView v-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
   <AppShell v-else-if="ready && !roomTransition">
     <LobbyView v-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />

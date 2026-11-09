@@ -489,6 +489,14 @@ describe('网页玩家', () => {
     expect(css).toContain('.chunk-fallback');
   });
 
+  it('统一身份票据失效的引导文案进了产物', () => {
+    // 票据在请求前就离开了地址栏，失效提示必须来自客户端产物本身，否则用户只看到一句 401。
+    const dir = new URL('../src/web/vue/', import.meta.url);
+    const scripts = readdirSync(dir).filter((name) => name.endsWith('.js'))
+      .map((name) => readFileSync(new URL(name, dir), 'utf8'));
+    expect(scripts.some((text) => text.includes('重新点一次入场'))).toBe(true);
+  });
+
   it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {
     const files = [
       'src/web/common.js',

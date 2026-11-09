@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * 家长入场：`#key=` 一进页面就从地址栏抹掉（不进历史、不会被复制外发），
  * 但钥匙必须留在内存里。旧页在断网后还能用同一把钥匙重试；Vue 换过来时漏了这一步——
  * 第一次请求没到服务器，第二次就没有钥匙可用，只能让用户回扩展面板重新点一次。
+ *
+ * `#identity=…&state=…`（统一身份回跳）是同一类：票据同样要留到换到席位为止；
+ * 但票据本身失效（401 / 403 / 回跳凭据对不上）时重试没有意义，要清掉并引导重新授权。
  */
 
 const mocks = vi.hoisted(() => ({
@@ -14,14 +17,23 @@ const mocks = vi.hoisted(() => ({
   finishGlobalEntry: vi.fn(),
 }));
 
-vi.mock('../web-src/api/client.ts', () => ({
-  api: mocks.api,
-  scopedPath: (path: string) => path,
-  takeKeyFromHash: mocks.takeKeyFromHash,
-  beginGlobalEntry: mocks.beginGlobalEntry,
-  finishGlobalEntry: mocks.finishGlobalEntry,
-  parentPlay: mocks.parentPlay,
-}));
+vi.mock('../web-src/api/client.ts', () => {
+  class IdentityExpiredError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'IdentityExpiredError';
+    }
+  }
+  return {
+    api: mocks.api,
+    scopedPath: (path: string) => path,
+    takeKeyFromHash: mocks.takeKeyFromHash,
+    beginGlobalEntry: mocks.beginGlobalEntry,
+    finishGlobalEntry: mocks.finishGlobalEntry,
+    parentPlay: mocks.parentPlay,
+    IdentityExpiredError,
+  };
+});
 
 vi.mock('../web-src/stores/chat.ts', () => ({ noteChatEvent: vi.fn(), resetChatState: vi.fn() }));
 vi.mock('../web-src/stores/dm.ts', () => ({ noteWhisper: vi.fn(), resetDmState: vi.fn() }));
@@ -49,12 +61,18 @@ class Stream {
 
 let store: any;
 let session: any;
+let client: any;
 
 beforeEach(async () => {
   vi.resetModules();
   for (const mock of Object.values(mocks)) mock.mockReset();
   vi.stubGlobal('location', { pathname: '/play', search: '', hash: '', reload: vi.fn(), assign: vi.fn() });
-  vi.stubGlobal('history', { state: null, replaceState: vi.fn(), pushState: vi.fn() });
+  // 真浏览器里 replaceState 会改地址栏；测试里手动同步，才能验证「地址栏抹掉后靠内存副本重试」。
+  vi.stubGlobal('history', {
+    state: null,
+    replaceState: vi.fn(() => { (globalThis as any).location.hash = ''; }),
+    pushState: vi.fn(),
+  });
   vi.stubGlobal('performance', { getEntriesByType: () => [] });
   vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
   vi.stubGlobal('EventSource', Stream);
@@ -62,8 +80,10 @@ beforeEach(async () => {
   // 计算式 import 让 Node 侧 tsconfig 不把整套 DOM 源码纳入服务端类型检查。
   const sessionPath = '../web-src/stores/session.ts';
   const storePath = '../web-src/stores/parlor.ts';
+  const clientPath = '../web-src/api/client.ts';
   session = await import(sessionPath);
   store = await import(storePath);
+  client = await import(clientPath);
   session.seat.value = null;
   session.readStoredSeat.mockImplementation(() => session.seat.value);
 });
@@ -121,5 +141,50 @@ describe('家长钥匙的重试', () => {
 
     await expect(store.boot()).resolves.toBe(true);
     expect(mocks.parentPlay).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('统一身份回跳票据的重试', () => {
+  it('第一次请求断网后，第二次仍然用同一张票据', async () => {
+    (globalThis as any).location.hash = '#identity=ticket-1&state=nonce-1';
+    mocks.finishGlobalEntry.mockRejectedValueOnce(new TypeError('fetch failed'));
+
+    await expect(store.boot()).rejects.toThrow('fetch failed');
+    expect(mocks.finishGlobalEntry).toHaveBeenCalledTimes(1);
+    expect(mocks.finishGlobalEntry).toHaveBeenLastCalledWith('ticket-1', 'nonce-1');
+    // 票据仍及时从地址栏抹掉；第二次只能靠页内副本。
+    expect((globalThis as any).location.hash).toBe('');
+
+    mocks.finishGlobalEntry.mockResolvedValueOnce(undefined);
+    await expect(store.boot()).resolves.toBe(false);
+    expect(mocks.finishGlobalEntry).toHaveBeenCalledTimes(2);
+    expect(mocks.finishGlobalEntry).toHaveBeenLastCalledWith('ticket-1', 'nonce-1');
+  });
+
+  it('票据本身失效时清掉副本，不再发请求，并引导重新授权', async () => {
+    (globalThis as any).location.hash = '#identity=ticket-2&state=nonce-2';
+    mocks.finishGlobalEntry.mockRejectedValueOnce(
+      new client.IdentityExpiredError('这次的身份票据已经失效，请回上一页重新点一次入场'),
+    );
+
+    await expect(store.boot()).rejects.toThrow('重新点一次入场');
+
+    // 再点一次「再试一次」不会拿死票重发；加入页会直接看到上面那句提示。
+    await expect(store.boot()).resolves.toBe(false);
+    expect(mocks.finishGlobalEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it('已有席位时票据失败不砸掉当前席位', async () => {
+    session.seat.value = { room: 'room1', seatId: 's1', name: '爸爸', token: 't1', cooId: 'c1', cooSecret: 'x' };
+    (globalThis as any).location.hash = '#identity=ticket-3&state=nonce-3';
+    mocks.finishGlobalEntry.mockRejectedValueOnce(new TypeError('fetch failed'));
+    mocks.api.mockImplementation(async (path: string) => {
+      if (path.startsWith('/v1/me/location')) return { room: 'room1', seat: { id: 's1', name: '爸爸' } };
+      if (path.startsWith('/v1/room')) return { id: 'room1', now: Date.now(), latest: 0, seats: [], online: [] };
+      return { events: [] };
+    });
+
+    await expect(store.boot()).resolves.toBe(true);
+    expect(mocks.finishGlobalEntry).toHaveBeenCalledTimes(1);
   });
 });
