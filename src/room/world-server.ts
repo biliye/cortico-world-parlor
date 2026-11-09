@@ -26,6 +26,7 @@ import { MailDb } from './mail-db.ts';
 import { gameByActionType, gameById } from './games/registry.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
 import { GAME_RESPONSE_MAX_BYTES, type TableLogQuery } from './table-engine.ts';
+import { TABLE_REPLAY_LIMIT, readTableReplay, type TableReplayQuery } from './table-replay.ts';
 import { likePrefix, parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
 import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
@@ -129,9 +130,9 @@ const json = (res: ServerResponse, status: number, body: unknown, req?: Incoming
   res.end(data);
 };
 
-function boundedGameJson(res: ServerResponse, body: unknown): void {
+function boundedGameJson(res: ServerResponse, body: unknown, tooLarge = '游戏查询结果超出大小限制；历史请缩小范围后分页查询'): void {
   if (Buffer.byteLength(JSON.stringify(body)) > GAME_RESPONSE_MAX_BYTES) {
-    throw new HttpError(413, '游戏查询结果超出大小限制；历史请缩小范围后分页查询');
+    throw new HttpError(413, tooLarge);
   }
   json(res, 200, body);
 }
@@ -152,6 +153,31 @@ function gameLogQuery(params: URLSearchParams): TableLogQuery {
     query.cursor = cursor;
   }
   return query;
+}
+
+function tableReplayQuery(params: URLSearchParams, op: 'replay' | 'replayStep'): TableReplayQuery {
+  const table = params.get('table')?.trim();
+  if (params.has('table') && !table) throw new HttpError(400, 'table 要填桌号');
+  const integer = (key: 'seq' | 'before' | 'limit', max: number): number | undefined => {
+    if (!params.has(key)) return undefined;
+    const value = Number(params.get(key));
+    if (!Number.isSafeInteger(value) || value < 1 || value > max) {
+      throw new HttpError(400, `${key} 要是 1 到 ${max} 的整数`);
+    }
+    return value;
+  };
+  if (op === 'replayStep') {
+    const seq = integer('seq', 2_147_483_647);
+    if (!table || seq === undefined || params.has('before') || params.has('limit')) {
+      throw new HttpError(400, 'replayStep 请填写 table 和 seq');
+    }
+    return { table, seq, limit: 1 };
+  }
+  const before = integer('before', 2_147_483_647);
+  if (params.has('seq') || (before !== undefined && !table)) {
+    throw new HttpError(400, 'before 只用于有桌号的回放翻页，seq 只用于 replayStep');
+  }
+  return { table, before, limit: integer('limit', TABLE_REPLAY_LIMIT) ?? TABLE_REPLAY_LIMIT };
 }
 
 const readBody = (req: IncomingMessage, limit = 64 * 1024): Promise<string> => new Promise((resolve, reject) => {
@@ -207,6 +233,7 @@ const statusOf = (error: unknown): number => {
   if (error instanceof AccountLimitError) return 503;
   if (error instanceof HostError) {
     if (error.code === 'not_found') return 404;
+    if (error.code === 'gone') return 410;
     if (error.code === 'forbidden') return 403;
     if (error.code === 'conflict' || error.code === 'full' || error.code === 'already_seated') return 409;
     return 400;
@@ -2063,7 +2090,12 @@ export class WorldServer {
         json(res, 200, { ...base, game: describeGame(game) });
         return;
       }
-      if (op !== 'state' && op !== 'history') throw new HttpError(400, 'op 只能是 list / describe / state / history');
+      if (op === 'replay' || op === 'replayStep') {
+        const replay = await readTableReplay(this.db, seat.cooId, tableReplayQuery(url.searchParams, op), this.now(), base);
+        boundedGameJson(res, replay, op === 'replayStep' ? '这一步的私视图超过大小限制，可以继续回看其他步骤' : undefined);
+        return;
+      }
+      if (op !== 'state' && op !== 'history') throw new HttpError(400, 'op 只能是 list / describe / state / history / replay / replayStep');
       const host = await this.host(roomId);
       await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
       const tableId = url.searchParams.get('table')?.trim() || undefined;

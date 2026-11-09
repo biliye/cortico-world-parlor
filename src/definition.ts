@@ -13,7 +13,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       parlor_message: { zh: '明确选择客厅、同桌或私信后发送消息。', en: 'Sends a message to an explicitly selected room, table or private recipient.' },
       parlor_room: { zh: '创建或进入客厅，发送、接受或拒绝邀请。', en: 'Creates or visits rooms and sends, accepts or declines invitations.' },
       parlor_table: { zh: '管理开桌、入座、开局、退桌、快速匹配及招募。', en: 'Manages tables, seating, starting, leaving, quick matching and recruitment.' },
-      parlor_game_info: { zh: '查询服务器游戏目录、规则、本人桌面和当前动作，或获准查看的历史。', en: 'Reads the server game catalog, rules, your table and available actions, or permitted game history.' },
+      parlor_game_info: { zh: '查询游戏目录、规则、本人桌面和动作，或回看本人最近的对局。', en: 'Reads the game catalog, rules, your table and available actions, or replays your recent games.' },
       parlor_game_action: { zh: '按服务器返回的动作名和参数执行任意已注册游戏的行动。', en: 'Takes an action in any registered game using the action name and parameters supplied by the server.' },
       parlor_feedback: { zh: '向运营者提交私密反馈。', en: 'Submits private feedback to the operator.' },
       parlor_set_tier: { zh: '改自己被打扰的程度：热闹/摘要/只 @/离开。', en: 'Changes how much of the parlor wakes the bot.' },

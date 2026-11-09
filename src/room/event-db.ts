@@ -94,6 +94,37 @@ const clampLimit = (value: number | undefined, fallback = 50): number => (
   Math.max(1, Math.min(200, Math.trunc(value ?? fallback) || fallback))
 );
 
+// Public events follow historical room visits. Private events follow the audience at write time.
+const replayVisibility = `(
+  (e.scope_kind IN ('room','hall') AND EXISTS (
+    SELECT 1 FROM room_seats s
+    WHERE s.room_id = e.room_id AND s.coo_id = ?
+      AND e.seq > s.visible_from_seq
+      AND (s.visible_to_seq IS NULL OR e.seq <= s.visible_to_seq)
+  ))
+  OR (e.scope_kind NOT IN ('room','hall') AND a.coo_id IS NOT NULL)
+)`;
+
+const replayTableMatch = `(e.scope_table_id = ? OR e.data_json ->> 'tableId' = ?)`;
+const replayOwnTurn = `e.scope_kind = 'seat' AND e.type = 'parlor.table.turn'
+  AND e.scope_seat_id = a.seat_id AND jsonb_typeof(e.data_json -> 'table') = 'object'`;
+
+export interface TableReplayStep {
+  seq: number;
+  ts: number;
+  type: string;
+  text: string;
+  revision: number | null;
+  hasSnapshot: boolean;
+}
+
+interface TableReplayEventQuery {
+  cooId: string;
+  tableId: string;
+  sinceAt: number;
+  endedAt: number;
+}
+
 export class EventDb {
   private readonly db: Db;
   /** 提交之后通知网关「这个客厅有新事件」，推送不用等 400ms 节拍。 */
@@ -257,6 +288,35 @@ export class EventDb {
     return { events: page.events.reverse(), older: page.more };
   }
 
+  /** Summaries only. Turn text can include hidden cards, roles and team chat. */
+  async replayTable(roomId: string, query: TableReplayEventQuery & { before?: number; limit: number }): Promise<TableReplayStep[]> {
+    const rows = await this.db.prepare(
+      `SELECT e.seq, e.ts, e.type,
+         CASE WHEN e.scope_kind = 'seat' THEN '本人行动记录' ELSE LEFT(e.text, 160) END AS text,
+         COALESCE(e.data_json #>> '{table,revision}', e.data_json ->> 'revision') AS revision,
+         COALESCE((${replayOwnTurn}), false) AS "hasSnapshot"
+       FROM events e
+       LEFT JOIN event_audience a ON a.room_id = e.room_id AND a.seq = e.seq AND a.coo_id = ?
+       WHERE e.room_id = ? AND e.ts BETWEEN ? AND ? AND e.seq < COALESCE(?, 2147483648::bigint)
+         AND ${replayTableMatch} AND ${replayVisibility}
+       ORDER BY e.seq DESC LIMIT ?`,
+    ).all(query.cooId, roomId, query.sinceAt, query.endedAt, query.before ?? null,
+      query.tableId, query.tableId, query.cooId, query.limit) as unknown as Array<Omit<TableReplayStep, 'revision'> & { revision: string | null }>;
+    return rows.map(row => ({ ...row, revision: row.revision === null ? null : Number(row.revision) }));
+  }
+
+  async replayTableSnapshot(roomId: string, query: TableReplayEventQuery & { seq: number }) {
+    const row = await this.db.prepare(
+      `SELECT e.ts, e.data_json -> 'table' AS snapshot
+       FROM events e
+       JOIN event_audience a ON a.room_id = e.room_id AND a.seq = e.seq AND a.coo_id = ?
+       WHERE e.room_id = ? AND e.seq = ? AND e.ts BETWEEN ? AND ?
+         AND ${replayTableMatch} AND ${replayOwnTurn}`,
+    ).get(query.cooId, roomId, query.seq, query.sinceAt, query.endedAt, query.tableId, query.tableId) as
+      { ts: number; snapshot: Record<string, unknown> } | undefined;
+    return row;
+  }
+
   /** 本机补档：只读 after 后的可见事件，正序分页，与回放共用到访区间/收件人授权。 */
   archive(roomId: string, query: { cooId: string; after: number; limit?: number }): Promise<{ events: RoomEvent[]; more: boolean }> {
     return this.visiblePage(roomId, query, true);
@@ -276,15 +336,7 @@ export class EventDb {
        WHERE e.room_id = ?
          AND (e.seq < COALESCE(?, 2147483647))
          AND e.seq > ?
-         AND (
-           (e.scope_kind IN ('room','hall') AND EXISTS (
-             SELECT 1 FROM room_seats s
-              WHERE s.room_id = e.room_id AND s.coo_id = ?
-                AND e.seq > s.visible_from_seq
-                AND (s.visible_to_seq IS NULL OR e.seq <= s.visible_to_seq)
-           ))
-           OR (e.scope_kind NOT IN ('room','hall') AND a.coo_id IS NOT NULL)
-         )
+         AND ${replayVisibility}
        ORDER BY e.seq ${forward ? 'ASC' : 'DESC'}
        LIMIT ?`,
     ).all(query.cooId, roomId, before, query.after ?? 0, query.cooId, limit + 1) as unknown as EventRow[];
