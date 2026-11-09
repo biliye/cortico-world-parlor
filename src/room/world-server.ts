@@ -45,6 +45,7 @@ import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protoc
 import { acceptsGzip, sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
+import { RecruitSnapshot } from './recruit-snapshot.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -267,6 +268,8 @@ export class WorldServer {
   private readonly identityRates = new Map<string, { until: number; count: number }>();
   private readonly coo: CooAccountDb;
   private readonly tableDiscovery: TableDiscovery;
+  /** 招募快照按网关共享 30 秒：132 个 Coo 每分钟要的是同一份，不必各查一次。 */
+  private readonly recruitSnapshot: RecruitSnapshot;
   private readonly now: () => number;
   private readonly defaultRoomId: string;
   private readonly inviteCode: string;
@@ -316,6 +319,7 @@ export class WorldServer {
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
+    this.recruitSnapshot = new RecruitSnapshot(db, this.now);
     this.coo = new CooAccountDb(this.db, {
       now: this.now,
       ...(options.accountLimit !== undefined ? { limit: options.accountLimit } : {}),
@@ -847,6 +851,33 @@ export class WorldServer {
         await this.cooOrSeat(req);
         json(res, 200, { announcements: await support.announcements() }); return;
       }
+      // 公告 / 新闻 / 招募共用一次请求：Coo 侧只有 60 秒一个定时器，
+      // 分成三条路由会让每个 Coo 每分钟发三次请求。
+      if (path === 'inbox' && method === 'GET') {
+        await this.cooOrSeat(req);
+        const topics = new Set((url.searchParams.get('topics') ?? 'announcements,news,recruit')
+          .split(',').map((item) => item.trim()).filter(Boolean));
+        const afterPublish = Number(url.searchParams.get('after_publish') ?? 0) || 0;
+        const afterId = url.searchParams.get('after_id') ?? '';
+        json(res, 200, {
+          ...(topics.has('announcements') ? { announcements: await support.announcements() } : {}),
+          ...(topics.has('news') ? { news: await support.newsFeed(afterPublish, afterId) } : {}),
+          ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3) } } : {}),
+        });
+        return;
+      }
+      // 主动查：一律 200，找不到就是 news:null。旧服务器没有这条路由才是 404，
+      // Coo 侧据此区分「本版没有新闻板块」和「这条还没发」。
+      if (path === 'news' && method === 'GET') {
+        await this.cooOrSeat(req);
+        const id = url.searchParams.get('id') ?? '';
+        // 没有就是 news:null——不能留 undefined，否则序列化成 {}，客户端判不出「这条还没发」。
+        if (id) { json(res, 200, { news: (await support.newsById(id)) ?? null }); return; }
+        if (url.searchParams.get('list') === '1') {
+          json(res, 200, { news: await support.newsList(Number(url.searchParams.get('limit') ?? 5)) }); return;
+        }
+        json(res, 200, { news: (await support.latestNews()) ?? null }); return;
+      }
       if (path === 'feedback' && (method === 'GET' || method === 'POST')) {
         const cooId = await this.cooOrSeat(req);
         if (method === 'GET') { json(res, 200, { feedback: await support.feedback(cooId) }); return; }
@@ -869,6 +900,10 @@ export class WorldServer {
         if (path === 'operator/announcements' && method === 'POST') {
           const body = await readJson(req);
           json(res, 200, { announcement: await support.announce(body.text, body.requestId) }); return;
+        }
+        if (path === 'operator/news' && method === 'POST') {
+          const body = await readJson(req);
+          json(res, 200, { news: await support.publishNews(body) }); return;
         }
       }
       throw new HttpError(404, '没有这个反馈通道地址');
