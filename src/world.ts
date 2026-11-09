@@ -2179,6 +2179,7 @@ export class ParlorWorld implements World {
           return game && ['dice', 'ddz'].includes(game.id) ? JSON.stringify({ game: describeGame(game) }) : this.failed('旧单厅只支持 dice/ddz；长局用 parlor_table legacy_monopoly');
         }
         if (args.op === 'history') return this.failed('旧单厅游戏没有独立历史入口，请用 parlor_query history 查事件回放');
+        if (args.op === 'replay' || args.op === 'replayStep') return this.failed('按桌回放需要多客厅服务器；旧单厅可用 parlor_query history 查事件回放');
         return JSON.stringify({ games: gameCatalog().filter(game => ['dice', 'ddz'].includes(game.id)) });
       }
       const token = this.token;
