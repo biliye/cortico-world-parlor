@@ -11,7 +11,8 @@ import { items as news, loaded as newsLoaded, loadBody, loadNews } from '../stor
 import type { NewsItem, NewsSummary } from '../stores/news.ts';
 
 const expanded = ref('');
-const body = ref<NewsItem | null>(null);
+/* 展开的那一期全文；与 `expanded` 分开，是为了「先占位、后到货」时还能显示加载/失败。 */
+const article = ref<NewsItem | null>(null);
 const bodyError = ref('');
 const bodyLoading = ref(false);
 
@@ -40,14 +41,14 @@ function paragraphs(text: string): string[] {
 async function toggle(item: NewsSummary): Promise<void> {
   if (expanded.value === item.id) { expanded.value = ''; return; }
   expanded.value = item.id;
-  body.value = null;
+  article.value = null;
   bodyError.value = '';
   bodyLoading.value = true;
   try {
-    const full = await loadBody(item.id);
+    const fetched = await loadBody(item.id);
     // 等全文的时候可能又点开了别的一期，晚到的结果不该盖上去。
     if (expanded.value !== item.id) return;
-    if (full) body.value = full;
+    if (fetched) article.value = fetched;
     else bodyError.value = '这一期还没发出来，过会儿再看。';
   } catch (error) {
     if (expanded.value === item.id) bodyError.value = (error as Error).message || '取不到全文';
@@ -75,7 +76,7 @@ function retry(item: NewsSummary): void {
       <section class="paper-col news-col" aria-label="每日新闻">
         <div class="paper-col-head">
           <h3>每日新闻</h3>
-          <span class="directory-count">{{ news.length }} 期</span>
+          <span class="paper-count">{{ news.length }} 期</span>
         </div>
         <p v-if="!news.length" class="muted paper-empty">还没有发过新闻。</p>
         <ol v-else class="news-list">
@@ -99,8 +100,8 @@ function retry(item: NewsSummary): void {
 
             <div v-if="expanded === item.id" class="news-body">
               <p v-if="bodyLoading" class="muted">正在取全文…</p>
-              <template v-else-if="body">
-                <p v-for="(line, index) in paragraphs(body.body)" :key="index">{{ line }}</p>
+              <template v-else-if="article">
+                <p v-for="(line, index) in paragraphs(article.body)" :key="index">{{ line }}</p>
               </template>
               <p v-else class="news-body-error">
                 {{ bodyError }}
@@ -114,7 +115,7 @@ function retry(item: NewsSummary): void {
       <aside class="paper-col notice-col" aria-label="公告栏">
         <div class="paper-col-head">
           <h3>公告栏</h3>
-          <span class="directory-count">{{ latestNotices.length }} 条</span>
+          <span class="paper-count">{{ latestNotices.length }} 条</span>
         </div>
         <p v-if="!latestNotices.length" class="muted paper-empty">门口暂时没贴新条子。</p>
         <ol v-else class="notice-list">
