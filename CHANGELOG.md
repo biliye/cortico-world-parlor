@@ -1,4 +1,4 @@
-## 0.40.0（未发布）
+## 0.40.0（2026-11-09）
 
 - **旧网页下线**：删除 `src/web/play.js`（4,454 行）与只服务它的 `announcement-banner.js` / `announcements.js` / `support-link.js`、旧版斗地主与狼人杀渲染器 `src/web/games/{ddz,werewolf}.js`、旧玩法目录与渲染器注册 `src/web/games/registry.js`。网页只剩 Vue 客户端，`vue-loader.js` 不再按 `?legacy=1` 分派。
 - **旧链接兼容**：`/play?legacy=1`（含 `legacy=true`）由服务器 **302** 回 `/play`，保留 `room` 等其它查询参数；旧书签与外链不会落到空白页。
@@ -7,12 +7,13 @@
 - **家长入场重试**：`#key=` 仍一进页面就从地址栏抹掉（不进历史、不会被复制外发），但钥匙在内存里留一份，**换到席位（或转交统一身份）之后才清**。断网让第一次请求根本没到服务器时，重试仍会用同一把钥匙；旧页有这条，Vue 此前漏了。
 - **统一身份回跳重试**：`#identity=…&state=…` 同样一进页面就抹掉地址栏，但票据在内存里留到换到席位为止；断网后点「再试一次」仍用同一张票据（此前票据在请求前就没了，第二次一次请求都不发）。票据本身失效（401 / 403，或 sessionStorage 里的回跳凭据对不上）时不再反复重试：清掉副本，加入页直接提示「请回上一页重新点一次入场」，并且不显示「再试一次」。已有席位时票据失败只提示，不会砸掉当前席位。
 - **异步棋盘子包兜底**：五子棋与快局大富翁的棋盘按需加载，文件名带内容哈希。发版换名后，升级前一直开着的标签页首次进这两桌会 404；现在先自动重试一次，仍失败就在牌桌位置显示「这一桌的界面没载入成功」与「刷新页面」，不再是一片空白。
+- **Coo 本人牌局回放**：`parlor_game_info` 新增 `replay` / `replayStep`。不带 `table` 时列出本人最近 **7 天**已结束或流局的对局；带 `table` 时按 `nextBefore` 分页看步骤（单页最多 50 条、受 16 KB 字节预算约束），`replayStep` 用 `table` + `seq` 取该步本人当时的私视图。归属按结算时的座位判定（结果为 `result` 的局再用 `participants` 排除同桌旁观者）；房间/大厅事件按 `room_seats` 到访区间，私密事件按 `event_audience`。非本人行动只给 160 字摘要，他人查同一桌或同一步返回 **404**，超过保留期返回 **410**。旧单间栈明确拒绝，提示改用 `parlor_query history`。
 - **数据库迁移：PG schema 8 → 11、SQLite 10 → 12**（本版基线含 0.39.1 的运营侧可改可删，虽然本版自身只改网页）。三段都是纯增量：v9 给 `news_items` / `support_announcements` 各加 `revision` / `updated_at` 并新建 `support_audit`；v10 给 `news_items.publish_id`；v11 给 `support_announcements.publish_id`。老行按 `legacy-<id>` 回填，之后每次发布写一个新 UUID。
   - **切前备份**：`pg_dump -Fc` 留档，并记下 `meta.schema_version` 原值 **8**。
   - **验收**：`/healthz` 的 `version` 为 **0.40.0**（该接口不返回 schema 版本）；schema 从数据库核 `SELECT value FROM meta WHERE key = 'schema_version'` 为 **11**；`support_audit` 表存在；`news_items` 与 `support_announcements` 的 `publish_id` 无空串；`tables` / `table_seats` / `rooms` / `accounts` 计数与切前一致。
   - **回退**：三段都只加列与表，退回 0.39.0 **不必恢复 dump**，只需把 `meta.schema_version` 改回 8（老程序不读多出来的列与表）；回退期间写入的新闻/公告 `publish_id` 为空串，下次升级启动时由 `applyPgDataRules` 按 id 补齐。
 - **部署注意**：旧页文件必须显式删除——上次那种 `install -D` 覆盖安装不会删掉 `src/web/play.js` 等已移除文件（`post-diff` 里表现为 `only-install`），切换后要确认这些路径 404。**上一版的 `src/web/vue/chunk-*.js` 这次要留着**：升级前就开着的标签页仍按 0.39.0 的 `main.js` 引那两个分包，删了会在首次进五子棋 / 快局大富翁时空白（新兜底只在新产物里）。新旧分包文件名按内容哈希，互不覆盖，下一版再清。
-- 测试同步删除旧渲染器用例与 `werewolf-inspections-web` 的快测登记，保留角色牌路由与打包断言，新增 `/play?legacy=1` 的 302 断言、家长钥匙重试用例与分包兜底的产物断言。Coo 侧无需升级。
+- 测试同步删除旧渲染器用例与 `werewolf-inspections-web` 的快测登记，保留角色牌路由与打包断言，新增 `/play?legacy=1` 的 302 断言、家长钥匙重试用例、分包兜底的产物断言，以及 `tests/table-replay-gateway.test.ts` 的真实 PG 端到端用例。网页侧刷新即用；旧 Coo 不受影响，**要使用 `replay` / `replayStep` 需升级扩展并重新加载会话工具**。
 
 ## 0.39.0（2026-11-09）
 
