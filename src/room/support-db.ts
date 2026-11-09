@@ -175,12 +175,15 @@ export class SupportDb {
     const id = input.id === undefined ? `news-${issueDate}` : String(input.id).trim();
     if (!/^[\w-]{1,100}$/.test(id)) throw new HostError('invalid', 'id 只能含字母、数字、下划线、短横线（1–100 字）');
     // 历史补录一律只进主动查：显式传 autoPush 也不放行，否则补旧闻会一次性推给所有人。
-    const autoPush = issueDate < today ? false : input.autoPush === undefined
+    // 这条只约束**首次创建**；重放判定以库里存下的为准——当天发的稿跨过午夜再重试时，
+    // 重新按「历史」算会把一次正常发布判成改了推送设置。
+    const historical = issueDate < today;
+    const autoPush = historical ? false : input.autoPush === undefined
       ? true
       : input.autoPush === true || input.autoPush === 'true';
     const ten = beijingTen(issueDate);
-    // 缺省可见时刻必须是可重放的：当天 10 点后补发取 `now`，重试时 now 已经变了，
-    // 逐字段比对会把它判成「改了可见时刻」。已有条目就沿用存下来的那个值。
+    // 缺省可见时刻必须是可重放的：当天 10 点后补发取 `now`，重试时 now 已经变了。
+    // 已有条目就沿用存下来的那个值。
     const saved = await this.db.prepare('SELECT * FROM news_items WHERE issue_date = ?')
       .get(issueDate) as NewsRow | undefined;
     const fallback = saved ? Number(saved.publish_at) : (ten <= now && autoPush ? now : ten);
@@ -200,8 +203,13 @@ export class SupportDb {
     }
     const existing = newsItem(row);
     if (existing.id !== id) throw new HostError('conflict', `今天已经有新闻了：${existing.id}`);
+    // 并发提交同一份请求时，两个都可能先读到「还没有条目」，各自算出一个 now 再 INSERT，
+    // 后到的那个被 ON CONFLICT 跳过。这时候库里的那行才是唯一事实：缺省的可见时刻与
+    // 历史补录的推送设置都按它判，否则同一份请求会因为几毫秒的差异被判成冲突。
+    const expectedPublishAt = input.publishAt === undefined ? existing.publishAt : publishAt;
+    const expectedAutoPush = historical ? existing.autoPush : autoPush;
     if (existing.title !== title || existing.summary !== summary || existing.body !== body
-      || existing.publishAt !== publishAt || existing.autoPush !== autoPush) {
+      || existing.publishAt !== expectedPublishAt || existing.autoPush !== expectedAutoPush) {
       throw new HostError('conflict', '同一天的新闻不能改标题、摘要、正文、可见时刻或推送设置');
     }
     return existing;

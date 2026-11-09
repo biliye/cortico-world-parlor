@@ -343,4 +343,48 @@ describe('inbox 轮询', () => {
     news.mockRejectedValueOnce(new ParlorHttpError(404, '没有这个反馈通道地址'));
     expect(await call({})).toContain('还没有新闻板块');
   });
+
+  it('热切 off 之后，已排队的招募与摘要也不再交给宿主；恢复后补投一次', async () => {
+    await start('full');
+    emit({
+      type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌开放了快速匹配（1/2 人）。',
+      data: { tableId: 't-1', game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, recruit: true, recruitVersion: 1 },
+    });
+    emit({ type: 'parlor.say', text: '顺带一句' });
+    // 事件已经排进队列、合并窗口还没到，这时把总闸关上：席位档位要等下一次
+    // reconcileTier 才同步，不能指望它已经生效。
+    cfg.wakeTier = 'off';
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(host.events.filter((event) => event.type === 'parlor.digest')).toHaveLength(0);
+
+    // 恢复后这一批照常投：静音只是不打扰，不该把话吞掉。
+    cfg.wakeTier = 'full';
+    await vi.advanceTimersByTimeAsync(60_000);
+    const digests = host.events.filter((event) => event.type === 'parlor.digest');
+    expect(digests).toHaveLength(1);
+    expect(digests[0].text).toContain('顺带一句');
+    expect(digests[0].text).toContain('开放了快速匹配');
+  });
+
+  it('同一桌同一版本的两条招募事件，只补一次加入引导；换版本才再补', async () => {
+    await start('full');
+    const discovery = {
+      type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌开放了快速匹配（1/2 人）。',
+      data: { tableId: 't-1', game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, recruit: true, recruitVersion: 1 },
+    };
+    // 重连补发会把同一句提示重放一遍：两条都进合并窗口。
+    emit(discovery);
+    emit(discovery);
+    await vi.advanceTimersByTimeAsync(6_000);
+    const digest = host.events.filter((event) => event.type === 'parlor.digest');
+    expect(digest).toHaveLength(1);
+    expect(digest[0].text.split('parlor_table {op:"join"').length - 1).toBe(1);
+
+    // 换了版本（改了招募文案或重新开放匹配）就是新提醒，照常再说一次。
+    emit({ ...discovery, data: { ...discovery.data, recruitVersion: 2 } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    const next = host.events.filter((event) => event.type === 'parlor.digest');
+    expect(next).toHaveLength(2);
+    expect(next[1].text).toContain('开放了快速匹配');
+  });
 });

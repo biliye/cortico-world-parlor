@@ -1056,6 +1056,8 @@ export class ParlorWorld implements World {
 
   private async flushAmbient(): Promise<void> {
     if (this.stopped || !this.host || !this.seat || this.focused || !this.pending.length) return;
+    // 总闸：静音期间队列原样留着，不 take、也不占投递额度。
+    if (this.ctx.cfg.wakeTier === 'off') return;
     const limit = TIER_BUDGET[this.seat.tier];
     if (!limit || this.seat.kind === 'observer') return;
     const wait = this.ambientBudget.reserve(limit, Date.now());
@@ -1070,7 +1072,7 @@ export class ParlorWorld implements World {
     if (this.stopped || !this.host) return;
     const batch = this.focusBacklog.take();
     if (batch.events.length === 0) return;
-    if (!this.seat || this.seat.tier === 'off') return;
+    if (!this.seat || this.seat.tier === 'off' || this.ctx.cfg.wakeTier === 'off') return;
     this.pending.merge({ ...batch, focus: true });
     await this.flushAmbient();
   }
@@ -1104,11 +1106,21 @@ export class ParlorWorld implements World {
 
   private async pushWake(batch: WakeBatch, addressed: boolean): Promise<void> {
     if (this.stopped || !this.host) return;
+    // `wakeTier='off'` 是自动提醒总闸。席位档位要等 reconcileTier 异步推上去，
+    // 热切之后到同步完成之间，事件仍会按旧档位排进队列；这里按当前配置再挡一次，
+    // 否则静音期间照样会收到摘要（招募就在摘要里）。
+    // 这批还回队列而不是丢掉：与 off 时 flushDigest 不 take 的既有行为一致，恢复后照常投。
+    if (this.ctx.cfg.wakeTier === 'off') {
+      this.pending.merge(batch);
+      return;
+    }
     // 配置是热更新的：事件排进队列之后才关掉招募提示的，也要在交给宿主前再筛一遍。
     // discovery 是纯招募事件，整条丢掉；开桌事件本身留着（开桌是正常动态），
     // render 里不再追加 join 提示。筛完一条不剩，这次唤醒就没有内容，直接取消。
     const notice = this.ctx.cfg.recruitNotice;
-    const events = notice ? batch.events : batch.events.filter(event => event.type !== 'parlor.table.discovery');
+    const kept = notice ? batch.events : batch.events.filter(event => event.type !== 'parlor.table.discovery');
+    // 重连补发或同窗口重复推送会让同一桌同一版本进来两条，各补一次 join 引导就是重复提醒。
+    const events = this.collapseRecruit(kept);
     if (events.length === 0) return;
     const { omitted, focus } = batch;
     // 这一批里事件自己已经说过的桌：同厅 discovery 与「开桌即开放匹配」。
@@ -1151,6 +1163,27 @@ export class ParlorWorld implements World {
       for (const table of hinted) this.rememberRecruit(table.tableId, table.recruitVersion);
       this.recruitHint = undefined;
     }
+  }
+
+  /**
+   * 同一桌、同一版本、同类型的招募事件只留最后一条。
+   * 重连补发会把同一句提示重放一遍，逐条渲染就会在一个摘要里补两次 join 引导；
+   * 按「类型 + 桌号 + 版本」去重，同版本里人数刚变过时保留较新的那条。
+   */
+  private collapseRecruit(events: RoomEvent[]): RoomEvent[] {
+    const out: RoomEvent[] = [];
+    const seen = new Map<string, number>();
+    for (const event of events) {
+      const signal = event.type === 'parlor.table.discovery'
+        || (event.type === 'parlor.table.open' && event.data?.matchOpen === true);
+      const tableId = signal && typeof event.data?.tableId === 'string' ? event.data.tableId : '';
+      if (!tableId) { out.push(event); continue; }
+      const key = `${event.type}:${tableId}:${Number(event.data?.recruitVersion ?? 0)}`;
+      const at = seen.get(key);
+      if (at === undefined) { seen.set(key, out.length); out.push(event); continue; }
+      out[at] = event;
+    }
+    return out;
   }
 
   /** 从一批事件里取「这桌在等人」的 tableId → recruitVersion。 */
