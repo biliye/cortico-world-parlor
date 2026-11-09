@@ -51,13 +51,18 @@ export class RecruitSnapshot {
     this.ttlMs = ttlMs;
   }
 
-  /** 最多给 limit 桌；缓存的是过滤排序后的完整候选，截断在返回时做。 */
-  async take(limit = 3): Promise<RecruitCandidate[]> {
+  /**
+   * 最多给 limit 桌；缓存的是过滤排序后的完整候选，截断在返回时做。
+   * `excludeRoom` 用来排掉请求者当前所在厅：同厅的桌走 SSE 即时通知，
+   * 再从 inbox 搭一次就是两条通路说同一桌，而且会白占截断名额。
+   */
+  async take(limit = 3, excludeRoom = ''): Promise<RecruitCandidate[]> {
     const now = this.now();
     if (!this.cache || now - this.cache.at >= this.ttlMs) {
       this.cache = { at: now, value: await this.query(now) };
     }
-    return this.cache.value.slice(0, Math.max(1, limit));
+    const pool = excludeRoom ? this.cache.value.filter(table => table.room !== excludeRoom) : this.cache.value;
+    return pool.slice(0, Math.max(1, limit));
   }
 
   private async query(now: number): Promise<RecruitCandidate[]> {

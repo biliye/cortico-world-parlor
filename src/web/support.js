@@ -73,7 +73,8 @@ async function inbox() {
 async function loadNewsList() {
   const target = $('operator-news-list');
   try {
-    const data = await api('news?list=1&limit=5');
+    // 走运营钥匙：席位查询读不到未到点的预录条目，只有运营钥匙的浏览器也调不动。
+    const data = await api('operator/news?limit=10', undefined, true);
     const items = Array.isArray(data.news) ? data.news : [];
     target.replaceChildren();
     if (!items.length) { target.append(node('p', '还没有新闻。')); return; }

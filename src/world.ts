@@ -51,6 +51,8 @@ const PENDING_MAX = 50;
 const PENDING_TEXT_MAX = 12_000;
 /** 招募去重表只留最近的桌：桌号一次性，旧条目不会被再用到。 */
 const RECRUIT_HINT_MAX = 200;
+/** inbox 探到 404 之后隔多久重探一次：服务器升级到 0.39.0 后最多这么久自动恢复。 */
+const INBOX_REPROBE_MS = 10 * 60_000;
 
 /** 只限制普通闲聊投递；直接消息、同桌聊天和行动提醒独立。 */
 const TIER_BUDGET: Readonly<Record<WakeTier, number>> = {
@@ -188,6 +190,10 @@ export class ParlorWorld implements World {
   private stopped = false;
   private supportTimer?: NodeJS.Timeout;
   private supportBusy = false;
+  /** 探测过一次 404 就记住：回退到 0.38.0 之后每轮直接走旧公告接口，不再先撞一次。 */
+  private inboxMissing = false;
+  /** 上次探测失败的时刻；服务器升上来之后最多 10 分钟重新试一次，别永久锁在旧通道。 */
+  private inboxProbeAt = 0;
   private seenAnnouncements: string[] = [];
   /** 新闻复合游标：同一毫秒多条时按 id 继续比较，不会重复也不会漏。 */
   private newsCursor: { publishAt: number; id: string } = { publishAt: 0, id: '' };
@@ -1097,31 +1103,47 @@ export class ParlorWorld implements World {
   }
 
   private async pushWake(batch: WakeBatch, addressed: boolean): Promise<void> {
-    const { events, omitted, focus } = batch;
-    if (this.stopped || !this.host || events.length === 0) return;
+    if (this.stopped || !this.host) return;
+    // 配置是热更新的：事件排进队列之后才关掉招募提示的，也要在交给宿主前再筛一遍。
+    // discovery 是纯招募事件，整条丢掉；开桌事件本身留着（开桌是正常动态），
+    // render 里不再追加 join 提示。筛完一条不剩，这次唤醒就没有内容，直接取消。
+    const notice = this.ctx.cfg.recruitNotice;
+    const events = notice ? batch.events : batch.events.filter(event => event.type !== 'parlor.table.discovery');
+    if (events.length === 0) return;
+    const { omitted, focus } = batch;
     // 这一批里事件自己已经说过的桌：同厅 discovery 与「开桌即开放匹配」。
     // 搭车的招募行要避开它们，否则同一条消息里会把同一桌说两遍。
-    const spoken = this.recruitSignalsOf(events);
+    const spoken = notice ? this.recruitSignalsOf(events) : new Map<string, number>();
+    const held = this.recruitHint;
     const hinted = this.peekRecruitHint();
+    // 先占住：摘要、桌聊、直投可能同时进来两个 pushWake，都读到同一份 hint 就会把
+    // 同一版本带出去两次。这里立刻清空，投递成功才算真的提示过，失败再还回去。
+    if (held) this.recruitHint = undefined;
     const recruit = hinted?.filter(table => spoken.get(table.tableId) !== table.recruitVersion);
     const line = recruit && recruit.length ? recruit : undefined;
-    await this.host.pushEvent({
-      type: addressed ? 'parlor.message' : 'parlor.digest',
-      ts: nowIso(this.ctx.timezone),
-      source: this.id,
-      origin: 'external',
-      senderKey: 'parlor',
-      text: `${focus ? '【打牌期间的客厅】\n' : ''}${omitted ? `（省略了 ${omitted} 条较早消息，可主动查看服务器历史。）\n` : ''}${this.render(events)}${line ? `\n${this.recruitLine(line)}` : ''}`,
-      meta: {
-        from: events[0].from,
-        seq: events[events.length - 1].seq,
-        count: events.length,
-        addressed,
-        ...(focus ? { focus: true } : {}),
-        ...(omitted ? { omitted } : {}),
-        ...(line ? { recruit: line.length } : {}),
-      },
-    }, { trigger: 'debounce' });
+    try {
+      await this.host.pushEvent({
+        type: addressed ? 'parlor.message' : 'parlor.digest',
+        ts: nowIso(this.ctx.timezone),
+        source: this.id,
+        origin: 'external',
+        senderKey: 'parlor',
+        text: `${focus ? '【打牌期间的客厅】\n' : ''}${omitted ? `（省略了 ${omitted} 条较早消息，可主动查看服务器历史。）\n` : ''}${this.render(events)}${line ? `\n${this.recruitLine(line)}` : ''}`,
+        meta: {
+          from: events[0].from,
+          seq: events[events.length - 1].seq,
+          count: events.length,
+          addressed,
+          ...(focus ? { focus: true } : {}),
+          ...(omitted ? { omitted } : {}),
+          ...(line ? { recruit: line.length } : {}),
+        },
+      }, { trigger: 'debounce' });
+    } catch (error) {
+      // 没投出去：把占住的还回去，下一轮还能带。
+      if (held && !this.recruitHint) this.recruitHint = held;
+      throw error;
+    }
     // 宿主收下之后才记「已提示」；抛错时 hint 留着，下一轮还能带。
     // 事件通路说的也是这一句提示，所以事件里的版本同样要记——否则 inbox 下一轮会再提一次。
     for (const [tableId, version] of spoken) this.rememberRecruit(tableId, version);
@@ -1164,7 +1186,10 @@ export class ParlorWorld implements World {
       this.recruitHint = undefined;
       return undefined;
     }
-    const usable = hint.tables.filter(table => table.deadlineAt > now && table.tableId !== this.myTableId);
+    const usable = hint.tables.filter(table => table.deadlineAt > now
+      && table.tableId !== this.myTableId
+      // 本厅的桌走 SSE 即时通知；换厅之后这里按新的 currentRoom 重新判一次。
+      && table.room !== this.currentRoom);
     if (!usable.length) { this.recruitHint = undefined; return undefined; }
     return usable;
   }
@@ -1191,8 +1216,10 @@ export class ParlorWorld implements World {
           // 免得把工具调用语法写进所有人可见的事件流。
           const game = typeof event.data?.game === 'string' ? event.data.game : '';
           let line = `（桌子）${event.text}`;
-          if (game && event.data?.matchOpen === true) line += `想去就 parlor_table {op:"join",params:{game:"${game}"}}。`;
-          if (event.data?.recruit === true) line += '这桌有招募原话，用 parlor_query {op:"rooms",params:{recruitments:true}} 看。';
+          // 招募提示关掉时只留事实，「怎么去」的引导也一起停。
+          const notice = this.ctx.cfg.recruitNotice;
+          if (notice && game && event.data?.matchOpen === true) line += `想去就 parlor_table {op:"join",params:{game:"${game}"}}。`;
+          if (notice && event.data?.recruit === true) line += '这桌有招募原话，用 parlor_query {op:"rooms",params:{recruitments:true}} 看。';
           lines.push(line);
           break;
         }
@@ -1289,31 +1316,60 @@ export class ParlorWorld implements World {
     if (this.supportBusy || this.stopped || !this.client || !this.token || this.ctx.cfg.wakeTier === 'off') return;
     this.supportBusy = true;
     try {
+      // 回退到 0.38.0 时没有 inbox：探到一次 404 就记住，之后直接走旧公告接口，
+      // 不用每分钟先撞一次。服务器升上来之后定期重探，别永久锁在旧通道上。
+      if (this.inboxMissing && Date.now() - this.inboxProbeAt < INBOX_REPROBE_MS) {
+        await this.pollLegacyAnnouncements(); return;
+      }
       const topics = [
         'announcements',
         ...(this.ctx.cfg.news ? ['news'] : []),
         ...(this.ctx.cfg.recruitNotice ? ['recruit'] : []),
       ];
-      const view = await this.client.inbox(this.token, {
-        topics, afterPublish: this.newsCursor.publishAt, afterId: this.newsCursor.id,
-      });
-      // 请求在途时可能已经静音或停了：回来后再判一次，整份响应当场作废。
-      if (this.autoSilenced) return;
-      const unread = (view.announcements ?? []).filter(item => !this.seenAnnouncements.includes(item.id));
-      if (unread.length) {
-        await this.host?.pushEvent({
-          type: 'parlor.announcement', ts: nowIso(this.ctx.timezone), source: this.id, origin: 'external', senderKey: 'parlor-operator',
-          text: unread.slice(0, 5).reverse().map(item => `【运营公告】${item.text}`).join('\n\n')
-            + (unread.length > 5 ? '\n更早的公告请用 parlor_query {op:"announcements"} 查看。' : ''),
-          meta: { ids: unread.map(item => item.id) },
-        }, { trigger: 'debounce' });
-        this.seenAnnouncements = [...this.seenAnnouncements, ...unread.map(item => item.id)].slice(-100);
+      try {
+        const view = await this.client.inbox(this.token, {
+          topics,
+          afterPublish: this.newsCursor.publishAt,
+          afterId: this.newsCursor.id,
+          ...(this.currentRoom && this.currentRoom !== 'hall' ? { room: this.currentRoom } : {}),
+        });
+        // 请求在途时可能已经静音或停了：回来后再判一次，整份响应当场作废。
+        if (this.autoSilenced) return;
+        await this.pushAnnouncements(view.announcements ?? []);
+        if (this.ctx.cfg.news && view.news) await this.pushNews(view.news);
+        if (this.ctx.cfg.recruitNotice && view.recruit) this.absorbRecruit(view.recruit.tables);
+        this.inboxMissing = false;
+        this.saveCursor();
+      } catch (error) {
+        // 只有 404 才回落：临时断网、5xx 下一轮仍走 inbox。
+        if (!(error instanceof ParlorHttpError) || error.status !== 404) throw error;
+        this.inboxMissing = true;
+        this.inboxProbeAt = Date.now();
+        await this.pollLegacyAnnouncements();
       }
-      if (this.ctx.cfg.news && view.news) await this.pushNews(view.news);
-      if (this.ctx.cfg.recruitNotice && view.recruit) this.absorbRecruit(view.recruit.tables);
-      this.saveCursor();
     } catch { /* 老服务器或临时断网：下次再查，不刷通知。 */ }
     finally { this.supportBusy = false; }
+  }
+
+  /** 旧服务器（0.38.0 及更早）只有公告：新闻与跨厅招募在这条通路上不存在。 */
+  private async pollLegacyAnnouncements(): Promise<void> {
+    if (!this.client || !this.token) return;
+    const { announcements = [] } = await this.client.support(this.token, 'announcements');
+    if (this.autoSilenced) return;
+    await this.pushAnnouncements(announcements);
+    this.saveCursor();
+  }
+
+  private async pushAnnouncements(items: Array<{ id: string; text: string }>): Promise<void> {
+    const unread = items.filter(item => !this.seenAnnouncements.includes(item.id));
+    if (!unread.length) return;
+    await this.host?.pushEvent({
+      type: 'parlor.announcement', ts: nowIso(this.ctx.timezone), source: this.id, origin: 'external', senderKey: 'parlor-operator',
+      text: unread.slice(0, 5).reverse().map(item => `【运营公告】${item.text}`).join('\n\n')
+        + (unread.length > 5 ? '\n更早的公告请用 parlor_query {op:"announcements"} 查看。' : ''),
+      meta: { ids: unread.map(item => item.id) },
+    }, { trigger: 'debounce' });
+    this.seenAnnouncements = [...this.seenAnnouncements, ...unread.map(item => item.id)].slice(-100);
   }
 
   private async pushNews(feed: InboxNews): Promise<void> {

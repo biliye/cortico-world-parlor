@@ -17,7 +17,11 @@ let snapshot: RoomSnapshot;
 let receive: (event: RoomEvent) => void;
 let seq: number;
 let inboxQueue: InboxView[];
-let inboxCalls: Array<{ topics: string[]; afterPublish: number; afterId: string }>;
+let inboxCalls: Array<{ topics: string[]; afterPublish: number; afterId: string; room?: string }>;
+/** 模拟回退到 0.38.0：inbox 路由不存在。 */
+let inboxFails = false;
+/** 拿到 ctx.cfg 的引用，热更新用例要在 start 之后改。 */
+let cfg: Record<string, unknown>;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -26,8 +30,10 @@ beforeEach(() => {
   seq = 1;
   inboxQueue = [];
   inboxCalls = [];
+  inboxFails = false;
   vi.spyOn(ParlorClient.prototype, 'inbox').mockImplementation(async (_token, query) => {
     inboxCalls.push(query);
+    if (inboxFails) throw new ParlorHttpError(404, '没有这个反馈通道地址');
     return inboxQueue.shift() ?? {};
   });
   vi.spyOn(ParlorClient.prototype, 'initializeIdentity').mockResolvedValue(true);
@@ -50,7 +56,8 @@ const start = async (tier: WakeTier = 'full', tune?: (cfg: Record<string, unknow
   ctx.cfg.room = 'hall';
   ctx.cfg.seatName = '小满';
   ctx.cfg.wakeTier = tier;
-  tune?.(ctx.cfg as unknown as Record<string, unknown>);
+  cfg = ctx.cfg as unknown as Record<string, unknown>;
+  tune?.(cfg);
   ctx.secret = (name) => name === 'PARLOR_SEAT_TOKEN' ? 'test-seat-token' : 'inv';
   snapshot = {
     id: 'hall', seat: { id: 'mine', name: '小满', kind: 'pet', tier, joinedAt: Date.now() },
@@ -211,6 +218,98 @@ describe('inbox 轮询', () => {
     const digest = host.events.find((event) => event.type === 'parlor.digest');
     expect(digest?.text).toContain('开放了快速匹配');
     expect(digest?.text).not.toContain('桌在等人');
+  });
+
+  it('旧网关没有 inbox：404 回落旧公告接口，并记住不再每轮撞', async () => {
+    inboxFails = true;
+    const support = vi.spyOn(ParlorClient.prototype, 'support').mockResolvedValue({
+      announcements: [{ id: 'ann-legacy', text: '今晚维护', created_at: Date.now() }],
+    });
+    await start();
+    const announced = () => host.events.filter((event) => event.type === 'parlor.announcement');
+    expect(announced()).toHaveLength(1);
+    expect(announced()[0].text).toContain('今晚维护');
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    // 探测结果缓存：之后两轮只走旧公告接口，没有再去撞 inbox。
+    expect(inboxCalls).toHaveLength(1);
+    expect(support.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(announced()).toHaveLength(1);
+  });
+
+  it('服务器升上来以后 10 分钟内自动重探 inbox，不用重启 Coo', async () => {
+    inboxFails = true;
+    vi.spyOn(ParlorClient.prototype, 'support').mockResolvedValue({ announcements: [] });
+    await start();
+    expect(inboxCalls).toHaveLength(1);
+
+    inboxFails = false;
+    inboxQueue = [{ news: newsEvent('升级后的第一期') }];
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    expect(inboxCalls.length).toBeGreaterThan(1);
+    expect(host.events.some((event) => event.type === 'parlor.news' && event.text.includes('升级后的第一期'))).toBe(true);
+  });
+
+  it('关掉招募时，已经排在队列里的 discovery 也不再发出去', async () => {
+    await start('full');
+    emit({ type: 'parlor.say', text: '先说一句' });
+    emit({
+      type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌开放了快速匹配（1/2 人）。',
+      data: { tableId: 't-1', game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, recruit: false, recruitVersion: 1 },
+    });
+    // 两条都已经进队列，这时才把开关关掉：交给宿主前还要再筛一次。
+    cfg.recruitNotice = false;
+    await vi.advanceTimersByTimeAsync(6_000);
+    const digest = host.events.find((event) => event.type === 'parlor.digest');
+    expect(digest?.text).toContain('先说一句');
+    expect(digest?.text).not.toContain('快速匹配');
+  });
+
+  it('队列里只剩招募事件时，关掉开关就整次唤醒都不发', async () => {
+    await start('full');
+    emit({
+      type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌开放了快速匹配（1/2 人）。',
+      data: { tableId: 't-1', game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, recruit: false, recruitVersion: 1 },
+    });
+    cfg.recruitNotice = false;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(host.events.filter((event) => event.type === 'parlor.digest')).toHaveLength(0);
+  });
+
+  it('关掉招募时开桌事件照常报，但不再带 join 引导', async () => {
+    await start('full');
+    emit({
+      type: 'parlor.table.open', text: '阿岚 开了一张五子棋桌。',
+      data: { game: 'gomoku', tableId: 't-1', matchOpen: true, seats: 1, capacity: 2, recruitVersion: 1 },
+    });
+    cfg.recruitNotice = false;
+    await vi.advanceTimersByTimeAsync(6_000);
+    const digest = host.events.find((event) => event.type === 'parlor.digest');
+    expect(digest?.text).toContain('开了一张五子棋桌');
+    expect(digest?.text).not.toContain('parlor_table {op:"join"');
+  });
+
+  it('两次 pushWake 并发时，同一版本只带出一次', async () => {
+    inboxQueue = [{ recruit: { tables: [table()] } }, {}];
+    await start('full');
+    // 第一轮 inbox 已经把候选收进 hint，现在让第一次推送卡在宿主前面。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let carried = 0;
+    const original = host.pushEvent.bind(host);
+    host.pushEvent = async (event, opts) => {
+      if (event.text.includes('桌在等人')) { carried++; await gate; }
+      return original(event, opts);
+    };
+
+    emit({ type: 'parlor.say', text: '第一句' });
+    await vi.advanceTimersByTimeAsync(6_000);
+    // 第一个 pushWake 占住了 hint 并挂起；第二个（点名私聊直接投递）不能把同一版本再带一次。
+    emit({ type: 'parlor.whisper', text: '悄悄话', from: 'other', scope: { kind: 'seat', seatId: 'mine' } });
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(carried).toBe(1);
   });
 
   it('主动查新闻：默认给全文，list 给目录，没到时间与旧网关都说清楚', async () => {

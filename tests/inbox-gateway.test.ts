@@ -13,14 +13,17 @@ import { pgServerStorage } from './helpers/pg.ts';
 
 const OPERATOR = 'operator-key-for-inbox-tests';
 const NOW = Date.parse('2026-11-09T12:00:00+08:00');
+/** 服务端时钟：默认钉在 NOW，个别用例可以往前推，验证「重试沿用已存时刻」。 */
+let clock = NOW;
 
 let app: WorldServer | undefined;
 afterEach(async () => { await app?.close(); app = undefined; });
 
 async function start() {
+  clock = NOW;
   app = await WorldServer.create({
     ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv',
-    operatorKey: OPERATOR, now: () => NOW,
+    operatorKey: OPERATOR, now: () => clock,
   });
   await app.listen();
   const client = new ParlorClient(app.url, {
@@ -68,22 +71,23 @@ describe('统一 inbox 网关（真实 PG）', () => {
   it('同毫秒发布靠 (publish_at, id) 复合游标推进：只推最新一条，也不吞后来的', async () => {
     const { client, token } = await start();
     const at = NOW - 3_600_000;
-    await publish({ issueDate: '2026-11-01', title: '一号', summary: 's1', body: 'b1', publishAt: at, autoPush: true });
-    await publish({ issueDate: '2026-11-02', title: '二号', summary: 's2', body: 'b2', publishAt: at, autoPush: true });
+    // 用今天与未来日期：历史补录现在一律不自动推送，造不出「已可见且会推」的样本。
+    await publish({ issueDate: '2026-11-09', title: '一号', summary: 's1', body: 'b1', publishAt: at, autoPush: true });
+    await publish({ issueDate: '2026-11-10', title: '二号', summary: 's2', body: 'b2', publishAt: at, autoPush: true });
 
     const first = await client.inbox(token, { topics: ['news'], afterPublish: 0, afterId: '' });
-    expect(first.news?.item).toMatchObject({ id: 'news-2026-11-02' });
+    expect(first.news?.item).toMatchObject({ id: 'news-2026-11-10' });
     expect(first.news?.skipped).toBe(1);
     expect(first.news?.capped).toBe(false);
     const cursor = first.news!.cursor;
-    expect(cursor).toEqual({ publishAt: at, id: 'news-2026-11-02' });
+    expect(cursor).toEqual({ publishAt: at, id: 'news-2026-11-10' });
 
     // 同一个毫秒再发一条 id 更大的：v1 的 unread[len-1] 取法会漏掉它，复合游标不会。
-    await publish({ issueDate: '2026-11-03', title: '三号', summary: 's3', body: 'b3', publishAt: at, autoPush: true });
+    await publish({ issueDate: '2026-11-11', title: '三号', summary: 's3', body: 'b3', publishAt: at, autoPush: true });
     const second = await client.inbox(token, {
       topics: ['news'], afterPublish: cursor.publishAt, afterId: cursor.id,
     });
-    expect(second.news?.item).toMatchObject({ id: 'news-2026-11-03' });
+    expect(second.news?.item).toMatchObject({ id: 'news-2026-11-11' });
     expect(second.news?.skipped).toBe(0);
 
     const third = await client.inbox(token, {
@@ -132,6 +136,56 @@ describe('统一 inbox 网关（真实 PG）', () => {
     // 同一天只有一条：冲突不会留下第二行。
     const list = await client.news(token, { list: true }) as { news: unknown[] };
     expect(list.news).toHaveLength(1);
+  });
+
+  it('当天 10 点后补发：省略 publishAt 的重试沿用已存时刻，不会被判成改了字段', async () => {
+    const { client } = await start();
+    const base = { issueDate: '2026-11-09', title: '今天的茶馆', summary: '摘要', body: '正文' };
+    const first = await publish(base);
+    expect(first.status).toBe(200);
+    expect(first.body.news.publishAt).toBe(NOW);
+
+    // 25 毫秒后再来一次：默认可见时刻如果重新取 now，就与存下来的不一致了。
+    clock = NOW + 25;
+    const again = await publish(base);
+    expect(again.status).toBe(200);
+    expect(again.body.news.publishAt).toBe(NOW);
+    expect(again.body.news.id).toBe(first.body.news.id);
+  });
+
+  it('历史补录显式传 autoPush 也强制不推送，主动查仍然可见', async () => {
+    const { client, token } = await start();
+    const old = await publish({
+      issueDate: '2026-10-20', title: '旧闻', summary: 's', body: '旧正文', autoPush: true,
+    });
+    expect(old.status).toBe(200);
+    expect(old.body.news.autoPush).toBe(false);
+
+    const feed = await client.inbox(token, { topics: ['news'], afterPublish: 0, afterId: '' });
+    expect(feed.news?.item).toBeNull();
+    const list = await client.news(token, { list: true }) as { news: Array<Record<string, any>> };
+    expect(list.news.map((item) => item.id)).toEqual(['news-2026-10-20']);
+  });
+
+  it('运营新闻列表走运营钥匙：含预录条目，席位令牌读不到', async () => {
+    const { client, token } = await start();
+    await publish({ issueDate: '2026-11-10', title: '明天的', summary: 's', body: '明天正文' });
+
+    // 席位查询只给已可见的：预录条目这里看不见。
+    const seatList = await client.news(token, { list: true, limit: 10 }) as { news: unknown[] };
+    expect(seatList.news).toEqual([]);
+
+    const asSeat = await fetch(`${app!.url}/v1/support/operator/news?limit=10`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(asSeat.status).toBe(403);
+
+    const asOperator = await fetch(`${app!.url}/v1/support/operator/news?limit=10`, {
+      headers: { authorization: `Bearer ${OPERATOR}` },
+    });
+    expect(asOperator.status).toBe(200);
+    const data = await asOperator.json() as { news: Array<Record<string, any>> };
+    expect(data.news.map((item) => item.id)).toEqual(['news-2026-11-10']);
   });
 
   it('公告照旧搭同一趟车；匿名读 401，运营入口无钥匙 403', async () => {

@@ -174,12 +174,16 @@ export class SupportDb {
     if (!validDate(issueDate)) throw new HostError('invalid', '日期要写成 YYYY-MM-DD');
     const id = input.id === undefined ? `news-${issueDate}` : String(input.id).trim();
     if (!/^[\w-]{1,100}$/.test(id)) throw new HostError('invalid', 'id 只能含字母、数字、下划线、短横线（1–100 字）');
-    const autoPush = input.autoPush === undefined
-      ? issueDate >= today
+    // 历史补录一律只进主动查：显式传 autoPush 也不放行，否则补旧闻会一次性推给所有人。
+    const autoPush = issueDate < today ? false : input.autoPush === undefined
+      ? true
       : input.autoPush === true || input.autoPush === 'true';
     const ten = beijingTen(issueDate);
-    // 当天 10 点已经过了：补发立即可见；否则按 10 点预录。
-    const fallback = ten <= now && autoPush ? now : ten;
+    // 缺省可见时刻必须是可重放的：当天 10 点后补发取 `now`，重试时 now 已经变了，
+    // 逐字段比对会把它判成「改了可见时刻」。已有条目就沿用存下来的那个值。
+    const saved = await this.db.prepare('SELECT * FROM news_items WHERE issue_date = ?')
+      .get(issueDate) as NewsRow | undefined;
+    const fallback = saved ? Number(saved.publish_at) : (ten <= now && autoPush ? now : ten);
     const publishAt = input.publishAt === undefined ? fallback : Number(input.publishAt);
     if (!Number.isFinite(publishAt) || publishAt <= 0) throw new HostError('invalid', '可见时刻要是毫秒时间戳');
 
@@ -234,6 +238,16 @@ export class SupportDb {
       `SELECT id, issue_date, title, summary, publish_at FROM news_items
         WHERE publish_at <= ? ORDER BY publish_at DESC, id DESC LIMIT ?`,
     ).all(this.now(), size) as NewsRow[];
+    return rows.map(newsSummary);
+  }
+
+  /** 运营列表：含未到可见时刻的预录条目，供运营钥匙校验过的路由使用。 */
+  async newsAdminList(limit: number): Promise<NewsSummary[]> {
+    const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 20) : 10;
+    const rows = await this.db.prepare(
+      `SELECT id, issue_date, title, summary, publish_at FROM news_items
+        ORDER BY issue_date DESC, publish_at DESC, id DESC LIMIT ?`,
+    ).all(size) as NewsRow[];
     return rows.map(newsSummary);
   }
 

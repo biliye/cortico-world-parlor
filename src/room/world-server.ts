@@ -859,10 +859,12 @@ export class WorldServer {
           .split(',').map((item) => item.trim()).filter(Boolean));
         const afterPublish = Number(url.searchParams.get('after_publish') ?? 0) || 0;
         const afterId = url.searchParams.get('after_id') ?? '';
+        // 同厅的桌已经走 SSE 即时通知；这里排掉，别让两条通路说同一桌、也别白占前三的名额。
+        const here = (url.searchParams.get('room') ?? '').trim();
         json(res, 200, {
           ...(topics.has('announcements') ? { announcements: await support.announcements() } : {}),
           ...(topics.has('news') ? { news: await support.newsFeed(afterPublish, afterId) } : {}),
-          ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3) } } : {}),
+          ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3, here) } } : {}),
         });
         return;
       }
@@ -900,6 +902,10 @@ export class WorldServer {
         if (path === 'operator/announcements' && method === 'POST') {
           const body = await readJson(req);
           json(res, 200, { announcement: await support.announce(body.text, body.requestId) }); return;
+        }
+        if (path === 'operator/news' && method === 'GET') {
+          // 运营列表含还没到可见时刻的预录条目：这条走运营钥匙，不走席位鉴权。
+          json(res, 200, { news: await support.newsAdminList(Number(url.searchParams.get('limit') ?? 10)) }); return;
         }
         if (path === 'operator/news' && method === 'POST') {
           const body = await readJson(req);

@@ -53,18 +53,25 @@ const seedTable = async (d: Db, seed: SeedTable): Promise<void> => {
   ).run(seed.id, seed.matchOpen === false ? 0 : 1, '来个人', NOW, seed.version ?? 1);
 };
 
-async function seedRooms(d: Db): Promise<{ publicEpoch: string; privateEpoch: string; unlistedEpoch: string }> {
+async function seedRooms(d: Db): Promise<{
+  publicEpoch: string; privateEpoch: string; unlistedEpoch: string; otherEpoch: string;
+}> {
   const owner = 'coo-snap-owner';
   await new CooAccountDb(d).registerCoo(owner, 'secret-snap-owner-0123456789', 'pet', '房主');
   const open = await createRoom(
     d, { id: 'r-snap-open', name: '公开厅', ownerCooId: owner, visibility: 'public' }, NOW,
+  );
+  const other = await createRoom(
+    d, { id: 'r-snap-other', name: '另一个公开厅', ownerCooId: owner, visibility: 'public' }, NOW,
   );
   const priv = await createRoom(
     d, { id: 'r-snap-priv', name: '私密厅', ownerCooId: owner, visibility: 'private' }, NOW,
   );
   // 建厅默认是 unlisted：与既有 recruits()/matchables() 口径一致，不公开就不进招募。
   const unlisted = await createRoom(d, { id: 'r-snap-unlisted', name: '没公开的厅', ownerCooId: owner }, NOW);
-  return { publicEpoch: open.epoch, privateEpoch: priv.epoch, unlistedEpoch: unlisted.epoch };
+  return {
+    publicEpoch: open.epoch, otherEpoch: other.epoch, privateEpoch: priv.epoch, unlistedEpoch: unlisted.epoch,
+  };
 }
 
 describe('招募快照（真实 PG）', () => {
@@ -128,5 +135,21 @@ describe('招募快照（真实 PG）', () => {
 
     clock += 30_000;
     expect((await snapshot.take(10)).map((table) => table.tableId)).toContain('t-snap-new');
+  });
+
+  it('排除请求者当前厅：本厅的桌不占名额，缓存也不受调用方影响', async () => {
+    db = await openTestDb();
+    const { publicEpoch, otherEpoch } = await seedRooms(db);
+    // 本厅三张都更接近坐满：不排除的话会把三个名额全占掉，过滤后就一条不剩。
+    await seedTable(db, { roomId: 'r-snap-open', epoch: publicEpoch, id: 't-here-1', game: 'ddz', seats: 2 });
+    await seedTable(db, { roomId: 'r-snap-open', epoch: publicEpoch, id: 't-here-2', game: 'ddz', seats: 2 });
+    await seedTable(db, { roomId: 'r-snap-open', epoch: publicEpoch, id: 't-here-3', game: 'ddz', seats: 2 });
+    await seedTable(db, { roomId: 'r-snap-other', epoch: otherEpoch, id: 't-away', game: 'ddz', seats: 1 });
+
+    const snapshot = new RecruitSnapshot(db, () => NOW);
+    expect((await snapshot.take(3, 'r-snap-open')).map((table) => table.tableId)).toEqual(['t-away']);
+    // 同一份缓存不带排除时仍是全量：排除只影响本次返回。
+    expect((await snapshot.take(10)).map((table) => table.tableId))
+      .toEqual(['t-here-1', 't-here-2', 't-here-3', 't-away']);
   });
 });

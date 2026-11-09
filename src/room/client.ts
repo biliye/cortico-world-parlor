@@ -53,12 +53,14 @@ export class ParlorClient {
   }
 
   /** 公告 + 新闻摘要 + 跨厅招募共用一次请求；旧服务器没有这条路由会抛 404。 */
-  async inbox(token: string, query: { topics: string[]; afterPublish: number; afterId: string }): Promise<InboxView> {
+  async inbox(token: string, query: { topics: string[]; afterPublish: number; afterId: string; room?: string }): Promise<InboxView> {
     const params = new URLSearchParams({
       topics: query.topics.join(','),
       after_publish: String(query.afterPublish),
     });
     if (query.afterId) params.set('after_id', query.afterId);
+    // 当前所在厅：服务端据此排掉同厅的桌，招募只搭「别的厅」。
+    if (query.room) params.set('room', query.room);
     const response = await fetch(this.url(`/v1/support/inbox?${params.toString()}`), {
       headers: await this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
