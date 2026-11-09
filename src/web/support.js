@@ -6,8 +6,8 @@ let feedbackRequest = null;
 let announcementRequest = null;
 let newsRequest = null;
 let editingNewsId = '';
-// 编辑时要带回「编辑者看到的那一期」：createdAt 识别删掉重发，revision 识别并发编辑。
-let editingNewsCreatedAt = 0;
+// 编辑时要带回「编辑者看到的那一期」：publishId 识别删掉重发，revision 识别并发编辑。
+let editingNewsPublishId = '';
 let editingNewsRevision = 1;
 // 表单只显示 HH:MM；记下回填值，没动过时间就不提交 publishAt，免得把秒数悄悄抹成 :00。
 let editingNewsTime = '';
@@ -100,7 +100,10 @@ async function loadAnnouncementList() {
       form.addEventListener('submit', event => {
         event.preventDefault();
         void perform(save, async () => {
-          await api('operator/announcements', { id: item.id, text: text.value.trim() }, true, 'PATCH');
+          // 带上页面看到的版本：另一个标签页先保存过，这里就会被拒，不会悄悄覆盖。
+          await api('operator/announcements', {
+            id: item.id, text: text.value.trim(), revision: Number(item.revision ?? 1),
+          }, true, 'PATCH');
           status('公告已更新。'); await loadAnnouncementList(); if (cfg?.token) await refresh();
         });
       });
@@ -108,7 +111,7 @@ async function loadAnnouncementList() {
       remove.addEventListener('click', () => {
         if (!confirm(`删除这条公告？横幅和列表里都会消失，发了就找不回来（原文只在留痕里）。\n\n${item.text.slice(0, 100)}`)) return;
         void perform(remove, async () => {
-          await api(`operator/announcements?id=${encodeURIComponent(item.id)}`, undefined, true, 'DELETE');
+          await api(`operator/announcements?id=${encodeURIComponent(item.id)}&revision=${encodeURIComponent(item.revision ?? 1)}`, undefined, true, 'DELETE');
           status('公告已删除。'); await loadAnnouncementList(); if (cfg?.token) await refresh();
         });
       });
@@ -145,7 +148,7 @@ async function loadNewsList() {
       remove.addEventListener('click', () => {
         if (!confirm(`删除 ${item.issueDate} 这一期？大厅小报会立刻下掉；已经推给 Coo 的文本收不回来。\n\n删掉之后同一天可以重发一条。`)) return;
         void perform(remove, async () => {
-          const data = await api(`operator/news?id=${encodeURIComponent(item.id)}&createdAt=${encodeURIComponent(item.createdAt)}`, undefined, true, 'DELETE');
+          const data = await api(`operator/news?id=${encodeURIComponent(item.id)}&publishId=${encodeURIComponent(item.publishId)}`, undefined, true, 'DELETE');
           if (editingNewsId === item.id) cancelNewsEdit();
           status(data.deleted ? '已删除，原文留在留痕里。' : '这一期本来就不在了。');
           await loadNewsList();
@@ -207,12 +210,12 @@ function resetNewsForm() {
   $('news-title').value = ''; $('news-summary').value = ''; $('news-body').value = '';
   $('news-time').value = '10:00'; $('news-time').disabled = false; $('news-time').removeAttribute('title');
   $('news-autopush').checked = true; newsRequest = null;
-  editingNewsCreatedAt = 0; editingNewsRevision = 1; editingNewsTime = '';
+  editingNewsPublishId = ''; editingNewsRevision = 1; editingNewsTime = '';
 }
 /** 把已有的一期灌回表单：改稿时不换日期，只换内容与可见设置。 */
 function fillNewsForm(item) {
   editingNewsId = item.id;
-  editingNewsCreatedAt = Number(item.createdAt ?? 0);
+  editingNewsPublishId = String(item.publishId ?? '');
   editingNewsRevision = Number(item.revision ?? 1);
   $('news-mode').hidden = false; $('news-mode-id').textContent = item.id;
   $('news-date').value = item.issueDate; $('news-date').disabled = true;
@@ -260,7 +263,7 @@ $('news-form').addEventListener('submit', event => {
     if (!confirm(`保存对 ${editingNewsId} 的修改？\n\n改完不会重新推给 Coo，但大厅小报下一次刷新就是新文本。`)) return;
     void perform(event.submitter, async () => {
       const payload = {
-        id: editingNewsId, createdAt: editingNewsCreatedAt, revision: editingNewsRevision,
+        id: editingNewsId, publishId: editingNewsPublishId, revision: editingNewsRevision,
         title, summary, body, autoPush, ...(publishAt ? { publishAt } : {}),
       };
       const data = await api('operator/news', payload, true, 'PATCH');

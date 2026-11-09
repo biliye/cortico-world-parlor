@@ -912,12 +912,14 @@ export class WorldServer {
           const body = await readJson(req);
           const id = String(body.id ?? '').trim();
           if (!id) throw new HttpError(400, '需要公告 id');
-          json(res, 200, { announcement: (await support.editAnnouncement(id, body.text)).item }); return;
+          // revision 必须是运营页面看到的那一版：服务端读到的版本不能当并发条件。
+          json(res, 200, { announcement: (await support.editAnnouncement(id, body.text, body.revision)).item }); return;
         }
         if (path === 'operator/announcements' && method === 'DELETE') {
           const id = (url.searchParams.get('id') ?? '').trim();
           if (!id) throw new HttpError(400, '需要公告 id');
-          json(res, 200, { ok: true, deleted: await support.deleteAnnouncement(id) }); return;
+          // 旧标签页拿着过期版本不能删掉别人刚改出来的新版。
+          json(res, 200, { ok: true, deleted: await support.deleteAnnouncement(id, url.searchParams.get('revision') ?? '') }); return;
         }
         if (path === 'operator/news' && method === 'GET') {
           const id = (url.searchParams.get('id') ?? '').trim();
@@ -940,15 +942,14 @@ export class WorldServer {
           json(res, 200, { news: result.item, changed: result.changed }); return;
         }
         // 删：物理删除，当天可以重发；原文进留痕表，`deleted: null` 表示本来就没有。
-        // `createdAt` 必填：同一天重发沿用同一个 id，只带 id 的旧请求会误删新稿。
+        // `publishId` 必填：同一天重发沿用同一个 id，只带 id 的旧请求会误删新稿；
+        // 也不用 createdAt——两次发布可以落在同一毫秒。
         if (path === 'operator/news' && method === 'DELETE') {
           const id = (url.searchParams.get('id') ?? '').trim();
           if (!id) throw new HttpError(400, '需要新闻 id');
-          const createdAt = Number(url.searchParams.get('createdAt'));
-          if (!Number.isFinite(createdAt) || createdAt <= 0) {
-            throw new HttpError(400, '需要 createdAt（本次发布的创建时刻）');
-          }
-          json(res, 200, { ok: true, deleted: await support.deleteNews(id, createdAt) }); return;
+          const publishId = (url.searchParams.get('publishId') ?? '').trim();
+          if (!publishId) throw new HttpError(400, '需要 publishId（本次发布的唯一标识）');
+          json(res, 200, { ok: true, deleted: await support.deleteNews(id, publishId) }); return;
         }
         if (path === 'operator/audit' && method === 'GET') {
           json(res, 200, { audit: await support.auditList(Number(url.searchParams.get('limit') ?? 20)) }); return;

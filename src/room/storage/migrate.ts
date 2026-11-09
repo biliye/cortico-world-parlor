@@ -16,7 +16,7 @@ import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '.
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 /** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
-export const SQLITE_SCHEMA_VERSION = 10;
+export const SQLITE_SCHEMA_VERSION = 11;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -155,6 +155,12 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   );
   if (!newsColumns.has('revision')) handle.exec('ALTER TABLE news_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
   if (!newsColumns.has('updated_at')) handle.exec('ALTER TABLE news_items ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0');
+  // schema 11：每次发布一个唯一标识。老行没有，按 id 派生一个稳定值——
+  // id 本身有主键约束，'legacy-' || id 也就互不相同；新行由 publishNews 写 UUID。
+  if (!newsColumns.has('publish_id')) {
+    handle.exec("ALTER TABLE news_items ADD COLUMN publish_id TEXT NOT NULL DEFAULT ''");
+  }
+  handle.exec("UPDATE news_items SET publish_id = 'legacy-' || id WHERE publish_id = ''");
   const announcementColumns = new Set(
     (handle.prepare('PRAGMA table_info(support_announcements)').all() as { name: string }[]).map((row) => row.name),
   );
