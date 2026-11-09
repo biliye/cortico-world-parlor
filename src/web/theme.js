@@ -1,10 +1,11 @@
 /** Run before styles: restore appearance without rebuilding the client or flashing the wrong theme.
- *  三套外观，换的是颜色不是布局：深色（会馆默认）、浅色、奶油（老客厅那套暖色）。
+ *  两套外观，换的是颜色不是布局：深色（会馆默认）与浅色。
+ *  奶油那套已随旧页下线；浏览器里存着的 cream 折到浅色并改写，免得每次进来都回落到系统色。
  *  第一次来跟着系统的深浅色走；点过之后以这台浏览器记下的为准。 */
 (() => {
   const key = 'parlor-theme-v1';
-  const themes = ['dark', 'light', 'cream'];
-  const metaColor = { dark: '#10191b', light: '#f5f7ef', cream: '#fff8ee' };
+  const themes = ['dark', 'light'];
+  const metaColor = { dark: '#10191b', light: '#f5f7ef' };
   const system = () => {
     try {
       // 没有 matchMedia（老浏览器、测试环境）就当深色，不做猜测。
@@ -15,7 +16,10 @@
   let theme = system();
   try {
     const saved = localStorage.getItem(key);
-    if (themes.includes(saved)) theme = saved;
+    if (saved === 'cream') {
+      theme = 'light';
+      try { localStorage.setItem(key, theme); } catch { /* retain the choice in memory */ }
+    } else if (themes.includes(saved)) theme = saved;
   } catch { /* private browsing */ }
 
   function apply() {

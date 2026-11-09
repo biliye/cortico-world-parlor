@@ -1,9 +1,8 @@
 /**
  * Vue 客户端的入口。
  *
- * 页面用一支 loader 分派：默认载入这里；?legacy=1 回退旧 play.js。
- * 挂载前给 <html> 打上 vue-app 标记：新的夜航会馆视觉只作用在这棵树上，
- * 旧页（回退用）继续用老样式，互不打架。
+ * 页面用一支 loader 载入这里（旧 play.js 已在 0.40.0 下线，不再有第二支）。
+ * 挂载前给 <html> 打上 vue-app 标记：夜航会馆视觉只作用在这棵树上。
  */
 import { createApp } from 'vue';
 import App from './App.vue';

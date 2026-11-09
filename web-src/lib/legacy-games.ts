@@ -1,10 +1,11 @@
 /**
- * 还没迁到 Vue 的桌面渲染器桥：骰子、大富翁仍是 `mountX(root, ctx) -> {update(view), destroy()}`，
- * 与 Vue 无关，可以原样挂进牌桌壳；斗地主与狼人杀已经换成 web-src/components/games/ 下的组件。
+ * 还没迁到 Vue 的牌桌渲染器桥：骰子与旧大富翁仍是 `mountX(root, ctx) -> {update(view), destroy()}`，
+ * 与 Vue 无关，可以原样挂进牌桌壳。两款都已在大厅收起，但存量桌仍要能看能玩；
+ * 斗地主、狼人杀、快局大富翁与五子棋已经是 web-src/components/games/ 下的 Vue 组件。
  */
 import type { ChatEvent, HallSeat, TableSummary } from '../api/types.ts';
 
-// @ts-ignore 旧渲染器是 JS，没有类型声明；迁移完成后这段会删掉。
+// @ts-ignore 旧渲染器是 JS，没有类型声明；这两款迁到 Vue 后这段会删掉。
 import { mountDice } from '../../src/web/games/dice.js';
 // @ts-ignore
 import { mountMonopoly } from '../../src/web/games/monopoly.js';

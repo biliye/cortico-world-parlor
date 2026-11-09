@@ -470,6 +470,18 @@ export class ParlorServer {
   /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
   private serveWeb(pathname: string, req: IncomingMessage, res: ServerResponse): boolean {
     if (pathname === '/play' || pathname === '/play/') {
+      // 旧页已下线：带 ?legacy=1 的书签 / 外链 302 回默认页，其余参数原样保留。
+      const url = new URL(req.url ?? '/play', 'http://localhost');
+      if (url.searchParams.has('legacy')) {
+        url.searchParams.delete('legacy');
+        const query = url.searchParams.toString();
+        res.writeHead(302, {
+          location: '/play' + (query ? '?' + query : ''),
+          'cache-control': 'no-store',
+        });
+        res.end();
+        return true;
+      }
       this.sendWeb('play.html', req, res, true);
       return true;
     }

@@ -128,6 +128,13 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 - 两款玩法都走 `parlor.game.v1`：`parlor_game_info {op:"state"}` 取本人桌面与可用动作，
   `parlor_game_action` 提交；网页棋盘子包按需加载（五子棋约 4.5 KB、大富翁约 9.1 KB，gzip 前）。
 
+## 0.40.0（未发布）：网页只保留 Vue 客户端
+
+- **旧网页下线**：删除 `src/web/play.js` 与只服务它的 `announcement-banner.js` / `announcements.js` / `support-link.js`、旧版斗地主与狼人杀渲染器 `src/web/games/{ddz,werewolf}.js`、旧玩法目录 `src/web/games/registry.js`。`?legacy=1` 的旧书签与外链 302 回 `/play`（保留 `room` 等参数），不再有第二套网页，也就不会同时开两张 SSE 连接。
+- **仍共用的样式与渲染器不动**：`play.css` / `club.css` / `appearance.css` 留着，斗地主与狼人杀的 Vue 桌面沿用这些类名与配色；骰子、旧大富翁两个未迁 Vue 的渲染器继续由 `web-src/lib/legacy-games.ts` 挂进牌桌（两款都已在大厅收起，存量桌仍可看）。
+- **奶油外观收口**：`theme.js` 只认深色 / 浅色，浏览器里存着的 `cream` 自动折到浅色并改写偏好；`appearance.css` 删掉奶油 token。
+- 网页刷新即用；无协议与数据库迁移。Coo 侧无需升级。
+
 ## 0.39.0：每日新闻、统一 inbox 与大厅小报
 
 - **每日新闻**：新表 `news_items`，`UNIQUE(issue_date)` 保证一天一版（按北京时间），正文上限 4000 字。

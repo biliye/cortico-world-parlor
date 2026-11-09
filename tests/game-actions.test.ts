@@ -27,10 +27,9 @@ function logic(component: typeof werewolf, view: any, ctx: any) {
 }
 
 describe('W1/E1：未发出或失败的动作保留输入', () => {
-  it.each(['store', 'legacy'])('%s 忙闸门返回 null 并明确提示未发送', async (entry) => {
+  it('store 忙闸门返回 null 并明确提示未发送', async () => {
     const toast = vi.fn();
-    const path = entry === 'store' ? 'web-src/stores/parlor.ts' : 'src/web/play.js';
-    const act = sourceFunction(path, 'act', { acting: true, switching: false, roomTransition: { value: null }, state: { busy: true }, showToast: toast });
+    const act = sourceFunction('web-src/stores/parlor.ts', 'act', { acting: true, switching: false, roomTransition: { value: null }, state: { busy: true }, showToast: toast });
     expect(await act({ type: 'werewolf_action', move: 'speak' })).toBeNull();
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('尚未发送'), 'bad');
   });
@@ -55,16 +54,6 @@ describe('W1/E1：未发出或失败的动作保留输入', () => {
     expect(storage.size).toBe(sent ? 0 : 1);
   });
 
-  it.each([null, false, 'reject', { seq: 3 }])('legacy 狼人杀也仅成功回执执行清理：%j', async (receipt) => {
-    const onOk = vi.fn();
-    const act = sourceFunction('src/web/games/werewolf.js', 'act', {
-      view: { priv: { windowId: 'w1' } },
-      ctx: context(receipt === 'reject' ? vi.fn().mockRejectedValue(new Error('400')) : vi.fn().mockResolvedValue(receipt)),
-    });
-    await act({ move: 'speak', text: '草稿' }, onOk);
-    expect(onOk).toHaveBeenCalledTimes(receipt && receipt !== 'reject' ? 1 : 0);
-  });
-
   it.each(['sendPlay', 'sendPass', 'sendBid'])('斗地主 %s 失败/忙时保留选牌，成功才清', async (action) => {
     for (const receipt of [null, false, 'reject', { seq: 3 }]) {
       const ctx = context(receipt === 'reject' ? vi.fn().mockRejectedValue(new Error('409')) : vi.fn().mockResolvedValue(receipt));
@@ -85,17 +74,6 @@ describe('W1/E1：未发出或失败的动作保留输入', () => {
     done({ seq: 3 });
     await nextTick(); await nextTick();
     expect([...state.selection.value]).toEqual([0, 1]);
-  });
-
-  it.each([null, false, 'reject', { seq: 3 }])('legacy 斗地主也仅成功后清选牌：%j', async (receipt) => {
-    const paint = vi.fn();
-    const ctx = context(receipt === 'reject' ? vi.fn().mockRejectedValue(new Error('409')) : vi.fn().mockResolvedValue(receipt));
-    const send = sourceFunction('src/web/games/ddz.js', 'sendAction', {
-      ctx, selection: new Set([0]), paintSelection: paint,
-    });
-    send({ type: 'ddz_action', move: 'play', cards: ['3'] });
-    await nextTick(); await nextTick();
-    expect(paint).toHaveBeenCalledTimes(receipt && receipt !== 'reject' ? 1 : 0);
   });
 });
 

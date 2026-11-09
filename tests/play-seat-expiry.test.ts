@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decideExpiredSeat, seatTokenFrom } from '../web-src/lib/seat-errors.ts';
-import { sourceFunction } from './helpers/game-component.ts';
 
 describe('换厅期间迟到的席位失效响应', () => {
   it('本页已换到新令牌时，旧 401 不清凭证、不重载旧地址', () => {
@@ -59,23 +58,8 @@ describe('入场网络请求不串行等待无关能力探测', () => {
   });
 });
 
-describe('H2/H3旧入口与私密内容恢复', () => {
+describe('H2/H3席位跟随与私密内容恢复', () => {
   afterEach(() => { vi.doUnmock('../web-src/api/client.ts'); vi.resetModules(); vi.unstubAllGlobals(); });
-
-  it('legacy采用共享新席位时重开的是新厅地址，清私密状态，不回写storage', () => {
-    const state:any = { cfg: { room: 'old', token: 'old' }, stream: { close: vi.fn() }, syncEpoch: 1,
-      snap: { tablePrivate: '旧手牌' }, log: ['旧日志'], mail: ['旧信'], dm: { messages: ['旧私聊'], threads: [], peer: '旧联系人' } };
-    const replace = vi.fn();
-    const key = (cfg:any) => JSON.stringify(cfg);
-    const follow = sourceFunction('src/web/play.js', 'followSharedSeat', {
-      state, readStore: () => ({ room: 'hall', token: 'new' }), sharedSeatKey: key,
-      clearTimeout: vi.fn(), location: { replace }, renderJoin: vi.fn(),
-    });
-    expect(follow()).toBe(true);
-    expect(replace).toHaveBeenCalledWith('/play?legacy=1&room=hall');
-    expect(state.snap).toBeNull(); expect(state.dm.messages).toEqual([]);
-    expect(follow()).toBe(false);
-  });
 
   it('真实session采用其他窗口席位只改内存，不向共享存储回写', async () => {
     const setItem = vi.fn();

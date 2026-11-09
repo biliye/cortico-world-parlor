@@ -1,4 +1,5 @@
-/** 网页侧的游戏清单。与旧 games/registry.js 一致；桌面渲染器仍挂在 src/web/games/ 下。 */
+/** 网页侧的游戏清单。旧 `src/web/games/registry.js` 已随旧页在 0.40.0 删除；
+ *  大厅与筛选只认这一份，服务端目录在 `src/room/games/registry.ts`。 */
 
 export interface GameDef {
   label: string;

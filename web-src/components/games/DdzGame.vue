@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 斗地主桌面（Vue 版）：DOM 结构与类名沿用旧渲染器，样式仍由 play.css 提供，
- * 所以外观不另起一套；旧文件 src/web/games/ddz.js 留给 ?legacy=1 的旧页。
+ * 所以外观不另起一套；旧渲染器 src/web/games/ddz.js 已随旧页在 0.40.0 删除。
  * 规则、牌型、提示、计分全在服务器；这里只摆牌、按钮和结果。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';

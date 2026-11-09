@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gameComponent, sourceFunction } from './helpers/game-component.ts';
+import { gameComponent } from './helpers/game-component.ts';
 
 const ddz = gameComponent('DdzGame.vue');
 const ended = () => ({
@@ -39,23 +39,5 @@ describe('E2：回放窗口外的结算信息', () => {
     for (const key of ['winners', 'revealed', 'spring', 'antiSpring']) delete view.table[key];
     expect(await ddz.html({ view, ctx })).toBe(cold);
     expect(view.endEvent).toBe(event);
-  });
-
-  it('legacy 冷页面同样读公开终局资料', () => {
-    type Node = { text: string; append: (...children: Node[]) => void };
-    const el = (_tag: string, _cls = '', text = ''): Node => ({
-      text, append(...children) { this.text += children.map((node) => node.text).join(''); },
-    });
-    const box = el('div');
-    const render = sourceFunction('src/web/games/ddz.js', 'renderEnd', {
-      view: ended(), box, ctx: {}, el, readable: String, seatAvatar: () => el('div'), roleTag: () => null,
-      btn: (text: string) => el('button', '', text), cardButton: (card: string) => el('span', '', `牌:${card}`),
-      document: { createTextNode: (text: string) => el('text', '', text) },
-    });
-    render();
-    expect(box.text).toContain('倍数 ×4 · 赢家 乙、丙');
-    expect(box.text).toContain('反春');
-    expect(box.text).toContain('牌:K');
-    expect(box.text).toContain('牌:3牌:4');
   });
 });

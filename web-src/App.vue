@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 根组件：没有席位显示加入页；有席位按「大厅 / 客厅 / 牌桌」三层渲染。
- * 默认由 vue-loader 载入；?legacy=1 回退旧的 play.js（排障用）。
+ * 由 vue-loader 载入；网页只剩这一套客户端（旧 play.js 已在 0.40.0 下线）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppShell from './components/AppShell.vue';

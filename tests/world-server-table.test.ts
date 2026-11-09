@@ -310,12 +310,15 @@ describe('WorldServer 大厅、邀请与网页', () => {
     const script = await fetch(`${app.url}${scriptPath}`);
     expect(script.status).toBe(200);
     expect(script.headers.get('content-type')).toContain('text/javascript');
-    // 入口按参数分派：不带 ?vue 时仍是旧的 play.js，两支都要能取到；Vue 产物也要能取。
+    // 旧页已下线：loader 只载 Vue；旧脚本不再发布，?legacy=1 的旧链接 302 回默认页。
     const loader = await script.text();
-    expect(loader).toContain('./play.js');
     expect(loader).toContain('./vue/main.js');
-    expect((await fetch(`${app.url}/play/assets/play.js`)).status).toBe(200);
+    expect(loader).not.toContain('./play.js');
+    expect((await fetch(`${app.url}/play/assets/play.js`)).status).toBe(404);
     expect((await fetch(`${app.url}/play/assets/vue/main.js`)).status).toBe(200);
+    const retired = await fetch(`${app.url}/play?legacy=1&room=hall`, { redirect: 'manual' });
+    expect(retired.status).toBe(302);
+    expect(retired.headers.get('location')).toBe('/play?room=hall');
   });
 });
 

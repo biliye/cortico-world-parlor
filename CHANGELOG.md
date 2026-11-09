@@ -1,3 +1,11 @@
+## 0.40.0（未发布）
+
+- **旧网页下线**：删除 `src/web/play.js`（4,454 行）与只服务它的 `announcement-banner.js` / `announcements.js` / `support-link.js`、旧版斗地主与狼人杀渲染器 `src/web/games/{ddz,werewolf}.js`、旧玩法目录与渲染器注册 `src/web/games/registry.js`。网页只剩 Vue 客户端，`vue-loader.js` 不再按 `?legacy=1` 分派。
+- **旧链接兼容**：`/play?legacy=1`（含 `legacy=true`）由服务器 **302** 回 `/play`，保留 `room` 等其它查询参数；旧书签与外链不会落到空白页。
+- **仍共用的不动**：`play.css` / `club.css` / `appearance.css` 保留（斗地主与狼人杀的 Vue 桌面沿用类名与配色）；骰子、旧大富翁的 DOM 渲染器与 `web-src/lib/legacy-games.ts` 保留，两款已在大厅收起，但存量桌仍要能看。
+- **奶油外观收口**：`theme.js` 从三套改为深色 / 浅色两套；浏览器里存着的 `cream` 在启动时折到浅色并改写偏好，`appearance.css` 删掉奶油 token。
+- 无协议与数据库迁移；Coo 侧无需升级。测试同步删除旧渲染器用例，保留角色牌路由与打包断言，并新增 `/play?legacy=1` 的 302 断言。
+
 ## 0.39.0（2026-11-09）
 
 - **每日新闻**：新增 `news_items` 表，`UNIQUE(issue_date)` 由库兜住「一天一版」（按北京时间算日期，不受服务器时区影响）；正文上限 **4000 字**（单写 `newsText()`，没有放宽同时服务反馈与公告的 2000 字上限）。`auto_push=0` 的稿子只进主动查、不进自动推送，历史补录默认走这条。Coo 用 `parlor_query {op:"news"}` 看目录与全文，工具总数仍是 **9 个**。

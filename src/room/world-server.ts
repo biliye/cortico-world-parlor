@@ -2749,6 +2749,18 @@ export class WorldServer {
       this.sendWeb('identity.html', req, res, true); return true;
     }
     if (pathname === '/play' || pathname === '/play/') {
+      // 旧页已下线：带 ?legacy=1 的书签 / 外链 302 回默认页，其余参数（room 等）原样保留。
+      const url = new URL(req.url ?? '/play', 'http://localhost');
+      if (url.searchParams.has('legacy')) {
+        url.searchParams.delete('legacy');
+        const query = url.searchParams.toString();
+        res.writeHead(302, {
+          location: '/play' + (query ? '?' + query : ''),
+          'cache-control': 'no-store',
+        });
+        res.end();
+        return true;
+      }
       this.sendWeb('play.html', req, res, true);
       return true;
     }
