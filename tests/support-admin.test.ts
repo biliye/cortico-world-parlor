@@ -10,7 +10,9 @@
  * 5. 并发编辑用 `revision` 条件更新，后提交的旧版本被拒，不丢字段；
  * 6. 删除用 `DELETE … RETURNING` 一条语句完成，留痕记的是实际删掉的那一版；
  * 7. 公告同样要带页面看到的 `revision`，旧标签页不能覆盖 / 删掉别人刚改的新版；
- * 8. 删掉的东西不会凭空消失：原文留在 `support_audit`，能从那儿找回来。
+ * 8. 公告也有每次发布的 `publishId`：删掉后用同一个 requestId 重发，版本又从 1 开始，
+ *    旧标签页手里的 revision=1 会正好命中新的一条，只有 `publishId` 能拦住；
+ * 9. 删掉的东西不会凭空消失：原文留在 `support_audit`，能从那儿找回来。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SupportDb } from '../src/room/support-db.ts';
@@ -277,23 +279,23 @@ describe('公告的编辑与删除（真实 PG）', () => {
     const created = await fresh().announce('原来的公告', 'announce-1');
     expect(created.text).toBe('原来的公告');
 
-    const edited = await fresh(NOW + 1_000).editAnnouncement(created.id, '改过的公告', 1);
+    const edited = await fresh(NOW + 1_000).editAnnouncement(created.id, '改过的公告', 1, created.publishId);
     expect(edited.changed).toBe(true);
     expect(edited.item).toMatchObject({ id: created.id, text: '改过的公告', revision: 2 });
 
     // 同一段文本重提：不算改动，也不因为 revision 过期就报冲突（重试幂等）。
-    const same = await fresh(NOW + 2_000).editAnnouncement(created.id, '改过的公告', 1);
+    const same = await fresh(NOW + 2_000).editAnnouncement(created.id, '改过的公告', 1, created.publishId);
     expect(same.changed).toBe(false);
     expect(same.item.revision).toBe(2);
 
     expect((await fresh(NOW + 3_000).announcementAdminList(10))[0]).toMatchObject({ text: '改过的公告' });
     expect((await fresh(NOW + 3_000).announcements())[0]).toMatchObject({ text: '改过的公告' });
 
-    await expect(fresh(NOW + 4_000).deleteAnnouncement(created.id, '')).rejects.toThrow('需要 revision');
-    const removed = await fresh(NOW + 4_000).deleteAnnouncement(created.id, 2);
+    await expect(fresh(NOW + 4_000).deleteAnnouncement(created.id, '', created.publishId)).rejects.toThrow('需要 revision');
+    const removed = await fresh(NOW + 4_000).deleteAnnouncement(created.id, 2, created.publishId);
     expect(removed).toMatchObject({ id: created.id, text: '改过的公告' });
     expect(await fresh(NOW + 5_000).announcements()).toEqual([]);
-    expect(await fresh(NOW + 5_000).deleteAnnouncement(created.id, 2)).toBeNull();
+    expect(await fresh(NOW + 5_000).deleteAnnouncement(created.id, 2, created.publishId)).toBeNull();
 
     const audit = await fresh(NOW + 6_000).auditList(10);
     expect(audit.map((entry) => entry.action)).toEqual(['announcement.delete', 'announcement.edit']);
@@ -305,25 +307,56 @@ describe('公告的编辑与删除（真实 PG）', () => {
     db = await openPgTestDb();
     const created = await fresh().announce('第 1 版', 'announce-stale');
     // 两个标签页都拿着 revision=1。
-    const a = await fresh(NOW + 1_000).editAnnouncement(created.id, 'A 改的第 2 版', 1);
+    const a = await fresh(NOW + 1_000).editAnnouncement(created.id, 'A 改的第 2 版', 1, created.publishId);
     expect(a.item.revision).toBe(2);
 
-    await expect(fresh(NOW + 2_000).editAnnouncement(created.id, 'B 用旧页面覆盖', 1))
+    await expect(fresh(NOW + 2_000).editAnnouncement(created.id, 'B 用旧页面覆盖', 1, created.publishId))
       .rejects.toThrow('这条公告刚被改过');
     expect((await fresh(NOW + 3_000).announcementAdminList(10))[0])
       .toMatchObject({ text: 'A 改的第 2 版', revision: 2 });
 
     // 删除同样要认页面看到的版本：旧页面不能删掉已经被改过的新版。
-    await expect(fresh(NOW + 4_000).deleteAnnouncement(created.id, 1))
+    await expect(fresh(NOW + 4_000).deleteAnnouncement(created.id, 1, created.publishId))
       .rejects.toThrow('这条公告刚被改过');
     expect((await fresh(NOW + 5_000).announcementAdminList(10))[0]).toMatchObject({ revision: 2 });
   });
 
   it('改不存在的公告报 not_found；空正文按 2000 字上限拦下', async () => {
     db = await openPgTestDb();
-    await expect(fresh().editAnnouncement('announce-none', '新文本', 1))
+    await expect(fresh().editAnnouncement('announce-none', '新文本', 1, 'legacy-announce-none'))
       .rejects.toMatchObject({ code: 'not_found' });
-    await expect(fresh().editAnnouncement('announce-none', '   ', 1))
+    await expect(fresh().editAnnouncement('announce-none', '   ', 1, 'legacy-announce-none'))
       .rejects.toThrow('正文要有 1 到 2000 个字');
+    // 少了发布标识就不给改：请求自带 id 是运营选的 requestId，删掉重发后版本又从 1 开始。
+    await expect(fresh().editAnnouncement('announce-none', '新文本', 1, ''))
+      .rejects.toThrow('需要 publishId');
+  });
+
+  it('删掉公告后用同一个 requestId 重发：旧标签页的删除与编辑都打不到新的一条', async () => {
+    db = await openPgTestDb();
+    const first = await fresh().announce('上一轮的公告', 'announce-reuse');
+    expect(first).toMatchObject({ revision: 1 });
+    expect(first.publishId).toBeTruthy();
+    await fresh(NOW + 1_000).deleteAnnouncement(first.id, 1, first.publishId);
+
+    // 同一个 requestId 重发：id 不变、版本又从 1 开始，只有 publishId 才是新的。
+    const again = await fresh(NOW + 2_000).announce('重发的新公告', 'announce-reuse');
+    expect(again.id).toBe(first.id);
+    expect(again.revision).toBe(1);
+    expect(again.publishId).not.toBe(first.publishId);
+
+    // 旧标签页手里的 revision=1 正好命中新的一条——只能靠 publishId 拦住。
+    await expect(fresh(NOW + 3_000).deleteAnnouncement(first.id, 1, first.publishId))
+      .rejects.toThrow('已经被删掉重发过');
+    await expect(fresh(NOW + 3_000).editAnnouncement(first.id, '旧页面覆盖', 1, first.publishId))
+      .rejects.toThrow('已经被删掉重发过');
+    expect((await fresh(NOW + 4_000).announcementAdminList(10))[0])
+      .toMatchObject({ text: '重发的新公告', revision: 1 });
+
+    // 新的一条照常可改可删，不因为老请求被拒就锁死。
+    const edited = await fresh(NOW + 5_000).editAnnouncement(again.id, '重发后又改了', 1, again.publishId);
+    expect(edited.item).toMatchObject({ text: '重发后又改了', revision: 2 });
+    const removed = await fresh(NOW + 6_000).deleteAnnouncement(again.id, 2, again.publishId);
+    expect(removed).toMatchObject({ id: again.id, text: '重发后又改了' });
   });
 });

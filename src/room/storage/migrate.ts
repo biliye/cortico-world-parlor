@@ -16,7 +16,7 @@ import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '.
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 /** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
-export const SQLITE_SCHEMA_VERSION = 11;
+export const SQLITE_SCHEMA_VERSION = 12;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -170,6 +170,12 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   if (!announcementColumns.has('updated_at')) {
     handle.exec('ALTER TABLE support_announcements ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0');
   }
+  // schema 12：公告也记每次发布的唯一标识。同一条公告删掉后能用同一个 requestId 重发，
+  // revision 又从 1 开始，只有它能分开「这一条」和「上一条」；老行同样按 id 派生。
+  if (!announcementColumns.has('publish_id')) {
+    handle.exec("ALTER TABLE support_announcements ADD COLUMN publish_id TEXT NOT NULL DEFAULT ''");
+  }
+  handle.exec("UPDATE support_announcements SET publish_id = 'legacy-' || id WHERE publish_id = ''");
   // CREATE TABLE IF NOT EXISTS 不给老库补列；招募版本列单独补。
   const discoveryColumns = new Set(
     (handle.prepare('PRAGMA table_info(table_discovery)').all() as { name: string }[]).map((row) => row.name),
@@ -319,6 +325,10 @@ export const applyPgDataRules = async (
   await query(
     "INSERT INTO meta(key, value) VALUES ('storage_mode', 'postgres') ON CONFLICT (key) DO UPDATE SET value = excluded.value",
   );
+  // 老 SQLite 备份里没有发布标识这一列：离线导入按「来源与目标的列交集」拷贝，
+  // 新列会留成空串，运营侧就改不动也删不掉这些老公告。按 id 补一个稳定值，
+  // 与 v11 迁移的兜底一致；正常库 0 行，可重复执行。
+  await query("UPDATE support_announcements SET publish_id = 'legacy-' || id WHERE publish_id = ''");
 };
 
 /** 按库的类型分派。 */

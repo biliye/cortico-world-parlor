@@ -159,7 +159,7 @@ it('v7 升到 v8：新闻表与招募版本列都是纯增量，老桌保留、�
     .get('t-v8-legacy') as { recruit_version: string | number }).recruit_version)).toBe(0);
 });
 
-it('v8 升到 v10：新闻补编辑留痕与发布标识，公告加版本，老数据保留且能直接编辑', async () => {
+it('v8 升到 v11：新闻与公告都补编辑留痕与发布标识，老数据保留且能直接编辑', async () => {
   db = await openTestDb();
   await db.prepare(
     `INSERT INTO news_items(id, issue_date, title, summary, body, publish_at, auto_push, created_at)
@@ -168,12 +168,13 @@ it('v8 升到 v10：新闻补编辑留痕与发布标识，公告加版本，老
   await db.prepare('INSERT INTO support_announcements(id, text, created_at) VALUES (?, ?, ?)')
     .run('ann-v9-legacy', '旧公告', 1);
 
-  // 退回 v8 的样子：两张表都没有编辑留痕的两列，新闻也没有发布标识，还没有留痕表。
+  // 退回 v8 的样子：两张表都没有编辑留痕的两列，也没有发布标识，还没有留痕表。
   await db.exec(`ALTER TABLE news_items DROP COLUMN IF EXISTS revision;
     ALTER TABLE news_items DROP COLUMN IF EXISTS updated_at;
     ALTER TABLE news_items DROP COLUMN IF EXISTS publish_id;
     ALTER TABLE support_announcements DROP COLUMN IF EXISTS revision;
     ALTER TABLE support_announcements DROP COLUMN IF EXISTS updated_at;
+    ALTER TABLE support_announcements DROP COLUMN IF EXISTS publish_id;
     DROP TABLE IF EXISTS support_audit;
     UPDATE meta SET value='8' WHERE key='schema_version';`);
   expect(await schemaVersion(db)).toBe(8);
@@ -201,11 +202,29 @@ it('v8 升到 v10：新闻补编辑留痕与发布标识，公告加版本，老
   expect(audit[0]).toMatchObject({ action: 'news.edit', targetId: 'news-2026-11-09' });
   expect(audit[0].before).toMatchObject({ title: '旧标题' });
 
+  // 公告老行同样按 id 派生出发布标识，迁移完就能直接改。
+  const legacyAnn = await db.prepare('SELECT revision, updated_at, publish_id FROM support_announcements WHERE id=?')
+    .get('ann-v9-legacy') as { revision: string | number; updated_at: string | number; publish_id: string };
+  expect(Number(legacyAnn.revision)).toBe(1);
+  expect(Number(legacyAnn.updated_at)).toBe(0);
+  expect(legacyAnn.publish_id).toBe('legacy-ann-v9-legacy');
+  const editedAnn = await new SupportDb(db, () => 3)
+    .editAnnouncement('ann-v9-legacy', '新公告', 1, legacyAnn.publish_id);
+  expect(editedAnn.item).toMatchObject({ text: '新公告', revision: 2 });
+
   // 重复启动：版本已是最新，不再重复加列，数据仍在。
   await migrate(db);
   expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   expect(Number((await db.prepare('SELECT revision FROM news_items WHERE id=?')
     .get('news-2026-11-09') as { revision: string | number }).revision)).toBe(2);
   expect((await db.prepare('SELECT text FROM support_announcements WHERE id=?')
-    .get('ann-v9-legacy') as { text: string }).text).toBe('旧公告');
+    .get('ann-v9-legacy') as { text: string }).text).toBe('新公告');
+
+  // 离线导入的老公告没有发布标识（拷贝走「来源与目标的列交集」，新列会留成空串）：
+  // 每次启动补一次，否则运营侧改不动也删不掉它们。
+  await db.prepare("INSERT INTO support_announcements(id, text, created_at, publish_id) VALUES (?, ?, ?, '')")
+    .run('ann-imported', '导入的公告', 4);
+  await migrate(db);
+  expect((await db.prepare('SELECT publish_id FROM support_announcements WHERE id=?')
+    .get('ann-imported') as { publish_id: string }).publish_id).toBe('legacy-ann-imported');
 });

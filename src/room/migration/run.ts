@@ -221,7 +221,7 @@ export const runMigration = async (options: MigrateOptions): Promise<MigrateRepo
         log(`序列校准：${Object.entries(sequences).map(([name, top]) => `${name}=${top}`).join('、') || '没有自增列'}`);
         // meta 里的 global_identity 刚搬过来：同名唯一索引要按它重来一次。
         await applyPgDataRules((sql, params) => db.prepare(sql).all(...((params ?? []) as (string | number)[])));
-        log('数据兜底（同名唯一索引 / 席位容量 / storage_mode）已按来源库的设置重做。');
+        log('数据兜底（同名唯一索引 / 席位容量 / storage_mode / 公告发布标识）已按来源库的设置重做。');
         log('导入完成，开始逐行核验……');
         verify = await verifyAll(source, clientOf(db), audit, {
           // 本次的审计记录是工具自己写的，来源里没有这一行；核验时两边都跳过。

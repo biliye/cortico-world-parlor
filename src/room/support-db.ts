@@ -68,6 +68,18 @@ export interface Announcement {
   revision?: number;
   updated_at?: number;
 }
+/**
+ * 运营侧看到的公告：多带一个 `publishId`。
+ *
+ * 公告的 `id` 是运营自己选的 requestId，删掉之后还能用同一个 requestId 重发，
+ * 而 `revision` 又从 1 开始——旧标签页手里的 `revision=1` 会正好命中新的一条。
+ * 每次发布一个 `publishId`，改与删都带上它，才能把「这一条」和「上一条」分开。
+ */
+export interface AnnouncementAdmin extends Announcement {
+  revision: number;
+  updated_at: number;
+  publishId: string;
+}
 
 /** 列表与推送只用摘要，正文留给主动查，避免每分钟给所有 Coo 传全文。 */
 export interface NewsSummary {
@@ -173,6 +185,20 @@ const newsAdminSummary = (row: NewsRow): NewsAdminSummary => ({
   publishId: row.publish_id ?? '',
 });
 
+interface AnnouncementRow {
+  id: string; text: string; created_at: number | string;
+  revision?: number | string; updated_at?: number | string; publish_id?: string | null;
+}
+/** 运营侧公告统一从这里出：`created_at` 在 PG 上是 bigint 字符串，顺便折成毫秒数。 */
+const announcementAdmin = (row: AnnouncementRow): AnnouncementAdmin => ({
+  id: row.id,
+  text: row.text,
+  created_at: Number(row.created_at ?? 0),
+  revision: Number(row.revision ?? 1),
+  updated_at: Number(row.updated_at ?? 0),
+  publishId: row.publish_id || `legacy-${row.id}`,
+});
+
 /** 新闻正文上限与反馈/公告不同，单独校验；不要放宽共用的 supportText。 */
 export const newsText = (value: unknown, max: number, label: string): string => {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -231,14 +257,19 @@ export class SupportDb {
       .all() as unknown as Announcement[];
   }
 
-  async announce(value: unknown, id: unknown): Promise<Announcement> {
+  async announce(value: unknown, id: unknown): Promise<AnnouncementAdmin> {
     const text = supportText(value);
     if (typeof id !== 'string' || !/^[\w-]{1,100}$/.test(id)) throw new HostError('invalid', '需要有效的 requestId');
-    await this.db.prepare('INSERT INTO support_announcements(id, text, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING')
-      .run(id, text, this.now());
-    const item = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as unknown as Announcement;
-    if (item.text !== text) throw new HostError('conflict', '同一个 requestId 的正文不能变');
-    return item;
+    // 每次发布一个唯一标识：同一个 requestId 在删掉之后还能重发，`revision` 又从 1 开始。
+    // 同一个 requestId 重试（没删过）会命中 ON CONFLICT，库里那行才是这次发布。
+    await this.db.prepare(
+      'INSERT INTO support_announcements(id, text, created_at, publish_id) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
+    ).run(id, text, this.now(), randomUUID());
+    const row = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as
+      AnnouncementRow | undefined;
+    if (!row) throw new HostError('conflict', '公告没写成，请重试');
+    if (row.text !== text) throw new HostError('conflict', '同一个 requestId 的正文不能变');
+    return announcementAdmin(row);
   }
 
   /**
@@ -422,19 +453,29 @@ export class SupportDb {
    *
    * `revision` 必须是运营页面实际看到的那一版：服务端「读到的版本」不能当条件，
    * 否则两个标签页同时打开第 1 版，后保存的那个会把先保存的悄悄覆盖成第 3 版。
+   * `publishId` 必须是这一条发布时返回的标识：同一条被删掉后重发，版本又从 1 开始，
+   * 只有它能拦住旧标签页手里的 `revision=1`。
    */
-  async editAnnouncement(id: string, value: unknown, revision: unknown): Promise<{ item: Announcement; changed: boolean }> {
+  async editAnnouncement(
+    id: string, value: unknown, revision: unknown, publishId: unknown,
+  ): Promise<{ item: AnnouncementAdmin; changed: boolean }> {
     const text = supportText(value);
     const expectedRevision = Number(revision);
     if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
       throw new HostError('invalid', '需要 revision（编辑者看到的版本号）');
     }
+    const expectedPublishId = typeof publishId === 'string' ? publishId.trim() : '';
+    if (!expectedPublishId) throw new HostError('invalid', '需要 publishId（发布时返回的标识）');
     return withTransaction(this.db, async () => {
       const row = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as
-        (Announcement & { revision?: number | string; updated_at?: number | string }) | undefined;
+        AnnouncementRow | undefined;
       if (!row) throw new HostError('not_found', '没有这条公告');
       // 同一段文本重提：不涨版本，也不因为 revision 过期就报冲突（重试幂等）。
-      if (row.text === text) return { item: row, changed: false };
+      if (row.text === text) return { item: announcementAdmin(row), changed: false };
+      // 先认发布标识再看版本：删掉重发之后，旧页面手里的 revision=1 会正好命中新的一条。
+      if ((row.publish_id ?? '') !== expectedPublishId) {
+        throw new HostError('conflict', '这条公告已经被删掉重发过，请刷新后再改');
+      }
       if (Number(row.revision ?? 1) !== expectedRevision) {
         throw new HostError('conflict', '这条公告刚被改过，请刷新后再试');
       }
@@ -442,48 +483,60 @@ export class SupportDb {
       const nextRevision = expectedRevision + 1;
       // 与新闻同一条规矩：两个人同时改，后提交的那个不能拿旧文本覆盖先提交的。
       const result = await this.db.prepare(
-        'UPDATE support_announcements SET text = ?, revision = ?, updated_at = ? WHERE id = ? AND revision = ?',
-      ).run(text, nextRevision, at, id, expectedRevision);
+        `UPDATE support_announcements SET text = ?, revision = ?, updated_at = ?
+          WHERE id = ? AND revision = ? AND publish_id = ?`,
+      ).run(text, nextRevision, at, id, expectedRevision, expectedPublishId);
       if (!result.changes) throw new HostError('conflict', '这条公告刚被改过，请刷新后再试');
-      const after = { ...row, text, revision: nextRevision, updated_at: at } as Announcement;
-      await this.audit('announcement.edit', id, row, after, at);
+      const before = announcementAdmin(row);
+      const after: AnnouncementAdmin = { ...before, text, revision: nextRevision, updated_at: at };
+      await this.audit('announcement.edit', id, before, after, at);
       return { item: after, changed: true };
     });
   }
 
   /**
    * 删一条公告：物理删除；下一轮 60 秒轮询里横幅与列表就会消失。
-   * 与新闻相同，带上运营看到的 `revision` 并一条语句删完——否则旧标签页能删掉
-   * 别人刚改出来的新版，留痕里的 `before` 也可能不是真正被删的那一版。
+   * 与新闻相同，带上运营看到的 `revision` 与 `publishId` 并一条语句删完——否则旧标签页
+   * 能删掉别人刚改出来的新版，或者删掉用同一个 requestId 重发的下一条。
    */
-  async deleteAnnouncement(id: string, revision: unknown): Promise<Announcement | null> {
+  async deleteAnnouncement(id: string, revision: unknown, publishId: unknown): Promise<AnnouncementAdmin | null> {
     const key = id.trim();
     if (!key) throw new HostError('invalid', '需要公告 id');
     const expectedRevision = Number(revision);
     if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
       throw new HostError('invalid', '需要 revision（删除者看到的版本号）');
     }
+    const expectedPublishId = typeof publishId === 'string' ? publishId.trim() : '';
+    if (!expectedPublishId) throw new HostError('invalid', '需要 publishId（发布时返回的标识）');
     return withTransaction(this.db, async () => {
       const rows = await this.db.prepare(
-        'DELETE FROM support_announcements WHERE id = ? AND revision = ? RETURNING *',
-      ).all(key, expectedRevision) as Announcement[];
+        'DELETE FROM support_announcements WHERE id = ? AND revision = ? AND publish_id = ? RETURNING *',
+      ).all(key, expectedRevision, expectedPublishId) as AnnouncementRow[];
       const row = rows[0];
       if (!row) {
-        const left = await this.db.prepare('SELECT id FROM support_announcements WHERE id = ?').get(key);
-        if (left) throw new HostError('conflict', '这条公告刚被改过，请刷新后再删');
+        const left = await this.db.prepare('SELECT publish_id FROM support_announcements WHERE id = ?').get(key) as
+          { publish_id?: string | null } | undefined;
+        if (left) {
+          if ((left.publish_id ?? '') !== expectedPublishId) {
+            throw new HostError('conflict', '这条公告已经被删掉重发过，请刷新后再删');
+          }
+          throw new HostError('conflict', '这条公告刚被改过，请刷新后再删');
+        }
         return null;
       }
-      await this.audit('announcement.delete', key, row, null, this.now());
-      return row;
+      const before = announcementAdmin(row);
+      await this.audit('announcement.delete', key, before, null, this.now());
+      return before;
     });
   }
 
-  /** 运营列表：与玩家侧同一批数据，但允许运营钥匙读（玩家接口只认 Coo / 席位令牌）。 */
-  async announcementAdminList(limit: number): Promise<Announcement[]> {
+  /** 运营列表：与玩家侧同一批数据，但带 `revision` 与 `publishId`，运营钥匙校验过的路由用。 */
+  async announcementAdminList(limit: number): Promise<AnnouncementAdmin[]> {
     const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 50) : 20;
-    return await this.db.prepare(
+    const rows = await this.db.prepare(
       'SELECT * FROM support_announcements ORDER BY created_at DESC, id DESC LIMIT ?',
-    ).all(size) as unknown as Announcement[];
+    ).all(size) as AnnouncementRow[];
+    return rows.map(announcementAdmin);
   }
 
   /** 改动留痕：最近的编辑 / 删除记录，含改前原文。 */

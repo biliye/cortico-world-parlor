@@ -100,9 +100,10 @@ async function loadAnnouncementList() {
       form.addEventListener('submit', event => {
         event.preventDefault();
         void perform(save, async () => {
-          // 带上页面看到的版本：另一个标签页先保存过，这里就会被拒，不会悄悄覆盖。
+          // 带上页面看到的版本与这一条发布：另一个标签页先保存过、或者这条已经被删掉
+          // 用同一个 requestId 重发过，这里都会被拒，不会悄悄覆盖新的一条。
           await api('operator/announcements', {
-            id: item.id, text: text.value.trim(), revision: Number(item.revision ?? 1),
+            id: item.id, text: text.value.trim(), revision: Number(item.revision ?? 1), publishId: item.publishId,
           }, true, 'PATCH');
           status('公告已更新。'); await loadAnnouncementList(); if (cfg?.token) await refresh();
         });
@@ -111,7 +112,7 @@ async function loadAnnouncementList() {
       remove.addEventListener('click', () => {
         if (!confirm(`删除这条公告？横幅和列表里都会消失，发了就找不回来（原文只在留痕里）。\n\n${item.text.slice(0, 100)}`)) return;
         void perform(remove, async () => {
-          await api(`operator/announcements?id=${encodeURIComponent(item.id)}&revision=${encodeURIComponent(item.revision ?? 1)}`, undefined, true, 'DELETE');
+          await api(`operator/announcements?id=${encodeURIComponent(item.id)}&revision=${encodeURIComponent(item.revision ?? 1)}&publishId=${encodeURIComponent(item.publishId)}`, undefined, true, 'DELETE');
           status('公告已删除。'); await loadAnnouncementList(); if (cfg?.token) await refresh();
         });
       });

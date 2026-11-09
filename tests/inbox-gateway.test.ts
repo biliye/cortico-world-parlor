@@ -269,21 +269,32 @@ describe('运营侧编辑与删除（真实 PG，HTTP 层）', () => {
 
   it('公告也可改可删；运营钥匙能读列表，玩家侧同步变化，删除留痕可查', async () => {
     const { client, token } = await start();
-    await operator('announcements', { text: '原来的公告', requestId: 'ann-edit-1' });
-    await operator('announcements', { text: '另一条', requestId: 'ann-edit-2' });
+    const created = await operator('announcements', { text: '原来的公告', requestId: 'ann-edit-1' });
+    const another = await operator('announcements', { text: '另一条', requestId: 'ann-edit-2' });
+    const publishId = (created.body.announcement as { publishId: string }).publishId;
+    const anotherPublishId = (another.body.announcement as { publishId: string }).publishId;
+    expect(publishId).toBeTruthy();
 
     const list = await operator('announcements?limit=10', undefined, OPERATOR, 'GET');
     expect(list.status).toBe(200);
     expect(list.body.announcements.map((item: Record<string, any>) => item.id)).toEqual(['ann-edit-2', 'ann-edit-1']);
 
-    const edited = await operator('announcements', { id: 'ann-edit-1', text: '改过的公告', revision: 1 }, OPERATOR, 'PATCH');
+    const edited = await operator('announcements', {
+      id: 'ann-edit-1', text: '改过的公告', revision: 1, publishId,
+    }, OPERATOR, 'PATCH');
     expect(edited.status).toBe(200);
     expect(edited.body.announcement).toMatchObject({ id: 'ann-edit-1', text: '改过的公告', revision: 2 });
 
     // 旧标签页还拿着第 1 版：不能把别人刚改出来的第 2 版覆盖掉。
-    expect((await operator('announcements', { id: 'ann-edit-1', text: '旧页面覆盖', revision: 1 }, OPERATOR, 'PATCH')).status).toBe(409);
+    expect((await operator('announcements', {
+      id: 'ann-edit-1', text: '旧页面覆盖', revision: 1, publishId,
+    }, OPERATOR, 'PATCH')).status).toBe(409);
     // 不带 revision 直接拒绝，不能退回「按服务端读到的版本」。
     expect((await operator('announcements', { id: 'ann-edit-1', text: '缺版本' }, OPERATOR, 'PATCH')).status).toBe(400);
+    // 不带 publishId 同样拒绝：删掉重发后版本又从 1 开始，只认 revision 会打到新的一条。
+    expect((await operator('announcements', {
+      id: 'ann-edit-1', text: '缺发布标识', revision: 2,
+    }, OPERATOR, 'PATCH')).status).toBe(400);
 
     const inbox = await client.inbox(token, { topics: ['announcements'], afterPublish: 0, afterId: '' });
     const texts = (inbox.announcements ?? []).map((item) => item.text);
@@ -291,8 +302,9 @@ describe('运营侧编辑与删除（真实 PG，HTTP 层）', () => {
 
     // 留痕按时刻排序；时钟钉死时两条会撞在同一毫秒，往前推一下让顺序可判。
     clock = NOW + 60_000;
-    expect((await operator('announcements?id=ann-edit-1&revision=1', undefined, OPERATOR, 'DELETE')).status).toBe(409);
-    const removed = await operator('announcements?id=ann-edit-2&revision=1', undefined, OPERATOR, 'DELETE');
+    expect((await operator(`announcements?id=ann-edit-1&revision=1&publishId=${publishId}`, undefined, OPERATOR, 'DELETE')).status).toBe(409);
+    expect((await operator(`announcements?id=ann-edit-2&revision=1`, undefined, OPERATOR, 'DELETE')).status).toBe(400);
+    const removed = await operator(`announcements?id=ann-edit-2&revision=1&publishId=${anotherPublishId}`, undefined, OPERATOR, 'DELETE');
     expect(removed.status).toBe(200);
     expect(removed.body.deleted).toMatchObject({ id: 'ann-edit-2', text: '另一条' });
     const after = await client.inbox(token, { topics: ['announcements'], afterPublish: 0, afterId: '' });
@@ -307,5 +319,39 @@ describe('运营侧编辑与删除（真实 PG，HTTP 层）', () => {
     expect((await fetch(`${app!.url}/v1/support/operator/audit`, {
       headers: { authorization: `Bearer ${token}` },
     })).status).toBe(403);
+  });
+
+  it('公告删掉后用同一个 requestId 重发：旧 publishId 的删除与编辑都打不到新的一条', async () => {
+    const { client, token } = await start();
+    const first = await operator('announcements', { text: '上一轮的公告', requestId: 'ann-reuse' });
+    const firstPublishId = (first.body.announcement as { publishId: string }).publishId;
+    expect(firstPublishId).toBeTruthy();
+
+    const removed = await operator(
+      `announcements?id=ann-reuse&revision=1&publishId=${firstPublishId}`, undefined, OPERATOR, 'DELETE',
+    );
+    expect(removed.status).toBe(200);
+
+    // 同一个 requestId 重发：id 不变、版本又从 1 开始，旧页面手里的 revision=1 正好命中。
+    const again = await operator('announcements', { text: '重发的新公告', requestId: 'ann-reuse' });
+    const againPublishId = (again.body.announcement as { publishId: string }).publishId;
+    expect(againPublishId).not.toBe(firstPublishId);
+    expect(again.body.announcement).toMatchObject({ revision: 1 });
+
+    expect((await operator('announcements', {
+      id: 'ann-reuse', text: '旧页面覆盖', revision: 1, publishId: firstPublishId,
+    }, OPERATOR, 'PATCH')).status).toBe(409);
+    expect((await operator(
+      `announcements?id=ann-reuse&revision=1&publishId=${firstPublishId}`, undefined, OPERATOR, 'DELETE',
+    )).status).toBe(409);
+
+    const inbox = await client.inbox(token, { topics: ['announcements'], afterPublish: 0, afterId: '' });
+    expect((inbox.announcements ?? []).map((item) => item.text)).toContain('重发的新公告');
+
+    // 新的一条照常可删，不因为老请求被拒就锁死。
+    const final = await operator(
+      `announcements?id=ann-reuse&revision=1&publishId=${againPublishId}`, undefined, OPERATOR, 'DELETE',
+    );
+    expect(final.body).toMatchObject({ deleted: { text: '重发的新公告' } });
   });
 });

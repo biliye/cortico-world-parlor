@@ -15,7 +15,7 @@
 import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 10;
+export const PG_SCHEMA_VERSION = 11;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -485,5 +485,15 @@ export const PG_MIGRATIONS: PgMigration[] = [
   { version: 10, name: 'news-publish-id', sql: `
     ALTER TABLE news_items ADD COLUMN IF NOT EXISTS publish_id TEXT NOT NULL DEFAULT '';
     UPDATE news_items SET publish_id = 'legacy-' || id WHERE publish_id = '';
+  ` },
+  /**
+   * 公告也有每次发布的唯一标识：`id` 是运营自己选的 requestId，删掉后还能用同一个
+   * requestId 重发，`revision` 又从 1 开始；只有它能把「这一条」与「上一条」分开。
+   * 老行按 id 派生，稳定且互不相同。纯增量：回退到上一版（schema 10）只需把
+   * meta.schema_version 改回 10——多出来的列老程序不读。
+   */
+  { version: 11, name: 'announcement-publish-id', sql: `
+    ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS publish_id TEXT NOT NULL DEFAULT '';
+    UPDATE support_announcements SET publish_id = 'legacy-' || id WHERE publish_id = '';
   ` },
 ];

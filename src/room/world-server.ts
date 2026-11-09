@@ -913,13 +913,22 @@ export class WorldServer {
           const id = String(body.id ?? '').trim();
           if (!id) throw new HttpError(400, '需要公告 id');
           // revision 必须是运营页面看到的那一版：服务端读到的版本不能当并发条件。
-          json(res, 200, { announcement: (await support.editAnnouncement(id, body.text, body.revision)).item }); return;
+          // publishId 认「这一条发布」：删掉后用同一个 requestId 重发，版本又从 1 开始。
+          json(res, 200, {
+            announcement: (await support.editAnnouncement(id, body.text, body.revision, body.publishId)).item,
+          }); return;
         }
         if (path === 'operator/announcements' && method === 'DELETE') {
           const id = (url.searchParams.get('id') ?? '').trim();
           if (!id) throw new HttpError(400, '需要公告 id');
-          // 旧标签页拿着过期版本不能删掉别人刚改出来的新版。
-          json(res, 200, { ok: true, deleted: await support.deleteAnnouncement(id, url.searchParams.get('revision') ?? '') }); return;
+          // 旧标签页拿着过期版本不能删掉别人刚改出来的新版；
+          // publishId 再挡一层：不能删掉用同一个 requestId 重发的下一条。
+          json(res, 200, {
+            ok: true,
+            deleted: await support.deleteAnnouncement(
+              id, url.searchParams.get('revision') ?? '', url.searchParams.get('publishId') ?? '',
+            ),
+          }); return;
         }
         if (path === 'operator/news' && method === 'GET') {
           const id = (url.searchParams.get('id') ?? '').trim();
