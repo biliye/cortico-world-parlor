@@ -24,6 +24,10 @@ export interface ParlorConfigSection {
   maxSeats: number;
   /** 默认提醒挡位；改动会同步到服务器上的这个席位。 */
   wakeTier: WakeTier;
+  /** 每日新闻：关闭后不拉取、不推送；主动查始终可用。 */
+  news: boolean;
+  /** 招募提示：关闭后同厅事件与 inbox 搭车都停；主动查可用。 */
+  recruitNotice: boolean;
 }
 
 /** 房主的公共客厅；装完默认连这里，想自己开就把地址清空。 */
@@ -53,6 +57,8 @@ export const PARLOR_DEFAULTS: ParlorConfigSection = {
   port: 8790,
   maxSeats: 8,
   wakeTier: DEFAULT_WAKE_TIER,
+  news: true,
+  recruitNotice: true,
 };
 
 export const PARLOR_CONFIG_GROUP: ConfigGroup = {
@@ -119,6 +125,18 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
         title: '提醒挡位',
         description: '热闹 = 闲聊也叫；摘要 = 被 @ 或私聊才叫，另加周期摘要；只 @ = 只有被 @ 或私聊；离开 = 完全不叫。',
         enum: ['full', 'digest', 'quiet', 'off'],
+        'x-hot': true,
+      },
+      'worlds.parlor.news': {
+        type: 'boolean',
+        title: '每日新闻',
+        description: '每天一期的新闻摘要（标题 + 摘要）。关闭后不再自动推送，仍可用 parlor_query 的 news 主动查看。',
+        'x-hot': true,
+      },
+      'worlds.parlor.recruitNotice': {
+        type: 'boolean',
+        title: '招募提示',
+        description: '有人开桌等人或发招募时，在同厅事件与下一次唤醒里顺带提一句。关闭后两条路径都停，仍可主动查。',
         'x-hot': true,
       },
     },

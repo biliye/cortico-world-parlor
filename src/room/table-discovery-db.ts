@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS table_discovery (
   match_open INTEGER NOT NULL DEFAULT 0 CHECK (match_open IN (0,1)),
   recruit_text TEXT NOT NULL DEFAULT '',
   author_coo_id TEXT REFERENCES coos(id),
-  updated_at BIGINT NOT NULL
+  updated_at BIGINT NOT NULL,
+  recruit_version BIGINT NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS table_entry_receipts (
   coo_id TEXT NOT NULL REFERENCES coos(id),
@@ -35,6 +36,11 @@ export interface TableRecruitment {
   link: string;
   /** 这张桌是否也开着快速匹配；招募与匹配相互独立，可以同时为真。 */
   matchOpen: boolean;
+  /**
+   * 招募版本：只有招募内容或开放状态实际变化时才递增，人数变化不算。
+   * 同厅事件与 inbox 搭车共用它做去重，避免「关掉再打开」回到旧键被误判已提示。
+   */
+  recruitVersion: number;
 }
 
 export interface TableEntryInput {

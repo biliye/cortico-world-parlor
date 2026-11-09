@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "parlor_query",
-      "description": "查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。",
+      "description": "查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告、每日新闻或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -17,6 +17,7 @@
               "history",
               "gifts",
               "announcements",
+              "news",
               "feedback",
               "table",
               "help"
@@ -353,6 +354,13 @@
       "description": {
         "zh": "运营者发布的新公告，断网后恢复补收。",
         "en": "New operator announcements, including ones received after reconnecting."
+      }
+    },
+    {
+      "type": "parlor.news",
+      "description": {
+        "zh": "每日新闻更新；关闭新闻提醒后不再自动推送，仍可主动查看。",
+        "en": "A new daily news item; not pushed after turning news off, but still readable on demand."
       }
     },
     {

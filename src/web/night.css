@@ -680,6 +680,149 @@ html.vue-app .rchip-name { font-size: 16.5px; font-weight: 700; letter-spacing: 
 html.vue-app .rchip-meta { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--dim); }
 html.vue-app .rchip-meta b { color: var(--text); font-family: var(--num); font-weight: 600; }
 
+/* ——— 会馆小报：首屏与目录之间的一屏 ——— */
+/* 位置是「大厅动画之后、全部客厅之前」；实底由 .hall-floor 接住，
+   所以这一屏是一张纸，往下才是目录。桌面一屏高、左边新闻右边公告，
+   窄屏落成单栏（新闻在前），内容多就自己长高，不裁切。 */
+html.vue-app .hall-paper {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: calc(100vh - 92px);
+  padding: 40px 0 56px;
+  border-bottom: 1px solid var(--line);
+  scroll-margin-top: 96px;
+}
+html.vue-app .paper-head h2 {
+  margin: 12px 0 0;
+  font-size: clamp(30px, 3.1vw, 42px);
+  font-weight: 700;
+  letter-spacing: -.025em;
+  line-height: 1.2;
+}
+html.vue-app .paper-sub {
+  margin: 10px 0 0;
+  max-width: 44em;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+html.vue-app .paper-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  margin-top: 30px;
+  border-top: 1px solid var(--line-2);
+}
+html.vue-app .paper-col { min-width: 0; padding-top: 22px; }
+html.vue-app .news-col { padding-right: 34px; }
+html.vue-app .paper-col + .paper-col { border-left: 1px solid var(--line); padding-left: 34px; }
+html.vue-app .paper-col-head { display: flex; align-items: baseline; gap: 12px; }
+html.vue-app .paper-col-head h3 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .04em; }
+html.vue-app .paper-count {
+  margin-left: auto;
+  font-family: var(--num);
+  font-size: 11.5px;
+  color: var(--dim);
+  letter-spacing: .12em;
+}
+html.vue-app .paper-empty { margin: 16px 0 0; font-size: 13px; }
+
+/* 新闻：日期与「读全文」在第一行，标题独占第二行，摘要跟在下面；
+   最新一期（第一条）标题放大，像报纸的头条。 */
+html.vue-app .news-list { list-style: none; margin: 12px 0 0; padding: 0; }
+html.vue-app .news-item { padding: 16px 0 15px; border-bottom: 1px dashed var(--line); }
+html.vue-app .news-item:last-child { border-bottom: 0; padding-bottom: 0; }
+html.vue-app .news-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "date caret" "title title";
+  align-items: baseline;
+  gap: 3px 12px;
+  width: 100%;
+  text-align: left;
+}
+html.vue-app .news-date {
+  grid-area: date;
+  font-family: var(--num);
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  color: var(--dim);
+  white-space: nowrap;
+}
+html.vue-app .news-title { grid-area: title; font-size: 15.5px; font-weight: 600; line-height: 1.45; color: var(--text); }
+html.vue-app .news-item:first-child .news-title { font-size: 21px; letter-spacing: -.015em; }
+html.vue-app .news-caret { grid-area: caret; font-size: 11.5px; color: var(--lime); white-space: nowrap; }
+html.vue-app .news-head:hover .news-title { color: var(--lime); }
+html.vue-app .news-summary {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+html.vue-app .news-item:first-child .news-summary { -webkit-line-clamp: 3; }
+html.vue-app .news-body {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-soft);
+  font-size: 13.5px;
+  line-height: 1.95;
+  color: var(--muted);
+}
+html.vue-app .news-body p { margin: 0 0 .8em; }
+html.vue-app .news-body p:last-child { margin-bottom: 0; }
+html.vue-app .news-retry {
+  margin-left: 6px;
+  color: var(--lime);
+  font-size: 12.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* 公告：一条一条挂在时间线上，长正文收到三行，再往下就是 /support。 */
+html.vue-app .notice-list { list-style: none; margin: 12px 0 0; padding: 0; }
+html.vue-app .notice-item { position: relative; padding: 0 0 16px 18px; }
+html.vue-app .notice-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--lamp);
+}
+html.vue-app .notice-item::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 17px;
+  bottom: 3px;
+  width: 1px;
+  background: var(--line);
+}
+html.vue-app .notice-item:last-child { padding-bottom: 0; }
+html.vue-app .notice-item:last-child::after { display: none; }
+html.vue-app .notice-time { font-family: var(--num); font-size: 10.5px; letter-spacing: .08em; color: var(--dim); }
+html.vue-app .notice-text {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+html.vue-app .paper-more { display: inline-block; margin-top: 16px; font-size: 12px; color: var(--lime); }
+html.vue-app .paper-more:hover { text-decoration: underline; text-underline-offset: 3px; }
+
 /* ——— 客厅目录 ——— */
 html.vue-app .directory { padding-top: 34px; scroll-margin-top: 96px; }
 html.vue-app .directory-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -1761,6 +1904,20 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .table-head { flex-wrap: wrap; }
 }
 
+/* 小报在平板以下落成单栏：新闻在前、公告在后，分隔线从竖改横。
+   这时不再强撑一屏高，免得中间空一大段。 */
+@media (max-width: 900px) {
+  html.vue-app .hall-paper { min-height: 0; padding: 40px 0 48px; }
+  html.vue-app .paper-grid { grid-template-columns: minmax(0, 1fr); }
+  html.vue-app .news-col { padding-right: 0; padding-bottom: 22px; }
+  html.vue-app .paper-col + .paper-col {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-left: 0;
+    padding-top: 22px;
+  }
+}
+
 @media (max-width: 640px) {
   html.vue-app .hero h1 { font-size: clamp(40px, 11vw, 54px); }
   html.vue-app .hero-sub { font-size: 13px; }
@@ -1806,6 +1963,12 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .fav-copy p { display: none; }
   html.vue-app .fav-row > .btn { display: none; }
   html.vue-app .empty-stage { padding: 32px 16px 30px; }
+  /* 小报在手机上一屏放不下，收一档留白与字号，别让首条标题压到「读全文」。 */
+  html.vue-app .hall-paper { padding: 30px 0 38px; scroll-margin-top: 84px; }
+  html.vue-app .paper-head h2 { font-size: clamp(26px, 7.4vw, 34px); }
+  html.vue-app .news-item:first-child .news-title { font-size: 18.5px; }
+  html.vue-app .news-head { gap: 2px 10px; }
+  html.vue-app .news-body { padding: 12px 13px; font-size: 13px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

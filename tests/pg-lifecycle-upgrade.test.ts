@@ -114,3 +114,46 @@ it('v5 单独升级到最新版本：保留快局大富翁桌并开放五子棋'
   expect(await db.prepare('SELECT game FROM tables WHERE id=?').get('t-v6-monopoly')).toEqual({ game: 'monopoly2d' });
   await insertTable(db, 't-v6-gomoku', 'r-v6-upgrade', 'gomoku');
 });
+
+it('v7 升到 v8：新闻表与招募版本列都是纯增量，老桌保留、重跑不丢数据', async () => {
+  db = await openTestDb();
+  const id = 'coo-v8-upgrade';
+  await new CooAccountDb(db).registerCoo(id, 'upgrade-secret-0123456789', 'pet', '旧玩家');
+  await createRoom(db, { id: 'r-v8-upgrade', ownerCooId: id, name: '旧客厅' }, 4);
+  await insertTable(db, 't-v8-legacy', 'r-v8-upgrade', 'ddz');
+  await db.prepare(
+    'INSERT INTO table_discovery(table_id, match_open, recruit_text, updated_at) VALUES (?, 1, ?, ?)',
+  ).run('t-v8-legacy', '旧招募', 11);
+
+  // 退回 v7 的样子：没有新闻表，也没有 recruit_version。
+  await db.exec(`DROP TABLE IF EXISTS news_items;
+    ALTER TABLE table_discovery DROP COLUMN IF EXISTS recruit_version;
+    UPDATE meta SET value='7' WHERE key='schema_version';`);
+  expect(await schemaVersion(db)).toBe(7);
+
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  const discovery = await db.prepare(
+    'SELECT match_open, recruit_text, recruit_version FROM table_discovery WHERE table_id=?',
+  ).get('t-v8-legacy') as { match_open: number; recruit_text: string; recruit_version: string | number };
+  expect(discovery.match_open).toBe(1);
+  expect(discovery.recruit_text).toBe('旧招募');
+  // 迁移前的老桌没有版本可比，从 0 起算；下一次招募变动才递增到 1。
+  expect(Number(discovery.recruit_version)).toBe(0);
+  expect(Number((await db.prepare('SELECT COUNT(*) AS n FROM news_items').get() as { n: string | number }).n)).toBe(0);
+
+  // 一天一版是库级约束，不是应用层约定。
+  const insertNews = (newsId: string, date: string) => db!.prepare(
+    `INSERT INTO news_items(id, issue_date, title, summary, body, publish_at, auto_push, created_at)
+     VALUES (?, ?, 't', 's', 'b', 1, 1, 1)`,
+  ).run(newsId, date);
+  await insertNews('n-v8-a', '2026-11-09');
+  await expect(insertNews('n-v8-b', '2026-11-09')).rejects.toThrow(/unique|duplicate/i);
+
+  // 重复启动：版本已是最新，迁移段跳过，新闻与版本号都还在。
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  expect(Number((await db.prepare('SELECT COUNT(*) AS n FROM news_items').get() as { n: string | number }).n)).toBe(1);
+  expect(Number((await db.prepare('SELECT recruit_version FROM table_discovery WHERE table_id=?')
+    .get('t-v8-legacy') as { recruit_version: string | number }).recruit_version)).toBe(0);
+});

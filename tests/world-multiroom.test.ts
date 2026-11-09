@@ -174,6 +174,29 @@ describe('Coo 快速匹配与牌桌分享', () => {
     expect(await call('parlor_table_join', { link: 'https://other.example/play?room=x&view=table&table=t-abc' })).toContain('当前客厅服务器');
   });
 
+  it('同厅有人写招募时，Coo 收到的摘要带游戏、人数和 join 提示，但不带玩家原文', async () => {
+    const { friend, friendToken, host } = await startWorld({ room: 'hall', tier: 'full' });
+    await call('parlor_room_create', { name: '招募可见厅', visibility: 'public' });
+    const rooms = await friend.rooms(true, friendToken);
+    const target = rooms.rooms.find(item => item.name === '招募可见厅')!;
+    await call('parlor_room_visit', { room: target.id });
+    const moved = await friend.switchTo(friendToken, 'hall', target.id);
+    const opened = await friend.action(moved.token, {
+      type: 'table_open', game: 'ddz', matchOpen: true, requestId: 'other-open',
+    }, target.id);
+    await friend.action(moved.token, {
+      type: 'table_discovery', table: opened.tableId!, text: '缺一个人，速来', requestId: 'other-recruit',
+    }, target.id);
+    await until(() => pushedText(host).includes('parlor_table {op:"join"'), 12_000);
+    const text = pushedText(host);
+    expect(text).toContain('（桌子）');
+    expect(text).toContain('斗地主');
+    expect(text).toContain('（1/3 人）');
+    expect(text).toContain('parlor_table {op:"join",params:{game:"ddz"}}');
+    expect(text).toContain('parlor_query {op:"rooms",params:{recruitments:true}}');
+    expect(text).not.toContain('缺一个人，速来');
+  });
+
   it('Coo 桌主能开放、编写与撤回招募，另一名 Coo 可匹配进入', async () => {
     const { friend, friendToken, secrets } = await startWorld({ room: 'hall' });
     await call('parlor_room_create', { name: 'Coo 招募厅', visibility: 'public' });

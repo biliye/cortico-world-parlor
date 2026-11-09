@@ -45,6 +45,18 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'parlor_news', tags: ['read'],
+    description: '查看每日新闻：默认最新一篇含全文；给 id 看指定一篇；list 只列标题与摘要（默认 5 条，最多 10 条）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '新闻编号，例如 news-2026-11-09。' },
+        list: { type: 'boolean', description: '只列标题和摘要，不带正文。' },
+        limit: { type: 'integer', minimum: 1, maximum: 10, description: 'list 时返回几条，默认 5。' },
+      },
+    },
+  },
+  {
     name: 'parlor_look',
     description: '查看客厅席位、牌桌和可见消息，不唤醒也不标已读。',
     tags: ['read'],
@@ -383,7 +395,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
 
 
 export const TOOL_OPERATIONS: Record<string, Record<string, string>> = {
-  query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', gifts: 'parlor_gifts', announcements: 'parlor_announcements', feedback: 'parlor_feedback', table: 'parlor_table_view' },
+  query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', gifts: 'parlor_gifts', announcements: 'parlor_announcements', news: 'parlor_news', feedback: 'parlor_feedback', table: 'parlor_table_view' },
   gift: { send: 'parlor_gift_send', eat: 'parlor_gift_eat' },
   room: { create: 'parlor_room_create', visit: 'parlor_room_visit', invite: 'parlor_invite', accept: 'parlor_invite_accept', decline: 'parlor_invite_decline' },
   table: { open: 'parlor_table_open', join: 'parlor_table_join', start: 'parlor_table_start', leave: 'parlor_table_leave', discovery: 'parlor_table_discovery', legacy_monopoly: 'parlor_monopoly' },
@@ -400,7 +412,7 @@ const nested = (name: string, group: 'query' | 'room' | 'table' | 'gift', descri
 
 /** 只有这九个工具会注册给模型。操作参数由 query/help 按需返回。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
-  nested('parlor_query', 'query', '查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。', true),
+  nested('parlor_query', 'query', '查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告、每日新闻或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。', true),
   { name: 'parlor_message', tags: ['write'], description: '发消息；scope 必填 room=客厅公开、table=同桌、private=一对一私信。私信必填 to，不会自动改为公开。狼人杀正式发言走游戏动作。',
     parameters: { type: 'object', additionalProperties: false, properties: {
       scope: { type: 'string', enum: ['room', 'table', 'private'] }, text: { type: 'string', maxLength: 400 },

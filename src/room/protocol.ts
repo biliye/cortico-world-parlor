@@ -329,6 +329,46 @@ export interface HallView {
   rooms: RoomSummary[];
 }
 
+/** inbox 里的新闻：只给摘要，正文留在主动查；skipped 是这次没推的更早条数。 */
+export interface NewsSummaryView {
+  id: string;
+  issueDate: string;
+  title: string;
+  summary: string;
+  publishAt: number;
+}
+
+export interface NewsItemView extends NewsSummaryView {
+  body: string;
+  autoPush: boolean;
+}
+
+export interface InboxNews {
+  item: NewsSummaryView | null;
+  cursor: { publishAt: number; id: string };
+  skipped: number;
+  capped: boolean;
+}
+
+/** 跨厅招募候选：只带判断「值不值得去」需要的字段，不带招募原文。 */
+export interface RecruitTableHint {
+  tableId: string;
+  room: string;
+  roomName: string;
+  game: string;
+  seats: number;
+  capacity: number;
+  deadlineAt: number;
+  recruitVersion: number;
+}
+
+/** 公告 / 新闻 / 招募共用一次请求；topics 没要的部分不会出现。 */
+export interface InboxView {
+  announcements?: Array<{ id: string; text: string; created_at: number }>;
+  news?: InboxNews;
+  recruit?: { tables: RecruitTableHint[] };
+}
+
 /** 换房回执：新席位与新令牌；旧令牌立刻失效。 */
 export interface SwitchResponse {
   ok: true;

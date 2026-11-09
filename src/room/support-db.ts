@@ -24,10 +24,80 @@ CREATE TABLE IF NOT EXISTS support_announcements (
 );
 `;
 
+/** 每日新闻：运营手写，一天一版；auto_push=0 的补录只进主动查，不自动推送。 */
+export const NEWS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS news_items (
+  id TEXT PRIMARY KEY,
+  issue_date TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  body TEXT NOT NULL,
+  publish_at BIGINT NOT NULL,
+  auto_push INTEGER NOT NULL DEFAULT 1 CHECK (auto_push IN (0,1)),
+  created_at BIGINT NOT NULL,
+  UNIQUE(issue_date)
+);
+CREATE INDEX IF NOT EXISTS ix_news_publish ON news_items(publish_at DESC, id DESC);
+`;
+
 export interface Feedback {
   id: string; coo_id: string; name: string; text: string; created_at: number; reply: string; status: string;
 }
 export interface Announcement { id: string; text: string; created_at: number }
+
+/** 列表与推送只用摘要，正文留给主动查，避免每分钟给所有 Coo 传全文。 */
+export interface NewsSummary { id: string; issueDate: string; title: string; summary: string; publishAt: number }
+export interface NewsItem extends NewsSummary { body: string; autoPush: boolean; createdAt: number }
+
+/** 复合游标：同一毫秒发布多条时按 id 继续比较，不会互相吞掉。 */
+export interface NewsCursor { publishAt: number; id: string }
+export interface NewsFeed {
+  item: NewsSummary | null;
+  cursor: NewsCursor;
+  /** 比 item 更早、这次没推的条数；上限 100。 */
+  skipped: number;
+  /** 积压超过 101 条，skipped 只是下限。 */
+  capped: boolean;
+}
+
+export interface NewsInput {
+  id?: unknown; issueDate?: unknown; title?: unknown; summary?: unknown;
+  body?: unknown; publishAt?: unknown; autoPush?: unknown;
+}
+
+interface NewsRow {
+  id: string; issue_date: string; title: string; summary: string;
+  publish_at: number | string; body?: string; auto_push?: number | boolean; created_at?: number | string;
+}
+
+const BEIJING_OFFSET_MS = 8 * 3_600_000;
+/** 服务端可能跑在任意时区，新闻的「一天」和「10 点」都固定按 UTC+8 算。 */
+export const beijingDate = (at: number): string => new Date(at + BEIJING_OFFSET_MS).toISOString().slice(0, 10);
+const beijingTen = (date: string): number => Date.parse(`${date}T10:00:00+08:00`);
+const validDate = (date: string): boolean => (
+  /^\d{4}-\d{2}-\d{2}$/.test(date)
+  && Number.isFinite(Date.parse(`${date}T00:00:00+08:00`))
+  && beijingDate(Date.parse(`${date}T00:00:00+08:00`)) === date
+);
+
+const newsSummary = (row: NewsRow): NewsSummary => ({
+  id: row.id, issueDate: row.issue_date, title: row.title,
+  summary: row.summary, publishAt: Number(row.publish_at),
+});
+
+const newsItem = (row: NewsRow): NewsItem => ({
+  ...newsSummary(row),
+  body: row.body ?? '',
+  autoPush: Number(row.auto_push ?? 1) === 1,
+  createdAt: Number(row.created_at ?? 0),
+});
+
+/** 新闻正文上限与反馈/公告不同，单独校验；不要放宽共用的 supportText。 */
+export const newsText = (value: unknown, max: number, label: string): string => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text || text.length > max) throw new HostError('invalid', `${label}要有 1 到 ${max} 个字`);
+  return text;
+};
 
 export const supportText = (value: unknown): string => {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -88,5 +158,117 @@ export class SupportDb {
     const item = await this.db.prepare('SELECT * FROM support_announcements WHERE id = ?').get(id) as unknown as Announcement;
     if (item.text !== text) throw new HostError('conflict', '同一个 requestId 的正文不能变');
     return item;
+  }
+
+  /**
+   * 发布/预录一天一版。一天一版由 UNIQUE(issue_date) 兜住：
+   * 同一天第二个不同 id 会被判冲突，同 id 只有逐字段一致才算幂等。
+   */
+  async publishNews(input: NewsInput): Promise<NewsItem> {
+    const title = newsText(input.title, 60, '标题');
+    const summary = newsText(input.summary, 200, '摘要');
+    const body = newsText(input.body, 4000, '正文');
+    const now = this.now();
+    const today = beijingDate(now);
+    const issueDate = input.issueDate === undefined ? today : String(input.issueDate).trim();
+    if (!validDate(issueDate)) throw new HostError('invalid', '日期要写成 YYYY-MM-DD');
+    const id = input.id === undefined ? `news-${issueDate}` : String(input.id).trim();
+    if (!/^[\w-]{1,100}$/.test(id)) throw new HostError('invalid', 'id 只能含字母、数字、下划线、短横线（1–100 字）');
+    // 历史补录一律只进主动查：显式传 autoPush 也不放行，否则补旧闻会一次性推给所有人。
+    // 这条只约束**首次创建**；重放判定以库里存下的为准——当天发的稿跨过午夜再重试时，
+    // 重新按「历史」算会把一次正常发布判成改了推送设置。
+    const historical = issueDate < today;
+    const autoPush = historical ? false : input.autoPush === undefined
+      ? true
+      : input.autoPush === true || input.autoPush === 'true';
+    const ten = beijingTen(issueDate);
+    // 缺省可见时刻必须是可重放的：当天 10 点后补发取 `now`，重试时 now 已经变了。
+    // 已有条目就沿用存下来的那个值。
+    const saved = await this.db.prepare('SELECT * FROM news_items WHERE issue_date = ?')
+      .get(issueDate) as NewsRow | undefined;
+    const fallback = saved ? Number(saved.publish_at) : (ten <= now && autoPush ? now : ten);
+    const publishAt = input.publishAt === undefined ? fallback : Number(input.publishAt);
+    if (!Number.isFinite(publishAt) || publishAt <= 0) throw new HostError('invalid', '可见时刻要是毫秒时间戳');
+
+    await this.db.prepare(
+      `INSERT INTO news_items(id, issue_date, title, summary, body, publish_at, auto_push, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+    ).run(id, issueDate, title, summary, body, publishAt, autoPush ? 1 : 0, now);
+    const row = await this.db.prepare('SELECT * FROM news_items WHERE issue_date = ?')
+      .get(issueDate) as NewsRow | undefined;
+    if (!row) {
+      const byId = await this.db.prepare('SELECT * FROM news_items WHERE id = ?').get(id) as NewsRow | undefined;
+      if (byId) throw new HostError('conflict', `编号 ${id} 已被 ${byId.issue_date} 的新闻占用`);
+      throw new HostError('conflict', '新闻没写成，请重试');
+    }
+    const existing = newsItem(row);
+    if (existing.id !== id) throw new HostError('conflict', `今天已经有新闻了：${existing.id}`);
+    // 并发提交同一份请求时，两个都可能先读到「还没有条目」，各自算出一个 now 再 INSERT，
+    // 后到的那个被 ON CONFLICT 跳过。这时候库里的那行才是唯一事实：缺省的可见时刻与
+    // 历史补录的推送设置都按它判，否则同一份请求会因为几毫秒的差异被判成冲突。
+    const expectedPublishAt = input.publishAt === undefined ? existing.publishAt : publishAt;
+    const expectedAutoPush = historical ? existing.autoPush : autoPush;
+    if (existing.title !== title || existing.summary !== summary || existing.body !== body
+      || existing.publishAt !== expectedPublishAt || existing.autoPush !== expectedAutoPush) {
+      throw new HostError('conflict', '同一天的新闻不能改标题、摘要、正文、可见时刻或推送设置');
+    }
+    return existing;
+  }
+
+  /**
+   * 取「比游标新、自动推送、已到可见时刻」的条目：只把最新一条交给宿主，
+   * 更早的折成 skipped。倒序取 101 条既能拿到最新，也能给出上限内的积压计数。
+   */
+  async newsFeed(afterPublish: number, afterId: string): Promise<NewsFeed> {
+    const after = Number.isFinite(afterPublish) && afterPublish > 0 ? afterPublish : 0;
+    const rows = await this.db.prepare(
+      `SELECT id, issue_date, title, summary, publish_at FROM news_items
+        WHERE auto_push = 1 AND publish_at <= ?
+          AND (publish_at > ? OR (publish_at = ? AND id > ?))
+        ORDER BY publish_at DESC, id DESC LIMIT 101`,
+    ).all(this.now(), after, after, afterId) as NewsRow[];
+    const first = rows[0];
+    if (!first) {
+      return { item: null, cursor: { publishAt: after, id: afterId }, skipped: 0, capped: false };
+    }
+    return {
+      item: newsSummary(first),
+      cursor: { publishAt: Number(first.publish_at), id: first.id },
+      skipped: rows.length - 1,
+      capped: rows.length === 101,
+    };
+  }
+
+  /** 主动查列表：补录条目（auto_push=0）也在这里出现，只是不自动推送。 */
+  async newsList(limit: number): Promise<NewsSummary[]> {
+    const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 10) : 5;
+    const rows = await this.db.prepare(
+      `SELECT id, issue_date, title, summary, publish_at FROM news_items
+        WHERE publish_at <= ? ORDER BY publish_at DESC, id DESC LIMIT ?`,
+    ).all(this.now(), size) as NewsRow[];
+    return rows.map(newsSummary);
+  }
+
+  /** 运营列表：含未到可见时刻的预录条目，供运营钥匙校验过的路由使用。 */
+  async newsAdminList(limit: number): Promise<NewsSummary[]> {
+    const size = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 20) : 10;
+    const rows = await this.db.prepare(
+      `SELECT id, issue_date, title, summary, publish_at FROM news_items
+        ORDER BY issue_date DESC, publish_at DESC, id DESC LIMIT ?`,
+    ).all(size) as NewsRow[];
+    return rows.map(newsSummary);
+  }
+
+  async newsById(id: string): Promise<NewsItem | undefined> {
+    const row = await this.db.prepare('SELECT * FROM news_items WHERE id = ? AND publish_at <= ?')
+      .get(id, this.now()) as NewsRow | undefined;
+    return row ? newsItem(row) : undefined;
+  }
+
+  async latestNews(): Promise<NewsItem | undefined> {
+    const row = await this.db.prepare(
+      'SELECT * FROM news_items WHERE publish_at <= ? ORDER BY publish_at DESC, id DESC LIMIT 1',
+    ).get(this.now()) as NewsRow | undefined;
+    return row ? newsItem(row) : undefined;
   }
 }

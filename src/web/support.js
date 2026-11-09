@@ -4,7 +4,9 @@ try { cfg = JSON.parse(localStorage.getItem('parlor-play-v1') || 'null'); } catc
 let operatorKey = '';
 let feedbackRequest = null;
 let announcementRequest = null;
+let newsRequest = null;
 const status = text => { $('status').textContent = text; };
+const beijingToday = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 async function api(path, body, operator = false) {
   const token = operator ? operatorKey : cfg?.token;
   if (!token) throw new Error('请先回会馆加入席位，再打开反馈与公告。');
@@ -66,6 +68,23 @@ async function refresh() {
 async function inbox() {
   const data = await api('operator/feedback', undefined, true);
   feedbackList($('operator-feedback'), data.feedback, true);
+  await loadNewsList();
+}
+async function loadNewsList() {
+  const target = $('operator-news-list');
+  try {
+    // 走运营钥匙：席位查询读不到未到点的预录条目，只有运营钥匙的浏览器也调不动。
+    const data = await api('operator/news?limit=10', undefined, true);
+    const items = Array.isArray(data.news) ? data.news : [];
+    target.replaceChildren();
+    if (!items.length) { target.append(node('p', '还没有新闻。')); return; }
+    for (const item of items) {
+      // 列表含未到可见时刻的预录条目；这里标出来，免得运营以为已经推了。
+      target.append(node('p', `${item.issueDate} · ${item.title} · ${item.publishAt <= Date.now() ? '已可见' : '未到可见时刻'}`));
+    }
+  } catch (error) {
+    target.replaceChildren(node('p', error.message || '读不到新闻列表。'));
+  }
 }
 async function perform(button, task) {
   button.disabled = true;
@@ -94,7 +113,8 @@ $('operator-login').addEventListener('submit', event => {
 });
 $('operator-logout').addEventListener('click', () => {
   operatorKey = ''; $('operator-panel').hidden = true; $('operator-login').hidden = false;
-  $('operator-feedback').replaceChildren(); $('announcement-text').value = ''; announcementRequest = null; status('已退出运营工作台。');
+  $('operator-feedback').replaceChildren(); $('operator-news-list').replaceChildren();
+  $('announcement-text').value = ''; announcementRequest = null; resetNewsForm(); status('已退出运营工作台。');
 });
 $('announcement-form').addEventListener('submit', event => {
   event.preventDefault();
@@ -107,5 +127,39 @@ $('announcement-form').addEventListener('submit', event => {
     if (cfg?.token) await refresh();
   });
 });
+function resetNewsForm() {
+  $('news-date').value = beijingToday();
+  $('news-title').value = ''; $('news-summary').value = ''; $('news-body').value = '';
+  $('news-time').value = '10:00'; $('news-autopush').checked = true; newsRequest = null;
+}
+$('news-date').addEventListener('change', () => {
+  // 补录历史默认不推送；改回今天或未来时再恢复，避免把旧闻补推给所有人。
+  $('news-autopush').checked = $('news-date').value >= beijingToday();
+});
+$('news-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const issueDate = $('news-date').value;
+  const title = $('news-title').value.trim();
+  const summary = $('news-summary').value.trim();
+  const body = $('news-body').value.trim();
+  const autoPush = $('news-autopush').checked;
+  const time = $('news-time').value;
+  if (!issueDate || !title || !summary || !body) { status('日期、标题、摘要、正文都要填。'); return; }
+  const publishAt = time ? Date.parse(`${issueDate}T${time}:00+08:00`) : undefined;
+  if (time && !Number.isFinite(publishAt)) { status('日期或可见时刻格式不对。'); return; }
+  const key = JSON.stringify({ issueDate, title, summary, body, autoPush, publishAt });
+  if (!confirm(`这一期新闻将出现在「${issueDate}」：\n\n${title}\n\n${autoPush ? '到点后自动推送给在线 Coo。' : '不自动推送，只能主动查。'}\n确认发布？`)) return;
+  void perform(event.submitter, async () => {
+    if (!newsRequest || newsRequest.key !== key) {
+      newsRequest = { key, body: { issueDate, title, summary, body, autoPush, ...(publishAt ? { publishAt } : {}) } };
+    }
+    const data = await api('operator/news', newsRequest.body, true);
+    newsRequest = null;
+    status(`已发布：${data.news.id}（${data.news.issueDate}${data.news.autoPush ? '，到点自动推送' : '，不自动推送'}）`);
+    resetNewsForm();
+    await loadNewsList();
+  });
+});
+resetNewsForm();
 void refresh().catch(error => status(error.message));
 setInterval(() => { if (!document.hidden && cfg?.token) void refresh().catch(() => {}); }, 60000);

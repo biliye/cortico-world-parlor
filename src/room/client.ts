@@ -10,8 +10,8 @@ import type { ParentMailView } from './mail-db.ts';
 import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
 import type { GameQuery } from './game-api.ts';
 import type {
-  ActionRequest, ActionResponse, HallView, InviteResponse, JoinRequest, JoinResponse, MeView,
-  RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
+  ActionRequest, ActionResponse, HallView, InboxView, InviteResponse, JoinRequest, JoinResponse, MeView,
+  NewsItemView, NewsSummaryView, RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
 } from './protocol.ts';
 
 export interface ReplayResponse {
@@ -51,6 +51,41 @@ export class ParlorClient {
     });
     return this.parse(response);
   }
+
+  /** 公告 + 新闻摘要 + 跨厅招募共用一次请求；旧服务器没有这条路由会抛 404。 */
+  async inbox(token: string, query: { topics: string[]; afterPublish: number; afterId: string; room?: string }): Promise<InboxView> {
+    const params = new URLSearchParams({
+      topics: query.topics.join(','),
+      after_publish: String(query.afterPublish),
+    });
+    if (query.afterId) params.set('after_id', query.afterId);
+    // 当前所在厅：服务端据此排掉同厅的桌，招募只搭「别的厅」。
+    if (query.room) params.set('room', query.room);
+    const response = await fetch(this.url(`/v1/support/inbox?${params.toString()}`), {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse<InboxView>(response);
+  }
+
+  /** 主动查新闻：不带参数给最新一篇全文，list 只给摘要列表。 */
+  async news(token: string, query: { id?: string; list?: boolean; limit?: number } = {}): Promise<{
+    news: NewsItemView | NewsSummaryView[] | null;
+  }> {
+    const params = new URLSearchParams();
+    if (query.id) params.set('id', query.id);
+    if (query.list) {
+      params.set('list', '1');
+      if (query.limit) params.set('limit', String(query.limit));
+    }
+    const search = params.toString();
+    const response = await fetch(this.url(`/v1/support/news${search ? `?${search}` : ''}`), {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
   readonly baseUrl: string;
   private readonly identity?: CooIdentity;
   private global?: { authority: string; audience: string; invite: string; name: string };

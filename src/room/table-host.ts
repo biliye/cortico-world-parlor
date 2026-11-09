@@ -503,7 +503,7 @@ export class TableHost {
     const event = await withTransaction(this.db, async () => {
       await this.insertTableRow(table, 'open', now, stateJson);
       if (input.matchOpen) await this.db.prepare(
-        'INSERT INTO table_discovery(table_id, match_open, updated_at) VALUES (?, 1, ?)',
+        'INSERT INTO table_discovery(table_id, match_open, updated_at, recruit_version) VALUES (?, 1, ?, 1)',
       ).run(table.id, now);
       await this.insertTableSeat(table.id, seat.id, cooId, 0, false, now);
       await this.insertActivePlayer(cooId, table.id, now);
@@ -513,7 +513,14 @@ export class TableHost {
         from: 'system',
         scope: { kind: 'room' },
         text: `${seat.name} 开了一张${def.label}桌。`,
-        data: { game: def.id, tableId: table.id },
+        // 开桌即开放匹配也要带上招募字段：这类桌不会再发 discovery 事件，
+        // 桌外 Coo 只靠 open 事件才能知道「这张桌可以匹配」。
+        data: {
+          game: def.id, tableId: table.id,
+          ...(input.matchOpen ? {
+            matchOpen: true, seats: 1, capacity: seatCount ?? tableCapacity(def.id), recruitVersion: 1,
+          } : {}),
+        },
       });
       await this.finishReceipt(receipt, engine);
       await this.storeReceipt(cooId, requestId, table.id, openKey, receipt, now);
@@ -631,7 +638,11 @@ export class TableHost {
         if ((input.matchOpen === true || input.text !== undefined) && room.visibility !== 'public') {
           throw new HostError('forbidden', '只有公开客厅里的牌桌可以开放快速匹配或分享到大厅');
         }
-        const current = await this.db.prepare('SELECT * FROM table_discovery WHERE table_id = ?').get(table.id) as { match_open: number; recruit_text: string; author_coo_id: string | null; updated_at: number } | undefined;
+        const current = await this.db.prepare('SELECT * FROM table_discovery WHERE table_id = ?')
+          .get(table.id) as {
+            match_open: number; recruit_text: string; author_coo_id: string | null;
+            updated_at: number; recruit_version: number;
+          } | undefined;
         const isHost = seat.id === table.hostSeatId;
         if (input.matchOpen !== undefined && !isHost) throw new HostError('forbidden', '只有开桌的人或 Coo 可以切换开放匹配');
         if (input.text !== undefined && !table.engine.has(seat.id)) throw new HostError('forbidden', '坐在这张桌上才可以发布招募');
@@ -645,16 +656,44 @@ export class TableHost {
         if (text !== undefined && current?.author_coo_id && now - Number(current.updated_at) < 60_000) {
           throw new HostError('conflict', '同一张桌的招募每分钟最多更新一次');
         }
+        const nextMatchOpen = input.matchOpen === undefined
+          ? Number(current?.match_open ?? 0) : Number(input.matchOpen);
+        const nextText = input.withdraw ? '' : (text ?? current?.recruit_text ?? '');
+        // 版本只在招募内容或开放状态真的变了才 +1：人数变化、幂等重放都不算，
+        // 否则每条 inbox 轮询都会变成「新招募」，去重就失效了。
+        const versionChanged = nextMatchOpen !== Number(current?.match_open ?? 0)
+          || nextText !== (current?.recruit_text ?? '');
+        const recruitVersion = current
+          ? Number(current.recruit_version ?? 0) + (versionChanged ? 1 : 0)
+          : 1;
         await this.db.prepare(
-          `INSERT INTO table_discovery(table_id, match_open, recruit_text, author_coo_id, updated_at) VALUES (?, ?, ?, ?, ?)
+          `INSERT INTO table_discovery(table_id, match_open, recruit_text, author_coo_id, updated_at, recruit_version)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(table_id) DO UPDATE SET match_open=excluded.match_open, recruit_text=excluded.recruit_text,
-             author_coo_id=excluded.author_coo_id, updated_at=excluded.updated_at`,
-        ).run(table.id, input.matchOpen === undefined ? (current?.match_open ?? 0) : Number(input.matchOpen),
-          input.withdraw ? '' : (text ?? current?.recruit_text ?? ''), text !== undefined ? cooId : (current?.author_coo_id ?? null),
-          text !== undefined || input.withdraw ? now : Number(current?.updated_at ?? now));
+             author_coo_id=excluded.author_coo_id, updated_at=excluded.updated_at,
+             recruit_version=excluded.recruit_version`,
+        ).run(table.id, nextMatchOpen, nextText,
+          text !== undefined ? cooId : (current?.author_coo_id ?? null),
+          text !== undefined || input.withdraw ? now : Number(current?.updated_at ?? now),
+          recruitVersion);
+        // 事件正文要能让不在桌上的人判断「值不值得去」：游戏名、几人几席、改了什么。
+        // 招募原话是玩家写的，不进广播正文（避免把陌生人的话塞进所有 Coo 的上下文），只用 recruit 标记。
+        const seats = await this.seatCount(table.id);
+        const capacity = tableCapacity(table.game);
+        const matchOpenNow = nextMatchOpen === 1;
+        const recruitNow = nextText.length > 0;
+        const changed: string[] = [];
+        if (input.withdraw) changed.push('撤回了招募');
+        else if (text !== undefined) changed.push('发了招募');
+        if (input.matchOpen === true) changed.push('开放了快速匹配');
+        else if (input.matchOpen === false) changed.push('关掉了快速匹配');
+        const action = changed.length ? changed.join('并') : '更新了匹配或招募设置';
+        // 狼人杀的容量按开局人数（6/9/12）定，固定表会写错，只报人数不报比例。
+        const scale = !capacity || table.game === 'werewolf' ? `（${seats} 人）` : `（${seats}/${capacity} 人）`;
         const event = await this.events.append(this.roomId, {
           type: 'parlor.table.discovery', ts: now, from: 'system', scope: { kind: 'room' },
-          text: `${seat.name} 更新了牌桌的匹配或招募设置。`, data: { tableId: table.id, game: table.game },
+          text: `${seat.name} 在「${gameLabelOf(table.game)}」桌${action}${scale}。`,
+          data: { tableId: table.id, game: table.game, seats, capacity, matchOpen: matchOpenNow, recruit: recruitNow, recruitVersion },
         });
         const receipt = { tableId: table.id, revision: table.revision, seq: event.seq };
         await this.storeReceipt(cooId, requestId, table.id, key, receipt, now);
@@ -1682,6 +1721,14 @@ export class TableHost {
       `INSERT INTO table_seats(table_id, room_id, seat_id, coo_id, position, is_bot, joined_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(tableId, this.roomId, seatId, cooId, position, isBot ? 1 : 0, now);
+  }
+
+  /** 这张桌当前还坐着几个人（含托管），用来在事件里写「几人几席」。 */
+  private async seatCount(tableId: string): Promise<number> {
+    const row = await this.db.prepare(
+      'SELECT COUNT(*) AS n FROM table_seats WHERE table_id = ? AND left_at IS NULL',
+    ).get(tableId) as { n: number | string } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   private async nextPosition(tableId: string): Promise<number> {
