@@ -12,11 +12,11 @@ import type { Db } from './types.ts';
 import type { SqliteDb } from './sqlite.ts';
 import type { PgDb } from './postgres.ts';
 import { PG_MIGRATIONS, PG_SCHEMA_VERSION } from './pg-schema.ts';
-import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { NEWS_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
 /** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
-export const SQLITE_SCHEMA_VERSION = 9;
+export const SQLITE_SCHEMA_VERSION = 10;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -147,6 +147,14 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   handle.exec(IDENTITY_SCHEMA_SQL);
   handle.exec(SUPPORT_SCHEMA_SQL);
   handle.exec(TABLE_DISCOVERY_SCHEMA_SQL);
+  handle.exec(NEWS_SCHEMA_SQL);
+  // CREATE TABLE IF NOT EXISTS 不给老库补列；招募版本列单独补。
+  const discoveryColumns = new Set(
+    (handle.prepare('PRAGMA table_info(table_discovery)').all() as { name: string }[]).map((row) => row.name),
+  );
+  if (!discoveryColumns.has('recruit_version')) {
+    handle.exec('ALTER TABLE table_discovery ADD COLUMN recruit_version BIGINT NOT NULL DEFAULT 0');
+  }
   const global = handle.prepare("SELECT 1 FROM meta WHERE key='global_identity' AND value='1'").get();
   if (global) handle.exec('DROP INDEX IF EXISTS ux_active_seat_name');
   else handle.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name ON room_seats(room_id,name COLLATE NOCASE) WHERE released_at IS NULL');

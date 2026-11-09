@@ -13,6 +13,7 @@ interface Candidate { id: string; room_id: string; room_name: string; game: stri
 interface RecruitmentRow {
   id: string; room_id: string; room_name: string; game: string;
   recruit_text: string; updated_at: number; match_open: number; author: string | null;
+  recruit_version: number;
 }
 interface EntryReceipt { coo_id: string; source_token_hash: string; result_token_hash: string; body_key: string; receipt_json: string }
 
@@ -31,7 +32,7 @@ export class TableDiscovery {
   async recruits(): Promise<TableRecruitment[]> {
     const rows = await this.db.prepare(
       `SELECT t.id, t.room_id, r.name AS room_name, t.game,
-              d.recruit_text, d.updated_at, d.match_open, c.display_name AS author
+              d.recruit_text, d.updated_at, d.match_open, d.recruit_version, c.display_name AS author
          FROM table_discovery d JOIN tables t ON t.id=d.table_id JOIN rooms r ON r.id=t.room_id
          LEFT JOIN coos c ON c.id=d.author_coo_id
         WHERE d.recruit_text<>'' AND t.status='open' AND t.frozen_at IS NULL
@@ -49,7 +50,7 @@ export class TableDiscovery {
   async matchables(): Promise<TableRecruitment[]> {
     const rows = await this.db.prepare(
       `SELECT t.id, t.room_id, r.name AS room_name, t.game,
-              d.recruit_text, d.updated_at, d.match_open, c.display_name AS author
+              d.recruit_text, d.updated_at, d.match_open, d.recruit_version, c.display_name AS author
          FROM table_discovery d JOIN tables t ON t.id=d.table_id JOIN rooms r ON r.id=t.room_id
          LEFT JOIN coos c ON c.id=d.author_coo_id
         WHERE d.match_open=1 AND t.status='open' AND t.frozen_at IS NULL
@@ -72,6 +73,7 @@ export class TableDiscovery {
         label: table.label, seats, capacity, full: seats >= capacity,
         text: row.recruit_text, author: row.author || '来客', updatedAt: Number(row.updated_at),
         matchOpen: Number(row.match_open) === 1,
+        recruitVersion: Number(row.recruit_version ?? 0),
         link: `/play?${new URLSearchParams({ room: row.room_id, view: 'table', table: row.id })}` });
     }
     return result;

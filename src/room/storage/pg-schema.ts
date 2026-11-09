@@ -12,10 +12,10 @@
  * 迁移按版本号走：PG 有自己的一套编号，不沿用来源 SQLite 的 schema_version。
  */
 
-import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
+import { NEWS_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 
-export const PG_SCHEMA_VERSION = 7;
+export const PG_SCHEMA_VERSION = 8;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -461,5 +461,11 @@ export const PG_MIGRATIONS: PgMigration[] = [
     ALTER TABLE ledger_entries DROP COLUMN IF EXISTS is_refill;
     ALTER TABLE tables DROP COLUMN IF EXISTS stake;
     DROP TABLE IF EXISTS ledger_transfers;
+  ` },
+  // 纯增量：新表 + 新列都有默认值，旧二进制读多出来的列不受影响，
+  // 所以降级不需要恢复整库 dump，只要把 meta.schema_version 改回 7。
+  { version: 8, name: 'news-and-recruit-version', sql: `
+    ${NEWS_SCHEMA_SQL}
+    ALTER TABLE table_discovery ADD COLUMN IF NOT EXISTS recruit_version BIGINT NOT NULL DEFAULT 0;
   ` },
 ];
