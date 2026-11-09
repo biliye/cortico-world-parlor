@@ -7,14 +7,18 @@ import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
 import { ParlorClient } from '../src/room/client.ts';
 import type { Announcement } from '../src/room/support-db.ts';
+import type { InboxView } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
 let dir: string;
 let world: ReturnType<typeof PARLOR.create> | undefined;
 let news: Announcement[];
+let inbox: InboxView;
 beforeEach(() => {
   vi.useFakeTimers(); dir = mkdtempSync(join(tmpdir(), 'parlor-world-support-'));
   news = [{ id: 'notice-1', text: '维护结束，欢迎回来', created_at: Date.now() }];
+  inbox = { announcements: news };
+  vi.spyOn(ParlorClient.prototype, 'inbox').mockImplementation(async () => inbox);
   vi.spyOn(ParlorClient.prototype, 'initializeIdentity').mockResolvedValue(true);
   vi.spyOn(ParlorClient.prototype, 'snapshot').mockResolvedValue({ id: 'hall', latest: 1, now: Date.now(), at: '',
     seat: { id: 'mine', name: '阿岚', kind: 'pet', tier: 'full', joinedAt: Date.now() }, seats: [], events: [], maxSeats: 400 });
@@ -32,12 +36,12 @@ const start = async (off = false) => {
 };
 describe('Coo 反馈与公告', () => {
   it('新公告投递一次；重复轮询与重启不重复，恢复后新公告可以补收', async () => {
-    const support = vi.spyOn(ParlorClient.prototype, 'support').mockImplementation(async () => ({ announcements: news }));
     const host = await start();
     expect(host.events.filter(e => e.type === 'parlor.announcement')).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(host.events.filter(e => e.type === 'parlor.announcement')).toHaveLength(1);
-    support.mockRejectedValueOnce(new Error('fetch failed'));
+    const inboxMock = vi.mocked(ParlorClient.prototype.inbox);
+    inboxMock.mockRejectedValueOnce(new Error('fetch failed'));
     news.unshift({ id: 'notice-2', text: '新公告', created_at: Date.now() });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(host.events.filter(e => e.type === 'parlor.announcement')).toHaveLength(1);
@@ -48,14 +52,16 @@ describe('Coo 反馈与公告', () => {
     expect(restarted.events.filter(e => e.type === 'parlor.announcement')).toHaveLength(0);
   });
 
-  it('off 不主动投递；仍可以主动查公告与提交反馈', async () => {
+  it('off 不轮询也不投递；仍可以主动查公告与提交反馈', async () => {
     const support = vi.spyOn(ParlorClient.prototype, 'support').mockImplementation(async (_token, action, body) => body
       ? { feedback: { id: 'f-1', coo_id: 'mine', name: '阿岚', text: body.text, created_at: Date.now(), reply: '', status: 'open' } }
       : action === 'announcements' ? { announcements: news } : { feedback: [] });
+    const inboxMock = vi.mocked(ParlorClient.prototype.inbox);
     const host = await start(true);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(host.events.some(e => e.type === 'parlor.announcement')).toBe(false);
-    expect(support).not.toHaveBeenCalled();
+    // 总闸：off 时连一次 inbox 都不发，游标留在原位。
+    expect(inboxMock).not.toHaveBeenCalled();
     const call = (name: string, args: Record<string, unknown>) => toolForOperation(world!, name)!.handler(args, {} as never);
     expect(await call('parlor_announcements', {})).toContain('维护结束');
     expect(await call('parlor_feedback', { text: '断线问题', requestId: 'retry-me' })).toContain('不代表运营者已读');

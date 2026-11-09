@@ -21,6 +21,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
     }),
     events: [
       { type: 'parlor.announcement', description: { zh: '运营者发布的新公告，断网后恢复补收。', en: 'New operator announcements, including ones received after reconnecting.' } },
+      { type: 'parlor.news', description: { zh: '每日新闻更新；关闭新闻提醒后不再自动推送，仍可主动查看。', en: 'A new daily news item; not pushed after turning news off, but still readable on demand.' } },
       { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },
       { type: 'parlor.message', description: { zh: '一条直接指向这个席位的消息（被 @、私聊或系统通知）。', en: 'A message addressed to this seat.' } },
       { type: 'parlor.digest', description: { zh: '攒起来的一段房间消息。', en: 'A digest of recent room events.' } },
