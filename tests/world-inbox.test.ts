@@ -344,7 +344,7 @@ describe('inbox 轮询', () => {
     expect(await call({})).toContain('还没有新闻板块');
   });
 
-  it('热切 off 之后，已排队的招募与摘要也不再交给宿主；恢复后补投一次', async () => {
+  it('热切 off 挡在投递口：服务端确认前队列留着，恢复后补投一次', async () => {
     await start('full');
     emit({
       type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌开放了快速匹配（1/2 人）。',
@@ -357,13 +357,59 @@ describe('inbox 轮询', () => {
     await vi.advanceTimersByTimeAsync(6_000);
     expect(host.events.filter((event) => event.type === 'parlor.digest')).toHaveLength(0);
 
-    // 恢复后这一批照常投：静音只是不打扰，不该把话吞掉。
+    // 这里只是「服务端还没确认 off」的窗口：档位一直没推成功，队列才留得住。
+    // 确认之后本地队列会被清空，那批不再补投（见下一条用例）。
     cfg.wakeTier = 'full';
     await vi.advanceTimersByTimeAsync(60_000);
     const digests = host.events.filter((event) => event.type === 'parlor.digest');
     expect(digests).toHaveLength(1);
     expect(digests[0].text).toContain('顺带一句');
     expect(digests[0].text).toContain('开放了快速匹配');
+  });
+
+  it('服务端确认 off 之后本地队列清空：那一批不会再补投', async () => {
+    vi.spyOn(ParlorClient.prototype, 'action').mockResolvedValue({} as never);
+    await start('full');
+    emit({ type: 'parlor.say', text: '清空前的这句话' });
+    // 摘要定时器到点先同步档位：set_tier 被接受就等于服务端确认了 off，本地队列当场清空。
+    cfg.wakeTier = 'off';
+    await vi.advanceTimersByTimeAsync(60_000);
+    cfg.wakeTier = 'full';
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(host.events.filter((event) => event.type === 'parlor.digest')).toHaveLength(0);
+  });
+
+  it('开桌即开放匹配后紧接同版本「开放匹配」：事实留两条，join 引导只加一次', async () => {
+    await start('full');
+    // 开桌就带 matchOpen：服务端在这里写 recruit_version=1，但不会再发 discovery。
+    emit({
+      type: 'parlor.table.open', text: '阿岚 开了一张五子棋桌。',
+      data: { game: 'gomoku', tableId: 't-1', matchOpen: true, seats: 1, capacity: 2, recruitVersion: 1 },
+    });
+    // 紧接着再提交一次「开放匹配」：状态没变，版本仍是 1。
+    emit({
+      type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌开放了快速匹配（1/2 人）。',
+      data: { tableId: 't-1', game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, recruit: false, recruitVersion: 1 },
+    });
+    await vi.advanceTimersByTimeAsync(6_000);
+    const digest = host.events.filter((event) => event.type === 'parlor.digest');
+    expect(digest).toHaveLength(1);
+    // 两条事实都在：开桌那句、开放匹配那句。
+    expect(digest[0].text).toContain('开了一张五子棋桌');
+    expect(digest[0].text).toContain('开放了快速匹配');
+    expect(digest[0].text.split('parlor_table {op:"join"').length - 1).toBe(1);
+
+    // 真的改了招募（版本 +1）就是新提醒，引导照常再补一次。
+    emit({
+      type: 'parlor.table.discovery', text: '阿岚 在「五子棋」桌发了招募（1/2 人）。',
+      data: { tableId: 't-1', game: 'gomoku', seats: 1, capacity: 2, matchOpen: true, recruit: true, recruitVersion: 2 },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    const next = host.events.filter((event) => event.type === 'parlor.digest');
+    expect(next).toHaveLength(2);
+    expect(next[1].text).toContain('发了招募');
+    expect(next[1].text).toContain('有招募原话');
+    expect(next[1].text.split('parlor_table {op:"join"').length - 1).toBe(1);
   });
 
   it('同一桌同一版本的两条招募事件，只补一次加入引导；换版本才再补', async () => {

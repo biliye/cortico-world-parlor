@@ -1056,7 +1056,8 @@ export class ParlorWorld implements World {
 
   private async flushAmbient(): Promise<void> {
     if (this.stopped || !this.host || !this.seat || this.focused || !this.pending.length) return;
-    // 总闸：静音期间队列原样留着，不 take、也不占投递额度。
+    // 总闸：这一轮不 take、不占投递额度。确认 off 时会清空当时队列里的那批；
+    // 只有「还没确认」和「确认时正在投递」的批次留得到恢复之后（见 pushWake）。
     if (this.ctx.cfg.wakeTier === 'off') return;
     const limit = TIER_BUDGET[this.seat.tier];
     if (!limit || this.seat.kind === 'observer') return;
@@ -1109,7 +1110,10 @@ export class ParlorWorld implements World {
     // `wakeTier='off'` 是自动提醒总闸。席位档位要等 reconcileTier 异步推上去，
     // 热切之后到同步完成之间，事件仍会按旧档位排进队列；这里按当前配置再挡一次，
     // 否则静音期间照样会收到摘要（招募就在摘要里）。
-    // 这批还回队列而不是丢掉：与 off 时 flushDigest 不 take 的既有行为一致，恢复后照常投。
+    // 这批先还回队列，但只在这两段里留得住：① 服务端还没确认 off（快速关开即此）；
+    // ② 确认那一刻正在投递、被挡回来的在途批次。确认时已经躺在队列里的那批，
+    // 会被 setTier / reconcileTier 当场清空，不再补投。差别只在同厅摘要这条通路；
+    // 新闻走 inbox 的复合游标，没交给宿主就不推进，恢复后照旧补推。
     if (this.ctx.cfg.wakeTier === 'off') {
       this.pending.merge(batch);
       return;
@@ -1167,8 +1171,10 @@ export class ParlorWorld implements World {
 
   /**
    * 同一桌、同一版本、同类型的招募事件只留最后一条。
-   * 重连补发会把同一句提示重放一遍，逐条渲染就会在一个摘要里补两次 join 引导；
+   * 重连补发会把同一句提示重放一遍，两条一模一样的事实留一条就够；
    * 按「类型 + 桌号 + 版本」去重，同版本里人数刚变过时保留较新的那条。
+   * 类型进 key 是因为 `open`（开桌）与 `discovery`（改了招募）是两条不同事实；
+   * 跨类型的重复引导不在这里删事实，由 `render()` 按桌号 + 版本补一次。
    */
   private collapseRecruit(events: RoomEvent[]): RoomEvent[] {
     const out: RoomEvent[] = [];
@@ -1229,6 +1235,16 @@ export class ParlorWorld implements World {
 
   private render(events: RoomEvent[]): string {
     const lines = events.length > 1 ? ['[客厅] 刚才房间里：'] : [];
+    // 「怎么去」按桌号 + 版本各补一次：开桌即开放匹配之后紧接着再提交一次「开放匹配」，
+    // 两条事件事实不同（都会留在摘要里），但版本没变，引导不该出现两遍。
+    // 分开记 join 与「有招募原话」：开桌那条只有 join，招募原话可能由后一条补上。
+    const guided = new Set<string>();
+    const guideOnce = (kind: string, tableId: string, version: number): boolean => {
+      const key = `${kind}:${tableId}:${version}`;
+      if (guided.has(key)) return false;
+      guided.add(key);
+      return true;
+    };
     for (const event of events) {
       const name = typeof event.data?.name === 'string' ? event.data.name : event.from;
       switch (event.type) {
@@ -1251,8 +1267,16 @@ export class ParlorWorld implements World {
           let line = `（桌子）${event.text}`;
           // 招募提示关掉时只留事实，「怎么去」的引导也一起停。
           const notice = this.ctx.cfg.recruitNotice;
-          if (notice && game && event.data?.matchOpen === true) line += `想去就 parlor_table {op:"join",params:{game:"${game}"}}。`;
-          if (notice && event.data?.recruit === true) line += '这桌有招募原话，用 parlor_query {op:"rooms",params:{recruitments:true}} 看。';
+          const tableId = typeof event.data?.tableId === 'string' ? event.data.tableId : '';
+          const version = Number(event.data?.recruitVersion ?? 0);
+          if (notice && game && event.data?.matchOpen === true
+            && (!tableId || guideOnce('join', tableId, version))) {
+            line += `想去就 parlor_table {op:"join",params:{game:"${game}"}}。`;
+          }
+          if (notice && event.data?.recruit === true
+            && (!tableId || guideOnce('recruit', tableId, version))) {
+            line += '这桌有招募原话，用 parlor_query {op:"rooms",params:{recruitments:true}} 看。';
+          }
           lines.push(line);
           break;
         }
