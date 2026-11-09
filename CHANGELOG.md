@@ -4,7 +4,14 @@
 - **旧链接兼容**：`/play?legacy=1`（含 `legacy=true`）由服务器 **302** 回 `/play`，保留 `room` 等其它查询参数；旧书签与外链不会落到空白页。
 - **仍共用的不动**：`play.css` / `club.css` / `appearance.css` 保留（斗地主与狼人杀的 Vue 桌面沿用类名与配色）；骰子、旧大富翁的 DOM 渲染器与 `web-src/lib/legacy-games.ts` 保留，两款已在大厅收起，但存量桌仍要能看。
 - **奶油外观收口**：`theme.js` 从三套改为深色 / 浅色两套；浏览器里存着的 `cream` 在启动时折到浅色并改写偏好，`appearance.css` 删掉奶油 token。
-- 无协议与数据库迁移；Coo 侧无需升级。测试同步删除旧渲染器用例，保留角色牌路由与打包断言，并新增 `/play?legacy=1` 的 302 断言。
+- **家长入场重试**：`#key=` 仍一进页面就从地址栏抹掉（不进历史、不会被复制外发），但钥匙在内存里留一份，**换到席位（或转交统一身份）之后才清**。断网让第一次请求根本没到服务器时，重试仍会用同一把钥匙；旧页有这条，Vue 此前漏了。
+- **异步棋盘子包兜底**：五子棋与快局大富翁的棋盘按需加载，文件名带内容哈希。发版换名后，升级前一直开着的标签页首次进这两桌会 404；现在先自动重试一次，仍失败就在牌桌位置显示「这一桌的界面没载入成功」与「刷新页面」，不再是一片空白。
+- **数据库迁移：PG schema 8 → 11、SQLite 10 → 12**（本版基线含 0.39.1 的运营侧可改可删，虽然本版自身只改网页）。三段都是纯增量：v9 给 `news_items` / `support_announcements` 各加 `revision` / `updated_at` 并新建 `support_audit`；v10 给 `news_items.publish_id`；v11 给 `support_announcements.publish_id`。老行按 `legacy-<id>` 回填，之后每次发布写一个新 UUID。
+  - **切前备份**：`pg_dump -Fc` 留档，并记下 `meta.schema_version` 原值 **8**。
+  - **验收**：`/healthz` 为 0.40.0 且 `schema_version=11`；`support_audit` 表存在；`news_items` 与 `support_announcements` 的 `publish_id` 无空串；`tables` / `table_seats` / `rooms` / `accounts` 计数与切前一致。
+  - **回退**：三段都只加列与表，退回 0.39.0 **不必恢复 dump**，只需把 `meta.schema_version` 改回 8（老程序不读多出来的列与表）；回退期间写入的新闻/公告 `publish_id` 为空串，下次升级启动时由 `applyPgDataRules` 按 id 补齐。
+- **部署注意**：旧页文件必须显式删除——上次那种 `install -D` 覆盖安装不会删掉 `src/web/play.js` 等已移除文件（`post-diff` 里表现为 `only-install`），切换后要确认这些路径 404。想给上一版 Vue 分包留过渡期，就暂不删 `src/web/vue/chunk-*.js`，下次发版再清。
+- 测试同步删除旧渲染器用例与 `werewolf-inspections-web` 的快测登记，保留角色牌路由与打包断言，新增 `/play?legacy=1` 的 302 断言、家长钥匙重试用例与分包兜底的产物断言。Coo 侧无需升级。
 
 ## 0.39.0（2026-11-09）
 

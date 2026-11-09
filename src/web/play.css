@@ -1798,6 +1798,17 @@ html.no-card-art .pcard.back { border: 0; }
 }
 .legacy-notice strong { display: block; font-size: 12px; }
 .legacy-notice p { margin: 2px 0 0; color: var(--muted); font-size: 10.5px; }
+/* 分包没载入（多半是发版后还开着旧页面）：牌桌区域给一句话和一个刷新按钮，别留空白。 */
+.chunk-fallback {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  margin: 18px auto; padding: 16px 18px; max-width: 420px;
+  border-radius: 16px;
+  border: 1px solid rgba(231, 169, 79, .3);
+  background: rgba(231, 169, 79, .08);
+}
+.chunk-fallback strong { font-size: 13px; }
+.chunk-fallback p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+.chunk-fallback .btn { align-self: flex-start; }
 .signup-notice {
   padding: 12px 14px;
   border-radius: 14px;

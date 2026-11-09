@@ -30,6 +30,14 @@ export const log = ref<ChatEvent[]>([]);
 export const roomTransition = ref<{ from: string; to: string; name: string; error: string } | null>(null);
 
 let stream: EventSource | null = null;
+/**
+ * 地址栏里那把家长钥匙的页内副本。
+ *
+ * `#key=` 取到就立刻从地址栏抹掉（不进历史、不会被复制外发），但第一次请求可能根本没到
+ * 服务器（断网、超时）。旧页在这里留了一份内存副本供重试，Vue 照做：**只有换到席位、
+ * 或已经转交统一身份之后才清掉**，否则失败一次就再也拼不回这把钥匙。
+ */
+let entryKey = '';
 let reconnectTimer: number | undefined;
 let reconnectFailures = 0;
 let locationTask: { key: string; promise: Promise<boolean> } | undefined;
@@ -823,14 +831,21 @@ export async function boot(): Promise<boolean> {
   }
   // 面板给的 #key= 链接：一次请求换会话 + 领席位，用完从地址栏抹掉。
   // 换不到但旧席位还在时，沿用旧席位继续（与旧版一致），只在没有旧席位时把错误抛给加入页。
-  const key = takeKeyFromHash();
+  // 地址栏抹掉后钥匙留在 entryKey 里：断网时第一次请求可能没到服务器，重试还要用它。
+  // 已经有席位就不再替用户换身份（比如重试失败后改用邀请码入场）；地址栏里新粘的 key 仍然优先。
+  const key = takeKeyFromHash() || (seat.value ? '' : entryKey);
   if (key) {
+    entryKey = key;
     try {
       const played = await parentPlay(key);
       if (played.globalEntry) {
         beginGlobalEntry(played.globalEntry, { room: played.room || 'hall', parent: true });
+        // 已经转交统一身份：回来时用 sessionStorage 里的 pending，不再需要这把钥匙。
+        entryKey = '';
         return false;
       }
+      // 换到席位才算这把钥匙用完了；失败时留着，下一次 boot() 还能再试一次。
+      entryKey = '';
     } catch (error) {
       if (!seat.value) throw error;
       showToast((error as Error).message || '这个家长链接没换成席位', 'bad');

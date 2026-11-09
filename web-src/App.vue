@@ -90,7 +90,7 @@ watch(seat, (next) => {
 </script>
 
 <template>
-  <JoinView v-if="!seat" :initial-error="failed || entryNotice" @entered="enter" />
+  <JoinView v-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed" @entered="enter" @retry="enter" />
   <AppShell v-else-if="ready && !roomTransition">
     <LobbyView v-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />

@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -475,6 +475,18 @@ describe('网页玩家', () => {
     const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
     expect(css).toContain('.ddz-end-seats');
     expect(css).toContain('.ddz-guide');
+  });
+
+  it('异步棋盘子包加载失败时有刷新兜底，样式齐全', () => {
+    // 发版会换掉带哈希的分包名：升级前开着的标签页首次进五子棋或快局大富翁会 404，
+    // 兜底文案必须真的进产物，否则牌桌区域只剩一片空白。
+    const dir = new URL('../src/web/vue/', import.meta.url);
+    const scripts = readdirSync(dir).filter((name) => name.endsWith('.js'))
+      .map((name) => readFileSync(new URL(name, dir), 'utf8'));
+    expect(scripts.some((text) => text.includes('这一桌的界面没载入成功'))).toBe(true);
+    expect(scripts.some((text) => text.includes('刷新页面'))).toBe(true);
+    const css = readFileSync(new URL('../src/web/play.css', import.meta.url), 'utf8');
+    expect(css).toContain('.chunk-fallback');
   });
 
   it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {
