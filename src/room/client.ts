@@ -316,6 +316,7 @@ export class ParlorClient {
   }
 
   async games(token: string, query: GameQuery = {}, roomId?: string): Promise<Record<string, unknown>> {
+    if (query.op === 'ratings' && !query.game?.trim()) throw new Error('查等级分榜需要 game，例如 gomoku');
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) params.set(key, String(value));

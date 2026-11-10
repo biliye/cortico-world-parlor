@@ -22,7 +22,7 @@ interface ResultSeat {
   is_bot: number;
 }
 
-/** 持久化前验证终局名册完整，且第一名与公开赢家一致。 */
+/** 持久化前验证参赛名单、竞赛名次和公开赢家。 */
 export function validSeatResults(
   results: readonly TableSeatResult[] | null | undefined,
   seatIds: readonly string[], winners: readonly string[], tie: boolean,
@@ -33,7 +33,10 @@ export function validSeatResults(
     if (!unmatched.delete(seatId) || !Number.isInteger(rank) || rank < 1 || rank > seatIds.length) return false;
     if (score !== undefined && (!Number.isInteger(score) || score < -2_147_483_648 || score > 2_147_483_647)) return false;
   }
+  const ranks = results.map(result => result.rank).sort((a, b) => a - b);
+  if (ranks.some((rank, index) => rank !== index + 1 && rank !== ranks[index - 1])) return false;
   const first = results.filter(result => result.rank === 1);
+  // 并列第一可同时带 winners 和 tie。无赢家的全桌和局才要求所有席位都排第一。
   return winners.length
     ? first.length === winners.length && first.every(result => winners.includes(result.seatId))
     : tie && first.length === results.length;

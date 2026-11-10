@@ -38,6 +38,14 @@ it('拒绝缺席、重复席、赢家矛盾的逐席赛果，接受全桌和局'
   expect(validSeatResults([a, { ...b, rank: 1 }], seats, [], true)).toBe(true);
 });
 
+it('并列后按占用的席位数跳名次，首位并列和全桌和局分别处理', () => {
+  const seats = ['a', 'b', 'c'];
+  const tied = [{ seatId: 'a', rank: 1 }, { seatId: 'b', rank: 1 }];
+  expect(validSeatResults([{ seatId: 'c', rank: 3 }, ...tied], seats, ['a', 'b'], true)).toBe(true);
+  expect(validSeatResults([{ seatId: 'c', rank: 2 }, ...tied], seats, ['a', 'b'], true)).toBe(false);
+  expect(validSeatResults([{ seatId: 'c', rank: 3 }, tied[0]!, { seatId: 'b', rank: 3 }], seats, ['a'], false)).toBe(false);
+});
+
 const player = (cooId: string | null, rank: number, team: string | null = null) => ({ cooId, rank, team });
 
 it('十胜零负仍收敛，每对一场虚拟平局，按每组几何平均强度定零分', () => {

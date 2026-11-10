@@ -18,6 +18,7 @@ export interface TableEvent {
 
 export interface TableSeatResult {
   seatId: string;
+  /** 并列共用名次，下一名按已排席位数加一，例如 1、1、3。 */
   rank: number;
   team?: string;
   score?: number;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
+import { DiceTable } from '../src/room/table.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
 const A = 'coo-aaaaaaaa';
@@ -213,6 +214,39 @@ describe('客厅牌桌（骰子）', () => {
     // 牌桌不产生任何持有量：谁也没押，谁也没分底池。
     expect(await ledger.heldGifts(A)).toEqual({});
     expect(await ledger.heldGifts(B)).toEqual({});
+  });
+
+  it('评级赛果与公开赢家冲突时仍提交普通结算，评级零行并留日志', async () => {
+    fixture = await setup();
+    const { db, host } = fixture;
+    await enter(host, A, '阿岚');
+    await enter(host, B, '小满');
+    const { tableId } = await host.openTable(A, { game: 'dice' });
+    await host.joinTable(B);
+    await host.startTable(A);
+
+    const play = DiceTable.prototype.act;
+    const inconsistent = vi.spyOn(DiceTable.prototype, 'act').mockImplementation(function (this: DiceTable, ...args) {
+      const step = play.apply(this, args);
+      if (!step.ended) return step;
+      const seatResults = step.seatResults!.map(result => ({ ...result, rank: 2 }));
+      return { ...step, seatResults };
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await act(host, A, { type: 'stand' }, 'invalid-rating-a');
+      await act(host, B, { type: 'stand' }, 'invalid-rating-b');
+      expect(log).toHaveBeenCalledWith('parlor: 等级分赛果缺失或不一致', 'dice', tableId);
+    } finally {
+      inconsistent.mockRestore();
+      log.mockRestore();
+    }
+
+    expect(await host.tablePublic(tableId)).toMatchObject({ status: 'ended' });
+    expect(await new LedgerDb(db).summaryFor(A)).toMatchObject({ games: 1 });
+    expect(await db.prepare('SELECT kind FROM table_finalizations WHERE table_id = ?').get(tableId))
+      .toEqual({ kind: 'result' });
+    expect(await db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId)).toEqual([]);
   });
 
   it('游戏锁：未开局也锁，退桌/收桌后才放行', async () => {

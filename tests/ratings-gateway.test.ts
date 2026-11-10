@@ -40,6 +40,9 @@ it('逐席结算随牌桌事务持久化，榜单跨厅、限登录访问并在�
     });
     expect((await fetch(endpoint('gomoku'))).status).toBe(401);
     expect((await fetch(endpoint('monopoly'), { headers: auth })).status).toBe(400);
+    for (const game of [undefined, '', ' ']) {
+      await expect(client.games(alice!.token, { op: 'ratings', game })).rejects.toThrow('查等级分榜需要 game');
+    }
     const read = async (token: string) => await new ParlorClient(server.url)
       .games(token, { op: 'ratings', game: 'gomoku' }) as unknown as RatingBoard;
     expect(await read(alice!.token)).toMatchObject({ since: null, groups: [], mine: { games: 0, rating: null } });
