@@ -14,6 +14,8 @@ export interface TableEvent {
   scope: TableEventScope;
   text: string;
   data?: Record<string, unknown>;
+  /** 终局结算用的阵营映射，不写进事件流。 */
+  teamBySeat?: Readonly<Record<string, string>>;
 }
 
 export interface TableStep {

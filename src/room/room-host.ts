@@ -47,6 +47,7 @@ export interface RoomHostOptions {
   recovery?: { lastHealthyAt?: number; maxDowntimeMs?: number; minHumanMs?: number };
   /** 事件提交后通知网关；推送用它立刻发，不再等 400ms 节拍。 */
   onCommit?: (roomId: string) => void;
+  onTableResult?: (game: string) => void;
 }
 
 export interface JoinResult {
@@ -184,6 +185,7 @@ export class RoomHost {
       db,
       roomId,
       onCommit: options.onCommit,
+      onTableResult: options.onTableResult,
       now,
       ledger,
       mail,

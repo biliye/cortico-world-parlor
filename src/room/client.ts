@@ -320,7 +320,9 @@ export class ParlorClient {
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) params.set(key, String(value));
     }
-    const response = await fetch(`${this.path('games', roomId)}?${params}`, {
+    if (query.op === 'ratings' && query.limit === undefined) params.set('limit', '20');
+    const path = query.op === 'ratings' ? this.url('/v1/hall/ratings') : this.path('games', roomId);
+    const response = await fetch(`${path}?${params}`, {
       headers: await this.headers({ authorization: `Bearer ${token}` }),
       signal: AbortSignal.timeout(15_000),
     });

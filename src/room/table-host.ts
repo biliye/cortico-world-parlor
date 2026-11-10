@@ -34,6 +34,7 @@ import {
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 import { tableCapacity } from './table-discovery-db.ts';
+import { writeSeatResults } from './table-results.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
 
 const OPEN_MS = 30 * 60_000;
@@ -56,6 +57,7 @@ export interface TableHostOptions {
   roomId: string;
   /** 仅在事件所在事务提交成功后通知网关推送。 */
   onCommit?: (roomId: string) => void;
+  onTableResult?: (game: string) => void;
   now?: () => number;
   /** 每手时限（测试里调短）。 */
   turnMs?: number;
@@ -222,6 +224,7 @@ export class TableHost {
   private readonly ledger: LedgerDb;
   private readonly mail: MailDb;
   private readonly now: () => number;
+  private readonly onTableResult?: (game: string) => void;
   private readonly seats: TableSeatLookup;
   private readonly turnMs?: number;
   private readonly openMs: number;
@@ -240,6 +243,7 @@ export class TableHost {
     this.ledger = options.ledger;
     this.mail = new MailDb(options.db, { now: options.now ?? Date.now });
     this.now = options.now ?? Date.now;
+    this.onTableResult = options.onTableResult;
     this.seats = options.seats;
     this.turnMs = options.turnMs;
     this.openMs = options.openMs ?? OPEN_MS;
@@ -1156,7 +1160,7 @@ export class TableHost {
     };
     for (const seatId of step.views) await writeTurn(seatId, true);
     for (const seatId of step.refreshViews ?? []) await writeTurn(seatId, false);
-    if (ended) await this.settle(table, ended, now);
+    if (ended) await this.settle(table, engine, ended, now);
   }
 
   /**
@@ -1195,12 +1199,13 @@ export class TableHost {
   }
 
   /**
-   * 一局结束：按开局时记下的真人席位写一条公开战绩并分底池。
+   * 一局结束：写公开战绩，并按本局引擎保留的参赛席位落逐席结果。
    * 终态只写一次（`table_finalizations`），正常结算与作废退款互斥。
    */
-  private async settle(table: LiveTable, event: TableEvent, now: number): Promise<void> {
+  private async settle(table: LiveTable, engine: TableEngine, event: TableEvent, now: number): Promise<void> {
     if (await this.finalization(table.id)) return;
-    const rows = (await this.tableSeatRows(table.id)).filter((row) => row.left_at === null && row.coo_id !== null);
+    const allSeats = await this.tableSeatRows(table.id);
+    const rows = allSeats.filter((row) => row.left_at === null && row.coo_id !== null);
     const participants = [...new Set(rows.map((row) => row.coo_id!))];
     const seatToCoo = new Map(rows.map((row) => [row.seat_id, row.coo_id!]));
     const data = event.data ?? {};
@@ -1238,6 +1243,8 @@ export class TableHost {
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
     ).run(table.id, entry.id, now, JSON.stringify({ winners, participants }));
+    await writeSeatResults(this.db, table.id, table.game, allSeats, engine.seatIds(), event, now);
+    this.db.afterCommit(() => this.onTableResult?.(table.game));
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
     if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN

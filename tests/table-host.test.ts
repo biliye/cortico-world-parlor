@@ -106,6 +106,12 @@ describe('客厅牌桌（骰子）', () => {
     expect(end?.text).toContain('新阿岚');
     expect(end?.text).not.toContain('地主 阿岚');
     expect((await new LedgerDb(db).publicInRoom('lobby', 5))[0].text).toContain('新阿岚');
+    const results = await db.prepare(
+      'SELECT seat_id, coo_id, rank, team FROM table_seat_results WHERE table_id = ? ORDER BY coo_id',
+    ).all<{ seat_id: string; coo_id: string; rank: number; team: string }>(tableId);
+    expect(results.map(row => [row.coo_id, row.team])).toEqual([[A, 'landlord'], [B, 'farmers'], [C, 'farmers']]);
+    expect(results.filter(row => row.rank === 1).map(row => row.seat_id).sort())
+      .toEqual([...(end!.data!.winners as string[])].sort());
   });
 
   it('斗地主两家过牌后，重新领出通知携带该手的已提交版本，可直接出牌', async () => {
@@ -136,7 +142,7 @@ describe('客厅牌桌（骰子）', () => {
 
   it('开桌/坐下/开始/停牌/结算；暗骰只在本人私视图里', async () => {
     fixture = await setup();
-    const { host, clock } = fixture;
+    const { host, clock, db } = fixture;
     const a = await enter(host, A, '阿岚');
     const b = await enter(host, B, '小满');
 
@@ -169,7 +175,14 @@ describe('客厅牌桌（骰子）', () => {
     clock.now += 100;
     await act(host, B, { type: 'stand' }, 'stand-b');
     const all = await host.history(B, { since: 0, limit: 200 });
-    expect(all.some((event) => event.type === 'parlor.table.end')).toBe(true);
+    const end = all.find(event => event.type === 'parlor.table.end');
+    const revealed = end?.data?.revealed as { id: string; total: number }[];
+    expect(revealed).toHaveLength(2);
+    expect(await db.prepare(
+      'SELECT seat_id, score, rank FROM table_seat_results WHERE table_id = ? ORDER BY seat_id',
+    ).all(opened.tableId)).toEqual(revealed.map(seat => ({
+      seat_id: seat.id, score: seat.total, rank: 1 + revealed.filter(other => other.total > seat.total).length,
+    })).sort((left, right) => left.seat_id.localeCompare(right.seat_id)));
     expect((await host.tablePublic())?.status).toBe('ended');
     // 结束就是下桌：不再有私视图；结果仍留在公开摘要与事件里。
     expect(await host.tablePrivate(a.seat.id)).toBeNull();
@@ -413,6 +426,7 @@ describe('重启与持久化', () => {
     // 作废只留一条终态：没有钱要退，也没有新的账本条目。
     const fin = await db.prepare('SELECT kind FROM table_finalizations WHERE table_id = ?').get(opened.tableId) as { kind: string };
     expect(fin.kind).toBe('refund');
+    expect(await db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(opened.tableId)).toEqual([]);
     expect((await new LedgerDb(db).summaryFor(A)).games).toBe(0);
   });
 

@@ -966,6 +966,7 @@ export class WerewolfTable implements TableEngine {
       type: 'parlor.table.end',
       scope: { kind: 'room' },
       text: `狼人杀终局。${verdict}`,
+      teamBySeat: Object.fromEntries(this.seats.map(seat => [seat.id, factionOf(seat.role!)])),
       data: {
         game: this.game,
         outcome,

@@ -3,7 +3,7 @@ import { GAME_LIST, type GameDefinition } from './games/registry.ts';
 import type { TableLogQuery, TablePrivateSummary, TableSummary } from './table-engine.ts';
 
 type Schema = Record<string, unknown>;
-export type GameQueryOp = 'list' | 'describe' | 'state' | 'history' | 'replay' | 'replayStep';
+export type GameQueryOp = 'list' | 'describe' | 'state' | 'history' | 'replay' | 'replayStep' | 'ratings';
 export interface GameQuery extends TableLogQuery {
   op?: GameQueryOp;
   game?: string;
