@@ -84,6 +84,8 @@ const priv = computed<M2dPriv | null>(() => (props.view.priv as unknown as M2dPr
 const me = computed(() => props.view.me);
 
 const cells = computed<M2dCell[]>(() => [...(table.value.cells ?? [])].sort((left, right) => left.index - right.index));
+// 方形环每条边有相同的格数，起点在左上角，沿顺时针排一圈。
+const edgeLength = computed(() => cells.value.length / 4 || 4);
 const seats = computed<M2dSeat[]>(() => table.value.seats ?? []);
 const playing = computed(() => table.value.status === 'playing');
 const ended = computed(() => table.value.status === 'ended');
@@ -115,10 +117,19 @@ function seatIndex(seatId?: string): number {
 function seatClass(seatId?: string): string {
   return 'm2d-p' + (seatIndex(seatId) % 4);
 }
+function cellGridArea(index: number): string {
+  const edge = edgeLength.value;
+  const last = edge + 1;
+  const offset = index % edge;
+  if (index < edge) return `1 / ${1 + offset}`;
+  if (index < 2 * edge) return `${1 + offset} / ${last}`;
+  if (index < 3 * edge) return `${last} / ${last - offset}`;
+  return `${last - offset} / 1`;
+}
 function cellClass(cell: M2dCell): string[] {
-  const classes = ['m2d-cell-' + cell.index, 'is-' + cell.kind];
+  const classes = ['is-' + cell.kind];
   if (cell.price) classes.push('band-' + Math.min(3, Math.floor((cell.price - 100) / 60)));
-  if (cell.index === 0 || cell.index === 4 || cell.index === 8 || cell.index === 12) classes.push('is-corner');
+  if (cell.index % edgeLength.value === 0) classes.push('is-corner');
   if (me.value && seats.value.some((seat) => seat.id === me.value.id && seat.pos === cell.index)) classes.push('is-here');
   if (playing.value && currentSeat.value?.pos === cell.index) classes.push('is-current');
   if (table.value.pending === cell.index) classes.push('is-pending');
@@ -229,12 +240,19 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
     </div>
 
     <div class="m2d-layout">
-      <div class="m2d-board" role="grid" aria-label="大富翁棋盘">
+      <div
+        class="m2d-board"
+        :class="{ 'm2d-board-expanded': edgeLength > 4 }"
+        :style="{ '--m2d-grid-size': edgeLength + 1 }"
+        role="grid"
+        aria-label="大富翁棋盘"
+      >
         <div
           v-for="cell in cells"
           :key="cell.index"
           class="m2d-cell"
           :class="cellClass(cell)"
+          :style="{ gridArea: cellGridArea(cell.index) }"
           role="gridcell"
         >
           <span class="m2d-cell-name">{{ cell.name }}</span>
@@ -405,8 +423,8 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
 .m2d-board {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-template-rows: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--m2d-grid-size), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--m2d-grid-size), minmax(0, 1fr));
   gap: 4px;
   aspect-ratio: 1 / 1;
   /* 方形棋盘要么占满这一栏，要么让位给顶栏与面板留白：
@@ -419,27 +437,12 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
   background: var(--panel-2);
 }
 
-/*
- * 16 格按环形摆放：上边 0-4 从左到右，右边 5-7 向下，下边 8-12 从右到左，
- * 左边 13-15 向上。四角是 0（起点）、4、8、12，与 `is-corner` 一致。
- * 不能靠自动流——DOM 顺序是 0..15，会填成行优先的方阵。
- */
-.m2d-cell-0 { grid-area: 1 / 1; }
-.m2d-cell-1 { grid-area: 1 / 2; }
-.m2d-cell-2 { grid-area: 1 / 3; }
-.m2d-cell-3 { grid-area: 1 / 4; }
-.m2d-cell-4 { grid-area: 1 / 5; }
-.m2d-cell-5 { grid-area: 2 / 5; }
-.m2d-cell-6 { grid-area: 3 / 5; }
-.m2d-cell-7 { grid-area: 4 / 5; }
-.m2d-cell-8 { grid-area: 5 / 5; }
-.m2d-cell-9 { grid-area: 5 / 4; }
-.m2d-cell-10 { grid-area: 5 / 3; }
-.m2d-cell-11 { grid-area: 5 / 2; }
-.m2d-cell-12 { grid-area: 5 / 1; }
-.m2d-cell-13 { grid-area: 4 / 1; }
-.m2d-cell-14 { grid-area: 3 / 1; }
-.m2d-cell-15 { grid-area: 2 / 1; }
+.m2d-board-expanded {
+  width: min(100%, max(320px, calc(100dvh - 360px)));
+}
+.m2d-board-expanded .m2d-cell-tag:has(+ .m2d-tokens .m2d-token) {
+  display: none;
+}
 
 .m2d-cell {
   position: relative;
@@ -536,7 +539,7 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
 }
 
 .m2d-center {
-  grid-area: 2 / 2 / 5 / 5;
+  grid-area: 2 / 2 / var(--m2d-grid-size) / var(--m2d-grid-size);
   display: flex;
   flex-direction: column;
   align-items: center;
