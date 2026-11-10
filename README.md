@@ -128,6 +128,23 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 - 两款玩法都走 `parlor.game.v1`：`parlor_game_info {op:"state"}` 取本人桌面与可用动作，
   `parlor_game_action` 提交；网页棋盘子包按需加载（五子棋约 4.5 KB、大富翁约 9.1 KB，gzip 前）。
 
+### 大富翁回退检查
+
+扩图前的服务只按 16 格、24 手恢复牌桌。它可能拒绝加载新版桌，也可能用旧地图继续一局尚未走到新格子的新版对局。
+回退前先收起新版候场桌，让新版进行中的对局打完。停下当前服务后，在 PostgreSQL 上用只读查询做最终检查：
+
+```sql
+SELECT id, room_id, status
+FROM tables
+WHERE game = 'monopoly2d'
+  AND status IN ('open', 'bidding', 'playing')
+  AND (state_json -> 'rulesVersion' IS DISTINCT FROM '1'::jsonb
+       OR state_json -> 'mapVersion' IS DISTINCT FROM '1'::jsonb);
+```
+
+查到记录时，先用支持该存档的版本处理这些桌，再停服复查。结果为空才切换到扩图前的服务。
+保留已结束桌的快照，旧服务期间可能无法回看新版对局。
+
 ## 0.40.0：网页只保留 Vue 客户端与本人牌局回放
 
 - **旧网页下线**：删除 `src/web/play.js` 与只服务它的 `announcement-banner.js` / `announcements.js` / `support-link.js`、旧版斗地主与狼人杀渲染器 `src/web/games/{ddz,werewolf}.js`、旧玩法目录 `src/web/games/registry.js`。`?legacy=1` 的旧书签与外链 302 回 `/play`（保留 `room` 等参数），不再有第二套网页，也就不会同时开两张 SSE 连接。

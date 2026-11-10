@@ -213,7 +213,7 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
           <template v-if="playing || ended">
             第 {{ round }}/{{ totalRounds }} 轮 · 第 {{ turnNo }}/{{ totalRounds * 4 }} 手 · {{ phaseText }}
           </template>
-          <template v-else>四人坐满开局，只用局内金币</template>
+          <template v-else>四人坐满开局 · {{ cells.length }} 格 · {{ totalRounds }} 轮 · 只用局内金币</template>
         </p>
       </div>
       <div v-if="playing && table.deadline" class="m2d-clock">
@@ -242,7 +242,6 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
     <div class="m2d-layout">
       <div
         class="m2d-board"
-        :class="{ 'm2d-board-expanded': edgeLength > 4 }"
         :style="{ '--m2d-grid-size': edgeLength + 1 }"
         role="grid"
         aria-label="大富翁棋盘"
@@ -269,10 +268,10 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
                 :title="seat.name"
               >{{ initial(seat.name) }}</span>
             </span>
+            <span v-if="ownerOf(cell.index)" class="m2d-owner" :class="seatClass(ownerOf(cell.index))" :title="'归 ' + nameOf(ownerOf(cell.index))">
+              {{ initial(nameOf(ownerOf(cell.index))) }}
+            </span>
           </div>
-          <span v-if="ownerOf(cell.index)" class="m2d-owner" :class="seatClass(ownerOf(cell.index))" :title="'归 ' + nameOf(ownerOf(cell.index))">
-            {{ initial(nameOf(ownerOf(cell.index))) }}
-          </span>
         </div>
 
         <div class="m2d-center" aria-hidden="true">
@@ -422,28 +421,21 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
 
 .m2d-board {
   position: relative;
+  container: m2d-board / inline-size;
   display: grid;
   grid-template-columns: repeat(var(--m2d-grid-size), minmax(0, 1fr));
   grid-template-rows: repeat(var(--m2d-grid-size), minmax(0, 1fr));
-  gap: 4px;
+  gap: 2px;
   aspect-ratio: 1 / 1;
-  /* 方形棋盘要么占满这一栏，要么让位给顶栏与面板留白：
-     518px 的方块在 775px 高的窗口里会顶出可视区，逼得用户滚动才能看到底边。 */
-  width: min(100%, calc(100dvh - 360px));
+  width: min(100%, max(320px, calc(100dvh - 360px)));
+  /* 窄屏允许棋盘变高，留出两行地名、一行价格和两行棋子的空间。 */
+  min-height: calc(62px * var(--m2d-grid-size) + 22px);
   margin-inline: auto;
-  padding: 6px;
+  padding: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-2);
 }
-
-.m2d-board-expanded {
-  width: min(100%, max(320px, calc(100dvh - 360px)));
-}
-.m2d-board-expanded .m2d-cell-tag:has(+ .m2d-tokens .m2d-token) {
-  display: none;
-}
-
 .m2d-cell {
   position: relative;
   display: flex;
@@ -800,10 +792,6 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
   .m2d-side {
     order: 2;
   }
-  .m2d-board {
-    gap: 2px;
-    padding: 4px;
-  }
   .m2d-cell {
     padding: 3px;
     border-radius: 4px;
@@ -834,6 +822,43 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
   }
   .m2d-center-copy span {
     font-size: 9px;
+  }
+}
+
+@container m2d-board (max-width: 480px) {
+  .m2d-cell {
+    padding: 2px;
+  }
+  .m2d-cell-name {
+    flex-shrink: 0;
+    font-size: 9px;
+  }
+  .m2d-cell-foot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1px;
+    min-height: 0;
+  }
+  .m2d-cell-price,
+  .m2d-cell-tag {
+    font-size: 8px;
+    line-height: 1.2;
+  }
+  .m2d-tokens {
+    grid-area: 2 / 1 / 3 / -1;
+    justify-content: start;
+    gap: 1px;
+  }
+  .m2d-token,
+  .m2d-owner {
+    width: 10px;
+    height: 10px;
+    font-size: 7px;
+  }
+  .m2d-owner {
+    position: static;
+    grid-area: 1 / 2;
   }
 }
 
