@@ -4,9 +4,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  BOARD, BOARD_SIZE, SEAT_COUNT, TURNS, cellAt, estateValue, moveOn, propertiesOf,
+  CLASSIC_RULES, DEFAULT_RULES, SEAT_COUNT, cellAt, estateValue, moveOn, propertiesOf,
   rankSeats, validateState, type Monopoly2dSeatState,
 } from '../src/room/games/monopoly2d-rules.ts';
+
+const board = DEFAULT_RULES.board;
 
 const seats = (): Monopoly2dSeatState[] => ([
   { id: 'a', name: '甲', cash: 1000, pos: 0 },
@@ -17,8 +19,8 @@ const seats = (): Monopoly2dSeatState[] => ([
 
 const baseState = (): Record<string, unknown> => ({
   version: 1,
-  rulesVersion: 1,
-  mapVersion: 1,
+  rulesVersion: DEFAULT_RULES.rulesVersion,
+  mapVersion: DEFAULT_RULES.mapVersion,
   status: 'playing',
   host: 'a',
   seats: seats(),
@@ -33,39 +35,41 @@ const baseState = (): Record<string, unknown> => ({
 });
 
 describe('地图', () => {
-  it('16 格环，四角是起点与三个休息格', () => {
-    expect(BOARD_SIZE).toBe(16);
-    expect(BOARD.map((cell) => cell.index)).toEqual([...Array(16).keys()]);
-    for (const index of [0, 4, 8, 12]) expect(cellAt(index).kind).not.toBe('property');
-    expect(cellAt(0).kind).toBe('start');
-    expect([4, 8, 12].map((index) => cellAt(index).kind)).toEqual(['rest', 'rest', 'rest']);
+  it.each([
+    [16, CLASSIC_RULES.board, [4, 8, 12]],
+    [24, board, [6, 12, 18]],
+  ] as const)('%i 格地图的四角是起点与三个休息格', (size, map, rest) => {
+    expect(map.map((cell) => cell.index)).toEqual([...Array(size).keys()]);
+    expect(cellAt(0, map).kind).toBe('start');
+    expect(rest.map((index) => cellAt(index, map).kind)).toEqual(['rest', 'rest', 'rest']);
   });
 
-  it('八块地产，售价与租金都随格号递增', () => {
-    const properties = BOARD.filter((cell) => cell.kind === 'property');
-    expect(properties.length).toBe(8);
+  it('新地图有十二块地产，售价与租金都随格号递增', () => {
+    const properties = board.filter((cell) => cell.kind === 'property');
+    expect(properties.length).toBe(12);
     for (let index = 1; index < properties.length; index++) {
       expect(properties[index].price!).toBeGreaterThan(properties[index - 1].price!);
+      expect(properties[index].rent!).toBeGreaterThan(properties[index - 1].rent!);
       expect(properties[index].rent!).toBeLessThan(properties[index].price!);
     }
     expect(properties.every((cell) => (cell.price! * 85) % 100 === 0)).toBe(true);
   });
 
   it('环形取格会绕回来', () => {
-    expect(cellAt(16).index).toBe(0);
-    expect(cellAt(-1).index).toBe(15);
+    expect(cellAt(24, board).index).toBe(0);
+    expect(cellAt(-1, board).index).toBe(23);
   });
 });
 
 describe('移动', () => {
   it('没跨圈就不发钱', () => {
-    expect(moveOn(3, 2)).toEqual({ to: 5, passedStart: false });
+    expect(moveOn(15, 3, board.length)).toEqual({ to: 18, passedStart: false });
   });
 
   it('跨过与恰好停在起点都算一次过起点', () => {
-    expect(moveOn(15, 3)).toEqual({ to: 2, passedStart: true });
-    expect(moveOn(14, 2)).toEqual({ to: 0, passedStart: true });
-    expect(moveOn(13, 3)).toEqual({ to: 0, passedStart: true });
+    expect(moveOn(23, 3, board.length)).toEqual({ to: 2, passedStart: true });
+    expect(moveOn(22, 2, board.length)).toEqual({ to: 0, passedStart: true });
+    expect(moveOn(15, 1, CLASSIC_RULES.board.length)).toEqual({ to: 0, passedStart: true });
   });
 });
 
@@ -76,7 +80,7 @@ describe('估值与排名', () => {
   });
 
   it('当前地图的售价都是 20 的倍数，所以两种取整在这里结果相同', () => {
-    const prices = BOARD.filter((cell) => cell.kind === 'property').map((cell) => cell.price!);
+    const prices = board.filter((cell) => cell.kind === 'property').map((cell) => cell.price!);
     for (const price of prices) {
       expect(estateValue([price])).toBe(Math.floor(price * 0.85));
       expect((price * 85) % 100).toBe(0);
@@ -90,7 +94,7 @@ describe('估值与排名', () => {
     players[1].cash = 880;   // 880 + 119 = 999
     players[2].cash = 1000;  // 1000 + 136 = 1136
     players[3].cash = 1136;  // 空手 1136
-    const rows = rankSeats(players, owners);
+    const rows = rankSeats(players, owners, board);
     expect(rows.map((row) => row.seat)).toEqual(['c', 'd', 'a', 'b']);
     expect(rows.map((row) => row.rank)).toEqual([1, 1, 3, 4]);
     expect(rows[0].estate).toBe(136);
@@ -113,6 +117,7 @@ describe('快照校验', () => {
 
   it('版本不认识要抛错', () => {
     expect(() => validateState({ ...baseState(), version: 2 }, 'a', 1)).toThrow(/存档版本/);
+    expect(() => validateState({ ...baseState(), mapVersion: 1 }, 'a', 1)).toThrow(/规则版本与地图版本/);
   });
 
   it('开局后席位不满四席要抛错', () => {
@@ -167,7 +172,8 @@ describe('快照校验', () => {
   });
 
   it('回合号超出总手数要抛错', () => {
-    expect(() => validateState({ ...baseState(), turnNo: TURNS + 1 }, 'a', 1)).toThrow(/回合序号/);
+    expect(() => validateState({ ...baseState(), turnNo: 49 }, 'a', 1)).toThrow(/回合序号/);
+    expect(() => validateState({ ...baseState(), rulesVersion: 1, mapVersion: 1, turnNo: 25 }, 'a', 1)).toThrow(/回合序号/);
   });
 
   it('金币为负要抛错', () => {

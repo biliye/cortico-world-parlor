@@ -16,6 +16,7 @@ import type { TableEngine, TableLogQuery } from '../table-engine.ts';
 import { DiceTable } from '../table.ts';
 import { RANKS } from './doudizhu.ts';
 import { DoudizhuTable } from './doudizhu-table.ts';
+import { DEFAULT_RULES, SEAT_COUNT as MONOPOLY2D_SEATS } from './monopoly2d-rules.ts';
 import { Monopoly2dTable } from './monopoly2d-table.ts';
 import { GOMOKU_SIZE, GomokuTable } from './gomoku-table.ts';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from './werewolf-table.ts';
@@ -270,8 +271,8 @@ const monopoly2d: GameDefinition = {
   id: 'monopoly2d',
   label: '快局大富翁',
   icon: 'board',
-  openHint: '（4 席，坐满后由开桌的人开始）四人 6 轮 24 手，掷骰、买地、收租、抽事件卡，最后按金币加地产估值排名。',
-  rules: ['四人六轮共二十四手，轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则收租或触发事件。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
+  openHint: `（${MONOPOLY2D_SEATS} 席，坐满后由开桌的人开始）${DEFAULT_RULES.board.length} 格地图，${DEFAULT_RULES.rounds} 轮共 ${DEFAULT_RULES.rounds * MONOPOLY2D_SEATS} 手，最后按金币加地产估值排名。`,
+  rules: ['轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则结算。地图和总轮数以当前桌面为准。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
   create: (ctx) => new Monopoly2dTable({
     host: ctx.host,
     now: ctx.now,
@@ -298,7 +299,7 @@ const monopoly2d: GameDefinition = {
         },
         turnNo: {
           type: 'integer',
-          description: '你桌面上给出的当前回合号（从 1 开始，最多 24）。照抄，别自己算。',
+          description: '照抄本人桌面给出的当前回合号（从 1 开始）。',
         },
       },
       required: ['move', 'turnNo'],
