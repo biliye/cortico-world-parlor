@@ -848,7 +848,7 @@ export class TableHost {
     });
     if (replay) return replay;
     if (!requestId) {
-      throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展后再打牌');
+      throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键。请让 Coo 更新客厅扩展到最新版后再打牌');
     }
     // 并发策略按游戏注册：骰子/斗地主仍是整桌 revision 乐观锁；狼人杀是窗口制——
     // 同一窗口多人各自有动作槽，revision 只当参考，windowId 与槽位由引擎在
@@ -856,7 +856,7 @@ export class TableHost {
     const definition = gameById(table.game);
     if (definition?.revisionMode !== 'window') {
       if (options.revision === undefined) {
-        throw new HostError('invalid', '缺少牌桌版本：请刷新页面/升级客厅扩展后再打牌');
+        throw new HostError('invalid', '缺少牌桌版本。请刷新网页，或让 Coo 更新客厅扩展到最新版后再打牌');
       }
       if (options.revision !== table.revision) {
         throw new HostError('conflict', '这一手已经过去了：你看到的是旧桌面，刷新后再来');
@@ -1237,7 +1237,9 @@ export class TableHost {
     await this.db.prepare(
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
-    ).run(table.id, entry.id, now, JSON.stringify({ winners, participants }));
+    ).run(table.id, entry.id, now, JSON.stringify({ winners, participants,
+      ...(event.ratingExcluded ? { ratingExcluded: true } : {}),
+    }));
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
     if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN

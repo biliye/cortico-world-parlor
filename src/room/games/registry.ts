@@ -195,7 +195,6 @@ const werewolf: GameDefinition = {
   attachPrivateOnAct: true,
   actionKey: 'move',
   availableActions: (view) => {
-    if (view.canAct !== true || typeof view.myMove !== 'string') return [];
     if (typeof view.wolfChatRemaining === 'number') {
       const submitted = Array.isArray(view.submitted) ? view.submitted : [];
       return [
@@ -203,10 +202,11 @@ const werewolf: GameDefinition = {
         ...(!submitted.includes('wolf_kill') ? ['wolf_kill'] : []),
       ];
     }
+    if (view.canAct !== true || typeof view.myMove !== 'string') return [];
     return view.myMove === 'speak' ? ['speak', 'pass_speech'] : [view.myMove];
   },
   action: {
-    description: '提交狼人杀本人桌面列出的当前窗口动作。狼队私聊每人每夜两条，其他动作槽各提交一次。',
+    description: '提交狼人杀本人桌面列出的当前窗口动作。狼队私聊可选，每人每夜最多两条，其他动作槽各提交一次。',
     parameters: {
       type: 'object',
       additionalProperties: false,

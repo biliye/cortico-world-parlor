@@ -212,6 +212,27 @@ describe('狼人杀人数与守卫', () => {
     runNightB(rig, { choice, ...(choice === 'poison' ? { target } : {}) });
     expect(view(rig, victim).alive).toBe(false);
   });
+
+  it('12 人四狼局：守卫挡自刀，下一夜自刀与毒药同中只记一次出局', () => {
+    const rig = makeRig(7, 1, false, 12);
+    startGame(rig);
+    const wolves = rig.ids.filter(id => roleOf(rig, id) === 'wolf');
+    expect(wolves).toHaveLength(4);
+    const [wolf] = wolves;
+    const target = seatNo(wolf);
+    collect(rig, act(rig, idWithRole(rig, 'guard'), { move: 'guard', target }));
+    runNightA(rig, { kill: target });
+    runNightB(rig, { choice: 'none' });
+    expect(view(rig, wolf).alive).toBe(true);
+
+    runSpeeches(rig, () => '');
+    runVote(rig, {});
+    runNightA(rig, { kill: target });
+    runNightB(rig, { choice: 'poison', target });
+    expect((rig.table.exportState() as AnyView).deaths).toEqual([
+      { seatNo: target, day: 2, phase: 'night', cause: 'wolf_poison' },
+    ]);
+  });
 });
 
 describe('狼人杀引擎', () => {
@@ -375,7 +396,10 @@ describe('狼人杀引擎', () => {
     expect(() => act(rig, nonWolfAlive[0], { move: 'wolf_kill', target: seatNo(nonWolfAlive[1]) })).toThrow(/狼人/);
     // 狼聊 150 字上限。
     expect(() => act(rig, wolves[0], { move: 'wolf_chat', text: '嗷'.repeat(151) })).toThrow(/150/);
-    collect(rig, act(rig, wolves[0], { move: 'wolf_chat', text: '今晚刀 9 号位试水' }));
+    const firstChat = act(rig, wolves[0], { move: 'wolf_chat', text: '今晚刀 9 号位试水' });
+    expect(firstChat.views).toEqual([wolves[0]]);
+    expect(firstChat.refreshViews).toEqual(wolves.slice(1));
+    collect(rig, firstChat);
     // 旧版夜间存档里只有一条狼聊，恢复后仍可补发一条。
     const restored = makeRig(11, 1);
     restored.table.restoreState(JSON.parse(JSON.stringify(rig.table.exportState())));
@@ -383,9 +407,17 @@ describe('狼人杀引擎', () => {
     expect(view(rig, wolves[0]).wolfChatRemaining).toBe(1);
     // 刀票可见性：交完刀后，其他狼的视图里有刀票记录；预言家/村民视图里没有。
     const wolfTargetNo = seatNo(nonWolfAlive[1]);
-    collect(rig, act(rig, wolves[0], { move: 'wolf_kill', target: wolfTargetNo }));
+    const deadline = view(rig, wolves[0]).deadline;
+    const vote = act(rig, wolves[0], { move: 'wolf_kill', target: wolfTargetNo });
+    expect(vote.views).toEqual([]);
+    collect(rig, vote);
+    expect(view(rig, wolves[0])).toMatchObject({ canAct: false, wolfChatRemaining: 1, deadline });
+    expect(rig.table.privateText(wolves[0], rig.clock.now)).toContain('不发也会到点锁刀');
     expect(() => act(rig, wolves[0], { move: 'wolf_kill' })).toThrow(/已经交过/);
-    collect(rig, act(rig, wolves[0], { move: 'wolf_chat', text: '刀票交了' }));
+    const extra = act(rig, wolves[0], { move: 'wolf_chat', text: '刀票交了' });
+    expect(extra.views).toEqual([]);
+    expect(extra.refreshViews).toEqual(wolves);
+    collect(rig, extra);
     expect(view(rig, wolves[0]).canAct).toBe(false);
     expect(() => act(rig, wolves[0], { move: 'wolf_chat', text: '第三条' })).toThrow(/已经交过/);
     const mate = wolves[1];
@@ -432,6 +464,22 @@ describe('狼人杀引擎', () => {
     runNightB(rig, { choice: 'none' });
     expect((rig.table.public() as AnyView).result.outcome).toBe('good');
     expect((rig.table.exportState() as AnyView).deaths).toContainEqual(expect.objectContaining({ seatNo: target, cause: 'wolf' }));
+    expect(eventType(rig, 'parlor.table.end')[0]).not.toHaveProperty('ratingExcluded');
+  });
+
+  it('狼队全部因狼刀出局时标记结算，公开终局数据不含评级标记', () => {
+    const rig = makeRig(23, 1, false, 6);
+    startGame(rig);
+    const [wolf, mate] = rig.ids.filter(id => roleOf(rig, id) === 'wolf');
+    runNightA(rig, { kill: seatNo(wolf) });
+    runNightB(rig);
+    runSpeeches(rig, () => '');
+    runVote(rig, {});
+    runNightA(rig, { kill: seatNo(mate) });
+    runNightB(rig);
+    const [end] = eventType(rig, 'parlor.table.end');
+    expect(end).toMatchObject({ ratingExcluded: true, data: { outcome: 'good' } });
+    expect(end.data).not.toHaveProperty('ratingExcluded');
   });
 
   it('夜A 平票或全弃 = 空刀；女巫无刀口不能救；用掉解药后不再知道刀口', () => {

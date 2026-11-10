@@ -2150,7 +2150,7 @@ export class WorldServer {
         || type === 'table_start' || type === 'table_discovery'
         || type === 'game_action' || gameByActionType(type) !== null;
       if (tableMutation && !requestId) {
-        throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
+        throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键。请刷新网页，或让 Coo 更新客厅扩展到最新版后再打牌');
       }
       const host = await this.host(roomId);
       const tableArg = typeof body.table === 'string' && body.table.trim() ? body.table.trim() : undefined;

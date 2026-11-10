@@ -904,7 +904,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-else-if="wolfChatRemaining > 0" class="wf-composer">
               <p class="wf-composer-hint">
-                狼队私聊 · 刀口锁定前还可发 {{ wolfChatRemaining }} 条，每条最多 150 字。
+                狼队私聊可选。刀口锁定前还可发 {{ wolfChatRemaining }} 条，每条最多 150 字，不发也会到点锁刀。
               </p>
               <div class="wf-draft">
                 <div class="wf-draft-main">

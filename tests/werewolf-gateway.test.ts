@@ -122,6 +122,7 @@ describe('狼人杀 · 网关与注册表', () => {
     expect(refused.status).toBe(400);
     expect(String(refused.body.error)).toContain('九九');
     expect(String(refused.body.error)).toContain(WEREWOLF_MIN_CLIENT);
+    expect(String(refused.body.error)).toContain('更新到最新版');
 
     // 原令牌用新版客户端读快照即刷新本人能力；不用退桌、换桌或重领席位。
     const client = new ParlorClient(app.url);
@@ -269,6 +270,7 @@ describe('狼人杀 · 秘密出口矩阵', () => {  it('B1：狼聊暗号与身
         phase?: string;
         windowId?: string;
         myMove?: string;
+        canAct?: boolean;
         wolfChat?: Array<{ seatNo: number; text: string }>;
         seats?: Array<{ seatNo: number; id: string }>;
       } | null;
@@ -312,6 +314,7 @@ describe('狼人杀 · 秘密出口矩阵', () => {  it('B1：狼聊暗号与身
       type: 'werewolf_action', windowId: wolfPriv!.windowId, move: 'wolf_kill', target: killTarget, requestId: 'b1-kill',
     });
     expect(kill.status, JSON.stringify(kill.body)).toBe(200);
+    expect((await privOf(wolfTokens[0]))?.canAct).toBe(false);
     expect(await wolfActions()).toEqual(['wolf_chat']);
     const secondCode = '交票之后再对一次暗号';
     const secondBody = {
