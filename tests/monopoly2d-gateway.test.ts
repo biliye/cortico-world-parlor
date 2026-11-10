@@ -226,7 +226,7 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
     watcher.stop();
   });
 
-  it('四个身份一路打到结算：24 手、四行排名、金币与估值对得上', async () => {
+  it('四个身份一路打到结算：48 手、四行排名、金币与估值对得上', async () => {
     const app = await start();
     const seats = [
       { token: await enter(app, A, '阿岚'), cooId: A },
@@ -247,7 +247,7 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
 
     const startedAt = Date.now();
     let turns = 0;
-    for (let step = 0; step < 80; step += 1) {
+    for (let step = 0; step < 48 * 2; step += 1) {
       const snap = await get(app.url, '/v1/room?limit=1', seats[0].token);
       const tableView = (snap.body.table ?? {}) as Json;
       if (tableView.status === 'ended') break;
@@ -269,8 +269,10 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
     const final = await get(app.url, '/v1/room?limit=1', seats[0].token);
     const ended = (final.body.table ?? {}) as Json;
     expect(ended.status).toBe('ended');
-    expect(turns).toBe(24);
-    expect(ended.round).toBe(6);
+    expect(turns).toBe(48);
+    expect(ended.round).toBe(12);
+    expect(ended.totalRounds).toBe(12);
+    expect(ended.cells).toHaveLength(24);
 
     const ranking = ended.ranking as { seat: string; cash: number; estate: number; total: number; rank: number }[];
     expect(ranking).toHaveLength(4);
@@ -283,7 +285,7 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
     // 竞赛排名：同分并列，占用的名次仍计入后续名次（如 1、2、2、4）。
     expect(ranking.map((row) => row.rank)).toEqual(totals.map(total => totals.indexOf(total) + 1));
 
-    // 给验收报告留一条可引用的实测：24 手全走 HTTP，含每次快照。
+    // 给验收报告留一条可引用的实测：48 手全走 HTTP，含每次快照。
     expect(elapsedMs).toBeLessThan(60_000);
   });
 });

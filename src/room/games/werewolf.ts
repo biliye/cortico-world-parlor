@@ -72,7 +72,7 @@ export const factionOf = (role: WerewolfRole): WerewolfFaction => (role === 'wol
 
 /** 一句话技能说明（按本项目房规写，不照抄别的版本）。 */
 export const ROLE_SKILLS: Record<WerewolfRole, string> = {
-  wolf: '每晚与同伴交流并交一张刀票，票数最多且唯一的存活非狼人出局；平票或没人交票就空刀。',
+  wolf: '每晚可发两条狼队私聊，交一张刀票。可刀任意存活玩家，包括自己和队友。唯一最高票成为刀口，平票或没有有效票则空刀。',
   villager: '没有夜间技能，靠白天发言与投票找出狼人。',
   seer: '每晚最多查验一名其他存活玩家，只得到「狼人 / 好人」，不告知具体神职。',
   witch: '全局各一瓶解药、一瓶毒药，每夜最多用其中一瓶。解药尚在时才得知当夜刀口；首夜可自救，之后不能自救，不能自毒。解药只抵消狼刀。',
@@ -128,7 +128,7 @@ export interface TallyResult {
 
 /**
  * 数票：相对多数、最高票唯一者胜。只数有效票（目标非 null）；
- * 目标的合法性（存活、不是自己）由调用方在收票时校验。
+ * 目标的合法性由调用方按当前投票规则在收票时校验。
  */
 export function tallyVotes(ballots: Ballots, allowedTargets?: ReadonlySet<number>): TallyResult {
   const counts = new Map<number, number>();

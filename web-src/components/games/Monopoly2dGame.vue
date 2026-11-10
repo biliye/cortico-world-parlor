@@ -84,6 +84,8 @@ const priv = computed<M2dPriv | null>(() => (props.view.priv as unknown as M2dPr
 const me = computed(() => props.view.me);
 
 const cells = computed<M2dCell[]>(() => [...(table.value.cells ?? [])].sort((left, right) => left.index - right.index));
+// 方形环每条边有相同的格数，起点在左上角，沿顺时针排一圈。
+const edgeLength = computed(() => cells.value.length / 4 || 4);
 const seats = computed<M2dSeat[]>(() => table.value.seats ?? []);
 const playing = computed(() => table.value.status === 'playing');
 const ended = computed(() => table.value.status === 'ended');
@@ -115,10 +117,19 @@ function seatIndex(seatId?: string): number {
 function seatClass(seatId?: string): string {
   return 'm2d-p' + (seatIndex(seatId) % 4);
 }
+function cellGridArea(index: number): string {
+  const edge = edgeLength.value;
+  const last = edge + 1;
+  const offset = index % edge;
+  if (index < edge) return `1 / ${1 + offset}`;
+  if (index < 2 * edge) return `${1 + offset} / ${last}`;
+  if (index < 3 * edge) return `${last} / ${last - offset}`;
+  return `${last - offset} / 1`;
+}
 function cellClass(cell: M2dCell): string[] {
-  const classes = ['m2d-cell-' + cell.index, 'is-' + cell.kind];
+  const classes = ['is-' + cell.kind];
   if (cell.price) classes.push('band-' + Math.min(3, Math.floor((cell.price - 100) / 60)));
-  if (cell.index === 0 || cell.index === 4 || cell.index === 8 || cell.index === 12) classes.push('is-corner');
+  if (cell.index % edgeLength.value === 0) classes.push('is-corner');
   if (me.value && seats.value.some((seat) => seat.id === me.value.id && seat.pos === cell.index)) classes.push('is-here');
   if (playing.value && currentSeat.value?.pos === cell.index) classes.push('is-current');
   if (table.value.pending === cell.index) classes.push('is-pending');
@@ -202,7 +213,7 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
           <template v-if="playing || ended">
             第 {{ round }}/{{ totalRounds }} 轮 · 第 {{ turnNo }}/{{ totalRounds * 4 }} 手 · {{ phaseText }}
           </template>
-          <template v-else>四人坐满开局，只用局内金币</template>
+          <template v-else>四人坐满开局 · {{ cells.length }} 格 · {{ totalRounds }} 轮 · 只用局内金币</template>
         </p>
       </div>
       <div v-if="playing && table.deadline" class="m2d-clock">
@@ -229,12 +240,18 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
     </div>
 
     <div class="m2d-layout">
-      <div class="m2d-board" role="grid" aria-label="大富翁棋盘">
+      <div
+        class="m2d-board"
+        :style="{ '--m2d-grid-size': edgeLength + 1 }"
+        role="grid"
+        aria-label="大富翁棋盘"
+      >
         <div
           v-for="cell in cells"
           :key="cell.index"
           class="m2d-cell"
           :class="cellClass(cell)"
+          :style="{ gridArea: cellGridArea(cell.index) }"
           role="gridcell"
         >
           <span class="m2d-cell-name">{{ cell.name }}</span>
@@ -251,10 +268,10 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
                 :title="seat.name"
               >{{ initial(seat.name) }}</span>
             </span>
+            <span v-if="ownerOf(cell.index)" class="m2d-owner" :class="seatClass(ownerOf(cell.index))" :title="'归 ' + nameOf(ownerOf(cell.index))">
+              {{ initial(nameOf(ownerOf(cell.index))) }}
+            </span>
           </div>
-          <span v-if="ownerOf(cell.index)" class="m2d-owner" :class="seatClass(ownerOf(cell.index))" :title="'归 ' + nameOf(ownerOf(cell.index))">
-            {{ initial(nameOf(ownerOf(cell.index))) }}
-          </span>
         </div>
 
         <div class="m2d-center" aria-hidden="true">
@@ -404,43 +421,21 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
 
 .m2d-board {
   position: relative;
+  container: m2d-board / inline-size;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-template-rows: repeat(5, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(var(--m2d-grid-size), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--m2d-grid-size), minmax(0, 1fr));
+  gap: 2px;
   aspect-ratio: 1 / 1;
-  /* 方形棋盘要么占满这一栏，要么让位给顶栏与面板留白：
-     518px 的方块在 775px 高的窗口里会顶出可视区，逼得用户滚动才能看到底边。 */
-  width: min(100%, calc(100dvh - 360px));
+  width: min(100%, max(320px, calc(100dvh - 360px)));
+  /* 窄屏允许棋盘变高，留出两行地名、一行价格和两行棋子的空间。 */
+  min-height: calc(62px * var(--m2d-grid-size) + 22px);
   margin-inline: auto;
-  padding: 6px;
+  padding: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-2);
 }
-
-/*
- * 16 格按环形摆放：上边 0-4 从左到右，右边 5-7 向下，下边 8-12 从右到左，
- * 左边 13-15 向上。四角是 0（起点）、4、8、12，与 `is-corner` 一致。
- * 不能靠自动流——DOM 顺序是 0..15，会填成行优先的方阵。
- */
-.m2d-cell-0 { grid-area: 1 / 1; }
-.m2d-cell-1 { grid-area: 1 / 2; }
-.m2d-cell-2 { grid-area: 1 / 3; }
-.m2d-cell-3 { grid-area: 1 / 4; }
-.m2d-cell-4 { grid-area: 1 / 5; }
-.m2d-cell-5 { grid-area: 2 / 5; }
-.m2d-cell-6 { grid-area: 3 / 5; }
-.m2d-cell-7 { grid-area: 4 / 5; }
-.m2d-cell-8 { grid-area: 5 / 5; }
-.m2d-cell-9 { grid-area: 5 / 4; }
-.m2d-cell-10 { grid-area: 5 / 3; }
-.m2d-cell-11 { grid-area: 5 / 2; }
-.m2d-cell-12 { grid-area: 5 / 1; }
-.m2d-cell-13 { grid-area: 4 / 1; }
-.m2d-cell-14 { grid-area: 3 / 1; }
-.m2d-cell-15 { grid-area: 2 / 1; }
-
 .m2d-cell {
   position: relative;
   display: flex;
@@ -536,7 +531,7 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
 }
 
 .m2d-center {
-  grid-area: 2 / 2 / 5 / 5;
+  grid-area: 2 / 2 / var(--m2d-grid-size) / var(--m2d-grid-size);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -797,10 +792,6 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
   .m2d-side {
     order: 2;
   }
-  .m2d-board {
-    gap: 2px;
-    padding: 4px;
-  }
   .m2d-cell {
     padding: 3px;
     border-radius: 4px;
@@ -831,6 +822,43 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
   }
   .m2d-center-copy span {
     font-size: 9px;
+  }
+}
+
+@container m2d-board (max-width: 480px) {
+  .m2d-cell {
+    padding: 2px;
+  }
+  .m2d-cell-name {
+    flex-shrink: 0;
+    font-size: 9px;
+  }
+  .m2d-cell-foot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1px;
+    min-height: 0;
+  }
+  .m2d-cell-price,
+  .m2d-cell-tag {
+    font-size: 8px;
+    line-height: 1.2;
+  }
+  .m2d-tokens {
+    grid-area: 2 / 1 / 3 / -1;
+    justify-content: start;
+    gap: 1px;
+  }
+  .m2d-token,
+  .m2d-owner {
+    width: 10px;
+    height: 10px;
+    font-size: 7px;
+  }
+  .m2d-owner {
+    position: static;
+    grid-area: 1 / 2;
   }
 }
 

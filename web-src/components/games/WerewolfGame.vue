@@ -48,6 +48,7 @@ interface WPriv {
   knownKill?: number | null; inspections?: Array<{ day: number; target: number; result: string }>;
   speechKind?: string; killVotes?: Array<{ seatNo: number; target: number | null }>;
   wolfChat?: Array<{ seatNo: number; name: string; text: string }>;
+  wolfChatRemaining?: number;
   lockedKill?: number | null;
 }
 
@@ -66,6 +67,9 @@ const isNight = computed(() => table.value.phase === 'night');
 const mySeatNo = computed(() => (table.value.seats ?? [])
   .find((seat) => seat.id === props.view.me.id)?.seatNo ?? 0);
 const myMove = computed(() => (priv.value?.canAct ? priv.value.myMove ?? null : null));
+const wolfChatRemaining = computed(() => priv.value?.wolfChatRemaining ?? (myMove.value === 'wolf_chat' ? 1 : 0));
+const wolfKillWindow = computed(() => priv.value?.wolfChatRemaining !== undefined || myMove.value === 'wolf_kill');
+const canWolfKill = computed(() => wolfKillWindow.value && !priv.value?.submitted?.includes('wolf_kill'));
 const seats = computed<WSeat[]>(() => table.value.seats ?? []);
 const aliveCount = computed(() => seats.value.filter((seat) => seat.alive !== false).length);
 const deaths = computed(() => table.value.deaths ?? []);
@@ -100,6 +104,7 @@ function canTarget(seatNo: number): boolean {
   const move = myMove.value;
   const own = priv.value;
   if (!move || !own) return false;
+  if (canWolfKill.value) return aliveOf(seatNo);
   if (move === 'guard') return aliveOf(seatNo) && seatNo !== own.previousGuard;
   if (seatNo === mySeatNo.value) return false;
   if (move === 'vote') {
@@ -108,10 +113,6 @@ function canTarget(seatNo: number): boolean {
   }
   if ((move === 'inspect' || move === 'shoot') && aliveOf(seatNo)) return true;
   if (move === 'witch' && (own.potions?.poison ?? 0) > 0 && aliveOf(seatNo)) return true;
-  if (move === 'wolf_kill' && aliveOf(seatNo)) {
-    const mates = new Set((own.teammates ?? []).map((mate) => mate.seatNo));
-    return !mates.has(seatNo);
-  }
   return false;
 }
 function seatClasses(seat: WSeat, area: string): string {
@@ -155,19 +156,19 @@ const poisonPick = ref<number | null>(null);
 const shootPick = ref<number | null>(null);
 const wolfKillPick = ref<number | null>(null);
 const pickedNo = computed(() => {
+  if (canWolfKill.value) return wolfKillPick.value;
   switch (myMove.value) {
     case 'vote': return votePick.value?.target;
     case 'inspect': return inspectPick.value;
     case 'guard': return guardPick.value;
     case 'witch': return poisonPick.value;
     case 'shoot': return shootPick.value;
-    case 'wolf_kill': return wolfKillPick.value;
     default: return null;
   }
 });
 const infoOpen = ref(false);
 const roomChatOpen = ref(false);
-const chatMove = computed(() => myMove.value === 'speak' || myMove.value === 'wolf_chat');
+const chatMove = computed(() => myMove.value === 'speak' || wolfChatRemaining.value > 0);
 watch(chatMove, (active) => {
   if (active) roomChatOpen.value = true;
 }, { immediate: true });
@@ -181,10 +182,10 @@ const endMissing = reactive<Record<number, boolean>>({});
 
 function pickTarget(seatNo: number): void {
   const move = myMove.value;
-  if (move === 'vote') votePick.value = { target: votePick.value?.target === seatNo ? null : seatNo };
+  if (canWolfKill.value) wolfKillPick.value = wolfKillPick.value === seatNo ? null : seatNo;
+  else if (move === 'vote') votePick.value = { target: votePick.value?.target === seatNo ? null : seatNo };
   else if (move === 'guard') guardPick.value = guardPick.value === seatNo ? null : seatNo;
   else if (move === 'inspect') inspectPick.value = inspectPick.value === seatNo ? null : seatNo;
-  else if (move === 'wolf_kill') wolfKillPick.value = wolfKillPick.value === seatNo ? null : seatNo;
   if (move === 'witch') poisonPick.value = poisonPick.value === seatNo ? null : seatNo;
   if (move === 'shoot') shootPick.value = shootPick.value === seatNo ? null : seatNo;
 }
@@ -219,7 +220,7 @@ function saveDraft(scope: string, text: string): void {
     else localStorage.removeItem(draftKey(scope));
   } catch { /* 存不进去就只留在输入框里 */ }
 }
-const draftScope = computed(() => (myMove.value === 'wolf_chat' ? 'wolf' : 'speech'));
+const draftScope = computed(() => (wolfChatRemaining.value > 0 ? 'wolf' : 'speech'));
 const draftMax = computed(() => (draftScope.value === 'wolf' ? 150 : 300));
 const draftCount = computed(() => Array.from(draftText[draftScope.value] || '').length);
 const speechKindLabel = computed(() => {
@@ -353,7 +354,7 @@ const coreSubText = computed(() => {
   if (!priv.value?.role) return '旁观视角';
   if (myMove.value === 'speak') return '在房间聊天里提交发言';
   if (myMove.value === 'vote') return '点选一位玩家';
-  if (myMove.value === 'inspect' || myMove.value === 'wolf_kill' || myMove.value === 'shoot') return '点选座位，再确认操作';
+  if (canWolfKill.value || myMove.value === 'inspect' || myMove.value === 'shoot') return '点选座位，再确认操作';
   return '';
 });
 const deadText = computed(() => deaths.value
@@ -408,10 +409,7 @@ const voteTargets = computed<number[]>(() => {
   if (own.voteVariant === 'pk') return own.pkSeats ?? [];
   return targetsAliveOthers.value;
 });
-const wolfTargets = computed<number[]>(() => {
-  const mates = new Set((priv.value?.teammates ?? []).map((mate) => mate.seatNo));
-  return targetsAliveOthers.value.filter((no) => !mates.has(no));
-});
+const wolfTargets = computed(() => seats.value.map((seat) => seat.seatNo ?? 0).filter(aliveOf));
 const submitted = computed<string[]>(() => priv.value?.submitted ?? []);
 const potions = computed(() => priv.value?.potions ?? { antidote: 0, poison: 0 });
 const knownKill = computed(() => priv.value?.knownKill);
@@ -682,10 +680,10 @@ onBeforeUnmount(() => {
                 <button v-else class="btn ghost" type="button" @click="votePick = { target: null }">弃票</button>
               </div>
             </div>
-            <div v-else-if="myMove === 'wolf_kill'" class="wf-composer">
-              <p v-if="submitted.includes('wolf_kill')" class="wf-composer-hint">你的刀票已经交了；到点锁定刀口。</p>
+            <div v-else-if="wolfKillWindow" class="wf-composer">
+              <p v-if="!canWolfKill" class="wf-composer-hint">你的刀票已经交了，到点锁定刀口。</p>
               <template v-else>
-                <p class="wf-composer-hint">交一张最终刀票（相对多数且唯一才成刀；平票或全弃 = 空刀）。</p>
+                <p class="wf-composer-hint">交一张刀票，可投任意存活玩家。唯一最高票成为刀口，平票或全弃则空刀。</p>
                 <div class="wf-targets">
                   <button
                     v-for="no in wolfTargets"
@@ -694,7 +692,7 @@ onBeforeUnmount(() => {
                     :class="{ 'is-active': wolfKillPick === no }"
                     type="button"
                     @click="wolfKillPick = wolfKillPick === no ? null : no"
-                  >{{ seatLabel(no) }}</button>
+                  >{{ seatLabel(no) }}{{ no === mySeatNo ? '（自己）' : '' }}</button>
                 </div>
                 <div class="wf-confirm">
                   <button v-if="wolfKillPick !== null" class="btn primary" type="button" @click="submitWolfKill">刀 {{ seatLabel(wolfKillPick) }}</button>
@@ -798,7 +796,7 @@ onBeforeUnmount(() => {
           </header>
           <button class="btn ghost small wf-mobile-toggle" type="button"
             :aria-expanded="roomChatOpen" aria-controls="wf-room-chat" @click="roomChatOpen = !roomChatOpen">
-            {{ roomChatOpen ? '收起房间聊天' : chatMove ? '房间聊天 · 轮到你发言' : '房间聊天' }}
+            {{ roomChatOpen ? '收起房间聊天' : wolfChatRemaining > 0 ? '房间聊天 · 狼队私聊' : chatMove ? '房间聊天 · 轮到你发言' : '房间聊天' }}
           </button>
           <div id="wf-room-chat" class="wf-room-chat">
             <section v-if="nowHint || (lastSpeech && tab !== 'today')" class="wf-panel wf-now">
@@ -904,9 +902,9 @@ onBeforeUnmount(() => {
                 <button class="btn primary" type="button" @click="sendSpeech">提交并结束发言</button>
               </div>
             </div>
-            <div v-else-if="myMove === 'wolf_chat'" class="wf-composer">
+            <div v-else-if="wolfChatRemaining > 0" class="wf-composer">
               <p class="wf-composer-hint">
-                狼队交流（每夜一条、150 字内）；同伴立刻能看到。已交 {{ submitted.includes('wolf_chat') ? '✓' : '✗' }}
+                狼队私聊可选。刀口锁定前还可发 {{ wolfChatRemaining }} 条，每条最多 150 字，不发也会到点锁刀。
               </p>
               <div class="wf-draft">
                 <div class="wf-draft-main">

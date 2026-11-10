@@ -4,9 +4,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Monopoly2dTable } from '../src/room/games/monopoly2d-table.ts';
-import { TURNS, type Monopoly2dSeatState } from '../src/room/games/monopoly2d-rules.ts';
+import type { Monopoly2dSeatState } from '../src/room/games/monopoly2d-rules.ts';
 
 const T0 = 1_000;
+const TURNS = 48;
 
 /** 固定骰点：`die(n)` 让下一次掷骰必出 n 点。 */
 const die = (value: number): number => (value - 0.5) / 6;
@@ -26,20 +27,7 @@ function makeTable(rng: () => number = () => 0, options: { rollMs?: number; buyM
   return table;
 }
 
-const pub = (table: Monopoly2dTable) => table.public() as unknown as {
-  status: string;
-  phase: 'await_roll' | 'await_buy' | null;
-  turn?: string;
-  deadline?: number;
-  turnNo: number;
-  round: number;
-  seats: Array<{ id: string; cash: number; pos: number; properties: number[]; estate: number }>;
-  owners: Array<{ cell: number; seat: string }>;
-  pending?: number;
-  ranking?: Array<{ seat: string; cash: number; estate: number; total: number; rank: number }>;
-  winners?: string[];
-  tie?: boolean;
-};
+const pub = (table: Monopoly2dTable) => table.public();
 
 const priv = (table: Monopoly2dTable, seatId: string) => table.view(seatId) as unknown as {
   canAct: boolean;
@@ -222,7 +210,7 @@ describe('收租与事件', () => {
   it('过起点领 120', () => {
     const table = makeTable(scripted([0, die(3)]));
     table.start('a', T0);
-    load(table, (state) => { state.seats[0].pos = 14; state.seats[0].cash = 100; });
+    load(table, (state) => { state.seats[0].pos = 22; state.seats[0].cash = 100; });
     table.act('a', { move: 'roll', turnNo: 1 }, T0 + 10);
     const state = pub(table);
     expect(state.seats[0].pos).toBe(1);
@@ -348,7 +336,7 @@ describe('短停机恢复', () => {
 });
 
 describe('结算', () => {
-  it('24 手打完自动结算：四行排名、资产 = 金币 + 地产 85%', () => {
+  it('48 手打完自动结算：四行排名、资产 = 金币 + 地产 85%', () => {
     const table = makeTable(() => 0.5);
     table.start('a', T0);
     let guard = 0;
@@ -363,6 +351,9 @@ describe('结算', () => {
     const state = pub(table);
     expect(state.status).toBe('ended');
     expect(state.turnNo).toBe(TURNS);
+    expect(state.round).toBe(12);
+    expect(state.totalRounds).toBe(12);
+    expect(state.cells).toHaveLength(24);
     expect(state.ranking).toHaveLength(4);
     for (const row of state.ranking!) {
       const seat = state.seats.find((entry) => entry.id === row.seat)!;
@@ -403,16 +394,44 @@ describe('结算', () => {
 });
 
 describe('快照', () => {
+  it('旧桌恢复后按 16 格绕圈，打完第 24 手结算并保留旧地产估值', () => {
+    const table = makeTable();
+    table.start('a', T0);
+    load(table, (state) => {
+      state.rulesVersion = 1;
+      state.mapVersion = 1;
+      state.turnNo = 24;
+      state.seats[3].pos = 15;
+      state.owners = { 6: 'd' };
+    });
+    expect(pub(table).cells).toHaveLength(16);
+    expect(pub(table).totalRounds).toBe(6);
+    expect(table.privateText('d', T0)).toContain('第 6/6 轮第 24 手');
+
+    table.act('d', { move: 'roll', turnNo: 24 }, T0 + 1);
+    expect(pub(table)).toMatchObject({ status: 'ended', turnNo: 24, rulesVersion: 1, mapVersion: 1 });
+    expect(pub(table).seats[3]).toMatchObject({ pos: 0, cash: 1120, estate: 153 });
+    expect(pub(table).ranking?.[0]).toMatchObject({ seat: 'd', total: 1273 });
+
+    const copy = makeTable();
+    copy.restoreState(JSON.parse(JSON.stringify(table.exportState())));
+    expect(pub(copy)).toEqual(pub(table));
+  });
+
   it('导出再恢复，桌面一致', () => {
     const table = makeTable();
     table.start('a', T0);
-    table.act('a', { move: 'roll', turnNo: 1 }, T0 + 10);
-    table.act('a', { move: 'buy', turnNo: 1 }, T0 + 20);
+    load(table, (state) => { state.turnNo = 47; state.seats[2].pos = 22; });
+    table.act('c', { move: 'roll', turnNo: 47 }, T0 + 10);
+    expect(pub(table).pending).toBe(23);
     const state = JSON.parse(JSON.stringify(table.exportState()));
     const copy = new Monopoly2dTable({ host: { id: 'a', name: '甲' }, now: T0 });
     copy.restoreState(state);
     expect(copy.seatIds()).toEqual(table.seatIds());
     expect(pub(copy)).toEqual(pub(table));
+    copy.act('c', { move: 'buy', turnNo: 47 }, T0 + 20);
+    expect(pub(copy).turnNo).toBe(48);
+    expect(pub(copy).seats[2]).toMatchObject({ cash: 660, properties: [23], estate: 289 });
   });
 
   it('坏快照明确抛错', () => {

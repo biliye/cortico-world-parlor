@@ -179,11 +179,13 @@ describe('客厅牌桌（骰子）', () => {
     const end = all.find(event => event.type === 'parlor.table.end');
     const revealed = end?.data?.revealed as { id: string; total: number }[];
     expect(revealed).toHaveLength(2);
-    expect(await db.prepare(
-      'SELECT seat_id, score, rank FROM table_seat_results WHERE table_id = ? ORDER BY seat_id',
-    ).all(opened.tableId)).toEqual(revealed.map(seat => ({
+    const results = await db.prepare(
+      'SELECT seat_id, score, rank FROM table_seat_results WHERE table_id = ?',
+    ).all(opened.tableId);
+    expect(results).toHaveLength(revealed.length);
+    expect(results).toEqual(expect.arrayContaining(revealed.map(seat => ({
       seat_id: seat.id, score: seat.total, rank: 1 + revealed.filter(other => other.total > seat.total).length,
-    })).sort((left, right) => left.seat_id.localeCompare(right.seat_id)));
+    }))));
     expect((await host.tablePublic())?.status).toBe('ended');
     // 结束就是下桌：不再有私视图；结果仍留在公开摘要与事件里。
     expect(await host.tablePrivate(a.seat.id)).toBeNull();
@@ -244,8 +246,8 @@ describe('客厅牌桌（骰子）', () => {
 
     expect(await host.tablePublic(tableId)).toMatchObject({ status: 'ended' });
     expect(await new LedgerDb(db).summaryFor(A)).toMatchObject({ games: 1 });
-    expect(await db.prepare('SELECT kind FROM table_finalizations WHERE table_id = ?').get(tableId))
-      .toEqual({ kind: 'result' });
+    expect(await db.prepare('SELECT kind, payload_json FROM table_finalizations WHERE table_id = ?').get(tableId))
+      .toMatchObject({ kind: 'result', payload_json: { ratingSkipped: 'invalid_seat_results' } });
     expect(await db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId)).toEqual([]);
   });
 

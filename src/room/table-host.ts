@@ -853,7 +853,7 @@ export class TableHost {
     });
     if (replay) return replay;
     if (!requestId) {
-      throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展后再打牌');
+      throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键。请让 Coo 更新客厅扩展到最新版后再打牌');
     }
     // 并发策略按游戏注册：骰子/斗地主仍是整桌 revision 乐观锁；狼人杀是窗口制——
     // 同一窗口多人各自有动作槽，revision 只当参考，windowId 与槽位由引擎在
@@ -861,7 +861,7 @@ export class TableHost {
     const definition = gameById(table.game);
     if (definition?.revisionMode !== 'window') {
       if (options.revision === undefined) {
-        throw new HostError('invalid', '缺少牌桌版本：请刷新页面/升级客厅扩展后再打牌');
+        throw new HostError('invalid', '缺少牌桌版本。请刷新网页，或让 Coo 更新客厅扩展到最新版后再打牌');
       }
       if (options.revision !== table.revision) {
         throw new HostError('conflict', '这一手已经过去了：你看到的是旧桌面，刷新后再来');
@@ -1242,18 +1242,25 @@ export class TableHost {
           : {}),
       },
     });
+    const eligibleForRating = gameById(table.game)?.rated === true && !event.ratingExcluded;
+    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true)
+      ? seatResults : null;
+    const ratingSkipped = eligibleForRating && !rankedSeats
+      ? (seatResults?.length ? 'invalid_seat_results' : 'missing_seat_results') : undefined;
     // 终态表靠主键挡第二次结算；写入保持普通 INSERT，冲突就是要它抛。
     await this.db.prepare(
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
-    ).run(table.id, entry.id, now, JSON.stringify({ winners, participants }));
-    if (gameById(table.game)?.rated) {
-      if (validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true)) {
-        await writeSeatResults(this.db, table.id, table.game, allSeats, seatResults, now);
-        this.db.afterCommit(() => this.onTableResult?.(table.game));
-      } else {
-        this.db.afterCommit(() => console.error('parlor: 等级分赛果缺失或不一致', table.game, table.id));
-      }
+    ).run(table.id, entry.id, now, JSON.stringify({
+      winners, participants,
+      ...(event.ratingExcluded ? { ratingExcluded: true } : {}),
+      ...(ratingSkipped ? { ratingSkipped } : {}),
+    }));
+    if (rankedSeats) {
+      await writeSeatResults(this.db, table.id, table.game, allSeats, rankedSeats, now);
+      this.db.afterCommit(() => this.onTableResult?.(table.game));
+    } else if (ratingSkipped) {
+      this.db.afterCommit(() => console.error('parlor: 等级分赛果缺失或不一致', table.game, table.id));
     }
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。

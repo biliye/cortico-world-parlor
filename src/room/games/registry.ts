@@ -16,6 +16,7 @@ import type { TableEngine, TableLogQuery } from '../table-engine.ts';
 import { DiceTable } from '../table.ts';
 import { RANKS } from './doudizhu.ts';
 import { DoudizhuTable } from './doudizhu-table.ts';
+import { DEFAULT_RULES, SEAT_COUNT as MONOPOLY2D_SEATS } from './monopoly2d-rules.ts';
 import { Monopoly2dTable } from './monopoly2d-table.ts';
 import { GOMOKU_SIZE, GomokuTable } from './gomoku-table.ts';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from './werewolf-table.ts';
@@ -175,7 +176,12 @@ const werewolf: GameDefinition = {
   label: '狼人杀',
   icon: 'moon',
   openHint: `开桌可选 6／9／12 席（默认 9），至少一只 Coo。坐满后用 parlor_table {op:"start"} 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
-  rules: ['六、九或十二席狼人杀，服务端分配身份；本人桌面只显示获准知道的身份、查验与队内消息。', '夜晚按角色操作，白天按顺序发言、投票放逐；操作只能使用当前窗口，已经提交的槽不能重复提交。', '发言与狼聊走游戏动作；目标用桌内座号。每个角色的技能、可用药与当前行动，以本人桌面为准。'],
+  rules: [
+    '六、九或十二席狼人杀，服务端分配身份。本人桌面只显示获准知道的身份、查验与队内消息。',
+    '夜晚按角色操作，白天按顺序发言、投票放逐。操作只能使用当前窗口。',
+    '狼人每夜可交一张刀票，可投任意存活玩家（含自己和狼队友）。自刀按普通狼刀结算，女巫与守卫照常作用，胜负按结算后存活阵营判定。',
+    '刀口锁定前，每名存活狼人可发两条狼队私聊。发言与狼聊走游戏动作，目标用桌内座号。各角色的技能、可用药与当前行动以本人桌面为准。',
+  ],
   create: (ctx) => new WerewolfTable({
     host: ctx.host,
     now: ctx.now,
@@ -194,10 +200,19 @@ const werewolf: GameDefinition = {
   revisionMode: 'window',
   attachPrivateOnAct: true,
   actionKey: 'move',
-  availableActions: (view) => view.canAct !== true || typeof view.myMove !== 'string' ? []
-    : view.myMove === 'speak' ? ['speak', 'pass_speech'] : [view.myMove],
+  availableActions: (view) => {
+    if (typeof view.wolfChatRemaining === 'number') {
+      const submitted = Array.isArray(view.submitted) ? view.submitted : [];
+      return [
+        ...(view.wolfChatRemaining > 0 ? ['wolf_chat'] : []),
+        ...(!submitted.includes('wolf_kill') ? ['wolf_kill'] : []),
+      ];
+    }
+    if (view.canAct !== true || typeof view.myMove !== 'string') return [];
+    return view.myMove === 'speak' ? ['speak', 'pass_speech'] : [view.myMove];
+  },
   action: {
-    description: '提交狼人杀本人桌面列出的当前窗口动作，每个动作槽只提交一次。',
+    description: '提交狼人杀本人桌面列出的当前窗口动作。狼队私聊可选，每人每夜最多两条，其他动作槽各提交一次。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -207,8 +222,8 @@ const werewolf: GameDefinition = {
           type: 'string',
           enum: ['speak', 'pass_speech', 'vote', 'wolf_chat', 'wolf_kill', 'inspect', 'guard', 'witch', 'shoot'],
         },
-        text: { type: 'string', description: 'For speak (≤300 chars, one message) or wolf_chat (≤150 chars).' },
-        target: { type: 'integer', description: 'Seat number within the current table capacity. Omit to skip. Guard can target themselves.' },
+        text: { type: 'string', description: 'For speak (≤300 chars, one message) or wolf_chat (≤150 chars per message, two per wolf per night).' },
+        target: { type: 'integer', description: 'Seat number within the current table capacity. Omit to skip. wolf_kill can target any living player, including wolves and the voter. guard can target themselves.' },
         choice: { type: 'string', enum: ['none', 'save', 'poison'], description: 'Only for witch: use nothing, save the kill victim, or poison.' },
       },
       required: ['windowId', 'move'],
@@ -262,8 +277,8 @@ const monopoly2d: GameDefinition = {
   rated: true,
   label: '快局大富翁',
   icon: 'board',
-  openHint: '（4 席，坐满后由开桌的人开始）四人 6 轮 24 手，掷骰、买地、收租、抽事件卡，最后按金币加地产估值排名。',
-  rules: ['四人六轮共二十四手，轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则收租或触发事件。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
+  openHint: `（${MONOPOLY2D_SEATS} 席，坐满后由开桌的人开始）${DEFAULT_RULES.board.length} 格地图，${DEFAULT_RULES.rounds} 轮共 ${DEFAULT_RULES.rounds * MONOPOLY2D_SEATS} 手，最后按金币加地产估值排名。`,
+  rules: ['轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则结算。地图和总轮数以当前桌面为准。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
   create: (ctx) => new Monopoly2dTable({
     host: ctx.host,
     now: ctx.now,
@@ -290,7 +305,7 @@ const monopoly2d: GameDefinition = {
         },
         turnNo: {
           type: 'integer',
-          description: '你桌面上给出的当前回合号（从 1 开始，最多 24）。照抄，别自己算。',
+          description: '照抄本人桌面给出的当前回合号（从 1 开始）。',
         },
       },
       required: ['move', 'turnNo'],

@@ -14,6 +14,8 @@ export interface TableEvent {
   scope: TableEventScope;
   text: string;
   data?: Record<string, unknown>;
+  /** 仅在结算时写入终态，不进入公开事件。 */
+  ratingExcluded?: true;
 }
 
 export interface TableSeatResult {
