@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import type { RatingBoard } from '../../src/room/ratings/types.ts';
+import type { RatedGame, RatingBoard } from '../../src/room/ratings/types.ts';
 import { api } from '../api/client.ts';
-import { GAMES } from '../lib/games.ts';
 import { seat } from '../stores/session.ts';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ 'update:open': [boolean] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
-const game = ref('gomoku');
-const games = ['gomoku', 'ddz', 'werewolf', 'monopoly2d', 'dice'];
+const game = ref('');
+const games = ref<RatedGame[]>([]);
 const board = ref<RatingBoard | null>(null);
 const busy = ref(false);
 const error = ref('');
@@ -33,8 +32,15 @@ watch([() => props.open, game, () => seat.value?.token, reload], async ([open], 
   error.value = '';
   busy.value = true;
   try {
-    const query = new URLSearchParams({ game: game.value });
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(25_000)]);
+    if (!game.value) {
+      const catalog = await api<{ games: RatedGame[] }>('/v1/hall/ratings', { signal });
+      if (request.signal.aborted) return;
+      games.value = catalog.games;
+      game.value = catalog.games.find(item => item.id === 'gomoku')?.id ?? catalog.games[0]?.id ?? '';
+      return;
+    }
+    const query = new URLSearchParams({ game: game.value });
     const data = await api<RatingBoard>('/v1/hall/ratings?' + query, { signal });
     if (!request.signal.aborted) board.value = data;
   } catch (cause) {
@@ -53,10 +59,10 @@ watch([() => props.open, game, () => seat.value?.token, reload], async ([open], 
         <button class="btn ghost small" type="button" @click="close">关闭</button>
       </div>
       <div class="access-body">
-        <label class="game-filter">
+        <label v-if="games.length" class="game-filter">
           玩法
           <select v-model="game">
-            <option v-for="id in games" :key="id" :value="id">{{ GAMES[id]?.label }}</option>
+            <option v-for="item in games" :key="item.id" :value="item.id">{{ item.label }}</option>
           </select>
         </label>
         <p v-if="busy" class="muted" role="status">正在读取榜单…</p>
@@ -90,6 +96,7 @@ watch([() => props.open, game, () => seat.value?.token, reload], async ([open], 
             </table>
           </section>
         </template>
+        <p v-else class="muted">暂无开榜的玩法。</p>
       </div>
     </div>
   </dialog>

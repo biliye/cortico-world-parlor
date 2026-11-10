@@ -1,3 +1,8 @@
+export interface RatedGame {
+  id: string;
+  label: string;
+}
+
 export interface RatingBoard {
   game: string;
   since: number | null;

@@ -356,17 +356,20 @@ export class DiceTable implements TableEngine {
       const dice = this.dice.get(seat.id) ?? [];
       return { id: seat.id, name: seat.name, dice: [...dice], total: dice.reduce((sum, value) => sum + value, 0) };
     });
-    const best = Math.max(...this.revealed.map((entry) => entry.total));
-    this.winners = this.revealed.filter((entry) => entry.total === best).map((entry) => entry.id);
+    const seatResults = this.revealed.map(seat => ({
+      seatId: seat.id, score: seat.total,
+      rank: 1 + this.revealed.filter(other => other.total > seat.total).length,
+    }));
+    this.winners = seatResults.filter(seat => seat.rank === 1).map(seat => seat.seatId);
     const scoreline = this.revealed.map((entry) => `${entry.name} ${entry.total} 点`).join('、');
-    const winnerNames = this.revealed.filter((entry) => entry.total === best).map((entry) => entry.name).join('、');
+    const winnerNames = this.revealed.filter((entry) => this.winners.includes(entry.id)).map((entry) => entry.name).join('、');
     events.push({
       type: 'parlor.table.end',
       scope: { kind: 'room' },
       text: `骰子桌结束：${scoreline}。${this.winners.length > 1 ? `平局：${winnerNames}` : `赢家：${winnerNames}`}。`,
       data: { game: this.game, winners: this.winners, tie: this.winners.length > 1, revealed: this.revealed },
     });
-    return { events, views: [], ended: true };
+    return { events, views: [], ended: true, seatResults };
   }
 }
 

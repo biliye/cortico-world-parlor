@@ -1,5 +1,42 @@
 import { expect, it } from 'vitest';
+import { GAME_LIST } from '../src/room/games/registry.ts';
 import { fitRatings } from '../src/room/ratings/bt.ts';
+import { validSeatResults } from '../src/room/table-results.ts';
+
+const ratedFixtures: Record<string, number> = {
+  dice: 2, ddz: 3, werewolf: 6, monopoly2d: 4, gomoku: 2,
+};
+
+it.each(GAME_LIST.filter(game => game.rated))('$id 正常终局符合统一的逐席赛果契约', game => {
+  const playerCount = ratedFixtures[game.id];
+  expect(playerCount, '新开榜玩法需要登记终局测试夹具').toBeDefined();
+  const seats = Array.from({ length: playerCount }, (_, index) => ({
+    id: `seat-${index + 1}`, name: `玩家 ${index + 1}`, kind: 'pet' as const, clientVersion: '0.40.0',
+  }));
+  let now = 1_000;
+  const engine = game.create({ host: seats[0]!, now, seatCount: 6, requireHuman: false, turnMs: 1 });
+  for (const seat of seats.slice(1)) engine.join(seat);
+  let step = engine.start(seats[0]!.id, now);
+  for (let turn = 0; !step.ended && turn < 500; turn++) {
+    now = (engine.nextWakeAt?.(now) ?? now + 600_000) + 1;
+    step = engine.tick(now) ?? step;
+  }
+  expect(step.ended).toBe(true);
+  const end = step.events.find(event => event.type === 'parlor.table.end');
+  expect(end).toBeDefined();
+  expect(validSeatResults(step.seatResults, engine.seatIds(), end!.data!.winners as string[], end!.data!.tie === true)).toBe(true);
+});
+
+it('拒绝缺席、重复席、赢家矛盾的逐席赛果，接受全桌和局', () => {
+  const seats = ['a', 'b'];
+  const a = { seatId: 'a', rank: 1 };
+  const b = { seatId: 'b', rank: 2 };
+  expect(validSeatResults(null, seats, ['a'], false)).toBe(false);
+  expect(validSeatResults([a], seats, ['a'], false)).toBe(false);
+  expect(validSeatResults([a, a], seats, ['a'], false)).toBe(false);
+  expect(validSeatResults([a, b], seats, ['b'], false)).toBe(false);
+  expect(validSeatResults([a, { ...b, rank: 1 }], seats, [], true)).toBe(true);
+});
 
 const player = (cooId: string | null, rank: number, team: string | null = null) => ({ cooId, rank, team });
 

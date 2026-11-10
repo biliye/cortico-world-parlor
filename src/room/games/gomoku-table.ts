@@ -227,7 +227,10 @@ export class GomokuTable implements TableEngine {
       events.push(this.event('end', won ? `${seat.name} 连五获胜。` : '棋盘已满，和棋。', {
         winners: won ? [seat.id] : [], tie: !won,
       }));
-      return { events, views: [], ended: true };
+      const seatResults = this.seats.map(player => ({
+        seatId: player.id, rank: !won || player.id === seat.id ? 1 : 2,
+      }));
+      return { events, views: [], ended: true, seatResults };
     }
     this.deadline = now + this.turnMs;
     return { events, views: [this.turnSeat!.id] };

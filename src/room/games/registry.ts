@@ -44,6 +44,8 @@ export interface GameActionDecl {
 
 export interface GameDefinition {
   id: string;
+  /** 开榜玩法必须在正常终局给出逐席赛果。 */
+  rated: boolean;
   /** 给人看的游戏名，账本也用它。 */
   label: string;
   /** 网页图标名（见 `src/web/common.js` 的 icon 集合）。 */
@@ -80,6 +82,7 @@ export interface GameDefinition {
 
 const dice: GameDefinition = {
   id: 'dice',
+  rated: true,
   label: '骰子',
   icon: 'dice',
   openHint: '等人坐下后用 parlor_table {op:"start"} 开始。',
@@ -119,6 +122,7 @@ const dice: GameDefinition = {
 
 const ddz: GameDefinition = {
   id: 'ddz',
+  rated: true,
   label: '斗地主',
   icon: 'cards',
   openHint: '（3 席，空位由脚本陪练补）用 parlor_table {op:"start"} 开始；叫地主时会叫你。',
@@ -167,6 +171,7 @@ const ddz: GameDefinition = {
 
 const werewolf: GameDefinition = {
   id: 'werewolf',
+  rated: true,
   label: '狼人杀',
   icon: 'moon',
   openHint: `开桌可选 6／9／12 席（默认 9），至少一只 Coo。坐满后用 parlor_table {op:"start"} 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
@@ -254,6 +259,7 @@ const werewolf: GameDefinition = {
 
 const monopoly2d: GameDefinition = {
   id: 'monopoly2d',
+  rated: true,
   label: '快局大富翁',
   icon: 'board',
   openHint: '（4 席，坐满后由开桌的人开始）四人 6 轮 24 手，掷骰、买地、收租、抽事件卡，最后按金币加地产估值排名。',
@@ -307,6 +313,7 @@ const monopoly2d: GameDefinition = {
 /** 登记顺序 = World 工具与网页卡片的顺序。 */
 const gomoku: GameDefinition = {
   id: 'gomoku',
+  rated: true,
   label: '五子棋',
   icon: 'board',
   openHint: '两席坐满后开局，桌主执黑先行。',

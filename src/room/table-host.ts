@@ -27,6 +27,7 @@ import {
   type TableEvent,
   type TableLogQuery,
   type TablePrivateSummary,
+  type TableSeatResult,
   type TableStatus,
   type TableStep,
   type TableSummary,
@@ -34,7 +35,7 @@ import {
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 import { tableCapacity } from './table-discovery-db.ts';
-import { writeSeatResults } from './table-results.ts';
+import { validSeatResults, writeSeatResults } from './table-results.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
 
 const OPEN_MS = 30 * 60_000;
@@ -1160,7 +1161,7 @@ export class TableHost {
     };
     for (const seatId of step.views) await writeTurn(seatId, true);
     for (const seatId of step.refreshViews ?? []) await writeTurn(seatId, false);
-    if (ended) await this.settle(table, engine, ended, now);
+    if (ended) await this.settle(table, engine, ended, step.seatResults, now);
   }
 
   /**
@@ -1202,7 +1203,10 @@ export class TableHost {
    * 一局结束：写公开战绩，并按本局引擎保留的参赛席位落逐席结果。
    * 终态只写一次（`table_finalizations`），正常结算与作废退款互斥。
    */
-  private async settle(table: LiveTable, engine: TableEngine, event: TableEvent, now: number): Promise<void> {
+  private async settle(
+    table: LiveTable, engine: TableEngine, event: TableEvent,
+    seatResults: readonly TableSeatResult[] | null | undefined, now: number,
+  ): Promise<void> {
     if (await this.finalization(table.id)) return;
     const allSeats = await this.tableSeatRows(table.id);
     const rows = allSeats.filter((row) => row.left_at === null && row.coo_id !== null);
@@ -1243,8 +1247,14 @@ export class TableHost {
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
     ).run(table.id, entry.id, now, JSON.stringify({ winners, participants }));
-    await writeSeatResults(this.db, table.id, table.game, allSeats, engine.seatIds(), event, now);
-    this.db.afterCommit(() => this.onTableResult?.(table.game));
+    if (gameById(table.game)?.rated) {
+      if (validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true)) {
+        await writeSeatResults(this.db, table.id, table.game, allSeats, seatResults, now);
+        this.db.afterCommit(() => this.onTableResult?.(table.game));
+      } else {
+        this.db.afterCommit(() => console.error('parlor: 等级分赛果缺失或不一致', table.game, table.id));
+      }
+    }
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
     if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN

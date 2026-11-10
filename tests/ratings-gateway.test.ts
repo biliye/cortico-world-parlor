@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { ParlorClient } from '../src/room/client.ts';
+import { GAME_LIST } from '../src/room/games/registry.ts';
 import type { RatingBoard } from '../src/room/ratings/types.ts';
 import { PgDb } from '../src/room/storage/postgres.ts';
 import { WorldServer } from '../src/room/world-server.ts';
@@ -32,6 +33,11 @@ it('逐席结算随牌桌事务持久化，榜单跨厅、限登录访问并在�
     let room = 'lobby';
     const auth = { authorization: `Bearer ${visitor!.token}` };
     const endpoint = (game: string) => `${server.url}/v1/hall/ratings?game=${game}`;
+    const catalog = `${server.url}/v1/hall/ratings`;
+    expect((await fetch(catalog)).status).toBe(401);
+    expect(await (await fetch(catalog, { headers: auth })).json()).toEqual({
+      games: GAME_LIST.filter(game => game.rated).map(({ id, label }) => ({ id, label })),
+    });
     expect((await fetch(endpoint('gomoku'))).status).toBe(401);
     expect((await fetch(endpoint('monopoly'), { headers: auth })).status).toBe(400);
     const read = async (token: string) => await new ParlorClient(server.url)
