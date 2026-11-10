@@ -107,7 +107,7 @@ export class TableDiscovery {
       if (direct && candidates.length === 0) throw new HostError('not_found', '这张牌桌不存在、已经开始、关闭或过期了');
       for (const candidate of candidates) {
         if (candidate.game === 'werewolf' && source.kind === 'pet' && !versionAtLeast(clientVersion, WEREWOLF_MIN_CLIENT)) {
-          throw new HostError('conflict', `狼人杀需要 Coo 的客厅扩展至少 ${WEREWOLF_MIN_CLIENT}，请升级后再加入`);
+          throw new HostError('conflict', `狼人杀需要 Coo 的客厅扩展至少 ${WEREWOLF_MIN_CLIENT}。请让 Coo 更新到最新版，重启宿主并重新加载会话工具后再加入。`);
         }
         const targetHost = await this.host(candidate.room_id);
         let result!: TableEntryResult;
