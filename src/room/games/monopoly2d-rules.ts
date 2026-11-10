@@ -1,12 +1,11 @@
 /**
  * 快局大富翁（monopoly2d）的地图与规则。
  *
- * 这一层是纯计算：16 格环形地图、估值、排名、快照校验，不碰时钟、不发事件、
+ * 这一层是纯计算：环形地图、估值、排名、快照校验，不碰时钟、不发事件、
  * 不掷骰。牌桌（`monopoly2d-table.ts`）负责推进阶段与生成事件；网页与 Coo 都从
  * 服务端视图取数，不自己判断规则。
  *
- * 版本：`RULES_VERSION` 随规则改动走（例如估值系数调整），`MAP_VERSION` 随地图
- * 改动走。两者都写进快照；旧局按旧版本读数，升级不会改历史局面。
+ * 规则和地图的版本都写进快照。恢复时用对应的地图与轮数继续。
  */
 
 export type Monopoly2dCellKind = 'start' | 'property' | 'event' | 'rest';
@@ -22,7 +21,7 @@ export interface Monopoly2dCell {
 }
 
 /** 首版地图：16 格环形，四角为 0（起点）、4、8、12（休息）。 */
-export const BOARD: readonly Monopoly2dCell[] = Object.freeze([
+const CLASSIC_BOARD: readonly Monopoly2dCell[] = Object.freeze([
   { index: 0, name: '茶馆门口', kind: 'start' },
   { index: 1, name: '茶摊', kind: 'property', price: 120, rent: 20 },
   { index: 2, name: '花店', kind: 'property', price: 140, rent: 24 },
@@ -41,15 +40,55 @@ export const BOARD: readonly Monopoly2dCell[] = Object.freeze([
   { index: 15, name: '街区消息', kind: 'event' },
 ]);
 
-export const BOARD_SIZE = BOARD.length;
-export const MAP_VERSION = 1;
-export const RULES_VERSION = 1;
+/** 扩展地图：24 格环形，每边新增一块地产与一个消息或休息格。 */
+const EXPANDED_BOARD: readonly Monopoly2dCell[] = Object.freeze([
+  { index: 0, name: '茶馆门口', kind: 'start' },
+  { index: 1, name: '茶摊', kind: 'property', price: 120, rent: 20 },
+  { index: 2, name: '花店', kind: 'property', price: 140, rent: 24 },
+  { index: 3, name: '街区消息', kind: 'event' },
+  { index: 4, name: '街心凉亭', kind: 'rest' },
+  { index: 5, name: '点心铺', kind: 'property', price: 160, rent: 28 },
+  { index: 6, name: '河畔长椅', kind: 'rest' },
+  { index: 7, name: '二手书店', kind: 'property', price: 180, rent: 32 },
+  { index: 8, name: '街区消息', kind: 'event' },
+  { index: 9, name: '唱片店', kind: 'property', price: 200, rent: 36 },
+  { index: 10, name: '街区消息', kind: 'event' },
+  { index: 11, name: '照相馆', kind: 'property', price: 220, rent: 40 },
+  { index: 12, name: '广场喷泉', kind: 'rest' },
+  { index: 13, name: '钟表铺', kind: 'property', price: 240, rent: 44 },
+  { index: 14, name: '剧场', kind: 'property', price: 260, rent: 48 },
+  { index: 15, name: '街区消息', kind: 'event' },
+  { index: 16, name: '渡口石阶', kind: 'rest' },
+  { index: 17, name: '陶艺坊', kind: 'property', price: 280, rent: 52 },
+  { index: 18, name: '路灯转角', kind: 'rest' },
+  { index: 19, name: '香料铺', kind: 'property', price: 300, rent: 56 },
+  { index: 20, name: '街区消息', kind: 'event' },
+  { index: 21, name: '糖果店', kind: 'property', price: 320, rent: 60 },
+  { index: 22, name: '街区消息', kind: 'event' },
+  { index: 23, name: '古着店', kind: 'property', price: 340, rent: 64 },
+]);
+
+export interface Monopoly2dRules {
+  readonly rulesVersion: number;
+  readonly mapVersion: number;
+  readonly rounds: number;
+  readonly board: readonly Monopoly2dCell[];
+}
+
+export const CLASSIC_RULES: Monopoly2dRules = { rulesVersion: 1, mapVersion: 1, rounds: 6, board: CLASSIC_BOARD };
+export const DEFAULT_RULES: Monopoly2dRules = { rulesVersion: 2, mapVersion: 2, rounds: 12, board: EXPANDED_BOARD };
+
+export function rulesFor(rulesVersion: unknown, mapVersion: unknown): Monopoly2dRules {
+  const rules = [CLASSIC_RULES, DEFAULT_RULES].find((entry) => (
+    entry.rulesVersion === rulesVersion && entry.mapVersion === mapVersion
+  ));
+  if (!rules) fail(`不认识的大富翁规则版本与地图版本：${String(rulesVersion)}/${String(mapVersion)}`);
+  return rules;
+}
 
 /** 四席固定：坐满才开局，空位不补脚本。 */
 export const SEAT_COUNT = 4;
 export const START_CASH = 1_000;
-export const ROUNDS = 6;
-export const TURNS = ROUNDS * SEAT_COUNT;
 export const PASS_START_CASH = 120;
 /** 终局估值：地产原价合计 × 85%，合计算完只取整一次。 */
 export const VALUATION_PERCENT = 85;
@@ -69,14 +108,10 @@ export const EVENT_CARDS: readonly Monopoly2dEventCard[] = Object.freeze([
   { label: '修雨棚', amount: -70 },
 ]);
 
-export const cellAt = (index: number): Monopoly2dCell => {
-  const wrapped = ((index % BOARD_SIZE) + BOARD_SIZE) % BOARD_SIZE;
-  return BOARD[wrapped];
+export const cellAt = (index: number, board: readonly Monopoly2dCell[]): Monopoly2dCell => {
+  const wrapped = ((index % board.length) + board.length) % board.length;
+  return board[wrapped];
 };
-
-export const isProperty = (index: number): boolean => cellAt(index).kind === 'property';
-
-export const propertyIndices = (): number[] => BOARD.filter((cell) => cell.kind === 'property').map((cell) => cell.index);
 
 export interface Monopoly2dSeatState {
   id: string;
@@ -123,7 +158,7 @@ export interface Monopoly2dState {
   seats: Monopoly2dSeatState[];
   /** 先手席位在 seats 里的下标，开局抽一次后固定。 */
   firstSeat: number;
-  /** 1..TURNS；开局前为 0。 */
+  /** 1..总手数；开局前为 0。 */
   turnNo: number;
   phase: 'await_roll' | 'await_buy' | null;
   deadline: number;
@@ -135,9 +170,9 @@ export interface Monopoly2dState {
 }
 
 /** 一次移动：返回落点与是否跨过（含恰好停在）起点。 */
-export function moveOn(pos: number, die: number): { to: number; passedStart: boolean } {
+export function moveOn(pos: number, die: number, boardSize: number): { to: number; passedStart: boolean } {
   const raw = pos + die;
-  return { to: raw % BOARD_SIZE, passedStart: raw >= BOARD_SIZE };
+  return { to: raw % boardSize, passedStart: raw >= boardSize };
 }
 
 /** 某席位的地产估值：原价合计 × 85%，只取整一次。 */
@@ -156,10 +191,11 @@ export function propertiesOf(seatId: string, owners: ReadonlyMap<number, string>
 export function rankSeats(
   seats: readonly Monopoly2dSeatState[],
   owners: ReadonlyMap<number, string>,
+  board: readonly Monopoly2dCell[],
 ): Monopoly2dRankRow[] {
   const rows = seats.map((seat) => {
     const properties = propertiesOf(seat.id, owners);
-    const estate = estateValue(properties.map((cell) => cellAt(cell).price ?? 0));
+    const estate = estateValue(properties.map((cell) => cellAt(cell, board).price ?? 0));
     return { seat: seat.id, cash: seat.cash, estate, total: seat.cash + estate, rank: 0, properties };
   });
   const sorted = rows.map((row, index) => ({ row, index }))
@@ -190,10 +226,8 @@ export function validateState(raw: unknown, host: string, stateVersion: number):
   if (status !== 'open' && status !== 'playing' && status !== 'ended') {
     fail(`大富翁存档的状态不对：${String(status)}`);
   }
-  const rulesVersion = data.rulesVersion;
-  if (!isInt(rulesVersion) || rulesVersion < 1) fail('大富翁存档的规则版本不对');
-  const mapVersion = data.mapVersion;
-  if (!isInt(mapVersion) || mapVersion < 1) fail('大富翁存档的地图版本不对');
+  const { rulesVersion, mapVersion, board, rounds } = rulesFor(data.rulesVersion, data.mapVersion);
+  const boardSize = board.length;
   const rawSeats = data.seats;
   // 开局前席位随入座/离座增减（1..4 席，空桌 0 席）；开局后必须坐满四席，
   // 否则回合轮转和排名都会少人。这条以前写成「一律四席」，害得第二个人入座时
@@ -210,7 +244,7 @@ export function validateState(raw: unknown, host: string, stateVersion: number):
     const cash = seat.cash;
     const pos = seat.pos;
     if (!isInt(cash) || cash < 0) fail('大富翁存档的金币不对');
-    if (!isInt(pos) || pos < 0 || pos >= BOARD_SIZE) fail('大富翁存档的棋子位置不对');
+    if (!isInt(pos) || pos < 0 || pos >= boardSize) fail('大富翁存档的棋子位置不对');
     return { id: seat.id, name: seat.name, cash, pos };
   });
   if (new Set(seats.map((seat) => seat.id)).size !== seats.length) fail('大富翁存档里有重复席位');
@@ -221,7 +255,7 @@ export function validateState(raw: unknown, host: string, stateVersion: number):
     const rawFirst = data.firstSeat;
     const rawTurn = data.turnNo;
     if (!isInt(rawFirst) || rawFirst < 0 || rawFirst >= SEAT_COUNT) fail('大富翁存档的先手不对');
-    if (!isInt(rawTurn) || rawTurn < 1 || rawTurn > TURNS) fail('大富翁存档的回合序号不对');
+    if (!isInt(rawTurn) || rawTurn < 1 || rawTurn > rounds * SEAT_COUNT) fail('大富翁存档的回合序号不对');
     firstSeat = rawFirst;
     turnNo = rawTurn;
   }
@@ -230,16 +264,16 @@ export function validateState(raw: unknown, host: string, stateVersion: number):
   const owners = new Map<number, string>();
   for (const [key, value] of Object.entries(ownersRaw as Record<string, unknown>)) {
     const cell = Number(key);
-    if (!isInt(cell) || cell < 0 || cell >= BOARD_SIZE) fail('大富翁存档的地块编号不对');
-    if (!isProperty(cell)) fail('大富翁存档把非地产记成了有主');
+    if (!isInt(cell) || cell < 0 || cell >= boardSize) fail('大富翁存档的地块编号不对');
+    if (board[cell].kind !== 'property') fail('大富翁存档把非地产记成了有主');
     if (typeof value !== 'string' || !ids.has(value)) fail('大富翁存档的地产所有人不存在');
     owners.set(cell, value);
   }
   const pendingRaw = data.pending;
   const pending = pendingRaw === null || pendingRaw === undefined ? null : Number(pendingRaw);
   if (pending !== null) {
-    if (!isInt(pending) || pending < 0 || pending >= BOARD_SIZE) fail('大富翁存档的待买地块不对');
-    if (!isProperty(pending)) fail('大富翁存档的待买地块不是地产');
+    if (!isInt(pending) || pending < 0 || pending >= boardSize) fail('大富翁存档的待买地块不对');
+    if (board[pending].kind !== 'property') fail('大富翁存档的待买地块不是地产');
     if (owners.has(pending)) fail('大富翁存档的待买地块已经有主');
   }
   const phase = data.phase;
@@ -263,8 +297,8 @@ export function validateState(raw: unknown, host: string, stateVersion: number):
     const to = row.to;
     if (typeof seatId !== 'string' || !ids.has(seatId)) fail('大富翁存档的上一手席位不对');
     if (!isInt(dieValue) || dieValue < 1 || dieValue > 6) fail('大富翁存档的骰点不对');
-    if (!isInt(from) || from < 0 || from >= BOARD_SIZE) fail('大富翁存档的起点位置不对');
-    if (!isInt(to) || to < 0 || to >= BOARD_SIZE) fail('大富翁存档的落点不对');
+    if (!isInt(from) || from < 0 || from >= boardSize) fail('大富翁存档的起点位置不对');
+    if (!isInt(to) || to < 0 || to >= boardSize) fail('大富翁存档的落点不对');
     let card: { label: string; amount: number } | undefined;
     if (row.card !== null && row.card !== undefined) {
       const rawCard = row.card;
@@ -305,7 +339,7 @@ export function validateState(raw: unknown, host: string, stateVersion: number):
       if (typeof seatId !== 'string' || !ids.has(seatId)) fail('大富翁存档的排名席位不对');
       if (!isInt(cash) || !isInt(estate) || !isInt(total) || !isInt(rank)) fail('大富翁存档的排名数字不对');
       const properties = row.properties;
-      if (!Array.isArray(properties) || properties.some((cell: unknown) => !isInt(cell) || !isProperty(cell))) {
+      if (!Array.isArray(properties) || properties.some((cell: unknown) => !isInt(cell) || board[cell]?.kind !== 'property')) {
         fail('大富翁存档的排名地产不对');
       }
       return { seat: seatId, cash, estate, total, rank, properties: properties as number[] };

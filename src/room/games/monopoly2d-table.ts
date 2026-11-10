@@ -1,5 +1,5 @@
 /**
- * 快局大富翁牌桌：四席固定、坐满开局，6 轮 24 手。
+ * 快局大富翁牌桌：四席固定、坐满开局，轮数和地图按牌桌的版本决定。
  *
  * 一次回合分两段：`await_roll`（60 秒，掷骰并结算落点）与 `await_buy`
  * （20 秒，只处理「落在无主且买得起的地产」）。两段共用 `turnNo`，
@@ -16,9 +16,8 @@ import {
   type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep,
 } from '../table-engine.ts';
 import {
-  BOARD, BOARD_SIZE, BUY_MS, EVENT_CARDS, MAP_VERSION, PASS_START_CASH, RULES_VERSION,
-  ROLL_MS, ROUNDS, SEAT_COUNT, START_CASH, TURNS, cellAt, estateValue, moveOn, propertiesOf,
-  rankSeats, validateState,
+  BUY_MS, DEFAULT_RULES, EVENT_CARDS, PASS_START_CASH, ROLL_MS, SEAT_COUNT, START_CASH,
+  cellAt, estateValue, moveOn, propertiesOf, rankSeats, rulesFor, validateState,
   type Monopoly2dLastTurn, type Monopoly2dRankRow, type Monopoly2dSeatState,
 } from './monopoly2d-rules.ts';
 
@@ -76,6 +75,7 @@ export class Monopoly2dTable implements TableEngine {
   private readonly rollMs: number;
   private readonly buyMs: number;
   private readonly rng: () => number;
+  private rules = DEFAULT_RULES;
   private readonly seats: Seat[] = [];
   private firstSeat = 0;
   private turnNo = 0;
@@ -162,11 +162,12 @@ export class Monopoly2dTable implements TableEngine {
     }
     const first = this.currentSeat();
     const names = this.seats.map((seat) => seat.name).join('、');
+    const { rounds } = this.rules;
     return {
       events: [{
         type: 'parlor.table.start',
         scope: { kind: 'room' },
-        text: `快局大富翁开始了：${names}。每人 ${START_CASH} 局内金币，${ROUNDS} 轮共 ${TURNS} 手，${first?.name ?? '？'} 先手。`,
+        text: `快局大富翁开始了：${names}。每人 ${START_CASH} 局内金币，${rounds} 轮共 ${rounds * SEAT_COUNT} 手，${first?.name ?? '？'} 先手。`,
         data: { game: this.game, seats: this.seatIds(), first: first?.id },
       }],
       views: first ? [first.id] : [],
@@ -229,7 +230,9 @@ export class Monopoly2dTable implements TableEngine {
     if (!seat) return null;
     const playing = this.status === 'playing';
     const yourTurn = playing && this.currentSeat()?.id === seat.id;
-    const pendingCell = this.pending === null ? null : cellAt(this.pending);
+    const { board, rounds } = this.rules;
+    const pendingCell = this.pending === null ? null : cellAt(this.pending, board);
+    const properties = propertiesOf(seat.id, this.owners);
     const movable = playing && !yourTurn ? [] : (this.phase === 'await_roll' ? ['roll'] : ['buy', 'pass']);
     return {
       game: this.game,
@@ -241,14 +244,14 @@ export class Monopoly2dTable implements TableEngine {
       deadline: playing ? this.deadline : undefined,
       turnNo: this.turnNo,
       round: this.roundOf(this.turnNo),
-      totalRounds: ROUNDS,
+      totalRounds: rounds,
       cash: seat.cash,
       pos: seat.pos,
       yourTurn,
       canAct: yourTurn,
       moves: yourTurn ? movable : [],
-      properties: propertiesOf(seat.id, this.owners),
-      estate: estateValue(propertiesOf(seat.id, this.owners).map((cell) => cellAt(cell).price ?? 0)),
+      properties,
+      estate: estateValue(properties.map((cell) => cellAt(cell, board).price ?? 0)),
       pending: pendingCell && yourTurn
         ? {
           index: pendingCell.index,
@@ -267,6 +270,7 @@ export class Monopoly2dTable implements TableEngine {
   public(): Monopoly2dPublic {
     const playing = this.status === 'playing';
     const current = playing ? this.currentSeat() : undefined;
+    const { board, rounds, rulesVersion, mapVersion } = this.rules;
     return {
       game: this.game,
       status: this.status,
@@ -276,10 +280,10 @@ export class Monopoly2dTable implements TableEngine {
       deadline: playing ? this.deadline : undefined,
       turnNo: this.turnNo,
       round: this.roundOf(this.turnNo),
-      totalRounds: ROUNDS,
-      rulesVersion: RULES_VERSION,
-      mapVersion: MAP_VERSION,
-      cells: BOARD.map((cell) => ({ ...cell })),
+      totalRounds: rounds,
+      rulesVersion,
+      mapVersion,
+      cells: board.map((cell) => ({ ...cell })),
       seats: this.seats.map((seat) => {
         const properties = propertiesOf(seat.id, this.owners);
         return {
@@ -288,7 +292,7 @@ export class Monopoly2dTable implements TableEngine {
           cash: seat.cash,
           pos: seat.pos,
           properties,
-          estate: estateValue(properties.map((cell) => cellAt(cell).price ?? 0)),
+          estate: estateValue(properties.map((cell) => cellAt(cell, board).price ?? 0)),
         };
       }),
       owners: [...this.owners.entries()].map(([cell, seat]) => ({ cell, seat })),
@@ -318,19 +322,20 @@ export class Monopoly2dTable implements TableEngine {
     }
     const current = this.currentSeat();
     const yourTurn = current?.id === seatId;
+    const { board, rounds } = this.rules;
     const lines: string[] = [];
     const header = yourTurn
-      ? `【快局大富翁·轮到你】第 ${this.roundOf(this.turnNo)}/${ROUNDS} 轮第 ${this.turnNo} 手`
-      : `【快局大富翁·等 ${current?.name ?? '？'}】第 ${this.roundOf(this.turnNo)}/${ROUNDS} 轮第 ${this.turnNo} 手`;
+      ? `【快局大富翁·轮到你】第 ${this.roundOf(this.turnNo)}/${rounds} 轮第 ${this.turnNo} 手`
+      : `【快局大富翁·等 ${current?.name ?? '？'}】第 ${this.roundOf(this.turnNo)}/${rounds} 轮第 ${this.turnNo} 手`;
     lines.push(header);
     lines.push(this.statusLine(seat));
-    lines.push(`其他三家：${this.seats.filter((entry) => entry.id !== seatId).map((entry) => `${entry.name} 在 ${cellAt(entry.pos).name}（金币 ${entry.cash}）`).join('；')}。`);
+    lines.push(`其他三家：${this.seats.filter((entry) => entry.id !== seatId).map((entry) => `${entry.name} 在 ${cellAt(entry.pos, board).name}（金币 ${entry.cash}）`).join('；')}。`);
     if (!yourTurn) {
       lines.push('等对方行动；桌面变化会随牌桌事件推给你。');
       return lines.join('\n');
     }
     if (this.phase === 'await_buy' && this.pending !== null) {
-      const cell = cellAt(this.pending);
+      const cell = cellAt(this.pending, board);
       const price = cell.price ?? 0;
       lines.push(`你落在「${cell.name}」：售价 ${price}，租金 ${cell.rent ?? 0}。买下后剩 ${seat.cash - price} 金币。`);
       lines.push(`截止 ${serverClockLabel(this.deadline)}，还剩 ${secondsLeft(this.deadline, now)} 秒：parlor_game_action {action:"buy",params:{turnNo:${this.turnNo}}} 买下，或 parlor_game_action {action:"pass",params:{turnNo:${this.turnNo}}} 放弃。`);
@@ -352,14 +357,14 @@ export class Monopoly2dTable implements TableEngine {
     }
     const current = this.currentSeat();
     const board = this.seats.map((seat) => `${seat.name} ${seat.cash}`).join('、');
-    return `【快局大富翁】第 ${this.roundOf(this.turnNo)}/${ROUNDS} 轮，轮到 ${current?.name ?? '？'}${this.phase === 'await_buy' ? ' 决定买地' : ' 掷骰'}；金币：${board}。`;
+    return `【快局大富翁】第 ${this.roundOf(this.turnNo)}/${this.rules.rounds} 轮，轮到 ${current?.name ?? '？'}${this.phase === 'await_buy' ? ' 决定买地' : ' 掷骰'}；金币：${board}。`;
   }
 
   exportState(): unknown {
     return {
       version: this.stateVersion,
-      rulesVersion: RULES_VERSION,
-      mapVersion: MAP_VERSION,
+      rulesVersion: this.rules.rulesVersion,
+      mapVersion: this.rules.mapVersion,
       status: this.status,
       host: this.host,
       seats: this.seats.map((seat) => ({ id: seat.id, name: seat.name, cash: seat.cash, pos: seat.pos })),
@@ -376,6 +381,7 @@ export class Monopoly2dTable implements TableEngine {
 
   restoreState(state: unknown): void {
     const parsed = validateState(state, this.host, this.stateVersion);
+    this.rules = rulesFor(parsed.rulesVersion, parsed.mapVersion);
     this.status = parsed.status;
     this.seats.splice(0, this.seats.length, ...parsed.seats);
     this.firstSeat = parsed.firstSeat;
@@ -402,7 +408,7 @@ export class Monopoly2dTable implements TableEngine {
   /* —— 内部转移 —— */
 
   private roundOf(turnNo: number): number {
-    return turnNo <= 0 ? 0 : Math.min(ROUNDS, Math.ceil(turnNo / SEAT_COUNT));
+    return Math.ceil(turnNo / SEAT_COUNT);
   }
 
   private currentSeat(): Seat | undefined {
@@ -429,7 +435,8 @@ export class Monopoly2dTable implements TableEngine {
   private roll(seat: Seat, now: number, source: 'player' | 'timeout' | 'auto'): TableStep {
     const die = this.rollDie();
     const from = seat.pos;
-    const { to, passedStart } = moveOn(from, die);
+    const { board } = this.rules;
+    const { to, passedStart } = moveOn(from, die, board.length);
     seat.pos = to;
     const events: TableEvent[] = [];
     const notes: string[] = [];
@@ -445,7 +452,7 @@ export class Monopoly2dTable implements TableEngine {
     const autoNote = source === 'timeout' ? '（超时代掷）' : source === 'auto' ? '（托管代掷）' : '';
     const autoPrefix = source === 'timeout' ? '超时，服务器代掷：' : source === 'auto' ? '托管代掷：' : '';
 
-    const cell = cellAt(to);
+    const cell = cellAt(to, board);
     if (cell.kind === 'property') {
       const price = cell.price ?? 0;
       const rent = cell.rent ?? 0;
@@ -504,7 +511,7 @@ export class Monopoly2dTable implements TableEngine {
 
   private buyNow(seat: Seat, now: number): TableStep {
     const cellIndex = this.pending!;
-    const cell = cellAt(cellIndex);
+    const cell = cellAt(cellIndex, this.rules.board);
     const price = cell.price ?? 0;
     if (seat.cash < price) throw new TableError('bad_action', `金币不够：${cell.name} 要 ${price}，你有 ${seat.cash}`);
     seat.cash -= price;
@@ -520,7 +527,7 @@ export class Monopoly2dTable implements TableEngine {
 
   private passNow(seat: Seat, now: number, source: 'player' | 'timeout' | 'auto'): TableStep {
     const cellIndex = this.pending;
-    const cell = cellIndex === null ? null : cellAt(cellIndex);
+    const cell = cellIndex === null ? null : cellAt(cellIndex, this.rules.board);
     this.pending = null;
     const why = source === 'timeout' ? '（超时自动放弃）' : source === 'auto' ? '（托管放弃）' : '';
     const event = this.actionEvent(
@@ -530,10 +537,10 @@ export class Monopoly2dTable implements TableEngine {
     return this.handoff(now, [event], seat, source);
   }
 
-  /** 交棒：回合号 +1，轮次按座次循环；第 24 手之后结算（结算时保留 24）。 */
+  /** 交棒：回合号 +1，轮次按座次循环，打完最后一手就结算。 */
   private handoff(now: number, events: TableEvent[], _seat: Seat, _source: string): TableStep {
     this.pending = null;
-    if (this.turnNo >= TURNS) return this.finish(events);
+    if (this.turnNo >= this.rules.rounds * SEAT_COUNT) return this.finish(events);
     this.turnNo += 1;
     this.phase = 'await_roll';
     this.deadline = now + this.rollMs;
@@ -545,7 +552,7 @@ export class Monopoly2dTable implements TableEngine {
     this.status = 'ended';
     this.deadline = 0;
     this.pending = null;
-    this.ranking = rankSeats(this.seats, this.owners);
+    this.ranking = rankSeats(this.seats, this.owners, this.rules.board);
     const winners = this.ranking.filter((row) => row.rank === 1).map((row) => row.seat);
     const rankText = this.ranking.map((row) => {
       const name = this.seats.find((seat) => seat.id === row.seat)?.name ?? '？';
@@ -577,9 +584,10 @@ export class Monopoly2dTable implements TableEngine {
   /** 私视图里那行「你在哪、有多少钱、几块地」。 */
   private statusLine(seat: Seat): string {
     const properties = propertiesOf(seat.id, this.owners);
-    const names = properties.map((cell) => cellAt(cell).name).join('、') || '还没有地产';
-    const estate = estateValue(properties.map((cell) => cellAt(cell).price ?? 0));
-    return `你：${seat.cash} 金币，站在「${cellAt(seat.pos).name}」；地产 ${names}（估值 ${estate}）。`;
+    const { board } = this.rules;
+    const names = properties.map((cell) => cellAt(cell, board).name).join('、') || '还没有地产';
+    const estate = estateValue(properties.map((cell) => cellAt(cell, board).price ?? 0));
+    return `你：${seat.cash} 金币，站在「${cellAt(seat.pos, board).name}」；地产 ${names}（估值 ${estate}）。`;
   }
 
   /** 供测试与排错：当前四个坐位（不含 kind）。 */
@@ -587,8 +595,8 @@ export class Monopoly2dTable implements TableEngine {
     return this.seats.map((seat) => ({ id: seat.id, name: seat.name, cash: seat.cash, pos: seat.pos }));
   }
 
-  /** 供测试：当前棋盘大小，避免测试里写死 16。 */
+  /** 供测试：新桌的棋盘大小。 */
   static get size(): number {
-    return BOARD_SIZE;
+    return DEFAULT_RULES.board.length;
   }
 }
