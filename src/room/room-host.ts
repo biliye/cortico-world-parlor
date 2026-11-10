@@ -32,7 +32,7 @@ import {
   isCooId, MAX_DUE_MS, MAX_OPEN_PROMISES, MAX_SOCIAL_PER_HOUR, MAX_SOCIAL_TEXT,
   type LedgerEntry,
 } from './ledger.ts';
-import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt } from './table-host.ts';
+import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt, type TableRematchResult } from './table-host.ts';
 import type { TableLogQuery, TablePrivateSummary, TableSummary } from './table-engine.ts';
 import type { DeliveryReceipt, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 
@@ -47,6 +47,11 @@ export interface RoomHostOptions {
   recovery?: { lastHealthyAt?: number; maxDowntimeMs?: number; minHumanMs?: number };
   /** 事件提交后通知网关；推送用它立刻发，不再等 400ms 节拍。 */
   onCommit?: (roomId: string) => void;
+  /**
+   * 先手座位的随机源（0 ≤ 值 < max）。生产不传，用系统随机；
+   * 测试传固定函数，否则「谁先手」的断言会随机翻车。
+   */
+  randomSeat?: (max: number) => number;
 }
 
 export interface JoinResult {
@@ -196,6 +201,7 @@ export class RoomHost {
         seats: () => activeSeats(db, roomId),
       },
       ...(options.recovery ? { recovery: options.recovery } : {}),
+      ...(options.randomSeat ? { randomSeat: options.randomSeat } : {}),
     });
     return new RoomHost(db, roomId, options, { mail, ledger, tableHost });
   }
@@ -661,6 +667,11 @@ export class RoomHost {
 
   joinTable(cooId: string, tableId?: string, requestId?: string, clientVersion?: string, transition?: Parameters<TableHost['join']>[4]) {
     return this.tableHost.join(cooId, tableId, requestId, clientVersion, transition);
+  }
+
+  /** 「再来一局」：并入本厅同玩法的开放桌，没有就开一张新的。 */
+  rematchTable(cooId: string, input: Parameters<TableHost['rematch']>[1] = {}, requestId?: string): Promise<TableRematchResult> {
+    return this.tableHost.rematch(cooId, input, requestId);
   }
 
   refreshClientVersion(cooId: string, version?: string): Promise<boolean> {

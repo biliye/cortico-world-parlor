@@ -340,7 +340,7 @@ function endArt(row: { cards?: string[]; handCards?: DdzArt[] } | null, index: n
         </div>
       </div>
       <div class="ddz-actions">
-        <button class="btn primary" type="button" @click="ctx.openDdz()">再开一桌</button>
+        <button class="btn primary" type="button" @click="ctx.rematch()">再来一局</button>
         <button class="btn ghost" type="button" @click="ctx.showLobby()">返回客厅</button>
       </div>
     </div>

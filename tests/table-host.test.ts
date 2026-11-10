@@ -44,7 +44,8 @@ const setup = async (file?: string): Promise<Fixture> => {
       id: 'other', name: '隔壁厅', ownerCooId: OWNER, visibility: 'public', capacity: 8,
     }, clock.now);
   }
-  const host = await RoomHost.create(db, 'lobby', { now: () => clock.now });
+  // 先手座位在生产是随机的；测试固定成 0（开桌的人先手），否则「谁先叫地主」的断言会翻车。
+  const host = await RoomHost.create(db, 'lobby', { now: () => clock.now, randomSeat: () => 0 });
   return { db, host, clock, close: () => closeTestDb(db) };
 };
 
@@ -551,5 +552,45 @@ describe('客厅牌桌（五子棋）', () => {
     expect(table?.id).toBe(opened.tableId);
     expect(table?.game).toBe('gomoku');
     expect(table?.last).toEqual(expect.objectContaining({ row: 7, col: 7 }));
+  });
+});
+
+describe('再来一局', () => {
+  it('先并入本厅同玩法的空桌，坐满后才新开一张', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚'); await enter(host, B, '小满'); await enter(host, C, '小柚');
+
+    const first = await host.rematchTable(A, { game: 'gomoku' }, 'rm-1');
+    expect(first).toMatchObject({ game: 'gomoku', created: true, joined: true });
+
+    // 第二个人点同款按钮：并进同一张桌，不再开第二张。
+    const second = await host.rematchTable(B, { game: 'gomoku' }, 'rm-2');
+    expect(second).toMatchObject({ tableId: first.tableId, created: false, joined: true });
+
+    // 已经在这张桌上的人再点一次：原样返回，既不开新桌也不报错。
+    const again = await host.rematchTable(A, { game: 'gomoku' }, 'rm-3');
+    expect(again).toMatchObject({ tableId: first.tableId, created: false, joined: false });
+
+    // 五子棋两席已经满了，第三个人只能开一张新的。
+    const third = await host.rematchTable(C, { game: 'gomoku' }, 'rm-4');
+    expect(third.created).toBe(true);
+    expect(third.tableId).not.toBe(first.tableId);
+  });
+
+  it('已在别的玩法桌上时按一人一桌拒绝，不硬塞进第二张', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    await host.openTable(A, { game: 'ddz' }, 'open-ddz');
+    await expect(host.rematchTable(A, { game: 'gomoku' }, 'rm-x'))
+      .rejects.toThrow(/一人同时只参与一张/);
+  });
+
+  it('不在任何桌上又不指定玩法时明确报错，不瞎开一张', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    await expect(host.rematchTable(A, {}, 'rm-none')).rejects.toThrow(/指定玩法/);
   });
 });

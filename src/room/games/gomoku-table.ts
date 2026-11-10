@@ -146,6 +146,11 @@ function isPoint(value: unknown): value is Point {
     && inside(point.row!, point.col!);
 }
 
+/** 认输只有一个布尔标记，不带坐标。 */
+function isResign(value: unknown): value is { resign: true } {
+  return !!value && typeof value === 'object' && (value as { resign?: unknown }).resign === true;
+}
+
 export class GomokuTable implements TableEngine {
   readonly game = 'gomoku';
   readonly label = '五子棋';
@@ -158,17 +163,28 @@ export class GomokuTable implements TableEngine {
   private winningLine: Point[] = [];
   private deadline = 0;
   private readonly turnMs: number;
+  /**
+   * 执黑的那一席在 `seats` 里的下标。开局时由宿主随机指定（`GameCreateContext.firstSeat`），
+   * 所以不再固定成「桌主执黑」：谁先手不该由谁开的桌决定。
+   */
+  private blackIndex = 0;
+  /** 终局赢家；认输时没有连五，光靠棋盘推不出来，必须显式记。 */
+  private winnerSeat: string | null = null;
 
   // 不用参数属性（`constructor(private readonly x)`）：那段语法过不了 Node 的
   // --experimental-strip-types（strip-only），线上 serve-world 就是这么起的。
-  constructor(host: TableSeat, turnMs = 60_000) {
+  constructor(host: TableSeat, turnMs = 60_000, firstSeat = 0) {
     this.host = host.id;
     this.seats = [{ ...host }];
     this.turnMs = turnMs;
+    this.blackIndex = firstSeat === 1 ? 1 : 0;
   }
 
+  /** 这一手该谁落：黑先，之后两手一换。颜色永远是 1 = 黑、2 = 白。 */
   private get color(): Color { return this.moves.length % 2 === 0 ? 1 : 2; }
-  private get turnSeat(): TableSeat | undefined { return this.seats[this.color - 1]; }
+  private get turnSeat(): TableSeat | undefined {
+    return this.seats[this.color === 1 ? this.blackIndex : 1 - this.blackIndex];
+  }
 
   has(seatId: string): boolean { return this.seats.some(seat => seat.id === seatId); }
   seatIds(): string[] { return this.seats.map(seat => seat.id); }
@@ -197,14 +213,20 @@ export class GomokuTable implements TableEngine {
     if (by !== this.host) throw new TableError('not_host', '只有桌主可以开局');
     if (this.status !== 'open' || this.seats.length !== 2) throw new TableError('not_open', '需要两席坐满才能开局');
     this.status = 'playing';
+    // 执黑的那一席由开桌时传进来的 firstSeat 决定（宿主随机），桌主不再默认占先手。
     this.deadline = now + this.turnMs;
-    return { events: [this.event('start', '五子棋开局，黑棋先行。')], views: [this.host] };
+    const first = this.seats[this.blackIndex];
+    return {
+      events: [this.event('start', `五子棋开局，${first.name} 执黑先行。`)],
+      views: [first.id],
+    };
   }
 
   act(seatId: string, action: unknown, now: number): TableStep {
     if (this.status !== 'playing') throw new TableError('not_started', '五子棋桌当前不可落子');
     if (this.turnSeat?.id !== seatId) throw new TableError('not_turn', '还没轮到你');
     if (now >= this.deadline) throw new TableError('expired', '本手已超时');
+    if (isResign(action)) return this.resign(seatId, now);
     if (!isPoint(action) || this.board[index(action.row, action.col)] !== 0) {
       throw new TableError('bad_action', '请选择 0–14 范围内的空交点');
     }
@@ -224,6 +246,7 @@ export class GomokuTable implements TableEngine {
       this.deadline = 0;
       this.winningLine = line.length >= 5 ? line : [];
       const won = this.winningLine.length > 0;
+      this.winnerSeat = won ? seat.id : null;
       events.push(this.event('end', won ? `${seat.name} 连五获胜。` : '棋盘已满，和棋。', {
         winners: won ? [seat.id] : [], tie: !won,
       }));
@@ -231,6 +254,30 @@ export class GomokuTable implements TableEngine {
     }
     this.deadline = now + this.turnMs;
     return { events, views: [this.turnSeat!.id] };
+  }
+
+  /**
+   * 认输：本人判负、对面直接获胜，按正常结算走（`winners` 就是对面那一席）。
+   * 只有轮到自己时才受理 —— 没到你的手就点认输，多半是视图过期，先让他看一眼棋盘。
+   */
+  private resign(seatId: string, _now: number): TableStep {
+    const seat = this.turnSeat!;
+    const opponent = this.seats.find(entry => entry.id !== seatId);
+    if (!opponent) throw new TableError('bad_action', '桌上没有对手');
+    this.status = 'ended';
+    this.deadline = 0;
+    this.winningLine = [];
+    this.winnerSeat = opponent.id;
+    return {
+      events: [
+        this.event('resign', `${seat.name} 认输了。`, { seat: seat.id }),
+        this.event('end', `${opponent.name} 获胜（${seat.name} 认输）。`, {
+          winners: [opponent.id], tie: false, cause: 'resign',
+        }),
+      ],
+      views: [],
+      ended: true,
+    };
   }
 
   autoPlay(seatId: string, now: number): TableStep | null {
@@ -251,13 +298,16 @@ export class GomokuTable implements TableEngine {
 
   public() {
     const last = this.moves.at(-1);
+    const resigned = this.status === 'ended' && this.winningLine.length === 0 && this.winnerSeat !== null;
     return {
       game: this.game, status: this.status, host: this.host, board: this.board.slice(),
-      seats: this.seats.map((seat, i) => ({ ...seat, color: i + 1 })),
+      // color 是绝对色（1 黑 / 2 白），不是入座顺序：执黑的那一席由开局随机决定。
+      seats: this.seats.map((seat, i) => ({ ...seat, color: i === this.blackIndex ? 1 : 2 })),
       turn: this.status === 'playing' ? this.turnSeat?.id : undefined,
       deadline: this.nextWakeAt(), last: last ? { ...last } : undefined,
       winningLine: this.winningLine.map(point => ({ ...point })),
-      winner: this.winningLine.length && last ? this.seats[last.color - 1]?.id : undefined,
+      winner: this.winnerSeat ?? undefined,
+      ...(resigned ? { cause: 'resign' as const } : {}),
       startBlockers: this.seats.length === 2 ? [] : ['等待第二位玩家入座'],
     };
   }
@@ -272,7 +322,11 @@ export class GomokuTable implements TableEngine {
   publicText(): string {
     if (this.status === 'open') return '五子棋等人中，两席坐满开局。';
     const winner = this.public().winner;
-    if (this.status === 'ended') return winner ? `${this.seats.find(seat => seat.id === winner)?.name} 连五获胜。` : '五子棋和棋。';
+    if (this.status === 'ended') {
+      if (!winner) return '五子棋和棋。';
+      const name = this.seats.find(seat => seat.id === winner)?.name;
+      return this.winningLine.length ? `${name} 连五获胜。` : `${name} 获胜（对手认输）。`;
+    }
     return `五子棋第 ${this.moves.length + 1} 手，轮到 ${this.turnSeat?.name}。`;
   }
 
@@ -291,6 +345,7 @@ export class GomokuTable implements TableEngine {
     return {
       version: this.stateVersion, status: this.status, deadline: this.deadline,
       seats: this.seats.map(seat => ({ ...seat })), moves: this.moves.map(move => ({ ...move })),
+      blackIndex: this.blackIndex, winner: this.winnerSeat,
     };
   }
 
@@ -300,9 +355,14 @@ export class GomokuTable implements TableEngine {
       || !Array.isArray(state.seats) || state.seats.length < 1 || state.seats.length > 2
       || state.seats[0]?.id !== this.host || new Set(state.seats.map(seat => seat?.id)).size !== state.seats.length
       || state.seats.some(seat => !seat?.id || typeof seat.name !== 'string')
-      || !Array.isArray(state.moves) || state.moves.length > CAPACITY || !Number.isSafeInteger(state.deadline)) {
+      || !Array.isArray(state.moves) || state.moves.length > CAPACITY || !Number.isSafeInteger(state.deadline)
+      // 旧存档没有这个字段：缺省 0 就是「桌主执黑」的旧行为，照旧能恢复。
+      || (state.blackIndex !== undefined && state.blackIndex !== 0 && state.blackIndex !== 1)) {
       throw new Error('五子棋存档格式错误');
     }
+    const blackIndex = state.blackIndex ?? 0;
+    // 只有一席时还分不出黑白，执黑下标只能是 0。
+    if (state.seats.length < 2 && blackIndex !== 0) throw new Error('五子棋存档执黑席位非法');
     const board = Array<number>(CAPACITY).fill(0);
     let winningLine: Point[] = [];
     for (const [i, move] of state.moves.entries()) {
@@ -313,8 +373,20 @@ export class GomokuTable implements TableEngine {
       const line = bestLine(board, move, move.color);
       if (line.length >= 5) winningLine = line;
     }
-    const terminal = winningLine.length > 0 || state.moves.length === CAPACITY;
-    if ((state.status === 'ended') !== terminal
+    // 认输的局没有连五，也没下满：终止条件只能靠 winner 判断，否则会被当成残缺棋谱拒掉。
+    const last = state.moves.at(-1);
+    const seatOfColor = (color: Color): string | undefined =>
+      state.seats[color === 1 ? blackIndex : 1 - blackIndex]?.id;
+    const lineWinner = winningLine.length && last ? seatOfColor(last.color) : undefined;
+    // 旧存档没有 winner 字段：和棋时 lineWinner 是 undefined，这里统一折成 null 再比对。
+    const declared = (state.winner === undefined ? lineWinner : state.winner) ?? null;
+    const drawn = winningLine.length === 0 && state.moves.length === CAPACITY;
+    const resigned = winningLine.length === 0 && state.moves.length < CAPACITY;
+    const endedOk = winningLine.length > 0
+      ? declared === lineWinner
+      : drawn ? declared === null : resigned && typeof declared === 'string'
+        && state.seats.some(seat => seat.id === declared);
+    if ((state.status === 'ended' ? !endedOk : declared !== null)
       || (state.status === 'playing' ? state.deadline <= 0 : state.deadline !== 0)
       || (state.status === 'open' ? state.moves.length > 0 : state.seats.length !== 2)) {
       throw new Error('五子棋存档状态与棋谱不一致');
@@ -323,6 +395,8 @@ export class GomokuTable implements TableEngine {
     this.moves = state.moves.map(move => ({ ...move }));
     this.board = board;
     this.winningLine = winningLine;
+    this.blackIndex = blackIndex;
+    this.winnerSeat = declared ?? null;
     this.status = state.status;
     this.deadline = state.deadline;
   }

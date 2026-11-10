@@ -2147,7 +2147,7 @@ export class WorldServer {
       // 牌桌修改一律要幂等键：旧客户端在这里拿到明确的升级提示，不会开出一张打不了的桌。
       // 玩法动作按注册表判断，加一个游戏不用再改这里。
       const tableMutation = type === 'table_open' || type === 'table_join' || type === 'table_leave'
-        || type === 'table_start' || type === 'table_discovery'
+        || type === 'table_start' || type === 'table_discovery' || type === 'table_rematch'
         || type === 'game_action' || gameByActionType(type) !== null;
       if (tableMutation && !requestId) {
         throw new HttpError(400, '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展/刷新网页后再打牌');
@@ -2251,6 +2251,24 @@ export class WorldServer {
         deadline = joined.receipt.deadline;
         turn = joined.receipt.turn;
         touchedTable = joined.tableId;
+        tablesChanged = true;
+      } else if (type === 'table_rematch') {
+        // 「再来一局」：本厅同玩法有开着的空桌就并进去，没有就开一张新的。
+        if (body.requireHuman !== undefined && typeof body.requireHuman !== 'boolean') {
+          throw new HttpError(400, 'requireHuman 必须是 true 或 false');
+        }
+        const rematched = await host.rematchTable(seat.cooId, {
+          ...(typeof body.game === 'string' ? { game: body.game } : {}),
+          clientVersion: headerValue(req, 'x-parlor-client').trim() || undefined,
+          ...(body.requireHuman !== undefined ? { requireHuman: body.requireHuman } : {}),
+          ...(body.seatCount !== undefined ? { seatCount: body.seatCount } : {}),
+        }, requestId);
+        tableId = rematched.tableId;
+        revision = rematched.receipt.revision;
+        receiptSeq = rematched.receipt.seq;
+        deadline = rematched.receipt.deadline;
+        turn = rematched.receipt.turn;
+        touchedTable = rematched.tableId;
         tablesChanged = true;
       } else if (type === 'table_leave') {
         // 离桌后这张桌可能就被收起来了；先记下桌号，回执照样能给出「那张桌已经不在了」。

@@ -225,7 +225,10 @@ function send(move: 'roll' | 'buy' | 'pass'): void {
           <span class="m2d-result-break">金币 {{ row.cash }} + 地产 {{ row.estate }}</span>
         </li>
       </ol>
-      <button class="btn ghost" type="button" @click="ctx.showLobby()">返回客厅</button>
+      <div class="m2d-result-actions">
+        <button class="btn primary" type="button" @click="ctx.rematch()">再来一局</button>
+        <button class="btn ghost" type="button" @click="ctx.showLobby()">返回客厅</button>
+      </div>
     </div>
 
     <div class="m2d-layout">

@@ -10,7 +10,7 @@ import { touchActivity } from './activity.ts';
  * 恢复：进程启动时按 `meta.last_healthy_at` 算停机时长。短停机把截止时刻搬到现在续局，
  * 超过 30 分钟的作废并按开局的实际扣款原路退回；读不懂的快照只隔离那一桌。
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
 import { lockCooRows, lockRoomRow, lockTableRow } from './storage/locks.ts';
 import { EventDb } from './event-db.ts';
@@ -66,6 +66,8 @@ export interface TableHostOptions {
    * 没有值就用这些桌子自己的 updated_at 当基准（等同于「刚刚还在」）。
    */
   recovery?: { lastHealthyAt?: number; maxDowntimeMs?: number; minHumanMs?: number };
+  /** 先手座位随机源（0 ≤ 值 < max）；生产不传，测试传固定值。 */
+  randomSeat?: (max: number) => number;
 }
 
 export interface TableSeatLookup {
@@ -161,6 +163,15 @@ export interface TableJoinResult {
   receipt: TableReceipt;
 }
 
+/** 「再来一局」的结果：`created` 说明这是新开的桌，`joined` 说明本次真的坐下了。 */
+export interface TableRematchResult {
+  tableId: string;
+  game: string;
+  joined: boolean;
+  created: boolean;
+  receipt: TableReceipt;
+}
+
 export interface TableLockInfo {
   tableId: string;
   game: string;
@@ -225,6 +236,7 @@ export class TableHost {
   private readonly seats: TableSeatLookup;
   private readonly turnMs?: number;
   private readonly openMs: number;
+  private readonly randomSeat: (max: number) => number;
   private readonly recovery: { lastHealthyAt?: number; maxDowntimeMs: number; minHumanMs: number };
   /** 未结束的桌 + 最近结束的几张（给结果页看）。 */
   private readonly tables = new Map<string, LiveTable>();
@@ -243,6 +255,7 @@ export class TableHost {
     this.seats = options.seats;
     this.turnMs = options.turnMs;
     this.openMs = options.openMs ?? OPEN_MS;
+    this.randomSeat = options.randomSeat ?? ((max: number) => randomInt(0, max));
     this.recovery = {
       ...(options.recovery?.lastHealthyAt !== undefined ? { lastHealthyAt: options.recovery.lastHealthyAt } : {}),
       maxDowntimeMs: options.recovery?.maxDowntimeMs ?? MAX_DOWNTIME_MS,
@@ -473,6 +486,8 @@ export class TableHost {
       };
     }
     const now = this.now();
+    // 先手座位在开桌时定：棋类与斗地主不再让开桌的人默认占先手。
+    const capacity = tableCapacity(def.id);
     const engine = def.create({
       host: {
         id: seat.id,
@@ -483,6 +498,7 @@ export class TableHost {
       now,
       requireHuman: input.requireHuman,
       seatCount,
+      ...(def.randomizeFirstSeat && capacity > 1 ? { firstSeat: this.randomSeat(capacity) } : {}),
       ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
     });
     const stateJson = JSON.stringify(engine.exportState());
@@ -553,6 +569,47 @@ export class TableHost {
         return joined;
       });
     } finally { release(); }
+  }
+
+  /**
+   * 「再来一局」：本厅已有同玩法、还开着、没坐满的桌就并进去，没有就开一张新的。
+   *
+   * 不复用刚结束的那张桌：`table_finalizations` 以 table_id 为主键，同一张桌打第二局
+   * 会撞主键，也会让 `settle()` 的幂等守卫把第二局结算静默跳过。结算时席位与
+   * 「一人一桌」都已释放，所以新桌就是一张普通的桌，不需要动任何表结构。
+   */
+  async rematch(
+    cooId: string,
+    input: { game?: string; clientVersion?: string; requireHuman?: boolean; seatCount?: unknown } = {},
+    requestId?: string,
+  ): Promise<TableRematchResult> {
+    const mine = await this.tableOf(cooId);
+    const id = input.game ?? mine?.game;
+    if (!id) throw new HostError('invalid', '要指定玩法才能再来一局');
+    const def = gameById(id);
+    if (!def) throw new HostError('invalid', `不认识的桌子：现在有 ${gameIds().join(' / ')}`);
+    if (mine && isLive(mine.engine.status)) {
+      if (mine.game !== def.id) {
+        throw new HostError('conflict', `你已经在一张${mine.engine.label}桌上了；一人同时只参与一张`);
+      }
+      // 已经在同玩法的桌上：把他带回那张桌，不当成错误（重连/连点两次都会走到这）。
+      return { tableId: mine.id, game: def.id, joined: false, created: false, receipt: { tableId: mine.id, revision: mine.revision } };
+    }
+    // liveTables() 已按开桌时间升序：同玩法先开的桌先坐满，不会一直空着最早那张。
+    const target = this.liveTables().find((table) => table.engine.status === 'open'
+      && table.game === def.id && !table.frozen && this.now() < table.openDeadlineAt
+      && table.engine.seatIds().length < tableCapacity(table.game));
+    if (target) {
+      const joined = await this.join(cooId, target.id, requestId, input.clientVersion);
+      return { tableId: target.id, game: def.id, joined: true, created: false, receipt: joined.receipt };
+    }
+    const opened = await this.open(cooId, {
+      game: def.id,
+      ...(input.clientVersion ? { clientVersion: input.clientVersion } : {}),
+      ...(input.requireHuman !== undefined ? { requireHuman: input.requireHuman } : {}),
+      ...(input.seatCount !== undefined ? { seatCount: input.seatCount } : {}),
+    }, requestId);
+    return { tableId: opened.tableId, game: def.id, joined: true, created: true, receipt: opened.receipt };
   }
 
   private async joinLocked(cooId: string, table: LiveTable, requestId?: string, clientVersion?: string): Promise<TableJoinResult> {

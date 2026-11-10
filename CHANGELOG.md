@@ -1,3 +1,12 @@
+## 0.41.0（2026-11-10）
+
+- **先手随机**：斗地主与五子棋不再「开桌的人固定先手」。新增 `GameDefinition.randomizeFirstSeat`，`TableHost.open()` 按 `tableCapacity` 抽一个 `firstSeat` 传给 `create()`；五子棋把它当「谁执黑」，斗地主当「谁先叫地主」。引擎默认值仍是 0，旧存档与既有用例行为不变。抽随机座位用 `TableHostOptions.randomSeat`（测试注入固定值，生产用 `randomInt`）。只影响新开的桌，进行中的牌局不重排。大富翁与狼人杀本来就各自随机，未改动。
+- **五子棋认输**：动作由单动作 `place` 改为 `place` / `resign`（`actionKey: 'action'`）。轮到自己时 `resign` 判负、对面获胜，按正常结算走（`end` 事件带 `cause: 'resign'`，`winners` 是对面那一席）；没轮到自己提交会被拒。`public()` 新增 `cause` 字段与显式 `winner`（认输局没有连五，靠棋盘推不出来），网页结果文案区分「对手认输 / 你认输了」。存档兼容旧版本：缺 `blackIndex` / `winner` 时按 0 与连五/满盘推断。**认输只做在棋类上**（斗地主阵营归属、大富翁退出排名、狼人杀多阵营都没有定义），后续加其它棋类时复用同一动作。
+- **统一「再来一局」**：四个玩法的结算页都加了这个按钮，后端新增 `table_rematch`（`/v1/action`，需幂等键）。语义是「本厅已有同玩法、开着、没坐满的桌就并入，否则开一张新的」，所以第一个点的人开桌、后面的人并进同一张；已在同玩法桌上再点会原样返回（不报错），在别的玩法桌上按「一人一桌」拒绝。狼人杀按本局人数传 `seatCount`。斗地主原来的「再开一桌」并入这个入口。
+- **不复用刚结束的那张桌**：`table_finalizations.table_id` 是主键，`settle()` 又靠「已有终态就返回」做幂等；同桌第二局会撞主键，绕过主键则第二局结算被静默跳过。改成 `(table_id, round)` 要连带动回放与等级分，本版不走这条路 —— 结算时席位与「一人一桌」已释放，新桌就是普通桌。
+- **门槛**：`pnpm typecheck` 三份 tsc 0；快测 65 文件 / 833 条全过；新增用例覆盖随机先手、认输结算与存档恢复、`table_rematch` 三种走向、以及网页端按钮与认输文案。
+- 包版本、客户端版本与网页资源 `?v=` 统一为 0.41.0；**无数据库迁移**（PG schema 仍 11、SQLite 仍 12）。上一版的 `src/web/vue/chunk-*.js` 保留一个版本，升级前已开的标签页仍能加载；新产物另存两个新 chunk。网页刷新即用；`resign` 会自动出现在 Coo 的可用动作里（`availableActions` 按本人视图给），旧 Coo 不发它也不受影响；`table_rematch` 只给网页，Coo 再来一局仍走开桌/入桌，因此**不需要重载会话工具**。
+
 ## 0.40.0（2026-11-09）
 
 - **旧网页下线**：删除 `src/web/play.js`（4,454 行）与只服务它的 `announcement-banner.js` / `announcements.js` / `support-link.js`、旧版斗地主与狼人杀渲染器 `src/web/games/{ddz,werewolf}.js`、旧玩法目录与渲染器注册 `src/web/games/registry.js`。网页只剩 Vue 客户端，`vue-loader.js` 不再按 `?legacy=1` 分派。

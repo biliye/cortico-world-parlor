@@ -531,7 +531,8 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div class="wf-end-actions">
-          <button class="btn primary" type="button" @click="ctx.showLobby()">返回客厅</button>
+          <button class="btn primary" type="button" @click="ctx.rematch()">再来一局</button>
+          <button class="btn ghost" type="button" @click="ctx.showLobby()">返回客厅</button>
         </div>
       </div>
       <section v-if="seerInspections.length" class="wf-panel wf-inspections">

@@ -23,6 +23,8 @@ export interface DoudizhuTableOptions {
   bidMs?: number;
   botDelayMs?: number;
   rng?: () => number;
+  /** 谁先叫地主：宿主在开桌时随机给出（0–2）；不传就是开桌的人，旧行为。 */
+  firstBidder?: number;
 }
 
 export type DoudizhuAction =
@@ -76,6 +78,8 @@ export class DoudizhuTable implements TableEngine {
   private readonly bidMs: number;
   private readonly botDelayMs: number;
   private readonly rng: () => number;
+  /** 本局第一个叫地主的位置：开桌时由宿主随机给出。 */
+  private readonly firstBidder: number;
   private readonly seats: Seat[] = [];
   private hands: [Card[], Card[], Card[]] = [[], [], []];
   private handCards: [PhysCard[], PhysCard[], PhysCard[]] = [[], [], []];
@@ -102,6 +106,8 @@ export class DoudizhuTable implements TableEngine {
     this.bidMs = options.bidMs ?? DEFAULT_BID_MS;
     this.botDelayMs = options.botDelayMs ?? DEFAULT_BOT_DELAY_MS;
     this.rng = options.rng ?? (() => randomInt(0, 2 ** 31) / 2 ** 31);
+    const firstBidder = options.firstBidder === undefined ? 0 : Math.floor(options.firstBidder);
+    this.firstBidder = Number.isSafeInteger(firstBidder) && firstBidder >= 0 && firstBidder < SEAT_COUNT ? firstBidder : 0;
     this.seats.push({
       id: options.host.id, name: options.host.name, bot: false, hand: [], cards: [], role: null, plays: 0,
     });
@@ -158,6 +164,10 @@ export class DoudizhuTable implements TableEngine {
       });
     }
     this.dealRound();
+    // 谁先叫地主由开桌时定下的 firstBidder 决定，开桌的人不再默认占这个位置。
+    this.dealer = this.firstBidder;
+    this.bidIndex = this.dealer;
+    this.turnId = this.seats[this.bidIndex].id;
     const first = this.seats[this.bidIndex];
     const names = this.seats.map((seat) => (seat.bot ? `${seat.name}（脚本）` : seat.name)).join('、');
     const events: TableEvent[] = [{
