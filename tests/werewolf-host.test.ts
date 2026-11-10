@@ -553,6 +553,8 @@ describe('狼人杀 · 宿主层', () => {
     ).all()) as Array<{ text: string; game: string }>;
     expect(entries).toHaveLength(1);
     expect(entries[0].text).toContain('狼人杀终局');
+    expect(await fixture.db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId))
+      .toHaveLength(COOS.length);
     // 结束即下桌：没有活跃锁、没有私视图。
     const locks = (await fixture.db.prepare('SELECT COUNT(*) AS n FROM active_table_players').get()) as { n: number };
     expect(locks.n).toBe(0);
@@ -563,7 +565,7 @@ describe('狼人杀 · 宿主层', () => {
     await fixture.close();
   });
 
-  it('全狼死于狼刀：只在内部终态记录评级排除标记', async () => {
+  it('全狼死于狼刀：普通结算入账，排除等级分并保留内部标记', async () => {
     const fixture = await setup();
     try {
       await enterAll(fixture);
@@ -600,6 +602,8 @@ describe('狼人杀 · 宿主层', () => {
 
       const result = await fixture.db.prepare('SELECT kind, payload_json FROM table_finalizations WHERE table_id = ?').get(tableId);
       expect(result).toMatchObject({ kind: 'result', payload_json: { ratingExcluded: true } });
+      expect(await new LedgerDb(fixture.db).summaryFor(players[0])).toMatchObject({ games: 1 });
+      expect(await fixture.db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId)).toEqual([]);
       const end = (await fixture.host.history(players[0], { since: 0, limit: 200 })).find(event => event.type === 'parlor.table.end');
       expect(end).toMatchObject({ data: { outcome: 'good' } });
       expect(end?.data).not.toHaveProperty('ratingExcluded');

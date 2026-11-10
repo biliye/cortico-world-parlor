@@ -18,7 +18,15 @@ export interface TableEvent {
   ratingExcluded?: true;
 }
 
-export interface TableStep {
+export interface TableSeatResult {
+  seatId: string;
+  /** 并列共用名次，下一名按已排席位数加一，例如 1、1、3。 */
+  rank: number;
+  team?: string;
+  score?: number;
+}
+
+export type TableStep = {
   events: TableEvent[];
   /** 需要补发私视图的席位（含当前回合的席位）。 */
   views: string[];
@@ -27,8 +35,11 @@ export interface TableStep {
    * 其他人该看到新桌面，但不该被再次叫醒）。
    */
   refreshViews?: string[];
-  ended?: boolean;
-}
+} & (
+  | { ended?: false; seatResults?: never }
+  /** 终局由引擎提供逐席赛果。明确不参与评级的玩法返回 null。 */
+  | { ended: true; seatResults: readonly TableSeatResult[] | null }
+);
 
 export interface TableSeat {
   id: string;

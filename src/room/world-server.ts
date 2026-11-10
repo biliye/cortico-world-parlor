@@ -23,7 +23,8 @@ import { openStorage, type StorageKind } from './storage/open.ts';
 import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
-import { gameByActionType, gameById } from './games/registry.ts';
+import { GAME_LIST, gameByActionType, gameById } from './games/registry.ts';
+import { RatingBoards } from './ratings/board.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
 import { GAME_RESPONSE_MAX_BYTES, type TableLogQuery } from './table-engine.ts';
 import { TABLE_REPLAY_LIMIT, readTableReplay, type TableReplayQuery } from './table-replay.ts';
@@ -295,6 +296,7 @@ export class WorldServer {
   private readonly identityRates = new Map<string, { until: number; count: number }>();
   private readonly coo: CooAccountDb;
   private readonly tableDiscovery: TableDiscovery;
+  private readonly ratingBoards: RatingBoards;
   /** 招募快照按网关共享 30 秒：132 个 Coo 每分钟要的是同一份，不必各查一次。 */
   private readonly recruitSnapshot: RecruitSnapshot;
   private readonly now: () => number;
@@ -346,6 +348,7 @@ export class WorldServer {
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
+    this.ratingBoards = new RatingBoards(db, this.now);
     this.recruitSnapshot = new RecruitSnapshot(db, this.now);
     this.coo = new CooAccountDb(this.db, {
       now: this.now,
@@ -560,6 +563,7 @@ export class WorldServer {
       ...(this.tableTurnMs !== undefined ? { turnMs: this.tableTurnMs } : {}),
       recovery: this.recovery,
       onCommit: (id: string) => this.markDirty(id),
+      onTableResult: game => this.ratingBoards.invalidate(game),
     }).then((host) => {
       this.hosts.set(roomId, host);
       this.hostPending.delete(roomId);
@@ -1243,6 +1247,25 @@ export class WorldServer {
       }, headerValue(req, 'x-parlor-client').trim() || undefined);
       this.pokeClock();
       json(res, 200, result);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/hall/ratings') {
+      const cooId = await this.cooOrSeat(req);
+      res.setHeader('Cache-Control', 'private, no-store');
+      const gameId = url.searchParams.get('game');
+      if (gameId === null) {
+        json(res, 200, { games: GAME_LIST.filter(game => game.rated).map(({ id, label }) => ({ id, label })) });
+        return;
+      }
+      const game = gameById(gameId);
+      if (!game?.rated) throw new HttpError(400, '请选择已开榜的玩法');
+      const inputLimit = url.searchParams.get('limit');
+      const limit = inputLimit === null ? undefined : Number(inputLimit);
+      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 200)) {
+        throw new HttpError(400, '榜单条数须为 1–200');
+      }
+      json(res, 200, await this.ratingBoards.get(game.id, cooId, limit));
       return;
     }
 

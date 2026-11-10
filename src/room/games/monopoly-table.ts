@@ -594,7 +594,7 @@ export class MonopolyTable implements TableEngine {
           ranking: out.ended.ranking,
         },
       });
-      return { events, views, ended: true };
+      return { events, views, ended: true, seatResults: null };
     }
 
     if (out.nextTurn) {

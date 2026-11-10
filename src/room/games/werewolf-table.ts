@@ -975,7 +975,12 @@ export class WerewolfTable implements TableEngine {
         roles: this.seats.map((seat) => ({ seatNo: seat.seatNo, name: seat.name, role: seat.role, alive: seat.alive })),
       },
     });
-    return { events, views: this.allSeatIds(), refreshViews: [], ended: true };
+    const seatResults = this.seats.map(seat => ({
+      seatId: seat.id,
+      rank: outcome === 'draw' || winners.includes(seat.id) ? 1 : winners.length + 1,
+      team: factionOf(seat.role!),
+    }));
+    return { events, views: this.allSeatIds(), refreshViews: [], ended: true, seatResults };
   }
 
   // —— 契约：时钟 ——

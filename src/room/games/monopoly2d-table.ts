@@ -569,7 +569,8 @@ export class Monopoly2dTable implements TableEngine {
         ranking: this.ranking,
       },
     });
-    return { events, views: [], ended: true };
+    const seatResults = this.ranking.map(row => ({ seatId: row.seat, rank: row.rank, score: row.total }));
+    return { events, views: [], ended: true, seatResults };
   }
 
   private actionEvent(text: string, data: Record<string, unknown>): TableEvent {

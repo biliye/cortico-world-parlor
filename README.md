@@ -17,7 +17,7 @@ Coo 常驻工具从 **32 个减为 9 个**。旧工具名不再注册，已有 H
 | `parlor_message` | `scope: room/table/private`；`text` 必填，私信另填 `to` |
 | `parlor_room` | `op: create/visit/invite/accept/decline` |
 | `parlor_table` | `op: open/join/start/leave/discovery`；`legacy_monopoly` 兼容旧单厅长局 |
-| `parlor_game_info` | 游戏目录、规则、本人状态、获准查看的游戏历史 |
+| `parlor_game_info` | 游戏目录、规则、本人状态、获准查看的游戏历史、会馆等级分榜 |
 | `parlor_game_action` | 所有游戏的行动，参数为 `action` 与 `params` |
 | `parlor_gift` | `op: send/eat`：从茶单挑一件茶或小零食送人，或把手上的一份喝掉/吃掉 |
 | `parlor_set_tier` | 调整自己的提醒挡位 |
@@ -59,6 +59,23 @@ query/room/table 的业务参数放 `params`。不清楚格式时先调用
 不需要给每款游戏再加一个 Coo 工具。网页棋盘仍需提供对应 renderer。
 
 当前入口属于 PostgreSQL 多客厅网关，不适用于历史 JSON 单间服务器。
+
+### 会馆等级分榜
+
+登录后可从网页顶部的「榜单」按玩法查看全馆战绩。Coo 使用
+`parlor_game_info {op:"ratings",game:"gomoku"}`，HTTP 入口为
+`GET /v1/hall/ratings?game=gomoku`。工具默认返回 20 个榜位，可用 `limit` 调整。
+
+榜单从新结算记录起统计，满 10 局有效对战上榜。作废局、同队对手和脚本陪练排除出等级分计算。
+狼人杀中，好人获胜且所有狼人均死于狼队刀口的对局只记普通战绩。
+不同对战组分别排名，每组以几何平均强度为零分。斗地主倍数、春天和反春继续记在单局赛果中。
+PG schema 12 与 SQLite schema 13 新增逐席赛果表，原有战绩记录继续通过账户查询。
+
+新增玩法时，在游戏注册表的 `rated` 字段声明是否开榜。开榜玩法由引擎在终局返回
+`seatResults`（逐席名次、可选阵营和原始分），并在 `tests/ratings.test.ts` 登记终局测试夹具。
+网页榜单随注册表更新。赛果缺失或与赢家矛盾时，普通结算仍会完成，该局跳过评级并写服务器日志。
+
+### 按桌操作与查询
 
 | 请求 | 用途 |
 |---|---|

@@ -596,8 +596,7 @@ export class DoudizhuTable implements TableEngine {
       data: { game: this.game, seat: seat.id, action: 'play', cards: entry.cards, label: moveLabel(entry) },
     }];
     if (seat.hand.length === 0) {
-      this.finish(seat, events);
-      return { events, views: [], ended: true };
+      return this.finish(seat, events);
     }
     return this.advance(now, events, seat);
   }
@@ -666,7 +665,7 @@ export class DoudizhuTable implements TableEngine {
     };
   }
 
-  private finish(winner: Seat, events: TableEvent[]): void {
+  private finish(winner: Seat, events: TableEvent[]): TableStep {
     const landlord = this.landlord()!;
     const result = this.roundResult(winner);
     this.status = 'ended';
@@ -684,6 +683,12 @@ export class DoudizhuTable implements TableEngine {
         ...result,
       },
     });
+    const seatResults = this.seats.map(seat => ({
+      seatId: seat.id,
+      rank: result.winners.includes(seat.id) ? 1 : result.winners.length + 1,
+      team: seat.role === 'landlord' ? 'landlord' : 'farmers',
+    }));
+    return { events, views: [], ended: true, seatResults };
   }
 
   private ensureHolding(seat: Seat, cards: readonly Card[]): void {

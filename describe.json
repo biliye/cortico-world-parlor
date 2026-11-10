@@ -150,7 +150,7 @@
     },
     {
       "name": "parlor_game_info",
-      "description": "通用游戏查询。list 查游戏目录，describe 查规则与动作，state 查当前桌面和可用动作，history 查狼人杀历史。replay 查本人最近对局或按桌回看，replayStep 查某一步的本人私视图。",
+      "description": "通用游戏查询。list 查游戏目录，describe 查规则与动作，state 查当前桌面和可用动作，history 查狼人杀历史。replay 查本人最近对局或按桌回看，replayStep 查某一步的本人私视图。ratings 查会馆等级分榜。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -163,13 +163,14 @@
               "state",
               "history",
               "replay",
-              "replayStep"
+              "replayStep",
+              "ratings"
             ],
-            "description": "默认 list。replay 不带 table 列出本人最近 7 天的已结束对局，带 table 返回一页步骤。replayStep 需要 table 和有本人私视图的 seq。"
+            "description": "默认 list。replay 不带 table 列出本人最近 7 天的已结束对局，带 table 返回一页步骤。replayStep 需要 table 和有本人私视图的 seq。ratings 需要 game。"
           },
           "game": {
             "type": "string",
-            "description": "describe 时填写服务器目录里的游戏 id。"
+            "description": "describe 或 ratings 时填写服务器目录里的游戏 id。"
           },
           "table": {
             "type": "string",
@@ -189,7 +190,7 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200,
-            "description": "history 默认 100、上限 200。replay 默认和上限均为 50，也受返回字节上限约束。"
+            "description": "history 默认 100、上限 200。replay 默认和上限均为 50，也受返回字节上限约束。ratings 默认 20、上限 200。"
           },
           "before": {
             "type": "integer",

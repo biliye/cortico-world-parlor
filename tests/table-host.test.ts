@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
+import { DiceTable } from '../src/room/table.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
 const A = 'coo-aaaaaaaa';
@@ -106,6 +107,12 @@ describe('客厅牌桌（骰子）', () => {
     expect(end?.text).toContain('新阿岚');
     expect(end?.text).not.toContain('地主 阿岚');
     expect((await new LedgerDb(db).publicInRoom('lobby', 5))[0].text).toContain('新阿岚');
+    const results = await db.prepare(
+      'SELECT seat_id, coo_id, rank, team FROM table_seat_results WHERE table_id = ? ORDER BY coo_id',
+    ).all<{ seat_id: string; coo_id: string; rank: number; team: string }>(tableId);
+    expect(results.map(row => [row.coo_id, row.team])).toEqual([[A, 'landlord'], [B, 'farmers'], [C, 'farmers']]);
+    expect(results.filter(row => row.rank === 1).map(row => row.seat_id).sort())
+      .toEqual([...(end!.data!.winners as string[])].sort());
   });
 
   it('斗地主两家过牌后，重新领出通知携带该手的已提交版本，可直接出牌', async () => {
@@ -136,7 +143,7 @@ describe('客厅牌桌（骰子）', () => {
 
   it('开桌/坐下/开始/停牌/结算；暗骰只在本人私视图里', async () => {
     fixture = await setup();
-    const { host, clock } = fixture;
+    const { host, clock, db } = fixture;
     const a = await enter(host, A, '阿岚');
     const b = await enter(host, B, '小满');
 
@@ -169,7 +176,16 @@ describe('客厅牌桌（骰子）', () => {
     clock.now += 100;
     await act(host, B, { type: 'stand' }, 'stand-b');
     const all = await host.history(B, { since: 0, limit: 200 });
-    expect(all.some((event) => event.type === 'parlor.table.end')).toBe(true);
+    const end = all.find(event => event.type === 'parlor.table.end');
+    const revealed = end?.data?.revealed as { id: string; total: number }[];
+    expect(revealed).toHaveLength(2);
+    const results = await db.prepare(
+      'SELECT seat_id, score, rank FROM table_seat_results WHERE table_id = ?',
+    ).all(opened.tableId);
+    expect(results).toHaveLength(revealed.length);
+    expect(results).toEqual(expect.arrayContaining(revealed.map(seat => ({
+      seat_id: seat.id, score: seat.total, rank: 1 + revealed.filter(other => other.total > seat.total).length,
+    }))));
     expect((await host.tablePublic())?.status).toBe('ended');
     // 结束就是下桌：不再有私视图；结果仍留在公开摘要与事件里。
     expect(await host.tablePrivate(a.seat.id)).toBeNull();
@@ -200,6 +216,39 @@ describe('客厅牌桌（骰子）', () => {
     // 牌桌不产生任何持有量：谁也没押，谁也没分底池。
     expect(await ledger.heldGifts(A)).toEqual({});
     expect(await ledger.heldGifts(B)).toEqual({});
+  });
+
+  it('评级赛果与公开赢家冲突时仍提交普通结算，评级零行并留日志', async () => {
+    fixture = await setup();
+    const { db, host } = fixture;
+    await enter(host, A, '阿岚');
+    await enter(host, B, '小满');
+    const { tableId } = await host.openTable(A, { game: 'dice' });
+    await host.joinTable(B);
+    await host.startTable(A);
+
+    const play = DiceTable.prototype.act;
+    const inconsistent = vi.spyOn(DiceTable.prototype, 'act').mockImplementation(function (this: DiceTable, ...args) {
+      const step = play.apply(this, args);
+      if (!step.ended) return step;
+      const seatResults = step.seatResults!.map(result => ({ ...result, rank: 2 }));
+      return { ...step, seatResults };
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await act(host, A, { type: 'stand' }, 'invalid-rating-a');
+      await act(host, B, { type: 'stand' }, 'invalid-rating-b');
+      expect(log).toHaveBeenCalledWith('parlor: 等级分赛果缺失或不一致', 'dice', tableId);
+    } finally {
+      inconsistent.mockRestore();
+      log.mockRestore();
+    }
+
+    expect(await host.tablePublic(tableId)).toMatchObject({ status: 'ended' });
+    expect(await new LedgerDb(db).summaryFor(A)).toMatchObject({ games: 1 });
+    expect(await db.prepare('SELECT kind, payload_json FROM table_finalizations WHERE table_id = ?').get(tableId))
+      .toMatchObject({ kind: 'result', payload_json: { ratingSkipped: 'invalid_seat_results' } });
+    expect(await db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId)).toEqual([]);
   });
 
   it('游戏锁：未开局也锁，退桌/收桌后才放行', async () => {
@@ -413,6 +462,7 @@ describe('重启与持久化', () => {
     // 作废只留一条终态：没有钱要退，也没有新的账本条目。
     const fin = await db.prepare('SELECT kind FROM table_finalizations WHERE table_id = ?').get(opened.tableId) as { kind: string };
     expect(fin.kind).toBe('refund');
+    expect(await db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(opened.tableId)).toEqual([]);
     expect((await new LedgerDb(db).summaryFor(A)).games).toBe(0);
   });
 

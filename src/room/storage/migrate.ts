@@ -14,9 +14,10 @@ import type { PgDb } from './postgres.ts';
 import { PG_MIGRATIONS, PG_SCHEMA_VERSION } from './pg-schema.ts';
 import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
+import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 
-/** 来源 SQLite 的库结构版本。6 = 全局短号登记/通行证；启用全局身份后允许同名席位。 */
-export const SQLITE_SCHEMA_VERSION = 12;
+/** 来源 SQLite 的库结构版本。 */
+export const SQLITE_SCHEMA_VERSION = 13;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -149,6 +150,7 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   handle.exec(TABLE_DISCOVERY_SCHEMA_SQL);
   handle.exec(NEWS_SCHEMA_SQL);
   handle.exec(SUPPORT_ADMIN_SCHEMA_SQL);
+  handle.exec(SEAT_RESULTS_SCHEMA_SQL);
   // 同上：老库的新闻表与公告表没有编辑留痕的两列，单独补。
   const newsColumns = new Set(
     (handle.prepare('PRAGMA table_info(news_items)').all() as { name: string }[]).map((row) => row.name),
