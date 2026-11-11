@@ -755,6 +755,36 @@ describe('再来一局的并发与重放边界', () => {
     expect(ids).toEqual([opened.tableId, opened.tableId]);
   });
 
+  it('同一张开桌单顺序重传，返回原桌而不是「一人一桌」冲突', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    const first = await host.openTable(A, { game: 'ddz' }, 'open-dup');
+    // 重传同一张单时人已经坐在桌上了：这就是并发重传的第二个人拿到房间锁时的处境，
+    // 「一人一桌」的检查如果排在回执查询前面，同一张单会被当成冲突拒掉。
+    const again = await host.openTable(A, { game: 'ddz' }, 'open-dup');
+    expect(again.tableId).toBe(first.tableId);
+    expect(again.receipt).toMatchObject({ tableId: first.tableId });
+  });
+
+  it('空厅里同一请求并发重传，两次拿到同一份回执且只开一张桌', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    // 没有候选桌 ⇒ 两次都会走到「自己开一张」。第一个开完桌、人也坐进去了，
+    // 第二个拿到房间锁时若先查「一人一桌」，就会把同一张单的第二次投递当成冲突拒掉。
+    const settled = await Promise.allSettled([
+      host.rematchTable(A, { game: 'ddz' }, 'race-empty'),
+      host.rematchTable(A, { game: 'ddz' }, 'race-empty'),
+    ]);
+    expect(settled.filter((entry) => entry.status === 'rejected')).toEqual([]);
+    const ids = settled.map((entry) => (entry.status === 'fulfilled' ? entry.value.tableId : ''));
+    expect(ids[0]).toBe(ids[1]);
+    const view = await host.snapshot(A, { limit: 1 });
+    expect((view.tables ?? []).filter((table) => table.game === 'ddz')).toHaveLength(1);
+    expect(view.tablePrivate?.tableId).toBe(ids[0]);
+  });
+
   it('别人用 <请求号>#rematch 开过桌，也不能被同号的重开请求当成自己的回执', async () => {
     fixture = await setup();
     const { host } = fixture;

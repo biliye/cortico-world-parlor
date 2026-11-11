@@ -460,23 +460,10 @@ export class TableHost {
     try {
     const seat = await this.requireSeat(cooId);
     if (seat.kind === 'observer') throw new HostError('forbidden', '观看者不能开桌');
-    if (this.liveTables().length >= MAX_LIVE_TABLES) {
-      throw new HostError('conflict', `这个客厅已经有 ${MAX_LIVE_TABLES} 张没结束的桌子了`);
-    }
-    const mine = await this.tableOf(cooId);
-    if (mine && isLive(mine.engine.status)) {
-      throw new HostError('conflict', `你已经在一张${mine.engine.label}桌上了；一人同时只参与一张`);
-    }
+    // 回执要排在「一人一桌」「桌数上限」前面查：同一张单的第二次投递拿到房间锁时，
+    // 第一次往往已经把桌开好、人也坐进去了 —— 先查状态就会把重传当成冲突拒掉。
     const id = input.game ?? 'dice';
-    const def = gameById(id);
-    if (!def) throw new HostError('invalid', `不认识的桌子：现在有 ${gameIds().join(' / ')}`);
-    if (input.requireHuman !== undefined && id !== 'werewolf') {
-      throw new HostError('invalid', 'requireHuman 仅适用于狼人杀');
-    }
     const seatCount = input.seatCount;
-    if (seatCount !== undefined && (id !== 'werewolf' || !isWerewolfSeatCount(seatCount))) {
-      throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
-    }
     const openKey = internal?.receiptKey ?? {
       type: 'table_open', game: id,
       ...(input.matchOpen ? { matchOpen: true } : {}),
@@ -499,6 +486,21 @@ export class TableHost {
         },
         receipt: replay,
       };
+    }
+    if (this.liveTables().length >= MAX_LIVE_TABLES) {
+      throw new HostError('conflict', `这个客厅已经有 ${MAX_LIVE_TABLES} 张没结束的桌子了`);
+    }
+    const mine = await this.tableOf(cooId);
+    if (mine && isLive(mine.engine.status)) {
+      throw new HostError('conflict', `你已经在一张${mine.engine.label}桌上了；一人同时只参与一张`);
+    }
+    const def = gameById(id);
+    if (!def) throw new HostError('invalid', `不认识的桌子：现在有 ${gameIds().join(' / ')}`);
+    if (input.requireHuman !== undefined && id !== 'werewolf') {
+      throw new HostError('invalid', 'requireHuman 仅适用于狼人杀');
+    }
+    if (seatCount !== undefined && (id !== 'werewolf' || !isWerewolfSeatCount(seatCount))) {
+      throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
     }
     const now = this.now();
     // 先手座位在开桌时定：棋类与斗地主不再让开桌的人默认占先手。
