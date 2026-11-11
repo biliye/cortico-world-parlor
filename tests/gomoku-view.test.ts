@@ -22,13 +22,14 @@ beforeAll(async () => {
   component = (await import(/* @vite-ignore */ url)).default;
 });
 
-const render = (viewer: string, status = 'ended', winner: string | null = 'black', priv: unknown = null) => renderToString(createSSRApp(component, {
+const render = (viewer: string, status = 'ended', winner: string | null = 'black', priv: unknown = null, cause?: string) => renderToString(createSSRApp(component, {
   view: {
     table: { game: 'gomoku', status, board: Array(225).fill(0),
-      seats: [{ id: 'black', name: '黑方', color: 1 }, { id: 'white', name: '白方', color: 2 }], winningLine: [], winner },
+      seats: [{ id: 'black', name: '黑方', color: 1 }, { id: 'white', name: '白方', color: 2 }], winningLine: [], winner,
+      ...(cause ? { cause } : {}) },
     priv, me: { id: viewer },
   },
-  ctx: { showLobby() {} },
+  ctx: { showLobby() {}, rematch() {} },
 }));
 
 describe('五子棋玩家与旁观者身份', () => {
@@ -65,5 +66,19 @@ describe('五子棋玩家与旁观者身份', () => {
     });
     expect(double).toContain('class="gomoku-tip danger"');
     expect(double).toContain('对方双活三');
+  });
+  it('结算页统一给「再来一局」，认输的局把胜负原因写成认输', async () => {
+    const line = await render('black');
+    expect(line).toContain('再来一局');
+    expect(line).toContain('返回客厅');
+    expect(line).not.toContain('认输');
+    const opponentResigned = await render('black', 'ended', 'black', null, 'resign');
+    expect(opponentResigned).toContain('对手认输');
+    expect(opponentResigned).toContain('再来一局');
+    expect(await render('white', 'ended', 'black', null, 'resign')).toContain('你认输了');
+  });
+  it('轮到自己时给认输按钮，没轮到就不给', async () => {
+    expect(await render('white', 'playing', null, { canAct: true })).toContain('认输');
+    expect(await render('white', 'playing', null, { canAct: false })).not.toContain('认输');
   });
 });

@@ -615,7 +615,7 @@ let acting = false;
 
 /** 需要幂等键的动作；与旧 play.js 的 IDEMPOTENT_ACTIONS 一致。 */
 const IDEMPOTENT = new Set([
-  'table_open', 'table_join', 'table_leave', 'table_start', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
+  'table_open', 'table_join', 'table_leave', 'table_start', 'table_rematch', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
   'monopoly2d_action', 'gomoku_action', 'table_discovery',
 ]);
 
@@ -810,6 +810,20 @@ export async function joinRoomTable(id: string): Promise<boolean> {
   const receipt = await act({ type: 'table_join', ...(id ? { table: id } : {}) });
   if (!receipt) return false;
   enterTable(id);
+  return true;
+}
+
+/**
+ * 再来一局：本厅已有同玩法、还开着、没坐满的桌就并入，没有就开一张新的。
+ * 服务端不复用刚结束的那张桌（终局表以桌号为主键），所以这里只需要一次动作。
+ */
+export async function rematchRoomTable(game: string, seatCount?: 6 | 9 | 12): Promise<boolean> {
+  const receipt = await act({
+    type: 'table_rematch', game,
+    ...(seatCount === undefined ? {} : { seatCount }),
+  });
+  if (!receipt) return false;
+  enterTable(typeof receipt.tableId === 'string' ? receipt.tableId : '');
   return true;
 }
 

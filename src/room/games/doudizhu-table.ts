@@ -23,6 +23,8 @@ export interface DoudizhuTableOptions {
   bidMs?: number;
   botDelayMs?: number;
   rng?: () => number;
+  /** 谁先叫地主：宿主在开桌时随机给出（0–2）；不传就是开桌的人，旧行为。 */
+  firstBidder?: number;
 }
 
 export type DoudizhuAction =
@@ -76,6 +78,8 @@ export class DoudizhuTable implements TableEngine {
   private readonly bidMs: number;
   private readonly botDelayMs: number;
   private readonly rng: () => number;
+  /** 本局第一个叫地主的位置：开桌时由宿主随机给出，要活过快照重建。 */
+  private firstBidder: number;
   private readonly seats: Seat[] = [];
   private hands: [Card[], Card[], Card[]] = [[], [], []];
   private handCards: [PhysCard[], PhysCard[], PhysCard[]] = [[], [], []];
@@ -102,6 +106,8 @@ export class DoudizhuTable implements TableEngine {
     this.bidMs = options.bidMs ?? DEFAULT_BID_MS;
     this.botDelayMs = options.botDelayMs ?? DEFAULT_BOT_DELAY_MS;
     this.rng = options.rng ?? (() => randomInt(0, 2 ** 31) / 2 ** 31);
+    const firstBidder = options.firstBidder === undefined ? 0 : Math.floor(options.firstBidder);
+    this.firstBidder = Number.isSafeInteger(firstBidder) && firstBidder >= 0 && firstBidder < SEAT_COUNT ? firstBidder : 0;
     this.seats.push({
       id: options.host.id, name: options.host.name, bot: false, hand: [], cards: [], role: null, plays: 0,
     });
@@ -158,6 +164,10 @@ export class DoudizhuTable implements TableEngine {
       });
     }
     this.dealRound();
+    // 谁先叫地主由开桌时定下的 firstBidder 决定，开桌的人不再默认占这个位置。
+    this.dealer = this.firstBidder;
+    this.bidIndex = this.dealer;
+    this.turnId = this.seats[this.bidIndex].id;
     const first = this.seats[this.bidIndex];
     const names = this.seats.map((seat) => (seat.bot ? `${seat.name}（脚本）` : seat.name)).join('、');
     const events: TableEvent[] = [{
@@ -368,6 +378,7 @@ export class DoudizhuTable implements TableEngine {
       bottom: [...this.bottom],
       bottomCards: this.bottomCards.map((card) => ({ ...card })),
       dealer: this.dealer,
+      firstBidder: this.firstBidder,
       bidIndex: this.bidIndex,
       bids: this.bids,
       redeals: this.redeals,
@@ -421,6 +432,11 @@ export class DoudizhuTable implements TableEngine {
       .map((cards) => (Array.isArray(cards) ? cards as PhysCard[] : [])) as [PhysCard[], PhysCard[], PhysCard[]];
     this.bottom = Array.isArray(raw.bottom) ? raw.bottom.filter(isCard) : [];
     this.bottomCards = Array.isArray(raw.bottomCards) ? raw.bottomCards as PhysCard[] : [];
+    // 先叫席位也要活过快照重建：开桌抽定之后、开局之前，引擎会被 hydrate 一次。
+    // 旧快照没有这个字段，按 0（桌主先叫）恢复，跟新开桌的默认值一致。
+    const rawFirstBidder = raw.firstBidder;
+    this.firstBidder = Number.isSafeInteger(rawFirstBidder) && (rawFirstBidder as number) >= 0 && (rawFirstBidder as number) < SEAT_COUNT
+      ? rawFirstBidder as number : 0;
     this.dealer = typeof raw.dealer === 'number' ? raw.dealer : 0;
     this.bidIndex = typeof raw.bidIndex === 'number' ? raw.bidIndex : 0;
     this.bids = typeof raw.bids === 'number' ? raw.bids : 0;

@@ -369,4 +369,27 @@ describe('桌面上的牌留到下一轮', () => {
     expect(plays).toHaveLength(1);
     expect(plays[0].cards).toEqual([second]);
   });
+
+  it('先叫地主的位置由开桌时指定，开桌的人不再默认先叫', () => {
+    const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(5), firstBidder: 1 });
+    table.join(GUEST);
+    table.join({ id: 'c', name: '第三位' });
+    const step = table.start('a', 0);
+    const start = step.events.find((event) => event.type === 'parlor.table.start')!;
+    expect(start.text).toContain('小满 先叫地主');
+    expect(viewOf(table, 'b').yourTurn).toBe(true);
+    expect(viewOf(table, 'a').yourTurn).toBe(false);
+    expect(() => table.act('a', { move: 'bid', call: true }, 0)).toThrow('还没轮到你');
+    table.act('b', { move: 'bid', call: false }, 0);
+    expect(viewOf(table, 'c').yourTurn).toBe(true);
+  });
+
+  it('先叫位置越界时回落到 0，不抛出也不抢人', () => {
+    const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(5), firstBidder: -3 });
+    table.join(GUEST);
+    table.join({ id: 'c', name: '第三位' });
+    const start = table.start('a', 0).events.find((event) => event.type === 'parlor.table.start')!;
+    expect(start.text).toContain('阿岚 先叫地主');
+    expect(viewOf(table, 'a').yourTurn).toBe(true);
+  });
 });

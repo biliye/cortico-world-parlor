@@ -10,7 +10,7 @@ import { gameOf } from '../lib/games.ts';
 import { componentFor } from '../lib/game-components.ts';
 import { mountFor, type GameCtx, type GameInstance, type GameView } from '../lib/legacy-games.ts';
 import {
-  activePrivate, activeTable, act, log, openRoomTable, serverNow, snapshot, tableIdOf, tableList,
+  activePrivate, activeTable, act, log, openRoomTable, rematchRoomTable, serverNow, snapshot, tableIdOf, tableList,
 } from '../stores/parlor.ts';
 import { showToast } from '../stores/ui.ts';
 import { backToRoom } from '../stores/view.ts';
@@ -93,6 +93,14 @@ const gameCtx = {
   showLobby: () => backToRoom(),
   openDdz: () => { void openRoomTable('ddz'); },
   openGame: (game: string) => { void openRoomTable(game); },
+  rematch: () => {
+    const current = table.value;
+    if (!current) return;
+    // 狼人杀按当前这局的人数重开：6／9／12 之外的不传，让服务端用默认席数。
+    const seats = Array.isArray(current.seats) ? current.seats.length : 0;
+    const seatCount = current.game === 'werewolf' && (seats === 6 || seats === 9 || seats === 12) ? seats : undefined;
+    void rematchRoomTable(current.game, seatCount);
+  },
 } as GameCtx;
 
 function context(): GameCtx {
