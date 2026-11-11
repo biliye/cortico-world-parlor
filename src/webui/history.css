@@ -13,3 +13,5 @@
 .parlor-history-panel article header { display:flex; gap:10px; flex-wrap:wrap; font-size:13px; opacity:.8; }
 .parlor-history-panel article p { white-space:pre-wrap; margin:8px 0; }
 @media(max-width:540px) { .parlor-history-panel form { padding:12px; } .parlor-history-panel label { flex:1; min-width:120px; } .parlor-history-actions { flex-basis:100%; } }
+.parlor-history-panel summary { cursor:pointer; overflow-wrap:anywhere; }
+.parlor-history-panel [aria-label="说书记录"] { margin-block:12px; }

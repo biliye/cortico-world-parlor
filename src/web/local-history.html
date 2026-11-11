@@ -11,11 +11,13 @@
   #status{min-height:24px}#status.error{color:#ffb3a6}.actions{display:flex;gap:12px;align-items:end}
   article{border-bottom:1px solid #3d5358;padding:16px 0}article header{display:flex;gap:10px;flex-wrap:wrap;color:#bad5ce;font-size:13px}
   article p{white-space:pre-wrap;overflow-wrap:anywhere;color:inherit;margin:8px 0}#more{margin:20px 0}.sent{color:#efca98}
+  #stories{margin-block:16px}#stories summary{cursor:pointer;overflow-wrap:anywhere}
   @media(max-width:540px){body{padding:14px}form{padding:12px}label{flex:1;min-width:120px}.actions{flex-basis:100%}}
 </style></head>
 <body><h1>家长 · 本地消息档案</h1>
 <p>消息保存在孩子运行 Coo 的电脑上，不随客厅服务器的 7 天回放清理。网页关闭后扩展仍会记录；已经丢失的旧消息无法补回。</p>
 <p>这里的“收到”表示孩子有权接收的客厅通信，不代表模型逐条读过。局中或未连接时，私密牌桌通知暂不展示；连接后确认已结束可回看。</p>
+<section id="stories" aria-label="说书记录"></section>
 <form id="filters">
   <label>开始（北京时间）<input id="from" type="datetime-local" required></label>
   <label>结束（不含此时刻）<input id="until" type="datetime-local" required></label>
@@ -27,4 +29,4 @@
 <p id="info"></p><p id="status" role="status" aria-live="polite"></p>
 <section id="messages" aria-label="消息记录"></section>
 <button id="more" type="button" hidden>更早的消息</button>
-<script src="./script"></script></body></html>
+<script type="module" src="./script"></script></body></html>

@@ -12,6 +12,7 @@ import { loadOrCreateIdentity, IDENTITY_FILE } from '../src/room/identity.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 import { LocalHistory, type HistoryMessage } from '../src/local-history.ts';
+import type { StoryArchive, StoryPage, StoryState } from '../src/room/story-protocol.ts';
 
 let world: ReturnType<typeof PARLOR.create> | undefined;
 let server: WorldServer | undefined;
@@ -28,6 +29,51 @@ const messages = async (): Promise<HistoryMessage[]> => {
 };
 
 describe('World 本地消息档案端到端', () => {
+  it('Coo 用工具开讲，重连收尾时收到一次纸条，散场正文自动补进本机', async () => {
+    let now = Date.now();
+    dir = mkdtempSync(join(tmpdir(), 'parlor-story-world-'));
+    server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), now: () => now, inviteCode: 'inv' });
+    await server.listen();
+    const ctx = fakeWorldContext(PARLOR, { scratchDir: dir });
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    ctx.secret = key => secrets[key] ?? '';
+    ctx.storeSecret = (key, value) => { secrets[key] = value; };
+    ctx.cfg.serverUrl = ctx.cfg.identityUrl = server.url;
+    ctx.cfg.room = 'lobby';
+    ctx.cfg.seatName = '小满';
+    ctx.cfg.wakeTier = 'full';
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+    const act = async (params: Record<string, unknown>) => {
+      const tool = world!.tools().find(candidate => candidate.name === 'parlor_room')!;
+      const result = await tool.handler({ op: 'story', params }, {} as ToolCallContext);
+      return JSON.parse(typeof result === 'string' ? result : result.text) as StoryState;
+    };
+    const opening = (await act({ action: 'start', title: '今天一起看月亮' })).round!;
+    await act({ action: 'speak', round: opening.id, text: '家长给我指水里的月亮。', requestId: 'opening' });
+    const friend = new ParlorClient(server.url, { cooId: 'coo-story-local-friend', cooSecret: 'story-local-friend-secret-0001' });
+    const peer = await friend.join('inv', { name: '朋友' }, 'lobby');
+    await friend.storyAction(peer.token, { action: 'note', round: opening.id, text: '月亮圆吗？' });
+    await world.stop();
+    now = opening.notesAt;
+    const host = new FakeHost();
+    world = PARLOR.create(ctx);
+    await world.start(host);
+    await until(async () => host.events.some(event => event.text.includes('【说书收尾】')));
+    expect(host.events.filter(event => event.text.includes('【说书收尾】')).map(event => event.text))
+      .toEqual([expect.stringContaining('月亮圆吗？')]);
+    const invoke = world.webUi!().invoke!;
+    await until(async () => !(await invoke('history', 'info', []) as { syncing: boolean }).syncing);
+    await act({ action: 'speak', round: opening.id, text: '圆得像一只盘子。', requestId: 'closing' });
+    now++;
+    await act({ action: 'finish', round: opening.id });
+    await until(async () => (await invoke('history', 'stories', [{}]) as StoryPage).rounds.some(round => round.id === opening.id));
+    const local = await invoke('history', 'stories', [{ id: opening.id }]) as StoryArchive;
+    expect(local.parts.map(part => part.text)).toEqual(['家长给我指水里的月亮。', '圆得像一只盘子。']);
+    expect(JSON.stringify(local)).not.toContain('月亮圆吗？');
+    expect(host.events.filter(event => event.text.includes('【说书收尾】'))).toHaveLength(1);
+  });
+
   it('坏身份按原规则修复后，档案写进连接后的真实身份分区', async () => {
     dir = mkdtempSync(join(tmpdir(), 'parlor-history-identity-'));
     server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv', defaultRoomId: 'lobby' });

@@ -5,6 +5,7 @@ import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } f
 import type { MailPage, MailReadResult } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type { HistorySyncPage } from './history-sync.ts';
+import type { StoryArchive, StoryCursor, StoryNotice, StoryPage, StoryState } from './story-protocol.ts';
 import type { Announcement, Feedback } from './support-db.ts';
 import type { ParentMailView } from './mail-db.ts';
 import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
@@ -42,6 +43,45 @@ export class ParlorHttpError extends Error {
 }
 
 export class ParlorClient {
+  private async storyRequest<T>(token: string, path: string, body?: Record<string, unknown>): Promise<T> {
+    const response = await fetch(this.url(path), {
+      method: body ? 'POST' : 'GET',
+      headers: await this.headers({ authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
+  storyLive(token: string, round?: string, after?: number): Promise<StoryState> {
+    const params = new URLSearchParams();
+    if (round) params.set('round', round);
+    if (after !== undefined) params.set('after', String(after));
+    return this.storyRequest(token, '/v1/story/live?' + params);
+  }
+
+  storyAction(token: string, action: Record<string, unknown>): Promise<StoryState> {
+    return this.storyRequest(token, '/v1/story/action', action);
+  }
+
+  storyNotice(token: string): Promise<StoryNotice> {
+    return this.storyRequest(token, '/v1/story/notice');
+  }
+
+  storyHistory(token: string, cursor?: StoryCursor, personal = false, forward = false): Promise<StoryPage> {
+    const params = new URLSearchParams();
+    if (cursor) {
+      params.set('cursorAt', String(cursor.endedAt));
+      params.set('cursorId', cursor.id);
+    }
+    if (forward) params.set('forward', '1');
+    return this.storyRequest(token, (personal ? '/v1/me/story/archive?' : '/v1/story/archive?') + params);
+  }
+
+  storyArchive(token: string, id: string, personal = false): Promise<StoryArchive> {
+    return this.storyRequest(token, (personal ? '/v1/me/story/archive?id=' : '/v1/story/archive?id=') + encodeURIComponent(id));
+  }
+
   async support(token: string, action: 'feedback' | 'announcements', body?: { text: string; requestId: string }): Promise<{ feedback?: Feedback[] | Feedback; announcements?: Announcement[] }> {
     const response = await fetch(this.url(`/v1/support/${action}`), {
       method: body ? 'POST' : 'GET',
@@ -91,12 +131,14 @@ export class ParlorClient {
   private global?: { authority: string; audience: string; invite: string; name: string };
   private ticket?: IdentityTicket;
   private refreshing?: Promise<IdentityTicket>;
+  storySupported = false;
 
   /** 只向目标服务器探测能力；需要新通行证时才联系权威。返回是否为多客厅网关。 */
   async initializeIdentity(authority: string, invite: string, name: string): Promise<boolean> {
     const response = await fetch(this.url('/healthz'), { redirect: 'error', signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new ParlorHttpError(response.status, '读取服务器能力失败');
-    const health = await response.json() as { protocol?: number; globalIdentity?: { authority: string; audience: string } };
+    const health = await response.json() as { protocol?: number; capabilities?: string[]; globalIdentity?: { authority: string; audience: string } };
+    this.storySupported = Array.isArray(health.capabilities) && health.capabilities.includes('storyteller-v1');
     if (!health.globalIdentity) {
       if (this.identity?.authority || identityOrigin(this.baseUrl) !== identityOrigin(authority)) {
         throw new Error('目标服务器尚未支持全局身份；请先升级服务器');

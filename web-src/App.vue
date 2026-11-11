@@ -15,11 +15,13 @@ import JoinView from './views/JoinView.vue';
 import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
 import TableView from './views/TableView.vue';
+import StoryView from './views/StoryView.vue';
 
 const ready = ref(false);
 const failed = ref('');
 /** 票据本身失效时不给「再试一次」——那只会重复同一句，得回上一页重新授权。 */
 const retryable = ref(false);
+const storyJoining = () => new URLSearchParams(location.search).get('join') === '1';
 let entering = false;
 const destination = computed(() => roomTransition.value?.name ||
   ((new URLSearchParams(location.search).get('room') || seat.value?.room) === 'hall' ? '大厅' : '客厅'));
@@ -70,6 +72,7 @@ function restoreForeground(): void {
   });
 }
 onMounted(() => {
+  readView();
   window.addEventListener('storage', onSeatStorage);
   document.addEventListener('visibilitychange', restoreForeground);
   window.addEventListener('pageshow', restoreForeground);
@@ -95,9 +98,11 @@ watch(seat, (next) => {
 </script>
 
 <template>
-  <JoinView v-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
+  <StoryView v-if="!seat && view === 'story' && !storyJoining()" />
+  <JoinView v-else-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
   <AppShell v-else-if="ready && !roomTransition">
-    <LobbyView v-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
+    <StoryView v-if="view === 'story'" />
+    <LobbyView v-else-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />
     <RoomView v-else />
   </AppShell>

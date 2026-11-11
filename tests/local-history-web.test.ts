@@ -16,12 +16,15 @@ const mount = () => {
   const pages: any[] = [];
   const downloads: string[][] = [];
   const info = { count: 2, first: 1, last: 2, rooms: ['hall'] };
-  const source = readFileSync(new URL('../src/web/local-history.js', import.meta.url), 'utf8').replace('void boot();', '');
+  const source = readFileSync(new URL('../src/web/local-history.js', import.meta.url), 'utf8')
+    .replace("import { mountStoryArchive } from './story-script';", '')
+    .replace('void boot();', '');
   const UI = runInNewContext(source + '\n({ load, exportRange, filters })', {
     document: { getElementById: (id: string) => nodes.get(id), createElement: () => new Node(), querySelectorAll: () => [...nodes.values()] },
     location: { href: 'http://localhost/api/webui/providers/world%3Aparlor/panels/history/page' },
     URL: class extends URL { static createObjectURL() { return 'blob:test'; } static revokeObjectURL() {} },
     Blob: class { constructor(chunks: string[]) { downloads.push(chunks); } },
+    mountStoryArchive() {},
     setTimeout() {},
     fetch: async (url: URL) => {
       if (url.pathname.endsWith('/info')) return { ok: true, json: async () => info };

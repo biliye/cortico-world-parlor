@@ -1,4 +1,5 @@
 /** 家长只读页：用 ownerKey 换 HttpOnly 会话，然后按孩子当前席位的可见范围看。 */
+import { mountStoryArchive } from './story-archive.js';
 
 const ui = {
   account: document.getElementById('account'),
@@ -33,6 +34,7 @@ const ui = {
   mailUnread: document.getElementById('mail-unread'),
   mail: document.getElementById('mail'),
   refresh: document.getElementById('refresh'),
+  stories: document.getElementById('parent-stories'),
   toast: document.getElementById('toast'),
 };
 
@@ -78,6 +80,7 @@ function showGate(message = '') {
   clearTimeout(timer);
   ui.gate.hidden = false;
   ui.view.hidden = true;
+  ui.stories.replaceChildren();
   ui.account.replaceChildren();
   ui.gateError.textContent = message;
   ui.gateKey.focus();
@@ -86,6 +89,16 @@ function showGate(message = '') {
 function showView(account) {
   ui.gate.hidden = true;
   ui.view.hidden = false;
+  ui.stories.replaceChildren();
+  const stories = el('div');
+  ui.stories.append(stories);
+  mountStoryArchive(stories, {
+    time: ts => new Date(ts + 8 * 3600_000).toISOString().slice(0, 16).replace('T', ' '),
+    list: cursor => api('/v1/parent/story' + (cursor
+      ? '?' + new URLSearchParams({ cursorAt: String(cursor.endedAt), cursorId: cursor.id }) : '')),
+    detail: id => api('/v1/parent/story?id=' + encodeURIComponent(id)),
+    active: () => stories.isConnected && !ui.view.hidden,
+  });
   clear(ui.account);
   const who = el('span', 'who', account.displayName || '家长');
   ui.account.append(who);

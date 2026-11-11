@@ -1,5 +1,6 @@
 import type { WebUiClientBundle, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import type { HistoryMessage, HistoryQuery } from '../local-history.ts';
+import { mountStoryArchive } from '../web/story-archive.js';
 import './history.css';
 
 interface HistoryPage { messages: HistoryMessage[]; next: HistoryQuery['before'] | null }
@@ -44,11 +45,19 @@ async function mountHistory(ctx: WebUiPanelContext): Promise<void> {
   const status = el('p'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const messages = el('section'); messages.setAttribute('aria-label', '消息记录');
   const more = el('button', '更早的消息'); more.type = 'button'; more.hidden = true;
+  const stories = el('section');
+  stories.setAttribute('aria-label', '说书记录');
   panel.append(el('h2', '本地消息档案'),
     el('p', '消息保存在孩子运行 Coo 的电脑上，不随客厅服务器的 7 天回放清理。网页关闭后扩展仍会记录；已经丢失的旧消息无法补回。'),
     el('p', '“收到”表示孩子有权接收，不代表模型逐条读过。局中或未连接时，私密牌桌通知暂不展示；连接后确认已结束可回看。'),
-    form, info, status, messages, more);
+    stories, form, info, status, messages, more);
   ctx.root.append(panel);
+  mountStoryArchive(stories, {
+    time,
+    list: before => ctx.invoke('stories', [before ? { before } : {}]),
+    detail: id => ctx.invoke('stories', [{ id }]),
+    active: () => !ctx.signal.aborted,
+  });
   const controls = [from, until, room, direction, presence, submit, download, more];
   const objectUrls = new Set<string>();
   ctx.own({ dispose() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls.clear(); } });

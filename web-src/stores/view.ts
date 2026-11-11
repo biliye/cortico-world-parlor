@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { seat } from './session.ts';
 
-export type ViewName = 'hall' | 'lobby' | 'table';
+export type ViewName = 'hall' | 'lobby' | 'table' | 'story';
 
 export const view = ref<ViewName>('hall');
 export const watchTableId = ref('');
@@ -23,7 +23,7 @@ export function readView(): void {
   watchTableId.value = params.get('table') || '';
   /* `?viewhall=1` 强行看大厅：单厅本地服务没有 /switch 接口，进不去大厅，
      而大厅那半屏（茶馆 canvas）又最需要单独截图核对。只影响这一屏，不写回 URL。 */
-  view.value = params.get('viewhall') === '1'
+  view.value = params.get('view') === 'story' ? 'story' : params.get('viewhall') === '1'
     ? 'hall'
     : params.get('view') === 'table'
       ? 'table'
@@ -36,12 +36,21 @@ export function writeView(replace = false): void {
     params.set('view', 'table');
     if (watchTableId.value) params.set('table', watchTableId.value);
     else params.delete('table');
+  } else if (view.value === 'story') {
+    params.set('view', 'story');
+    params.delete('table');
+    params.delete('viewhall');
   } else {
     params.delete('view');
     params.delete('table');
   }
   const url = '/play' + (params.toString() ? '?' + params : '');
   history[replace ? 'replaceState' : 'pushState']({ parlor: true }, '', url);
+}
+
+export function enterStory(): void {
+  view.value = 'story';
+  writeView();
 }
 
 export function enterTable(id = ''): void {
