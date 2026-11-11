@@ -444,7 +444,17 @@ export class TableHost {
     } finally { release(); }
   }
 
-  async open(cooId: string, input: { game?: string; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean; seatCount?: unknown } = {}, requestId?: string): Promise<TableOpenResult> {
+  /**
+   * `internal` 只给「再来一局」这类内部调用：让它用自己的动作名和回执内容记一次，
+   * 而不是再派生一个请求号（`x#rematch`）往下传 —— 那个后缀在 HTTP 层是合法请求号，
+   * 客户端自己用同名字符串开过桌时，派生键就会把别人早关掉的桌当成这次的「已处理」。
+   */
+  async open(
+    cooId: string,
+    input: { game?: string; clientVersion?: string; matchOpen?: boolean; requireHuman?: boolean; seatCount?: unknown } = {},
+    requestId?: string,
+    internal?: { receiptKey?: unknown; receiptExtra?: Record<string, string | number | boolean> },
+  ): Promise<TableOpenResult> {
     // 开桌还没有 tableId，用房间级键；开桌与「数桌上限」要串行。
     const releaseOpen = await this.lockTable('#room');
     try {
@@ -467,7 +477,7 @@ export class TableHost {
     if (seatCount !== undefined && (id !== 'werewolf' || !isWerewolfSeatCount(seatCount))) {
       throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
     }
-    const openKey = {
+    const openKey = internal?.receiptKey ?? {
       type: 'table_open', game: id,
       ...(input.matchOpen ? { matchOpen: true } : {}),
       ...(input.requireHuman ? { requireHuman: true } : {}),
@@ -544,6 +554,9 @@ export class TableHost {
         },
       });
       await this.finishReceipt(receipt, engine);
+      // 内部调用（再来一局）多带 joined / created / game：返回给调用方的回执要和
+      // 落库那条完全一致，否则重放（读到落库值）与首次返回（读内存值）会对不上。
+      if (internal?.receiptExtra) Object.assign(receipt, internal.receiptExtra);
       await this.storeReceipt(cooId, requestId, table.id, openKey, receipt, now);
       // 开桌这一刻就是「数据库还能写」的证据；刚开桌就崩，也不会把停机时长算错。
       await this.markHealthy(now);
@@ -588,6 +601,27 @@ export class TableHost {
     input: { game?: string; clientVersion?: string; requireHuman?: boolean; seatCount?: unknown } = {},
     requestId?: string,
   ): Promise<TableRematchResult> {
+    type RematchReceipt = TableReceipt & { joined?: boolean; created?: boolean; game?: string };
+    // 回执按「原样输入」算：game 缺省时不掺进 mine.game，否则重放时拼不出同一个 hash。
+    const key = {
+      type: 'table_rematch',
+      game: input.game ?? null,
+      seatCount: input.seatCount ?? null,
+      requireHuman: input.requireHuman ?? null,
+    };
+    // 回执里带着当时的玩法：重放时场上可能已经换了桌，甚至已经不在任何桌上。
+    const asResult = (receipt: RematchReceipt, fallbackGame?: string): TableRematchResult => ({
+      tableId: receipt.tableId,
+      game: receipt.game ?? fallbackGame ?? '',
+      joined: receipt.joined ?? false,
+      created: receipt.created ?? false,
+      receipt,
+    });
+
+    // 重传先看回执，不用知道「现在」坐在哪张桌 —— 客户端可以省略 game，也可以已经离桌。
+    const early = await this.replayReceipt(cooId, requestId, key) as RematchReceipt | null;
+    if (early) return asResult(early, input.game);
+
     const mine = await this.tableOf(cooId);
     const id = input.game ?? mine?.game;
     if (!id) throw new HostError('invalid', '要指定玩法才能再来一局');
@@ -596,55 +630,64 @@ export class TableHost {
     if (input.seatCount !== undefined && (def.id !== 'werewolf' || !isWerewolfSeatCount(input.seatCount))) {
       throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
     }
-    // 回执按「原样输入」算：game 缺省时不掺进 mine.game，否则重放时拼不出同一个 hash。
-    const key = {
-      type: 'table_rematch',
-      game: input.game ?? null,
-      seatCount: input.seatCount ?? null,
-      requireHuman: input.requireHuman ?? null,
-    };
-    type RematchReceipt = TableReceipt & { joined?: boolean; created?: boolean };
-    const replayed = await this.replayReceipt(cooId, requestId, key) as RematchReceipt | null;
-    if (replayed) {
-      return {
-        tableId: replayed.tableId, game: def.id,
-        joined: replayed.joined ?? false, created: replayed.created ?? false, receipt: replayed,
-      };
-    }
-    // 下游的 join/open 各自按 requestId 存回执，派生一个键，免得同一张单撞主键。
-    const downstream = requestId ? `${requestId}#rematch` : undefined;
-    const done = async (result: TableRematchResult): Promise<TableRematchResult> => {
-      await this.storeReceipt(
-        cooId, requestId, result.tableId, key,
-        { ...result.receipt, joined: result.joined, created: result.created } as TableReceipt, this.now(),
-      );
-      return result;
-    };
     if (mine && isLive(mine.engine.status)) {
       if (mine.game !== def.id) {
         throw new HostError('conflict', `你已经在一张${mine.engine.label}桌上了；一人同时只参与一张`);
       }
       // 已经在同玩法的桌上：把他带回那张桌，不当成错误（重连/连点两次都会走到这）。
-      return done({ tableId: mine.id, game: def.id, joined: false, created: false, receipt: { tableId: mine.id, revision: mine.revision } });
+      // 锁住自己这一行再写回执，并发重传才会拿到同一个结果，而不是撞唯一键。
+      return withTransaction(this.db, async () => {
+        await lockCooRows(this.db, [cooId]);
+        const again = await this.replayReceipt(cooId, requestId, key) as RematchReceipt | null;
+        if (again) return asResult(again, def.id);
+        const receipt: RematchReceipt = {
+          tableId: mine.id, revision: mine.revision, game: def.id, joined: false, created: false,
+        };
+        await this.storeReceipt(cooId, requestId, mine.id, key, receipt, this.now());
+        return asResult(receipt, def.id);
+      });
     }
     // liveTables() 已按开桌时间升序：同玩法先开的桌先坐满，不会一直空着最早那张。
     // 容量取候选桌自己的席数（狼人杀可以是 6/9/12），并按本次请求的人数筛，别把人塞进人数不符的局。
     const wanted = isWerewolfSeatCount(input.seatCount) ? input.seatCount : undefined;
-    const target = this.liveTables().find((table) => table.engine.status === 'open'
+    const candidates = this.liveTables().filter((table) => table.engine.status === 'open'
       && table.game === def.id && !table.frozen && this.now() < table.openDeadlineAt
-      && (wanted === undefined || this.capacityOf(table) === wanted)
-      && table.engine.seatIds().length < this.capacityOf(table));
-    if (target) {
-      const joined = await this.join(cooId, target.id, downstream, input.clientVersion);
-      return done({ tableId: target.id, game: def.id, joined: true, created: false, receipt: joined.receipt });
+      && (wanted === undefined || this.capacityOf(table) === wanted));
+    for (const table of candidates) {
+      // 候选是锁外选的，最后一张席随时会被别人抢走：拿到桌锁后再确认一次，
+      // 满了就换下一张，而不是把人踹回去看「最多 N 个人」。
+      const release = await this.lockTable(table.id);
+      try {
+        const attempt = await withTransaction(this.db, async () => {
+          await lockCooRows(this.db, [cooId]);
+          await lockRoomRow(this.db, this.roomId);
+          const again = await this.replayReceipt(cooId, requestId, key) as RematchReceipt | null;
+          if (again) return { kind: 'done' as const, result: asResult(again, def.id) };
+          if (table.frozen || table.engine.status !== 'open' || this.now() >= table.openDeadlineAt) {
+            return { kind: 'miss' as const };
+          }
+          if (table.engine.seatIds().length >= this.capacityOf(table)) return { kind: 'miss' as const };
+          const joined = await this.joinLocked(cooId, table, undefined, input.clientVersion);
+          const receipt: RematchReceipt = {
+            ...joined.receipt, game: def.id, joined: true, created: false,
+          };
+          await this.storeReceipt(cooId, requestId, table.id, key, receipt, this.now());
+          return { kind: 'done' as const, result: asResult(receipt, def.id) };
+        });
+        if (attempt.kind === 'done') return attempt.result;
+      } finally {
+        release();
+      }
     }
+    // 没有空位就自己开一张：回执与开桌写在同一个事务里（`open` 负责），
+    // 回执写不进去就整笔回滚，不会留下「桌开了但接口报错」的半截状态。
     const opened = await this.open(cooId, {
       game: def.id,
       ...(input.clientVersion ? { clientVersion: input.clientVersion } : {}),
       ...(input.requireHuman !== undefined ? { requireHuman: input.requireHuman } : {}),
       ...(input.seatCount !== undefined ? { seatCount: input.seatCount } : {}),
-    }, downstream);
-    return done({ tableId: opened.tableId, game: def.id, joined: true, created: true, receipt: opened.receipt });
+    }, requestId, { receiptKey: key, receiptExtra: { game: def.id, joined: true, created: true } });
+    return asResult(opened.receipt as RematchReceipt, def.id);
   }
 
   /** 桌子的实际席数：狼人杀把开桌定的人数写进公开视图，其它玩法看注册表。 */

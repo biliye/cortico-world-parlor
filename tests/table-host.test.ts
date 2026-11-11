@@ -719,3 +719,87 @@ describe('随机先手与再来一局的边界', () => {
     expect(again.tableId).toBe(same.tableId);
   });
 });
+
+describe('再来一局的并发与重放边界', () => {
+  it('两人同时抢最后一席时，落选的人另开一桌而不是收到满桌错误', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚'); await enter(host, B, '小满');
+    await enter(host, C, '小柚'); await enter(host, D, '客四');
+    const opened = await host.openTable(A, { game: 'ddz' }, 'race-open');
+    await host.joinTable(B, opened.tableId, 'race-join-b');
+    // 斗地主三席，剩最后一席；两人的候选都是同一张桌。
+    const settled = await Promise.allSettled([
+      host.rematchTable(C, { game: 'ddz' }, 'race-c'),
+      host.rematchTable(D, { game: 'ddz' }, 'race-d'),
+    ]);
+    const failed = settled.filter((entry) => entry.status === 'rejected');
+    expect(failed).toEqual([]);
+    const ids = settled.map((entry) => (entry.status === 'fulfilled' ? entry.value.tableId : ''));
+    // 一个并入原桌、一个另开新桌，谁也不该被拒。
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toContain(opened.tableId);
+  });
+
+  it('同一请求号并发重传，两次都返回同一张桌且不报唯一键冲突', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    const opened = await host.openTable(A, { game: 'ddz' }, 'cc-open');
+    const settled = await Promise.allSettled([
+      host.rematchTable(A, { game: 'ddz' }, 'cc-dup'),
+      host.rematchTable(A, { game: 'ddz' }, 'cc-dup'),
+    ]);
+    expect(settled.filter((entry) => entry.status === 'rejected')).toEqual([]);
+    const ids = settled.map((entry) => (entry.status === 'fulfilled' ? entry.value.tableId : ''));
+    expect(ids).toEqual([opened.tableId, opened.tableId]);
+  });
+
+  it('别人用 <请求号>#rematch 开过桌，也不能被同号的重开请求当成自己的回执', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    // 客户端完全可以合法地用这种带后缀的请求号开桌：它只是普通的 table_open。
+    const opened = await host.openTable(A, { game: 'ddz' }, 'x#rematch');
+    await host.leaveTable(A, opened.tableId, 'ns-leave');
+    const again = await host.rematchTable(A, { game: 'ddz' }, 'x');
+    expect(again.created).toBe(true);
+    expect(again.tableId).not.toBe(opened.tableId);
+    // 而且人是真的坐进去了，不是拿一张早关掉的桌糊过去。
+    const view = (await host.snapshot(A, { limit: 1 })).tablePrivate;
+    expect(view?.tableId).toBe(again.tableId);
+  });
+
+  it('回执写不进去时整笔回滚，不留「桌开了但接口报错」的半截状态', async () => {
+    fixture = await setup();
+    const { host, db } = fixture;
+    await enter(host, A, '阿岚');
+    // 只拦这一次请求的回执写入：模拟回执落库失败（磁盘、触发器、约束都算）。
+    await db.prepare(
+      "CREATE OR REPLACE FUNCTION parlor_boom_receipt() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'boom'; END; $$ LANGUAGE plpgsql",
+    ).run();
+    await db.prepare(
+      "CREATE TRIGGER parlor_boom_receipt BEFORE INSERT ON action_receipts FOR EACH ROW WHEN (NEW.request_id = 'boom-rm') EXECUTE FUNCTION parlor_boom_receipt()",
+    ).run();
+    await expect(host.rematchTable(A, { game: 'ddz' }, 'boom-rm')).rejects.toThrow();
+    // 开桌与回执要么一起成功、要么一起没有：不能留下玩家没坐上、却已经存在的桌。
+    const view = await host.snapshot(A, { limit: 1 });
+    expect(view.tablePrivate).toBeFalsy();
+    expect((view.tables ?? []).filter((table) => table.game === 'ddz')).toEqual([]);
+  });
+
+  it('省略玩法的请求离桌后重传，仍按原回执返回当时的玩法与桌号', async () => {
+    fixture = await setup();
+    const { host } = fixture;
+    await enter(host, A, '阿岚');
+    const opened = await host.openTable(A, { game: 'ddz' }, 'nf-open');
+    // 人在斗地主桌上、请求里不带 game：按当前桌推断，回执要记住推出来的玩法。
+    const first = await host.rematchTable(A, {}, 'nf-rm');
+    expect(first.game).toBe('ddz');
+    await host.leaveTable(A, opened.tableId, 'nf-leave');
+    // 离桌后重传：不能因为「现在没在桌上」就报「要指定玩法」。
+    const replay = await host.rematchTable(A, {}, 'nf-rm');
+    expect(replay.tableId).toBe(opened.tableId);
+    expect(replay.game).toBe('ddz');
+  });
+});
