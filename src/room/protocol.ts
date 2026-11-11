@@ -129,6 +129,8 @@ export type ActionRequest =
   | { type: 'table_open'; game?: TableGame; matchOpen?: boolean; requireHuman?: boolean; seatCount?: 6 | 9 | 12; requestId?: string; table?: string }
   | { type: 'table_discovery'; table: string; requestId?: string; matchOpen?: boolean; text?: string; withdraw?: boolean }
   | { type: 'table_join'; requestId?: string; table?: string }
+  /** 再来一局：本厅同玩法有开着的空桌就并进去，没有就开一张新的（不复用刚结束的那张）。 */
+  | { type: 'table_rematch'; game?: TableGame; requireHuman?: boolean; seatCount?: 6 | 9 | 12; requestId?: string }
   | { type: 'table_leave'; requestId?: string; table?: string }
   | { type: 'table_start'; requestId?: string; table?: string }
   | {

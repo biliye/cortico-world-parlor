@@ -30,6 +30,11 @@ export interface GameCreateContext {
   seatCount?: WerewolfSeatCount;
   /** 开桌时给的「每回合多久」（测试里调短）；只有用得上它的游戏才读。 */
   turnMs?: number;
+  /**
+   * 先手座位的下标，由宿主在开桌时随机给出（见 `GameDefinition.randomizeFirstSeat`）。
+   * 不传就是 0，即「开桌的人先手」的旧行为。
+   */
+  firstSeat?: number;
 }
 
 export interface GameActionDecl {
@@ -58,6 +63,12 @@ export interface GameDefinition {
   create(ctx: GameCreateContext): TableEngine;
   /** `/v1/action` 的动作类型；旧 World 也按这个名字发。 */
   actionType: string;
+  /**
+   * 开桌时随机指定先手座位（`GameCreateContext.firstSeat`）。
+   * 只对「先手位置会明显影响公平」的玩法打开：棋类与斗地主；
+   * 大富翁、狼人杀自己在 `start()` 里抽，不用这个字段。
+   */
+  randomizeFirstSeat?: boolean;
   /** `/v1/action` body → 引擎动作。 */
   toAction(body: Record<string, unknown>): unknown;
   /** 游戏协议，不依赖 Coo 工具名；新游戏只实现这一份定义。 */
@@ -128,10 +139,11 @@ const ddz: GameDefinition = {
   icon: 'cards',
   openHint: '（3 席，空位由脚本陪练补）用 parlor_table {op:"start"} 开始；叫地主时会叫你。',
   rules: ['三席斗地主，先叫地主，再轮流出牌；地主独自对抗两名农民，先出完手牌的一方获胜。', '同型同长度比主牌，炸弹压普通牌，王炸最大；领出不能过牌。牌用点数表示，小王 SJ、大王 BJ。', '本人桌面提供手牌、可过判断及合法出牌建议，超时按服务端规则代打。'],
-  create: (ctx) => new DoudizhuTable({ host: ctx.host, now: ctx.now }),
+  create: (ctx) => new DoudizhuTable({ host: ctx.host, now: ctx.now, firstBidder: ctx.firstSeat }),
   actionType: 'ddz_action',
   toAction: (body) => ({ move: body.move, call: body.call, cards: body.cards }),
   revisionMode: 'strict',
+  randomizeFirstSeat: true,
   actionKey: 'move',
   availableActions: (view) => view.yourTurn !== true ? [] : view.status === 'bidding'
     ? ['bid'] : view.status === 'playing' ? (view.canPass === true ? ['play', 'pass'] : ['play']) : [],
@@ -331,27 +343,39 @@ const gomoku: GameDefinition = {
   rated: true,
   label: '五子棋',
   icon: 'board',
-  openHint: '两席坐满后开局，桌主执黑先行。',
-  rules: ['十五乘十五棋盘，桌主执黑先行，双方轮流在空格落子；行列从 0 到 14。', '横、竖或斜向连续至少五子获胜，棋盘下满仍无赢家则和棋；本人桌面提供落点建议。'],
-  create: ({ host, turnMs }) => new GomokuTable(host, turnMs),
+  openHint: '两席坐满后开局，谁执黑由开局随机决定。',
+  rules: ['十五乘十五棋盘，开局随机决定谁执黑先行，之后双方轮流在空格落子；行列从 0 到 14。', '横、竖或斜向连续至少五子获胜，棋盘下满仍无赢家则和棋；本人桌面提供落点建议。', '轮到自己时可以认输，对面直接获胜并正常结算。'],
+  create: ({ host, turnMs, firstSeat }) => new GomokuTable(host, turnMs, firstSeat),
   actionType: 'gomoku_action',
   revisionMode: 'strict',
-  toAction: ({ row, col }) => ({ row, col }),
-  singleAction: 'place',
-  availableActions: (view) => view.canAct === true ? ['place'] : [],
+  randomizeFirstSeat: true,
+  toAction: (body) => (body.resign === true ? { resign: true } : { row: body.row, col: body.col }),
+  actionKey: 'action',
+  availableActions: (view) => view.canAct === true ? ['place', 'resign'] : [],
   action: {
-    description: '五子棋轮到你时落子，行列从 0 到 14。用 parlor_game_info {op:"state"} 看棋盘和下一步建议。',
+    description: '五子棋轮到你时落子（action:"place"，带行列 0–14），或认输（action:"resign"）。用 parlor_game_info {op:"state"} 看棋盘和下一步建议。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        action: { type: 'string', enum: ['place', 'resign'], description: 'place = 落子；resign = 认输。' },
         row: { type: 'integer', minimum: 0, maximum: GOMOKU_SIZE - 1 },
         col: { type: 'integer', minimum: 0, maximum: GOMOKU_SIZE - 1 },
       },
-      required: ['row', 'col'],
+      required: ['action'],
     },
-    toBody: ({ row, col }) => ({ type: 'gomoku_action', row, col }),
-    done: ({ row, col }) => `落子 ${row},${col}。`,
+    toBody: (args) => {
+      const action = String(args.action ?? '');
+      if (action === 'resign') return { type: 'gomoku_action', resign: true };
+      if (action !== 'place') throw new Error('action 只能是 place 或 resign');
+      const { row, col } = args;
+      if (!Number.isInteger(row) || !Number.isInteger(col)
+        || Number(row) < 0 || Number(row) >= GOMOKU_SIZE || Number(col) < 0 || Number(col) >= GOMOKU_SIZE) {
+        throw new Error(`place 要给 row、col，且都在 0–${GOMOKU_SIZE - 1}`);
+      }
+      return { type: 'gomoku_action', row, col };
+    },
+    done: (body) => (body.resign === true ? '认输了。' : `落子 ${body.row},${body.col}。`),
   },
 };
 

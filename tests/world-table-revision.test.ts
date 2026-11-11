@@ -72,7 +72,7 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
 
 describe('World 牌桌版本同步', () => {
   it('五子棋 state 只给一份点阵，旧服务器的通用行动回执也精简', async () => {
-    const engine = new GomokuTable({ id: 'mine', name: '小满' });
+    const engine = new GomokuTable({ id: 'mine', name: '小满' }, 60_000, 0);
     engine.join({ id: 'other', name: '对手' });
     engine.start('mine', 1000);
     engine.act('mine', { row: 0, col: 10 }, 1001);

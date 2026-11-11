@@ -15,6 +15,8 @@ interface BoardView {
   winner?: string;
   last?: Point;
   winningLine: Point[];
+  /** 终局原因：只有认输时带 'resign'。 */
+  cause?: string;
   revision?: number;
 }
 
@@ -48,11 +50,13 @@ const ghost = computed(() => {
 });
 const won = computed(() => !!table.value.winner && table.value.winner === props.view.me.id);
 const tie = computed(() => ended.value && !table.value.winner);
+const resigned = computed(() => table.value.cause === 'resign');
 const resultTitle = computed(() => (tie.value ? '和棋' : !mySeat.value
   ? `${winnerName.value || '一方'}获胜` : won.value ? '你赢了' : '你输了'));
 const resultLine = computed(() => {
   if (tie.value) return `棋盘已满，共 ${moveCount.value} 手`;
   const name = winnerName.value || '对手';
+  if (resigned.value) return won.value || !mySeat.value ? `对手认输 · 共 ${moveCount.value} 手` : `你认输了 · 共 ${moveCount.value} 手`;
   return won.value || !mySeat.value ? `连五 · 共 ${moveCount.value} 手` : `${name} 连五获胜 · 共 ${moveCount.value} 手`;
 });
 
@@ -93,6 +97,18 @@ async function play(): Promise<void> {
     submitting.value = false;
   }
 }
+
+/** 认输：只在轮到自己时可点（服务端也按同一条规则受理）。 */
+async function resign(): Promise<void> {
+  if (!canPlay.value || submitting.value) return;
+  if (typeof window !== 'undefined' && !window.confirm('认输后这一局直接判负并结算，确定吗？')) return;
+  submitting.value = true;
+  try {
+    await props.ctx.act({ type: 'gomoku_action', resign: true });
+  } finally {
+    submitting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -102,7 +118,8 @@ async function play(): Promise<void> {
         <strong>{{ resultTitle }}</strong>
         <span>{{ resultLine }}</span>
       </div>
-      <button class="btn primary" type="button" @click="ctx.showLobby()">返回客厅</button>
+      <button class="btn primary" type="button" @click="ctx.rematch()">再来一局</button>
+      <button class="btn ghost" type="button" @click="ctx.showLobby()">返回客厅</button>
     </div>
 
     <div class="gomoku-layout">
@@ -150,6 +167,7 @@ async function play(): Promise<void> {
           <button v-if="hints.length" class="btn ghost" type="button" :aria-expanded="hintIndex >= 0" @click="cycleHint">
             {{ hintIndex < 0 ? '下一步建议' : '看下一个建议（' + (hintIndex + 1) + '/' + hints.length + '）' }}
           </button>
+          <button class="btn ghost gomoku-resign" type="button" :disabled="submitting" @click="resign">认输</button>
         </template>
       </aside>
     </div>

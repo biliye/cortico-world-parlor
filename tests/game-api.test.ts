@@ -5,17 +5,22 @@ import type { TableSummary } from '../src/room/table-engine.ts';
 
 describe('通用游戏协议', () => {
   it('新游戏不需要工具名，只用动作协议即可发现和转换参数', () => {
-    const future: GameDefinition = {
-      ...gameById('gomoku')!, id: 'future', singleAction: 'place', rated: false,
-    };
-    expect(gameActions(future).map(entry => entry.action)).toEqual(['place']);
-    expect(gameActionBody(future, 'place', { row: 7, col: 8 })).toEqual({ type: 'gomoku_action', row: 7, col: 8 });
+    const future: GameDefinition = { ...gameById('ddz')!, id: 'future', rated: false };
+    expect(gameActions(future).map(entry => entry.action)).toEqual(['bid', 'play', 'pass']);
+    expect(gameActionBody(future, 'bid', { call: false })).toEqual({ type: 'ddz_action', move: 'bid', call: false });
+  });
+
+  it('五子棋的认输走同一套动作协议，不用另开工具', () => {
+    const gomoku = gameById('gomoku')!;
+    expect(gameActions(gomoku).map(entry => entry.action)).toEqual(['place', 'resign']);
+    expect(gameActionBody(gomoku, 'resign', {})).toEqual({ type: 'gomoku_action', resign: true });
+    expect(gameActionBody(gomoku, 'place', { row: 7, col: 8 })).toEqual({ type: 'gomoku_action', row: 7, col: 8 });
   });
 
   it.each([
     ['place', { row: '7', col: 8 }], ['place', { row: 15, col: 0 }],
     ['place', { row: 1.5, col: 0 }], ['place', { row: 0 }],
-    ['place', { row: 0, col: 0, type: 'say' }], ['place', []], ['place', null], ['resign', {}],
+    ['place', { row: 0, col: 0, type: 'say' }], ['place', []], ['place', null], ['jump', {}],
   ])('拒绝非法动作或参数 %s %j', (action, params) => {
     expect(() => gameActionBody(gameById('gomoku')!, action, params)).toThrow();
   });

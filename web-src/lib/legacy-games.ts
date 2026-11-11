@@ -31,6 +31,8 @@ export interface GameCtx {
   showLobby: () => void;
   openDdz: () => void;
   openGame: (game: string) => void;
+  /** 再来一局：并进本厅同玩法的空桌，没有就开一张新的。 */
+  rematch: () => void;
 }
 
 export interface GameInstance {
