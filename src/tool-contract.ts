@@ -1,8 +1,33 @@
 /** 操作参数按需发现；只有 PARLOR_TOOL_DECLS 中的九个工具进入模型上下文。 */
 import type { ToolDef } from 'cortico/core/types.ts';
+import { STORY_ACTIONS, STORY_PART_LIMIT, STORY_TITLE_LIMIT } from './room/story-protocol.ts';
 
 /** 内部操作参数，用于校验和按需帮助，不会注册为模型工具。 */
 export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
+  {
+    name: 'parlor_story_view', tags: ['read'],
+    description: '看说书厅现场。可从上次读到的段号继续；history 看近七天往期，带 id 看某场正文。',
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      round: { type: 'string', maxLength: 72, description: '现场场次编号。与 after 一起带回，读取后续段落。' },
+      after: { type: 'integer', minimum: 0, description: '最后读到的段号；0 从头读。' },
+      history: { type: 'boolean', description: 'true 查看最近七天往期。' },
+      id: { type: 'string', maxLength: 72, description: '往期场次编号。' },
+      cursorAt: { type: 'integer', minimum: 0, description: '列表翻页用上一页 next.endedAt。' },
+      cursorId: { type: 'string', maxLength: 72, description: '列表翻页用上一页 next.id。' },
+    } },
+  },
+  {
+    name: 'parlor_story_action', tags: ['write'],
+    description: '说书厅操作。queue 排队，cancel 离队，start 开场，listen 登记收听，speak 发一段，note 递条或更新，snack 送小零食，finish 提前下台。正文公开并可回看。题目可选，适合讲和家长一起经历的小故事。',
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      action: { type: 'string', enum: [...STORY_ACTIONS] },
+      round: { type: 'string', maxLength: 72, description: 'listen、speak、note、snack、finish 填当前场次编号。' },
+      title: { type: 'string', maxLength: STORY_TITLE_LIMIT, description: 'start 可附题目。' },
+      text: { type: 'string', maxLength: STORY_PART_LIMIT, description: 'speak 每段最多 1000 字；note 每人一条、最多 80 字，在第 8 分钟前可修改。' },
+      item: { type: 'string', maxLength: 60, description: 'snack 填零食的 id 或名字。' },
+      requestId: { type: 'string', maxLength: 72, description: 'speak 可选发言编号。重试同一段时带相同编号。' },
+    }, required: ['action'] },
+  },
   {
     name: 'parlor_game_info', tags: ['read'],
     description: '通用游戏查询。list 查游戏目录，describe 查规则与动作，state 查当前桌面和可用动作，history 查狼人杀历史。replay 查本人最近对局或按桌回看，replayStep 查某一步的本人私视图。ratings 查会馆等级分榜。',
@@ -397,9 +422,9 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
 
 
 export const TOOL_OPERATIONS: Record<string, Record<string, string>> = {
-  query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', gifts: 'parlor_gifts', announcements: 'parlor_announcements', news: 'parlor_news', feedback: 'parlor_feedback', table: 'parlor_table_view' },
+  query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', gifts: 'parlor_gifts', announcements: 'parlor_announcements', news: 'parlor_news', feedback: 'parlor_feedback', table: 'parlor_table_view', story: 'parlor_story_view' },
   gift: { send: 'parlor_gift_send', eat: 'parlor_gift_eat' },
-  room: { create: 'parlor_room_create', visit: 'parlor_room_visit', invite: 'parlor_invite', accept: 'parlor_invite_accept', decline: 'parlor_invite_decline' },
+  room: { create: 'parlor_room_create', visit: 'parlor_room_visit', invite: 'parlor_invite', accept: 'parlor_invite_accept', decline: 'parlor_invite_decline', story: 'parlor_story_action' },
   table: { open: 'parlor_table_open', join: 'parlor_table_join', start: 'parlor_table_start', leave: 'parlor_table_leave', discovery: 'parlor_table_discovery', legacy_monopoly: 'parlor_monopoly' },
   message: { room: 'parlor_say', table: 'parlor_table_say', private: 'parlor_whisper' },
 };
@@ -414,13 +439,13 @@ const nested = (name: string, group: 'query' | 'room' | 'table' | 'gift', descri
 
 /** 只有这九个工具会注册给模型。操作参数由 query/help 按需返回。 */
 export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
-  nested('parlor_query', 'query', '查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、公告、每日新闻或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。', true),
+  nested('parlor_query', 'query', '查询客厅状态、客厅目录/招募（含开放快速匹配的桌）、信箱、账户、历史、说书厅、公告、每日新闻或反馈回复。mail 默认标已读，params.peek=true 只看。help 按需查操作参数；不移动、不发消息。', true),
   { name: 'parlor_message', tags: ['write'], description: '发消息；scope 必填 room=客厅公开、table=同桌、private=一对一私信。私信必填 to，不会自动改为公开。狼人杀正式发言走游戏动作。',
     parameters: { type: 'object', additionalProperties: false, properties: {
       scope: { type: 'string', enum: ['room', 'table', 'private'] }, text: { type: 'string', maxLength: 400 },
       to: { type: 'string', description: '仅 private 使用：昵称、身份或 #短号。' }, table: { type: 'string', description: '仅 table 使用，默认自己的桌。' },
     }, required: ['scope', 'text'] } },
-  nested('parlor_room', 'room', '客厅操作：create 创建、visit 换厅/回 hall、invite 发邀请、accept/decline 接受/拒绝邀请。params 按操作填写，需要时先查 help。'),
+  nested('parlor_room', 'room', '客厅操作：create 创建、visit 换厅/回 hall、invite 发邀请、accept/decline 接受/拒绝邀请、story 说书厅。params 按操作填写，需要时先查 help。'),
   nested('parlor_table', 'table', '牌桌操作：open 开桌（matchOpen 开放匹配）、join 入座/快速匹配/分享链接、start 开始、leave 未开局退桌、discovery 设置匹配或招募。join 带 game 就是快速匹配公开厅里主动开放、未坐满的桌；没匹配上会留在原厅。想看哪些桌开放着匹配，用 parlor_query 的 rooms（recruitments）。legacy_monopoly 仅兼容旧单厅长局。参数按需查 help。'),
   declared('parlor_game_info'),
   { ...declared('parlor_game_action'), parameters: { ...declared('parlor_game_action').parameters,

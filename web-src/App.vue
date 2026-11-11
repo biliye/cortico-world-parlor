@@ -8,21 +8,34 @@ import AppShell from './components/AppShell.vue';
 import RoomTransition from './components/RoomTransition.vue';
 import { startAnnouncementWatch } from './stores/announcements.ts';
 import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition, onSeatStorage } from './stores/parlor.ts';
-import { IdentityExpiredError } from './api/client.ts';
+import { fetchHealth, IdentityExpiredError } from './api/client.ts';
 import { entryNotice, seat } from './stores/session.ts';
 import { readView, view, wantHall } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
 import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
 import TableView from './views/TableView.vue';
+import StoryView from './views/StoryView.vue';
 
 const ready = ref(false);
 const failed = ref('');
 /** 票据本身失效时不给「再试一次」——那只会重复同一句，得回上一页重新授权。 */
 const retryable = ref(false);
+const storyJoining = () => new URLSearchParams(location.search).get('join') === '1';
+const storyAvailability = ref<'checking' | 'available' | 'unsupported' | 'unreachable'>('checking');
 let entering = false;
 const destination = computed(() => roomTransition.value?.name ||
   ((new URLSearchParams(location.search).get('room') || seat.value?.room) === 'hall' ? '大厅' : '客厅'));
+
+async function checkStoryAvailability(): Promise<void> {
+  storyAvailability.value = 'checking';
+  const health = await fetchHealth();
+  if (!health) {
+    storyAvailability.value = 'unreachable';
+    return;
+  }
+  storyAvailability.value = health.capabilities?.includes('storyteller-v1') ? 'available' : 'unsupported';
+}
 
 async function retry(): Promise<void> {
   if (!roomTransition.value) return enter();
@@ -70,6 +83,8 @@ function restoreForeground(): void {
   });
 }
 onMounted(() => {
+  readView();
+  void checkStoryAvailability();
   window.addEventListener('storage', onSeatStorage);
   document.addEventListener('visibilitychange', restoreForeground);
   window.addEventListener('pageshow', restoreForeground);
@@ -95,9 +110,20 @@ watch(seat, (next) => {
 </script>
 
 <template>
-  <JoinView v-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
-  <AppShell v-else-if="ready && !roomTransition">
-    <LobbyView v-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
+  <main v-if="view === 'story' && storyAvailability !== 'available'" class="story-entry-status">
+    <h1>说书人</h1>
+    <p role="status">
+      {{ storyAvailability === 'checking' ? '正在确认说书厅是否开放…'
+        : storyAvailability === 'unreachable' ? '暂时无法确认说书厅是否开放。' : '当前茶馆未开放说书厅。' }}
+    </p>
+    <button v-if="storyAvailability === 'unreachable'" type="button" @click="checkStoryAvailability">重试</button>
+    <a href="/play">返回茶馆</a>
+  </main>
+  <StoryView v-else-if="!seat && view === 'story' && !storyJoining()" />
+  <JoinView v-else-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
+  <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available' || storyAvailability === 'unreachable'">
+    <StoryView v-if="view === 'story'" />
+    <LobbyView v-else-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />
     <RoomView v-else />
   </AppShell>
@@ -110,3 +136,8 @@ watch(seat, (next) => {
     @retry="retry"
   />
 </template>
+
+<style scoped>
+.story-entry-status { width: min(100%, 49rem); margin-inline: auto; padding: clamp(1rem, 4vw, 2.75rem); }
+.story-entry-status button { margin-inline-end: .75rem; }
+</style>

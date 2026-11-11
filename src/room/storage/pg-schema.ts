@@ -15,8 +15,9 @@
 import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
+import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 13;
+export const PG_SCHEMA_VERSION = 14;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -503,4 +504,5 @@ export const PG_MIGRATIONS: PgMigration[] = [
     ALTER TABLE tables ADD CONSTRAINT tables_game_check
       CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi'));
   ` },
+  { version: 14, name: 'storyteller', sql: STORY_SCHEMA_SQL },
 ];

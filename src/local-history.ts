@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { StoryArchive, StoryCursor, StoryPage, StorySummary } from './room/story-protocol.ts';
 // 与现有 SQLite 适配器一致，避免 Vite 5 把 node:sqlite 误识别成外部包。
 const { DatabaseSync: NativeDatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
 
@@ -50,7 +51,11 @@ export class LocalHistory {
       );
       CREATE INDEX IF NOT EXISTS history_time ON messages(ts DESC, id DESC);
       CREATE INDEX IF NOT EXISTS history_room_time ON messages(room, ts DESC, id DESC);
-      CREATE TABLE IF NOT EXISTS progress (key TEXT PRIMARY KEY, seq INTEGER NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS progress (key TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS stories (
+        id TEXT PRIMARY KEY, ended_at INTEGER NOT NULL, summary TEXT NOT NULL, parts TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS local_story_time ON stories(ended_at DESC, id DESC);`);
     this.db = db;
     return db;
   }
@@ -61,6 +66,32 @@ export class LocalHistory {
       (id,ts,room,type,direction,sender,recipient,text,private) VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(message.id, message.ts, message.room, message.type, message.direction,
         message.sender, message.recipient, message.text, message.private ? 1 : 0);
+  }
+
+  saveStory({ parts, ...round }: StoryArchive): void {
+    this.open().prepare('INSERT OR IGNORE INTO stories (id, ended_at, summary, parts) VALUES (?, ?, ?, ?)')
+      .run(round.id, round.endedAt, JSON.stringify(round), JSON.stringify(parts));
+  }
+
+  latestStory(): StoryCursor | undefined {
+    return this.open().prepare('SELECT id, ended_at AS endedAt FROM stories ORDER BY ended_at DESC, id DESC LIMIT 1')
+      .get() as StoryCursor | undefined;
+  }
+
+  story(id: string): StoryArchive {
+    const row = this.open().prepare('SELECT summary, parts FROM stories WHERE id = ?').get(id);
+    if (!row) throw new Error('这场说书尚未存到本机');
+    return { ...JSON.parse(String(row.summary)), parts: JSON.parse(String(row.parts)) };
+  }
+
+  storyList(before?: StoryCursor): StoryPage {
+    if (before && (!Number.isSafeInteger(before.endedAt) || typeof before.id !== 'string')) throw new Error('说书档案翻页位置无效');
+    const filter = before ? 'WHERE ended_at < ? OR (ended_at = ? AND id < ?)' : '';
+    const rows = this.open().prepare(`SELECT summary FROM stories ${filter} ORDER BY ended_at DESC, id DESC LIMIT 21`)
+      .all(...(before ? [before.endedAt, before.endedAt, before.id] : []));
+    const rounds = rows.slice(0, 20).map(row => JSON.parse(String(row.summary)) as StorySummary);
+    const last = rounds.at(-1);
+    return { rounds, next: rows.length > 20 && last ? { id: last.id, endedAt: last.endedAt } : null };
   }
 
   progress(key: string): number {

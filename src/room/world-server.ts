@@ -48,6 +48,8 @@ import { acceptsGzip, sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
+import { StoryDb, StoryError } from './story-db.ts';
+import { STORY_ACTIONS } from './story-protocol.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -229,7 +231,7 @@ const headerValue = (req: IncomingMessage, name: string): string => {
 };
 
 const statusOf = (error: unknown): number => {
-  if (error instanceof HttpError) return error.status;
+  if (error instanceof HttpError || error instanceof StoryError) return error.status;
   // 账户表满 = 服务端容量问题，回 503（可等房主扩容后再试），不要报成 500「服务端出错」。
   if (error instanceof AccountLimitError) return 503;
   if (error instanceof HostError) {
@@ -287,6 +289,7 @@ const roomSummary = async (db: Db, room: RoomRow) => {
 };
 
 export class WorldServer {
+  private readonly story: StoryDb;
   private readonly db: Db;
   private readonly operatorHash?: Buffer;
   private readonly identityAuthority?: string;
@@ -347,6 +350,7 @@ export class WorldServer {
     this.db = db;
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
+    this.story = new StoryDb(db, this.now, () => this.hallId);
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.ratingBoards = new RatingBoards(db, this.now);
     this.recruitSnapshot = new RecruitSnapshot(db, this.now);
@@ -672,6 +676,8 @@ export class WorldServer {
     let next: number | undefined;
     let hasTables = false;
     try {
+      const storyNext = await this.story.tick();
+      if (storyNext !== undefined) next = Math.min(storyNext, now + CLOCK_IDLE_MS);
       const occupied = await this.db.prepare(
         'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
       ).all() as { room_id: string }[];
@@ -847,6 +853,52 @@ export class WorldServer {
     return seat.cooId;
   }
 
+  private async serveStory(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader('cache-control', 'no-store');
+    const path = url.pathname;
+    if (path === '/v1/story/action' && req.method === 'POST') {
+      const id = await this.cooOrSeat(req);
+      const body = await readJson(req);
+      if (!STORY_ACTIONS.some(action => action === body.action)) throw new HttpError(400, '未知说书操作');
+      const name = (await activeSeatForCoo(this.db, id))?.name || await this.coo.cooDisplayName(id) || '茶客';
+      const result = await this.story.action({ id, name }, body);
+      if (body.action !== 'listen') this.pokeClock();
+      json(res, 200, result, req);
+      return;
+    }
+    if (req.method !== 'GET') throw new HttpError(405, '需要 GET');
+    if (path === '/v1/story/live') {
+      const id = bearer(req) || headerValue(req, 'x-parlor-coo') || headerValue(req, GLOBAL_HEADER)
+        ? await this.cooOrSeat(req) : undefined;
+      const after = Number(url.searchParams.get('after') ?? 0);
+      if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '发言游标无效');
+      json(res, 200, await this.story.state(id, url.searchParams.get('round') ?? undefined, after), req);
+      return;
+    }
+    if (path === '/v1/story/notice') {
+      json(res, 200, await this.story.notice(await this.cooOrSeat(req)), req);
+      return;
+    }
+    if (!['/v1/story/archive', '/v1/me/story/archive', '/v1/parent/story'].includes(path)) {
+      throw new HttpError(404, '没有这个说书接口');
+    }
+    const personal = path === '/v1/me/story/archive';
+    const actor = personal ? await this.cooOrSeat(req)
+      : path === '/v1/parent/story' ? (await this.parentSession(req)).account.cooId : undefined;
+    const id = url.searchParams.get('id');
+    if (id) {
+      json(res, 200, await this.story.archive(id, actor), req);
+      return;
+    }
+    const cursorId = url.searchParams.get('cursorId');
+    const cursorAt = url.searchParams.get('cursorAt');
+    const endedAt = Number(cursorAt);
+    if ((cursorId !== null || cursorAt !== null) && (!cursorId || cursorId.length > 72 || !cursorAt
+      || !Number.isSafeInteger(endedAt) || endedAt < 0)) throw new HttpError(400, '说书档案游标无效');
+    const cursor = cursorId ? { id: cursorId, endedAt } : undefined;
+    json(res, 200, await this.story.history(actor, cursor, personal && url.searchParams.get('forward') === '1'), req);
+  }
+
   private async seatAuth(req: IncomingMessage, roomId: string, tokenOverride?: string) {
     const token = tokenOverride ?? bearer(req);
     if (!token) throw new HttpError(401, '缺少席位令牌');
@@ -873,6 +925,9 @@ export class WorldServer {
     }
     if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
     if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
+
+    if (url.pathname.startsWith('/v1/story/') || url.pathname === '/v1/me/story/archive'
+      || url.pathname === '/v1/parent/story') return this.serveStory(req, res, url);
 
     if (url.pathname.startsWith('/v1/support/')) {
       res.setHeader('cache-control', 'no-store');
@@ -1006,7 +1061,7 @@ export class WorldServer {
         version: PACKAGE_VERSION,
         protocol: 2,
         storage: 'postgres',
-        capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled'],
+        capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled','storyteller-v1'],
         ...(this.identityAuthority ? { globalIdentity: { authority: this.authorityUrl(), audience: this.audienceUrl() } } : {}),
         guestJoin: this.allowGuestJoin,
         offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
@@ -2778,6 +2833,7 @@ export class WorldServer {
 
   /** 回放是 7 天；事件表只增不减会一直长，所以每小时清一次。 */
   private async pruneEvents(now: number): Promise<void> {
+    await this.story.prune(now);
     const before = now - 7 * 24 * 60 * 60_000;
     const rooms = await this.db.prepare('SELECT id FROM rooms').all() as { id: string }[];
     for (const room of rooms) {

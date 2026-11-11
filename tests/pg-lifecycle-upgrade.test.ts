@@ -12,6 +12,36 @@ import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
 
+it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象棋桌', async () => {
+  db = await openTestDb();
+  const owner = 'coo-v14-upgrade';
+  const room = 'r-v14-upgrade';
+  expect(await new CooAccountDb(db).registerCoo(owner, 'story-upgrade-secret-012345', 'pet', '旧玩家')).toBe('ok');
+  await createRoom(db, { id: room, ownerCooId: owner, name: '旧客厅' }, 4);
+  await insertTable(db, 'old-xiangqi', room, 'xiangqi');
+  await db.exec(`
+    DROP TABLE story_parts, story_attendance, story_notes, story_snacks, story_queue, story_rounds;
+    UPDATE meta SET value='13' WHERE key='schema_version';
+  `);
+  const storyTables = () => db!.prepare(`
+    SELECT tablename FROM pg_tables WHERE schemaname='public' AND left(tablename, 6)='story_' ORDER BY tablename
+  `).all<{ tablename: string }>();
+  expect(await schemaVersion(db)).toBe(13);
+  expect(await storyTables()).toEqual([]);
+
+  await migrate(db);
+  await migrate(db);
+
+  expect(await schemaVersion(db)).toBe(14);
+  expect((await storyTables()).map(row => row.tablename)).toEqual([
+    'story_attendance', 'story_notes', 'story_parts', 'story_queue', 'story_rounds', 'story_snacks',
+  ]);
+  expect(await db.prepare('SELECT id, name FROM rooms WHERE id=?').get(room)).toEqual({ id: room, name: '旧客厅' });
+  expect(await db.prepare('SELECT id, game FROM tables WHERE room_id=?').all(room)).toEqual([
+    { id: 'old-xiangqi', game: 'xiangqi' },
+  ]);
+});
+
 it('PG v12 升到 v13：保留五子棋桌并允许中国象棋桌', async () => {
   db = await openTestDb();
   const room = 'r-v13-upgrade';
@@ -28,7 +58,7 @@ it('PG v12 升到 v13：保留五子棋桌并允许中国象棋桌', async () =>
   await expect(insertTable(db, 'new-xiangqi', room, 'xiangqi')).rejects.toThrow(/tables_game_check/);
   await migrate(db);
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(13);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   await insertTable(db, 'new-xiangqi', room, 'xiangqi');
   expect(await db.prepare('SELECT id, game FROM tables WHERE room_id=? ORDER BY id').all(room)).toEqual([
     { id: 'new-xiangqi', game: 'xiangqi' }, { id: 'old-gomoku', game: 'gomoku' },
@@ -36,7 +66,7 @@ it('PG v12 升到 v13：保留五子棋桌并允许中国象棋桌', async () =>
 
   await db.exec("ALTER TABLE tables DROP CONSTRAINT tables_game_check; UPDATE meta SET value='12' WHERE key='schema_version';");
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(13);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   await expect(insertTable(db, 'invalid-game', room, 'unknown-game')).rejects.toThrow(/tables_game_check/);
 });
 

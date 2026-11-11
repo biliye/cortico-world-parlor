@@ -1,4 +1,5 @@
 /** 经 Coo 控制台原有的面板读取本机档案，不连接客厅服务器。 */
+import { mountStoryArchive } from './story-script';
 const $ = id => document.getElementById(id);
 const zone = 8 * 3600_000;
 const time = ts => new Date(ts + zone).toISOString().slice(0, 19).replace('T', ' ');
@@ -111,3 +112,8 @@ async function boot() {
   await load();
 }
 void boot();
+mountStoryArchive($('stories'), {
+  time,
+  list: before => api('stories', before ? { before } : {}),
+  detail: id => api('stories', { id }),
+});

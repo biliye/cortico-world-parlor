@@ -11,6 +11,7 @@ export interface SeatConfig {
 
 export interface Health {
   guestJoin?: boolean;
+  capabilities?: string[];
   globalIdentity?: { authority: string } | null;
   /** 多客厅服务器才有；单客厅服务器（serve.ts）没有这个字段。 */
   rooms?: number;

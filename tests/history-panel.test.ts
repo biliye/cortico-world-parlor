@@ -24,7 +24,7 @@ class Element {
   append(...nodes: Element[]) { this.children.push(...nodes); }
   replaceChildren() { this.children = []; }
   setAttribute(name: string, value: string) { this.attrs[name] = value; }
-  addEventListener(type: string, fn: (event: { preventDefault(): void }) => void, opts: { signal?: AbortSignal }) {
+  addEventListener(type: string, fn: (event: { preventDefault(): void }) => void, opts: { signal?: AbortSignal } = {}) {
     this.listeners.set(type, { fn, signal: opts.signal });
   }
   fire(type: string) { const handler = this.listeners.get(type); if (!handler?.signal?.aborted) handler?.fn({ preventDefault() {} }); }

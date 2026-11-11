@@ -681,3 +681,7 @@ svg { display: block; }
   .live-dot.is-live, .gate-led { animation: none; }
   .board-btn:active, .gate button:active { transform: none; }
 }
+.parent-stories { padding: 14px; }
+.parent-stories details details { margin-block: 10px; }
+.parent-stories summary { cursor: pointer; overflow-wrap: anywhere; }
+.parent-stories article p { white-space: pre-wrap; overflow-wrap: anywhere; }

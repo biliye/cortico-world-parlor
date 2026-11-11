@@ -79,7 +79,7 @@ function seatKey(cfg: SeatConfig | null = seat.value): string {
 function replaceRoomUrl(room: string, resetView = true): void {
   const params = new URLSearchParams(location.search);
   params.set('room', room);
-  if (resetView) { params.delete('table'); params.delete('view'); }
+  if (resetView && params.get('view') !== 'story') { params.delete('table'); params.delete('view'); }
   history.replaceState({ ...history.state, parlor: true }, '', location.pathname + '?' + params);
 }
 
@@ -625,7 +625,7 @@ const IDEMPOTENT = new Set([
  */
 const STRICT_ACTIONS = new Set(['table_action', 'ddz_action', 'monopoly2d_action', 'gomoku_action', 'xiangqi_action']);
 
-function newRequestId(): string {
+export function newRequestId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   } catch {

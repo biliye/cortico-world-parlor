@@ -207,6 +207,10 @@ export class ParlorWorld implements World {
   private readonly hintedRecruits = new Map<string, number>();
   private history?: LocalHistory;
   private historyTimer?: NodeJS.Timeout;
+  private storyNoticeTimer?: NodeJS.Timeout;
+  private storyNoticeTask?: Promise<void>;
+  private storyNoticeRefreshPending = false;
+  private storyNoticeRetryMs = 0;
   private cursorTimer?: NodeJS.Timeout;
   private historyTask?: Promise<void>;
   private historySyncUnsupported = false;
@@ -280,6 +284,8 @@ export class ParlorWorld implements World {
     const byName = new Map(OPERATION_DECLS.map((decl) => [decl.name, decl]));
     const tool = (name: string, handler: ToolDef['handler']): ToolDef => ({ ...byName.get(name)!, handler });
     return [
+      tool('parlor_story_view', (args) => this.storyView(args)),
+      tool('parlor_story_action', (args) => this.storyAction(args)),
       tool('parlor_game_info', (args) => this.gameInfo(args)),
       tool('parlor_game_action', (args) => this.genericGameAct(args)),
       tool('parlor_feedback', (args) => this.supportRequest('feedback', args)),
@@ -353,12 +359,12 @@ export class ParlorWorld implements World {
     storage.push(this.cursorStorage(), this.identityStorage());
     return {
       config: [PARLOR_CONFIG_GROUP],
-      panels: [{ id: 'history', title: '本地消息档案', getMethods: ['page', 'script', 'query', 'info'],
+      panels: [{ id: 'history', title: '本地消息档案', getMethods: ['page', 'script', 'story-script', 'query', 'info', 'stories'],
         description: '孩子电脑上的持久消息记录，按时间查询；无需打开网页也会持续记录。' }],
       invoke: async (panel, method, args) => {
         if (panel !== 'history') throw new Error('没有这个面板');
-        if (method === 'page' || method === 'script') {
-          const file = method === 'page' ? 'local-history.html' : 'local-history.js';
+        if (method === 'page' || method === 'script' || method === 'story-script') {
+          const file = method === 'page' ? 'local-history.html' : method === 'script' ? 'local-history.js' : 'story-archive.js';
           return { $binary: { mime: method === 'page' ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
             base64: readFileSync(new URL(`./web/${file}`, import.meta.url)).toString('base64') } };
         }
@@ -367,6 +373,10 @@ export class ParlorWorld implements World {
         if (method === 'info') return { ...history.info(), error: this.historyError,
           syncing: !!this.historyTask, privateHidden, server: this.baseUrl, name: this.seat?.name };
         if (method === 'query') return history.query((args[0] ?? {}) as HistoryQuery, privateHidden);
+        if (method === 'stories') {
+          const query = (args[0] ?? {}) as { id?: string; before?: import('./room/story-protocol.ts').StoryCursor };
+          return typeof query.id === 'string' ? history.story(query.id) : history.storyList(query.before);
+        }
         throw new Error('没有这个查询方法');
       },
       links,
@@ -431,6 +441,8 @@ export class ParlorWorld implements World {
     this.stopped = true;
     if (this.historyTimer) clearInterval(this.historyTimer);
     this.historyTimer = undefined;
+    if (this.storyNoticeTimer) clearTimeout(this.storyNoticeTimer);
+    this.storyNoticeTimer = undefined;
     if (this.supportTimer) clearInterval(this.supportTimer);
     this.supportTimer = undefined;
     this.clearPendingMessages();
@@ -440,6 +452,7 @@ export class ParlorWorld implements World {
     await this.streamTask?.catch(() => {});
     this.streamTask = undefined;
     await this.historyTask;
+    await this.storyNoticeTask;
     this.history?.close();
     await this.server?.close();
     this.server = undefined;
@@ -750,6 +763,7 @@ export class ParlorWorld implements World {
             this.historySeats.add(this.seat!.id);
             this.historyRooms.add(this.currentRoom);
             this.scheduleHistorySync();
+            this.scheduleStoryNotice(0);
             if (disconnected) {
               disconnected = false;
               if (Date.now() - lastUpAt >= LINK_GAP_MS) {
@@ -908,6 +922,121 @@ export class ParlorWorld implements World {
       history.advance(`room:${room}`, high);
     }
     if (!unsupported) this.historyError = '';
+    if (client.storySupported && !this.stopped) await this.syncStories(history, client);
+  }
+
+  private async syncStories(history: LocalHistory, client: ParlorClient): Promise<void> {
+    let cursor = history.latestStory();
+    while (!this.stopped) {
+      let page;
+      try { page = await client.storyHistory(this.token, cursor, true, true); }
+      catch (error) {
+        if (error instanceof ParlorHttpError && error.status === 404) return;
+        throw error;
+      }
+      for (const round of page.rounds) {
+        if (this.stopped) return;
+        try { history.saveStory(await client.storyArchive(this.token, round.id, true)); }
+        catch (error) {
+          if (!(error instanceof ParlorHttpError) || error.status !== 404) throw error;
+          // 列表读取与下载之间，场次可能刚好超过七天。
+        }
+      }
+      if (!page.next) return;
+      cursor = page.next;
+    }
+  }
+
+  private scheduleStoryNotice(delay: number): void {
+    if (this.stopped || !this.client?.storySupported) return;
+    if (delay === 0) this.storyNoticeRetryMs = 0;
+    if (this.storyNoticeTask) {
+      this.storyNoticeRefreshPending = true;
+      return;
+    }
+    if (this.storyNoticeTimer) clearTimeout(this.storyNoticeTimer);
+    this.storyNoticeTimer = setTimeout(() => {
+      this.storyNoticeTimer = undefined;
+      let next: number | undefined;
+      this.storyNoticeTask = this.checkStoryNotice().then(delay => {
+        this.storyNoticeRetryMs = 0;
+        next = delay;
+      }).catch(error => {
+        // 4xx 等待认证过的客厅流重新打开，或本人再次操作说书厅。
+        if (error instanceof ParlorHttpError && error.status < 500) return;
+        this.storyNoticeRetryMs = Math.min(30_000, Math.max(1_000, 2 * this.storyNoticeRetryMs));
+        next = this.storyNoticeRetryMs;
+      }).finally(() => {
+        this.storyNoticeTask = undefined;
+        if (this.storyNoticeRefreshPending) next = 0;
+        this.storyNoticeRefreshPending = false;
+        if (next !== undefined) this.scheduleStoryNotice(next);
+      });
+    }, delay);
+    this.storyNoticeTimer.unref?.();
+  }
+
+  private async checkStoryNotice(): Promise<number | undefined> {
+    if (!this.client || !this.history) return;
+    const token = this.token;
+    const notice = await this.client.storyNotice(token);
+    if (this.stopped || this.token !== token) return;
+    const { round, readyUntil, now } = notice;
+    if (round && round.notesAt > now) {
+      return round.notesAt - now + 50;
+    }
+    if (round || readyUntil) {
+      const mark = round ? round.endsAt : readyUntil!;
+      const key = round ? 'story-closing-notice' : 'story-queue-notice';
+      if (this.history.progress(key) >= mark) return;
+      if (this.autoSilenced) {
+        return mark - now > 5_000 ? 5_000 : undefined;
+      }
+      const text = round
+        ? `【说书收尾】还剩 ${Math.max(1, Math.ceil((round.endsAt - now) / 1000))} 秒。收到 ${round.snacks} 份零食。听众来信：${JSON.stringify(round.batch ?? [])}。可挑几条回应，也可以继续讲完。`
+        : '【说书人】轮到你了。请在一分钟确认窗口内用 parlor_room {op:"story",params:{action:"start"}} 开讲。';
+      await this.host?.pushEvent({
+        type: 'parlor.message', ts: nowIso(this.ctx.timezone), source: this.id, origin: 'external', senderKey: 'parlor',
+        text, meta: { story: round?.id, deadline: mark },
+      }, { trigger: 'debounce' });
+      this.history.advance(key, mark);
+      return;
+    }
+    return notice.queued ? 5_000 : undefined;
+  }
+
+  private async storyView(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.multiRoom) return this.failed('说书厅需要连接多客厅服务器');
+    const after = args.after as number | undefined;
+    if (typeof args.id === 'string') {
+      const archive = await this.client.storyArchive(this.token, args.id);
+      const parts = archive.parts.filter(part => part.seq > (after ?? 0)).slice(0, 6);
+      const last = parts.at(-1)?.seq;
+      return JSON.stringify({ ...archive, parts, nextAfter: last && last < archive.parts.length ? last : null });
+    }
+    if (args.history === true) {
+      const cursor = typeof args.cursorAt === 'number' && typeof args.cursorId === 'string'
+        ? { endedAt: args.cursorAt, id: args.cursorId } : undefined;
+      return JSON.stringify(await this.client.storyHistory(this.token, cursor));
+    }
+    const roundId = args.round as string | undefined;
+    const state = await this.client.storyLive(this.token, roundId, after);
+    if (!state.round) return JSON.stringify(state);
+    const all = state.round.parts;
+    const parts = after === undefined ? all.slice(-6) : all.slice(0, 6);
+    return JSON.stringify({ ...state, round: { ...state.round, parts },
+      nextAfter: parts.at(-1)?.seq ?? (state.round.id === roundId ? after ?? 0 : 0),
+      earlier: parts.length > 0 && parts[0].seq > 1 });
+  }
+
+  private async storyAction(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (!this.client || !this.multiRoom) return this.failed('说书厅需要连接多客厅服务器');
+    const body = args.action === 'speak' && !args.requestId ? { ...args, requestId: randomUUID() } : args;
+    const state = await this.client.storyAction(this.token, body);
+    if (args.action === 'queue' || args.action === 'start') this.scheduleStoryNotice(0);
+    if (args.action === 'finish') this.scheduleHistorySync();
+    const round = state.round;
+    return JSON.stringify({ ...state, round: round ? { ...round, parts: round.parts.slice(-3) } : null });
   }
 
   /** 正序补齐缺口；一页成功落盘才推进，不让后续页失败跳过尚未保存的消息。 */

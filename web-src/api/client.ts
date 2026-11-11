@@ -115,14 +115,14 @@ async function read<T>(response: Response, headers: Headers): Promise<T> {
   return body as T;
 }
 
-export async function fetchHealth(): Promise<Health | null> {
-  try {
-    const response = await fetch('/healthz', { signal: timeoutSignal() });
-    if (!response.ok) return null;
-    return await response.json() as Health;
-  } catch {
-    return null;
-  }
+let healthTask: Promise<Health | null> | undefined;
+
+export function fetchHealth(): Promise<Health | null> {
+  healthTask ??= fetch('/healthz', { signal: timeoutSignal() })
+    .then(response => response.ok ? response.json() as Promise<Health> : null)
+    .catch(() => null)
+    .finally(() => { healthTask = undefined; });
+  return healthTask;
 }
 
 /** 普通入场：邀请码放在请求头，名字放在正文。统一身份在时由调用方走跳转流程。 */

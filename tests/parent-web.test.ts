@@ -15,6 +15,7 @@ class TestNode {
 const mount = () => {
   const nodes = new Map<string, TestNode>();
   const source = readFileSync(new URL('../src/web/parent.js', import.meta.url), 'utf8')
+    .replace("import { mountStoryArchive } from './story-archive.js';", '')
     .replace('void boot();', '');
   const renderer = runInNewContext(source + '\n({ renderMail, renderLog })', {
     document: {
