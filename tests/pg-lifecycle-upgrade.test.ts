@@ -33,6 +33,11 @@ it('PG v12 升到 v13：保留五子棋桌并允许中国象棋桌', async () =>
   expect(await db.prepare('SELECT id, game FROM tables WHERE room_id=? ORDER BY id').all(room)).toEqual([
     { id: 'new-xiangqi', game: 'xiangqi' }, { id: 'old-gomoku', game: 'gomoku' },
   ]);
+
+  await db.exec("ALTER TABLE tables DROP CONSTRAINT tables_game_check; UPDATE meta SET value='12' WHERE key='schema_version';");
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(13);
+  await expect(insertTable(db, 'invalid-game', room, 'unknown-game')).rejects.toThrow(/tables_game_check/);
 });
 
 it('PG v11 升到 v12：保留旧终局，新逐席表从空表起算且可重复迁移', async () => {

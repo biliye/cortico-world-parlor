@@ -499,7 +499,7 @@ export const PG_MIGRATIONS: PgMigration[] = [
   ` },
   { version: 12, name: 'table-seat-results', sql: SEAT_RESULTS_SCHEMA_SQL },
   { version: 13, name: 'tables-game-xiangqi', sql: `
-    ALTER TABLE tables DROP CONSTRAINT tables_game_check;
+    ALTER TABLE tables DROP CONSTRAINT IF EXISTS tables_game_check;
     ALTER TABLE tables ADD CONSTRAINT tables_game_check
       CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi'));
   ` },

@@ -6,6 +6,9 @@ import {
 } from './xiangqi.ts';
 
 const QUIET_LIMIT = 120;
+// 将帅不能被吃。每次吃子前最多 119 手不吃子，最后一段最多 120 手。
+const MAX_CAPTURES = 30;
+const MAX_PLIES = (MAX_CAPTURES + 1) * QUIET_LIMIT;
 const causeLabel = {
   mate: '将死', stalemate: '困毙', resign: '认输',
   perpetual_check: '单方长将判负', repetition: '三次重复局面', no_capture: '连续 60 回合未吃子',
@@ -255,7 +258,7 @@ export class XiangqiTable implements TableEngine {
       || state.seats[0]?.id !== this.host || new Set(state.seats.map(seat => seat?.id)).size !== state.seats.length
       || state.seats.some(seat => typeof seat?.id !== 'string' || !seat.id || typeof seat.name !== 'string')
       || (state.redIndex !== 0 && state.redIndex !== 1)
-      || !Array.isArray(state.moves) || typeof state.resigned !== 'boolean'
+      || !Array.isArray(state.moves) || state.moves.length > MAX_PLIES || typeof state.resigned !== 'boolean'
       || !Number.isSafeInteger(state.deadline) || (state.status === 'playing' ? state.deadline <= 0 : state.deadline !== 0)
       || (state.status === 'open' ? state.moves.length !== 0 : state.seats.length !== 2)) {
       throw new Error('象棋存档格式错误');

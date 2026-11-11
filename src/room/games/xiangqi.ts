@@ -158,11 +158,13 @@ export function suggestMoves(
 }
 
 export function formatXiangqiBoard(board: readonly number[], last?: XiangqiMove): string {
-  const rows = ['    0 1 2 3 4 5 6 7 8'];
+  // 两个汉字占四个等宽字符，列号和空格也各占同样的宽度。
+  const columns = Array.from({ length: XIANGQI_COLS }, (_, col) => String(col).padEnd(4));
+  const rows = [`    ${columns.join(' ').trimEnd()}`];
   for (let row = 0; row < XIANGQI_ROWS; row++) {
     const cells = board.slice(row * XIANGQI_COLS, (row + 1) * XIANGQI_COLS)
-      .map(piece => piece ? `${colorName(piece > 0 ? 1 : -1)}${pieceName(piece)}` : '·');
-    rows.push(`${row}   ${cells.join(' ')}`);
+      .map(piece => piece ? `${colorName(piece > 0 ? 1 : -1)}${pieceName(piece)}` : '.   ');
+    rows.push(`${row}   ${cells.join(' ').trimEnd()}`);
   }
   if (last) rows.push(`上一步 ${moveText(last)}`);
   return rows.join('\n');

@@ -88,6 +88,15 @@ describe('World 牌桌版本同步', () => {
     const state = await callState();
     expect(state.table.board).toMatch(/0\s+黑车 黑马 黑象 黑士 黑将/);
     expect(state.table.board).toContain('红帅');
+    const [columns, backRank, emptyRank, cannonRank] = (state.table.board as string).split('\n');
+    const expandWideChars = (line: string) => line.replace(/\p{Script=Han}/gu, '$&$&');
+    for (let col = 0; col < 9; col++) {
+      const offset = 4 + col * 5;
+      expect(columns[offset]).toBe(String(col));
+      expect(expandWideChars(backRank)[offset]).toBe('黑');
+      expect(emptyRank[offset]).toBe('.');
+    }
+    expect(expandWideChars(cannonRank).slice(4 + 7 * 5, 8 + 7 * 5)).toBe('黑黑炮炮');
     expect(state.tablePrivate.text).toContain('建议走法');
     expect(state.tablePrivate.board).toBeUndefined();
     expect(state.tablePrivate.legalMoves).toBeUndefined();

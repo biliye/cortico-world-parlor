@@ -147,6 +147,32 @@ describe('象棋牌桌', () => {
     expect(restored.public()).toEqual(table.public());
   });
 
+  it('单方长将三次重复判负，恢复棋谱仍是同一结果', () => {
+    const table = started();
+    // 黑方移开左士，红车从左底角绕到第 1 行。
+    const opening = [
+      move(9, 0, 8, 0), move(0, 3, 1, 4), move(8, 0, 8, 3),
+      move(1, 4, 2, 5), move(8, 3, 1, 3), move(0, 1, 2, 2),
+    ];
+    const cycle = [move(1, 3, 1, 4), move(0, 4, 0, 3), move(1, 4, 1, 3), move(0, 3, 0, 4)];
+    const steps = [...opening, ...cycle, ...cycle].map((step, i) => table.act(i % 2 ? black.id : red.id, step, i + 2));
+    expect(steps[9].ended).toBeUndefined();
+    expect(steps.at(-1)).toMatchObject({ ended: true, seatResults: [
+      { seatId: red.id, rank: 2 }, { seatId: black.id, rank: 1 },
+    ] });
+    expect(table.public()).toMatchObject({ status: 'ended', winner: black.id, cause: 'perpetual_check', plies: 14 });
+    const restored = new XiangqiTable(red);
+    restored.restoreState(table.exportState());
+    expect(restored.public()).toEqual(table.public());
+  });
+
+  it('拒绝超过规则允许最大手数的存档，先检查长度再读取着法', () => {
+    const table = started();
+    const moves = Array(3_721);
+    Object.defineProperty(moves, 0, { get: () => { throw new Error('不应读取着法'); } });
+    expect(() => table.restoreState({ ...table.exportState(), moves })).toThrow('象棋存档格式错误');
+  });
+
   it('轮到自己才能认输，保留胜负和棋盘，拒绝非法存档', () => {
     const table = started();
     expect(() => table.act(black.id, { resign: true }, 2)).toThrow(/还没轮到/);
