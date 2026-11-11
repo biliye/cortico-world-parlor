@@ -11,6 +11,32 @@ import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
+
+it('PG v11 升到 v12：保留旧终局，新逐席表从空表起算且可重复迁移', async () => {
+  db = await openTestDb();
+  const id = 'coo-v12-upgrade';
+  const room = 'r-v12-upgrade';
+  const table = 't-v12-legacy';
+  await new CooAccountDb(db).registerCoo(id, 'upgrade-secret-0123456789', 'pet', '旧战绩');
+  await createRoom(db, { id: room, ownerCooId: id, name: '旧客厅' }, 4);
+  await insertTable(db, table, room, 'gomoku');
+  await db.prepare("INSERT INTO table_finalizations(table_id, kind, at) VALUES (?, 'result', ?)")
+    .run(table, 1000);
+  await db.exec("DROP TABLE table_seat_results; UPDATE meta SET value='11' WHERE key='schema_version';");
+
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  expect(await db.prepare('SELECT table_id FROM table_finalizations').all()).toEqual([{ table_id: table }]);
+  expect(await db.prepare('SELECT table_id FROM table_seat_results').all()).toEqual([]);
+
+  await db.prepare(
+    "INSERT INTO table_seat_results(table_id, seat_id, coo_id, rank, game, at) VALUES (?, 'seat', ?, 1, 'gomoku', ?)",
+  ).run(table, id, 2000);
+  await db.exec("UPDATE meta SET value='11' WHERE key='schema_version';");
+  await migrate(db);
+  expect(await db.prepare('SELECT table_id FROM table_seat_results').all()).toEqual([{ table_id: table }]);
+});
+
 it('PG v3 升到 v4 给旧房间/席位完整宽限，保留身份、令牌、账本条目，重跑不延长宽限',async()=>{
   db=await openTestDb();
   const id='coo-upgrade-aaa';

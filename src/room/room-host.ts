@@ -52,6 +52,7 @@ export interface RoomHostOptions {
    * 测试传固定函数，否则「谁先手」的断言会随机翻车。
    */
   randomSeat?: (max: number) => number;
+  onTableResult?: (game: string) => void;
 }
 
 export interface JoinResult {
@@ -189,6 +190,7 @@ export class RoomHost {
       db,
       roomId,
       onCommit: options.onCommit,
+      onTableResult: options.onTableResult,
       now,
       ledger,
       mail,

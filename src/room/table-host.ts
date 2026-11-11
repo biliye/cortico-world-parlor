@@ -27,6 +27,7 @@ import {
   type TableEvent,
   type TableLogQuery,
   type TablePrivateSummary,
+  type TableSeatResult,
   type TableStatus,
   type TableStep,
   type TableSummary,
@@ -34,6 +35,7 @@ import {
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 import { tableCapacity } from './table-discovery-db.ts';
+import { validSeatResults, writeSeatResults } from './table-results.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
 
 const OPEN_MS = 30 * 60_000;
@@ -56,6 +58,7 @@ export interface TableHostOptions {
   roomId: string;
   /** 仅在事件所在事务提交成功后通知网关推送。 */
   onCommit?: (roomId: string) => void;
+  onTableResult?: (game: string) => void;
   now?: () => number;
   /** 每手时限（测试里调短）。 */
   turnMs?: number;
@@ -233,6 +236,7 @@ export class TableHost {
   private readonly ledger: LedgerDb;
   private readonly mail: MailDb;
   private readonly now: () => number;
+  private readonly onTableResult?: (game: string) => void;
   private readonly seats: TableSeatLookup;
   private readonly turnMs?: number;
   private readonly openMs: number;
@@ -252,6 +256,7 @@ export class TableHost {
     this.ledger = options.ledger;
     this.mail = new MailDb(options.db, { now: options.now ?? Date.now });
     this.now = options.now ?? Date.now;
+    this.onTableResult = options.onTableResult;
     this.seats = options.seats;
     this.turnMs = options.turnMs;
     this.openMs = options.openMs ?? OPEN_MS;
@@ -905,7 +910,7 @@ export class TableHost {
     });
     if (replay) return replay;
     if (!requestId) {
-      throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键，请升级客厅扩展后再打牌');
+      throw new HostError('invalid', '缺少 requestId：牌桌动作要带幂等键。请让 Coo 更新客厅扩展到最新版后再打牌');
     }
     // 并发策略按游戏注册：骰子/斗地主仍是整桌 revision 乐观锁；狼人杀是窗口制——
     // 同一窗口多人各自有动作槽，revision 只当参考，windowId 与槽位由引擎在
@@ -913,7 +918,7 @@ export class TableHost {
     const definition = gameById(table.game);
     if (definition?.revisionMode !== 'window') {
       if (options.revision === undefined) {
-        throw new HostError('invalid', '缺少牌桌版本：请刷新页面/升级客厅扩展后再打牌');
+        throw new HostError('invalid', '缺少牌桌版本。请刷新网页，或让 Coo 更新客厅扩展到最新版后再打牌');
       }
       if (options.revision !== table.revision) {
         throw new HostError('conflict', '这一手已经过去了：你看到的是旧桌面，刷新后再来');
@@ -1213,7 +1218,7 @@ export class TableHost {
     };
     for (const seatId of step.views) await writeTurn(seatId, true);
     for (const seatId of step.refreshViews ?? []) await writeTurn(seatId, false);
-    if (ended) await this.settle(table, ended, now);
+    if (ended) await this.settle(table, engine, ended, step.seatResults, now);
   }
 
   /**
@@ -1252,12 +1257,16 @@ export class TableHost {
   }
 
   /**
-   * 一局结束：按开局时记下的真人席位写一条公开战绩并分底池。
+   * 一局结束：写公开战绩，并按本局引擎保留的参赛席位落逐席结果。
    * 终态只写一次（`table_finalizations`），正常结算与作废退款互斥。
    */
-  private async settle(table: LiveTable, event: TableEvent, now: number): Promise<void> {
+  private async settle(
+    table: LiveTable, engine: TableEngine, event: TableEvent,
+    seatResults: readonly TableSeatResult[] | null | undefined, now: number,
+  ): Promise<void> {
     if (await this.finalization(table.id)) return;
-    const rows = (await this.tableSeatRows(table.id)).filter((row) => row.left_at === null && row.coo_id !== null);
+    const allSeats = await this.tableSeatRows(table.id);
+    const rows = allSeats.filter((row) => row.left_at === null && row.coo_id !== null);
     const participants = [...new Set(rows.map((row) => row.coo_id!))];
     const seatToCoo = new Map(rows.map((row) => [row.seat_id, row.coo_id!]));
     const data = event.data ?? {};
@@ -1290,11 +1299,26 @@ export class TableHost {
           : {}),
       },
     });
+    const eligibleForRating = gameById(table.game)?.rated === true && !event.ratingExcluded;
+    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true)
+      ? seatResults : null;
+    const ratingSkipped = eligibleForRating && !rankedSeats
+      ? (seatResults?.length ? 'invalid_seat_results' : 'missing_seat_results') : undefined;
     // 终态表靠主键挡第二次结算；写入保持普通 INSERT，冲突就是要它抛。
     await this.db.prepare(
       `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
        VALUES (?, 'result', ?, ?, ?)`,
-    ).run(table.id, entry.id, now, JSON.stringify({ winners, participants }));
+    ).run(table.id, entry.id, now, JSON.stringify({
+      winners, participants,
+      ...(event.ratingExcluded ? { ratingExcluded: true } : {}),
+      ...(ratingSkipped ? { ratingSkipped } : {}),
+    }));
+    if (rankedSeats) {
+      await writeSeatResults(this.db, table.id, table.game, allSeats, rankedSeats, now);
+      this.db.afterCommit(() => this.onTableResult?.(table.game));
+    } else if (ratingSkipped) {
+      this.db.afterCommit(() => console.error('parlor: 等级分赛果缺失或不一致', table.game, table.id));
+    }
     // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
     if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN

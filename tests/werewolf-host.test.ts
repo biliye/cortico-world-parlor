@@ -553,6 +553,8 @@ describe('狼人杀 · 宿主层', () => {
     ).all()) as Array<{ text: string; game: string }>;
     expect(entries).toHaveLength(1);
     expect(entries[0].text).toContain('狼人杀终局');
+    expect(await fixture.db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId))
+      .toHaveLength(COOS.length);
     // 结束即下桌：没有活跃锁、没有私视图。
     const locks = (await fixture.db.prepare('SELECT COUNT(*) AS n FROM active_table_players').get()) as { n: number };
     expect(locks.n).toBe(0);
@@ -561,6 +563,51 @@ describe('狼人杀 · 宿主层', () => {
     const log = await fixture.host.tableLog(COOS[0], tableId, { review: true }) as { nights?: unknown[] };
     expect(Array.isArray(log.nights)).toBe(true);
     await fixture.close();
+  });
+
+  it('全狼死于狼刀：普通结算入账，排除等级分并保留内部标记', async () => {
+    const fixture = await setup();
+    try {
+      await enterAll(fixture);
+      const players = COOS.slice(0, 6);
+      const { tableId } = await fixture.host.openTable(players[0], { game: 'werewolf', seatCount: 6 });
+      for (const cooId of players.slice(1)) await fixture.host.joinTable(cooId, tableId, `join-${cooId}`, CLIENT_OK);
+      await startTable(fixture, tableId);
+      const advance = async (ms: number) => {
+        fixture.clock.now += ms;
+        await fixture.host.tickClock();
+      };
+      await advance(16_000);
+      const wolves = [];
+      for (const cooId of players) {
+        const view = await privOf(fixture, cooId);
+        if (view.role !== 'wolf') continue;
+        const seat = (await fixture.host.seatOf(cooId))!;
+        wolves.push({ cooId, seatNo: view.seats!.find(entry => entry.id === seat.id)!.seatNo });
+      }
+      expect(wolves).toHaveLength(2);
+      const [first, last] = wolves;
+      for (const wolf of wolves) {
+        expect((await action(fixture, wolf.cooId, { move: 'wolf_kill', target: first.seatNo })).error).toBeUndefined();
+      }
+      await advance(61_000);
+      await advance(61_000);
+      for (let index = 0; index < 24 && (await privOf(fixture, last.cooId)).phase !== 'night'; index++) {
+        await advance(181_000);
+      }
+      expect(await privOf(fixture, last.cooId)).toMatchObject({ phase: 'night', day: 2 });
+      expect((await action(fixture, last.cooId, { move: 'wolf_kill', target: last.seatNo })).error).toBeUndefined();
+      await advance(61_000);
+      await advance(61_000);
+
+      const result = await fixture.db.prepare('SELECT kind, payload_json FROM table_finalizations WHERE table_id = ?').get(tableId);
+      expect(result).toMatchObject({ kind: 'result', payload_json: { ratingExcluded: true } });
+      expect(await new LedgerDb(fixture.db).summaryFor(players[0])).toMatchObject({ games: 1 });
+      expect(await fixture.db.prepare('SELECT seat_id FROM table_seat_results WHERE table_id = ?').all(tableId)).toEqual([]);
+      const end = (await fixture.host.history(players[0], { since: 0, limit: 200 })).find(event => event.type === 'parlor.table.end');
+      expect(end).toMatchObject({ data: { outcome: 'good' } });
+      expect(end?.data).not.toHaveProperty('ratingExcluded');
+    } finally { await fixture.close(); }
   });
 
   it('真人时限更长：开局看身份 15 秒，白天真人发言窗 180 秒、Coo 60 秒', async () => {

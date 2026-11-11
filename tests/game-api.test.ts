@@ -5,7 +5,7 @@ import type { TableSummary } from '../src/room/table-engine.ts';
 
 describe('通用游戏协议', () => {
   it('新游戏不需要工具名，只用动作协议即可发现和转换参数', () => {
-    const future: GameDefinition = { ...gameById('ddz')!, id: 'future' };
+    const future: GameDefinition = { ...gameById('ddz')!, id: 'future', rated: false };
     expect(gameActions(future).map(entry => entry.action)).toEqual(['bid', 'play', 'pass']);
     expect(gameActionBody(future, 'bid', { call: false })).toEqual({ type: 'ddz_action', move: 'bid', call: false });
   });

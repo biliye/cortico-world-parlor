@@ -250,7 +250,10 @@ export class GomokuTable implements TableEngine {
       events.push(this.event('end', won ? `${seat.name} 连五获胜。` : '棋盘已满，和棋。', {
         winners: won ? [seat.id] : [], tie: !won,
       }));
-      return { events, views: [], ended: true };
+      const seatResults = this.seats.map(player => ({
+        seatId: player.id, rank: !won || player.id === seat.id ? 1 : 2,
+      }));
+      return { events, views: [], ended: true, seatResults };
     }
     this.deadline = now + this.turnMs;
     return { events, views: [this.turnSeat!.id] };
@@ -259,6 +262,7 @@ export class GomokuTable implements TableEngine {
   /**
    * 认输：本人判负、对面直接获胜，按正常结算走（`winners` 就是对面那一席）。
    * 只有轮到自己时才受理 —— 没到你的手就点认输，多半是视图过期，先让他看一眼棋盘。
+   * 赛果照常给（`rated` 玩法终局必须带），认输这一局同样进等级分。
    */
   private resign(seatId: string, _now: number): TableStep {
     const seat = this.turnSeat!;
@@ -268,6 +272,9 @@ export class GomokuTable implements TableEngine {
     this.deadline = 0;
     this.winningLine = [];
     this.winnerSeat = opponent.id;
+    const seatResults = this.seats.map(player => ({
+      seatId: player.id, rank: player.id === opponent.id ? 1 : 2,
+    }));
     return {
       events: [
         this.event('resign', `${seat.name} 认输了。`, { seat: seat.id }),
@@ -277,6 +284,7 @@ export class GomokuTable implements TableEngine {
       ],
       views: [],
       ended: true,
+      seatResults,
     };
   }
 

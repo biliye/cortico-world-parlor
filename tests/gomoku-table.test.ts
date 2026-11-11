@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GomokuTable } from '../src/room/games/gomoku-table.ts';
+import { GOMOKU_SIZE, GomokuTable } from '../src/room/games/gomoku-table.ts';
 
 const black = { id: 'black', name: '黑方' };
 const white = { id: 'white', name: '白方' };
@@ -28,6 +28,27 @@ function playThreat(blackMoves: Array<[number, number]>, whiteMoves = blackMoves
 }
 
 describe('五子棋牌桌', () => {
+  it('填满 225 个交点仍无连五时，两席同为第一', () => {
+    const table = started();
+    const points: Record<'black' | 'white', { row: number; col: number }[]> = { black: [], white: [] };
+    // 四个方向上的周期都不会出现五颗同色棋子。
+    for (let row = 0; row < GOMOKU_SIZE; row++) {
+      for (let col = 0; col < GOMOKU_SIZE; col++) {
+        const color = (row + 2 * col) % 4 < 2 ? 'black' : 'white';
+        points[color].push({ row, col });
+      }
+    }
+    for (const [index, point] of points.white.entries()) {
+      expect(table.act(black.id, points.black[index]!, 1001).ended).toBeUndefined();
+      expect(table.act(white.id, point, 1001).ended).toBeUndefined();
+    }
+    const end = table.act(black.id, points.black.at(-1)!, 1001);
+    expect(end.ended).toBe(true);
+    expect(end.events.find(event => event.type === 'parlor.table.end')?.data)
+      .toMatchObject({ winners: [], tie: true });
+    expect(end.seatResults).toEqual([{ seatId: black.id, rank: 1 }, { seatId: white.id, rank: 1 }]);
+  });
+
   it('行动通知用数字标尺和小写末手，只用坐标写建议', () => {
     const table = started();
     expect(table.privateText(black.id)).toContain(' 0 ...............');
@@ -127,6 +148,10 @@ describe('五子棋牌桌', () => {
     const end = step.events.find((event) => event.type === 'parlor.table.end')!;
     expect(end.data).toMatchObject({ winners: [black.id], tie: false, cause: 'resign' });
     expect(table.public()).toMatchObject({ status: 'ended', winner: black.id, cause: 'resign' });
+    // 认输也是正常终局：赛果照给，否则开榜玩法会把这局当「赛果缺失」跳过等级分。
+    expect(step.seatResults).toEqual([
+      { seatId: black.id, rank: 1 }, { seatId: white.id, rank: 2 },
+    ]);
     expect(table.public().winningLine).toEqual([]);
     expect(table.publicText()).toContain('认输');
     expect(table.privateText(white.id)).toContain('认输');

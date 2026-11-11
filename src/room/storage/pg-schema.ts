@@ -14,8 +14,9 @@
 
 import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '../support-db.ts';
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
+import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 
-export const PG_SCHEMA_VERSION = 11;
+export const PG_SCHEMA_VERSION = 12;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -496,4 +497,5 @@ export const PG_MIGRATIONS: PgMigration[] = [
     ALTER TABLE support_announcements ADD COLUMN IF NOT EXISTS publish_id TEXT NOT NULL DEFAULT '';
     UPDATE support_announcements SET publish_id = 'legacy-' || id WHERE publish_id = '';
   ` },
+  { version: 12, name: 'table-seat-results', sql: SEAT_RESULTS_SCHEMA_SQL },
 ];

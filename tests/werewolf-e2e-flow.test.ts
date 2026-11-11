@@ -339,6 +339,10 @@ describe('狼人杀端到端·主对局（五角色全出场）', () => {
     const end = eventType(rig, 'parlor.table.end').at(-1)!;
     expect((end.data as AnyView).outcome).toBe('good');
     expect(end.text).toContain('好人阵营胜利');
+    expect(rig.steps.find(step => step.ended)?.seatResults).toEqual(rig.ids.map(seatId => {
+      const wolf = roleOf(rig, seatId) === 'wolf';
+      return { seatId, rank: wolf ? 7 : 1, team: wolf ? 'wolf' : 'good' };
+    }));
     expect(view(rig, 's1').phase).toBe('ended');
     expect(rig.table.status).toBe('ended');
     // 终局亮身份：公开视图与私文本都给全名单。
@@ -408,6 +412,10 @@ describe('狼人杀端到端·主对局（五角色全出场）', () => {
     expect(end.text).toContain('屠边达成');
     expect(end.text).toContain('狼人阵营胜利');
     expect(((end.data as AnyView).winners as string[]).sort()).toEqual([...wolfIds].sort());
+    expect(rig.steps.find(step => step.ended)?.seatResults).toEqual(rig.ids.map(seatId => {
+      const wolf = wolfIds.includes(seatId);
+      return { seatId, rank: wolf ? 1 : 4, team: wolf ? 'wolf' : 'good' };
+    }));
     // 村民线还活着：这是神职线屠边；全场没开过枪。
     const revealed = (end.data as AnyView).roles as Array<{ role: string; alive: boolean }>;
     expect(revealed.filter((s) => s.role === 'villager' && s.alive).length).toBe(3);
