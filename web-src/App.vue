@@ -114,14 +114,14 @@ watch(seat, (next) => {
     <h1>说书人</h1>
     <p role="status">
       {{ storyAvailability === 'checking' ? '正在确认说书厅是否开放…'
-        : storyAvailability === 'unreachable' ? '暂时连不上茶馆。' : '当前茶馆未开放说书厅。' }}
+        : storyAvailability === 'unreachable' ? '暂时无法确认说书厅是否开放。' : '当前茶馆未开放说书厅。' }}
     </p>
     <button v-if="storyAvailability === 'unreachable'" type="button" @click="checkStoryAvailability">重试</button>
     <a href="/play">返回茶馆</a>
   </main>
   <StoryView v-else-if="!seat && view === 'story' && !storyJoining()" />
   <JoinView v-else-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
-  <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available'">
+  <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available' || storyAvailability === 'unreachable'">
     <StoryView v-if="view === 'story'" />
     <LobbyView v-else-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />
