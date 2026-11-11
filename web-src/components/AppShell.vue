@@ -22,6 +22,8 @@ import { seat } from '../stores/session.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
 import { backToRoom, enterStory, view } from '../stores/view.ts';
 
+defineProps<{ showStory: boolean }>();
+
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
@@ -102,7 +104,7 @@ onMounted(() => {
           <Icon :name="item.icon" />
           <span>{{ item.label }}</span>
         </button>
-        <button class="rail-btn" type="button" :class="{ 'is-on': view === 'story' }" @click="enterStory">
+        <button v-if="showStory" class="rail-btn" type="button" :class="{ 'is-on': view === 'story' }" @click="enterStory">
           <Icon name="lamp" /><span>说书人</span>
         </button>
         <a class="rail-btn rail-support" href="/support" target="_blank" rel="noopener" title="反馈与公告" aria-label="反馈与公告">

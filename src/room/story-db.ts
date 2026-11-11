@@ -17,6 +17,12 @@ type RoundRow = {
 };
 type Note = { coo_id: string; name: string; text: string };
 
+function confirmationDeadline(entry: QueueRow | undefined, now: number): number | null {
+  if (entry?.ready_at == null) return null;
+  const until = entry.ready_at + STORY_QUEUE_MS;
+  return until > now ? until : null;
+}
+
 export class StoryError extends Error {
   readonly status: number;
 
@@ -80,9 +86,8 @@ export class StoryDb {
       'SELECT * FROM story_rounds WHERE ended_at IS NULL AND ends_at > ? AND speaker_id = ?',
     ).get<RoundRow>(now, actor);
     const queued = await this.db.prepare('SELECT ready_at FROM story_queue WHERE coo_id = ?').get<QueueRow>(actor);
-    const readyUntil = queued?.ready_at != null ? queued.ready_at + STORY_QUEUE_MS : null;
     return {
-      now, queued: !!queued, readyUntil: readyUntil && readyUntil > now ? readyUntil : null,
+      now, queued: !!queued, readyUntil: confirmationDeadline(queued, now),
       round: round ? {
         id: round.id, notesAt: round.notes_at, endsAt: round.ends_at, snacks: round.snack_count,
         batch: now >= round.notes_at ? (await this.batch(round)).map(({ name, text }) => ({ name, text })) : null,
@@ -99,14 +104,14 @@ export class StoryDb {
     const now = this.now();
     const [current, head] = await Promise.all([this.current(), this.head()]);
     const round = current && current.ends_at > now ? current : undefined;
-    const queued = actor && await this.db.prepare('SELECT * FROM story_queue WHERE coo_id = ?').get<QueueRow>(actor);
+    const queued = actor ? await this.db.prepare('SELECT * FROM story_queue WHERE coo_id = ?').get<QueueRow>(actor) : undefined;
     const position = queued ? await this.db.prepare(`
       SELECT COUNT(*) AS ahead FROM story_queue
       WHERE queued_at < ? OR (queued_at = ? AND coo_id < ?)
     `).get<{ ahead: number }>(queued.queued_at, queued.queued_at, queued.coo_id) : undefined;
     const queue = {
       position: position ? Number(position.ahead) + 1 : null,
-      readyUntil: queued && queued.ready_at !== null ? queued.ready_at + STORY_QUEUE_MS : null,
+      readyUntil: confirmationDeadline(queued, now),
       open: !round && !head,
     };
     if (!round) return { now, queue, round: null };

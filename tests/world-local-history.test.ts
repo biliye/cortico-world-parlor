@@ -72,6 +72,20 @@ describe('World 本地消息档案端到端', () => {
     expect(local.parts.map(part => part.text)).toEqual(['家长给我指水里的月亮。', '圆得像一只盘子。']);
     expect(JSON.stringify(local)).not.toContain('月亮圆吗？');
     expect(host.events.filter(event => event.text.includes('【说书收尾】'))).toHaveLength(1);
+
+    const readStory = async (round: string, after: number) => {
+      const tool = world!.tools().find(candidate => candidate.name === 'parlor_query')!;
+      const result = await tool.handler({ op: 'story', params: { round, after } }, {} as ToolCallContext);
+      return JSON.parse(typeof result === 'string' ? result : result.text) as StoryState & { nextAfter: number };
+    };
+    const nextRound = (await friend.storyAction(peer.token, { action: 'start' })).round!;
+    const handover = await readStory(opening.id, 2);
+    expect(handover.round).toMatchObject({ id: nextRound.id, parts: [] });
+    expect(handover.nextAfter).toBe(0);
+    await friend.storyAction(peer.token, { action: 'speak', round: nextRound.id, text: '新场的开头。', requestId: 'first' });
+    const continued = await readStory(nextRound.id, handover.nextAfter);
+    expect(continued.round?.parts).toEqual([{ seq: 1, text: '新场的开头。' }]);
+    expect((await readStory(nextRound.id, continued.nextAfter)).nextAfter).toBe(1);
   });
 
   it('坏身份按原规则修复后，档案写进连接后的真实身份分区', async () => {

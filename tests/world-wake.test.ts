@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
-import { ParlorClient } from '../src/room/client.ts';
+import { ParlorClient, ParlorHttpError } from '../src/room/client.ts';
 import type { RoomEvent, RoomSnapshot, WakeTier } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
@@ -14,6 +14,7 @@ let world: ReturnType<typeof PARLOR.create>;
 let host: FakeHost;
 let snapshot: RoomSnapshot;
 let receive: (event: RoomEvent) => void;
+let confirmStream: () => void;
 let seq: number;
 
 beforeEach(() => {
@@ -30,7 +31,7 @@ afterEach(async () => {
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
-const start = async (tier: WakeTier = 'full'): Promise<void> => {
+const start = async (tier: WakeTier = 'full', storySupported = false): Promise<void> => {
   const ctx = fakeWorldContext(PARLOR, { scratchDir });
   ctx.cfg.serverUrl = 'http://127.0.0.1:8790';
   ctx.cfg.room = 'lobby';
@@ -41,16 +42,56 @@ const start = async (tier: WakeTier = 'full'): Promise<void> => {
     id: 'lobby', seat: { id: 'mine', name: '小满', kind: 'pet', tier, joinedAt: Date.now() },
     seats: [], maxSeats: 30, latest: seq, now: Date.now(), at: '测试时刻', events: [], tablePrivate: null,
   };
-  vi.spyOn(ParlorClient.prototype, 'initializeIdentity').mockResolvedValue(true);
+  vi.spyOn(ParlorClient.prototype, 'initializeIdentity').mockImplementation(async function (this: ParlorClient) {
+    this.storySupported = storySupported;
+    return true;
+  });
   vi.spyOn(ParlorClient.prototype, 'snapshot').mockImplementation(async () => snapshot);
-  vi.spyOn(ParlorClient.prototype, 'stream').mockImplementation(async (_token, _since, onEvent, signal) => {
+  vi.spyOn(ParlorClient.prototype, 'stream').mockImplementation(async (_token, _since, onEvent, signal, _room, onOpen) => {
     receive = onEvent;
+    confirmStream = onOpen!;
     await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
   });
   world = PARLOR.create(ctx);
   host = new FakeHost();
   await world.start(host);
 };
+
+it('说书提醒遇到认证错误等客厅流恢复，临时失败按退避重试', async () => {
+  vi.spyOn(ParlorClient.prototype, 'messageHistory').mockResolvedValue({ items: [], seats: [] });
+  vi.spyOn(ParlorClient.prototype, 'historySync').mockResolvedValue({ events: [], more: false });
+  vi.spyOn(ParlorClient.prototype, 'storyHistory').mockResolvedValue({ rounds: [], next: null });
+  vi.spyOn(ParlorClient.prototype, 'inbox').mockResolvedValue({});
+  const notice = vi.spyOn(ParlorClient.prototype, 'storyNotice')
+    .mockRejectedValueOnce(new ParlorHttpError(401, '席位令牌已失效'))
+    .mockRejectedValueOnce(new ParlorHttpError(403, '暂时没有权限'))
+    .mockRejectedValueOnce(new ParlorHttpError(503, '暂时不可用'))
+    .mockRejectedValueOnce(new TypeError('fetch failed'))
+    .mockResolvedValue({ now: Date.now(), queued: false, readyUntil: null, round: null });
+
+  await start('full', true);
+  for (const count of [1, 2]) {
+    confirmStream();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notice).toHaveBeenCalledTimes(count);
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(notice).toHaveBeenCalledTimes(count);
+  }
+
+  confirmStream();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(notice).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(notice).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(notice).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(1999);
+  expect(notice).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(notice).toHaveBeenCalledTimes(5);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(notice).toHaveBeenCalledTimes(5);
+});
 
 const emit = (text: string, extra: Partial<RoomEvent> = {}): void => receive({
   seq: ++seq, ts: Date.now(), from: 'friend', type: 'parlor.say', scope: { kind: 'room' },

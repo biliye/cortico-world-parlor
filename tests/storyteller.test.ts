@@ -127,6 +127,8 @@ it('同一场的抽签结果固定，未确认的排队席会顺延，过期场�
     await story.tick();
     expect((await story.state(listeners[0].id)).queue.readyUntil).toBe(now + 60_000);
     now += 60_000;
+    expect((await story.state(listeners[0].id)).queue.readyUntil).toBeNull();
+    expect((await story.notice(listeners[0].id)).readyUntil).toBeNull();
     await story.tick();
     expect((await story.state(listeners[0].id)).queue.position).toBeNull();
     expect((await story.state(listeners[1].id)).queue.readyUntil).toBe(now + 60_000);

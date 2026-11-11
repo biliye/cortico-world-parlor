@@ -209,6 +209,8 @@ export class ParlorWorld implements World {
   private historyTimer?: NodeJS.Timeout;
   private storyNoticeTimer?: NodeJS.Timeout;
   private storyNoticeTask?: Promise<void>;
+  private storyNoticeRefreshPending = false;
+  private storyNoticeRetryMs = 0;
   private cursorTimer?: NodeJS.Timeout;
   private historyTask?: Promise<void>;
   private historySyncUnsupported = false;
@@ -417,7 +419,6 @@ export class ParlorWorld implements World {
     this.digestTimer.unref?.();
     this.streamTask = this.runStream();
     if (this.multiRoom) {
-      this.scheduleStoryNotice(0);
       this.supportTimer = setInterval(() => { void this.pollInbox(); }, 60_000);
       this.supportTimer.unref?.();
       void this.pollInbox();
@@ -762,6 +763,7 @@ export class ParlorWorld implements World {
             this.historySeats.add(this.seat!.id);
             this.historyRooms.add(this.currentRoom);
             this.scheduleHistorySync();
+            this.scheduleStoryNotice(0);
             if (disconnected) {
               disconnected = false;
               if (Date.now() - lastUpAt >= LINK_GAP_MS) {
@@ -947,33 +949,48 @@ export class ParlorWorld implements World {
 
   private scheduleStoryNotice(delay: number): void {
     if (this.stopped || !this.client?.storySupported) return;
+    if (delay === 0) this.storyNoticeRetryMs = 0;
+    if (this.storyNoticeTask) {
+      this.storyNoticeRefreshPending = true;
+      return;
+    }
     if (this.storyNoticeTimer) clearTimeout(this.storyNoticeTimer);
     this.storyNoticeTimer = setTimeout(() => {
       this.storyNoticeTimer = undefined;
-      if (this.storyNoticeTask || this.stopped) return;
-      this.storyNoticeTask = this.checkStoryNotice().catch(error => {
-        if (!(error instanceof ParlorHttpError) || error.status !== 404) this.scheduleStoryNotice(10_000);
-      }).finally(() => { this.storyNoticeTask = undefined; });
+      let next: number | undefined;
+      this.storyNoticeTask = this.checkStoryNotice().then(delay => {
+        this.storyNoticeRetryMs = 0;
+        next = delay;
+      }).catch(error => {
+        // 4xx 等待认证过的客厅流重新打开，或本人再次操作说书厅。
+        if (error instanceof ParlorHttpError && error.status < 500) return;
+        this.storyNoticeRetryMs = Math.min(30_000, Math.max(1_000, 2 * this.storyNoticeRetryMs));
+        next = this.storyNoticeRetryMs;
+      }).finally(() => {
+        this.storyNoticeTask = undefined;
+        if (this.storyNoticeRefreshPending) next = 0;
+        this.storyNoticeRefreshPending = false;
+        if (next !== undefined) this.scheduleStoryNotice(next);
+      });
     }, delay);
     this.storyNoticeTimer.unref?.();
   }
 
-  private async checkStoryNotice(): Promise<void> {
+  private async checkStoryNotice(): Promise<number | undefined> {
     if (!this.client || !this.history) return;
-    const notice = await this.client.storyNotice(this.token);
-    if (this.stopped) return;
+    const token = this.token;
+    const notice = await this.client.storyNotice(token);
+    if (this.stopped || this.token !== token) return;
     const { round, readyUntil, now } = notice;
     if (round && round.notesAt > now) {
-      this.scheduleStoryNotice(round.notesAt - now + 50);
-      return;
+      return round.notesAt - now + 50;
     }
     if (round || readyUntil) {
       const mark = round ? round.endsAt : readyUntil!;
       const key = round ? 'story-closing-notice' : 'story-queue-notice';
       if (this.history.progress(key) >= mark) return;
       if (this.autoSilenced) {
-        if (mark - now > 5_000) this.scheduleStoryNotice(5_000);
-        return;
+        return mark - now > 5_000 ? 5_000 : undefined;
       }
       const text = round
         ? `【说书收尾】还剩 ${Math.max(1, Math.ceil((round.endsAt - now) / 1000))} 秒。收到 ${round.snacks} 份零食。听众来信：${JSON.stringify(round.batch ?? [])}。可挑几条回应，也可以继续讲完。`
@@ -985,7 +1002,7 @@ export class ParlorWorld implements World {
       this.history.advance(key, mark);
       return;
     }
-    if (notice.queued) this.scheduleStoryNotice(5_000);
+    return notice.queued ? 5_000 : undefined;
   }
 
   private async storyView(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -1002,12 +1019,14 @@ export class ParlorWorld implements World {
         ? { endedAt: args.cursorAt, id: args.cursorId } : undefined;
       return JSON.stringify(await this.client.storyHistory(this.token, cursor));
     }
-    const state = await this.client.storyLive(this.token, args.round as string | undefined, after);
+    const roundId = args.round as string | undefined;
+    const state = await this.client.storyLive(this.token, roundId, after);
     if (!state.round) return JSON.stringify(state);
     const all = state.round.parts;
     const parts = after === undefined ? all.slice(-6) : all.slice(0, 6);
     return JSON.stringify({ ...state, round: { ...state.round, parts },
-      nextAfter: parts.at(-1)?.seq ?? after ?? 0, earlier: parts.length > 0 && parts[0].seq > 1 });
+      nextAfter: parts.at(-1)?.seq ?? (state.round.id === roundId ? after ?? 0 : 0),
+      earlier: parts.length > 0 && parts[0].seq > 1 });
   }
 
   private async storyAction(args: Record<string, unknown>): Promise<string | ToolOutcome> {
