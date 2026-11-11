@@ -593,28 +593,65 @@ export class TableHost {
     if (!id) throw new HostError('invalid', '要指定玩法才能再来一局');
     const def = gameById(id);
     if (!def) throw new HostError('invalid', `不认识的桌子：现在有 ${gameIds().join(' / ')}`);
+    if (input.seatCount !== undefined && (def.id !== 'werewolf' || !isWerewolfSeatCount(input.seatCount))) {
+      throw new HostError('invalid', 'seatCount 仅适用于狼人杀，必须是 6、9 或 12');
+    }
+    // 回执按「原样输入」算：game 缺省时不掺进 mine.game，否则重放时拼不出同一个 hash。
+    const key = {
+      type: 'table_rematch',
+      game: input.game ?? null,
+      seatCount: input.seatCount ?? null,
+      requireHuman: input.requireHuman ?? null,
+    };
+    type RematchReceipt = TableReceipt & { joined?: boolean; created?: boolean };
+    const replayed = await this.replayReceipt(cooId, requestId, key) as RematchReceipt | null;
+    if (replayed) {
+      return {
+        tableId: replayed.tableId, game: def.id,
+        joined: replayed.joined ?? false, created: replayed.created ?? false, receipt: replayed,
+      };
+    }
+    // 下游的 join/open 各自按 requestId 存回执，派生一个键，免得同一张单撞主键。
+    const downstream = requestId ? `${requestId}#rematch` : undefined;
+    const done = async (result: TableRematchResult): Promise<TableRematchResult> => {
+      await this.storeReceipt(
+        cooId, requestId, result.tableId, key,
+        { ...result.receipt, joined: result.joined, created: result.created } as TableReceipt, this.now(),
+      );
+      return result;
+    };
     if (mine && isLive(mine.engine.status)) {
       if (mine.game !== def.id) {
         throw new HostError('conflict', `你已经在一张${mine.engine.label}桌上了；一人同时只参与一张`);
       }
       // 已经在同玩法的桌上：把他带回那张桌，不当成错误（重连/连点两次都会走到这）。
-      return { tableId: mine.id, game: def.id, joined: false, created: false, receipt: { tableId: mine.id, revision: mine.revision } };
+      return done({ tableId: mine.id, game: def.id, joined: false, created: false, receipt: { tableId: mine.id, revision: mine.revision } });
     }
     // liveTables() 已按开桌时间升序：同玩法先开的桌先坐满，不会一直空着最早那张。
+    // 容量取候选桌自己的席数（狼人杀可以是 6/9/12），并按本次请求的人数筛，别把人塞进人数不符的局。
+    const wanted = isWerewolfSeatCount(input.seatCount) ? input.seatCount : undefined;
     const target = this.liveTables().find((table) => table.engine.status === 'open'
       && table.game === def.id && !table.frozen && this.now() < table.openDeadlineAt
-      && table.engine.seatIds().length < tableCapacity(table.game));
+      && (wanted === undefined || this.capacityOf(table) === wanted)
+      && table.engine.seatIds().length < this.capacityOf(table));
     if (target) {
-      const joined = await this.join(cooId, target.id, requestId, input.clientVersion);
-      return { tableId: target.id, game: def.id, joined: true, created: false, receipt: joined.receipt };
+      const joined = await this.join(cooId, target.id, downstream, input.clientVersion);
+      return done({ tableId: target.id, game: def.id, joined: true, created: false, receipt: joined.receipt });
     }
     const opened = await this.open(cooId, {
       game: def.id,
       ...(input.clientVersion ? { clientVersion: input.clientVersion } : {}),
       ...(input.requireHuman !== undefined ? { requireHuman: input.requireHuman } : {}),
       ...(input.seatCount !== undefined ? { seatCount: input.seatCount } : {}),
-    }, requestId);
-    return { tableId: opened.tableId, game: def.id, joined: true, created: true, receipt: opened.receipt };
+    }, downstream);
+    return done({ tableId: opened.tableId, game: def.id, joined: true, created: true, receipt: opened.receipt });
+  }
+
+  /** 桌子的实际席数：狼人杀把开桌定的人数写进公开视图，其它玩法看注册表。 */
+  private capacityOf(table: LiveTable): number {
+    const view = table.engine.public() as { capacity?: unknown };
+    return typeof view.capacity === 'number' && Number.isSafeInteger(view.capacity) && view.capacity > 0
+      ? view.capacity : tableCapacity(table.game);
   }
 
   private async joinLocked(cooId: string, table: LiveTable, requestId?: string, clientVersion?: string): Promise<TableJoinResult> {

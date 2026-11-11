@@ -369,8 +369,11 @@ export class GomokuTable implements TableEngine {
       throw new Error('五子棋存档格式错误');
     }
     const blackIndex = state.blackIndex ?? 0;
-    // 只有一席时还分不出黑白，执黑下标只能是 0。
-    if (state.seats.length < 2 && blackIndex !== 0) throw new Error('五子棋存档执黑席位非法');
+    // 待开局时桌上只有桌主一席，但执黑席位开桌时就已经抽定，可能指向还没入座的第二席；
+    // 这时不能按「一席只能是 0」拒掉，否则抽到第二席执黑的桌第二个人永远坐不进来。
+    if (state.seats.length < 2 && blackIndex !== 0 && state.status !== 'open') {
+      throw new Error('五子棋存档执黑席位非法');
+    }
     const board = Array<number>(CAPACITY).fill(0);
     let winningLine: Point[] = [];
     for (const [i, move] of state.moves.entries()) {
