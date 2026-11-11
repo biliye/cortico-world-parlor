@@ -8,6 +8,7 @@ import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
 import { ParlorClient, ParlorHttpError } from '../src/room/client.ts';
 import { GomokuTable } from '../src/room/games/gomoku-table.ts';
+import { XiangqiTable } from '../src/room/games/xiangqi-table.ts';
 import type { ActionRequest, RoomEvent, RoomSnapshot } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
@@ -71,6 +72,45 @@ const expectRevision = (revision: number) => vi.spyOn(ParlorClient.prototype, 'a
   });
 
 describe('World 牌桌版本同步', () => {
+  it('中国象棋给 Coo 一份文字棋盘和私有走棋建议，可按同一版桌面提交', async () => {
+    const engine = new XiangqiTable({ id: 'mine', name: '小满' });
+    engine.join({ id: 'other', name: '对手' });
+    engine.start('mine', 1000);
+    const table = { ...engine.public(), id: 't1', tableId: 't1', revision: 8, label: '中国象棋', text: engine.publicText() };
+    const tablePrivate = { ...engine.view('mine')!, tableId: 't1', revision: 8, text: engine.privateText('mine')! };
+    const games = vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue({
+      ...snapshot, seq: ++seq, table, tablePrivate, tables: [table],
+    });
+    const callState = async () => {
+      const output = await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler({ op: 'state' }, {} as ToolCallContext);
+      return JSON.parse(typeof output === 'string' ? output : output.text);
+    };
+    const state = await callState();
+    expect(state.table.board).toMatch(/0\s+黑车 黑马 黑象 黑士 黑将/);
+    expect(state.table.board).toContain('红帅');
+    const [columns, backRank, emptyRank, cannonRank] = (state.table.board as string).split('\n');
+    const expandWideChars = (line: string) => line.replace(/\p{Script=Han}/gu, '$&$&');
+    for (let col = 0; col < 9; col++) {
+      const offset = 4 + col * 5;
+      expect(columns[offset]).toBe(String(col));
+      expect(expandWideChars(backRank)[offset]).toBe('黑');
+      expect(emptyRank[offset]).toBe('.');
+    }
+    expect(expandWideChars(cannonRank).slice(4 + 7 * 5, 8 + 7 * 5)).toBe('黑黑炮炮');
+    expect(state.tablePrivate.text).toContain('建议走法');
+    expect(state.tablePrivate.board).toBeUndefined();
+    expect(state.tablePrivate.legalMoves).toBeUndefined();
+    expect(tablePrivate.legalMoves).toHaveLength(44);
+    const { from, to } = tablePrivate.hints![0];
+    const action = expectRevision(8);
+    await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(
+      { action: 'move', params: { from, to } }, {} as ToolCallContext,
+    );
+    expect(action.mock.calls[0][1]).toMatchObject({ action: 'move', table: 't1', revision: 8, params: { from, to } });
+    games.mockResolvedValueOnce({ ...snapshot, table, tablePrivate: null });
+    expect((await callState()).tablePrivate).toBeNull();
+  });
+
   it('五子棋 state 只给一份点阵，旧服务器的通用行动回执也精简', async () => {
     const engine = new GomokuTable({ id: 'mine', name: '小满' }, 60_000, 0);
     engine.join({ id: 'other', name: '对手' });

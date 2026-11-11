@@ -27,6 +27,7 @@ import {
 import { gameById, type GameDefinition } from './room/games/registry.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
 import { formatGomokuAdvice, formatGomokuBoard } from './room/games/gomoku-table.ts';
+import { formatXiangqiAdvice, formatXiangqiBoard, type XiangqiHint, type XiangqiMove } from './room/games/xiangqi.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
 import { GAME_RESPONSE_MAX_BYTES, type TablePrivateSummary, type TableSummary } from './room/table-engine.ts';
@@ -67,28 +68,31 @@ function compactGameResult(result: Record<string, unknown>): Record<string, unkn
   const table = result.table as TableSummary | null | undefined;
   const view = result.tablePrivate as TablePrivateSummary | null | undefined;
   const output = { ...result };
-  const hasPublicBoard = table?.game === 'gomoku' && Array.isArray(table.board);
+  const formatBoard = (game: string, board: number[], last: unknown) => game === 'xiangqi'
+    ? formatXiangqiBoard(board, last as XiangqiMove | undefined)
+    : formatGomokuBoard(board, last as Parameters<typeof formatGomokuBoard>[1]);
+  const isBoardGame = (game?: string) => game === 'gomoku' || game === 'xiangqi';
+  const hasPublicBoard = table && isBoardGame(table.game) && Array.isArray(table.board);
   if (hasPublicBoard) {
-    const last = table.last as Parameters<typeof formatGomokuBoard>[1];
-    output.table = { ...table, board: formatGomokuBoard(table.board as number[], last) };
+    output.table = { ...table, board: formatBoard(table.game, table.board as number[], table.last) };
   }
-  if (view?.game === 'gomoku' && Array.isArray(view.board)) {
-    const { board, hints, warning, ...rest } = view;
+  if (view && isBoardGame(view.game) && Array.isArray(view.board)) {
+    const { board, hints, warning, legalMoves: _legalMoves, ...rest } = view;
     const hasSameBoard = hasPublicBoard && (table.id ?? table.tableId) === view.tableId && table.revision === view.revision;
-    const advice = formatGomokuAdvice(
-      (Array.isArray(hints) ? hints : []) as Parameters<typeof formatGomokuAdvice>[0],
-      warning as Parameters<typeof formatGomokuAdvice>[1],
-    );
+    const moves = Array.isArray(hints) ? hints : [];
+    const advice = view.game === 'xiangqi'
+      ? formatXiangqiAdvice(moves as XiangqiHint[], warning as string | undefined)
+      : formatGomokuAdvice(moves as Parameters<typeof formatGomokuAdvice>[0], warning as Parameters<typeof formatGomokuAdvice>[1]);
     const headline = typeof view.text === 'string' ? view.text.split('\n', 1)[0] : '';
     output.tablePrivate = {
       ...rest,
       text: [headline, advice].filter(Boolean).join('\n'),
-      ...(!hasSameBoard && { board: formatGomokuBoard(board, view.last as Parameters<typeof formatGomokuBoard>[1]) }),
+      ...(!hasSameBoard && { board: formatBoard(view.game, board, view.last) }),
     };
   }
   if (Array.isArray(result.tables)) {
     output.tables = result.tables.map((entry: TableSummary) => {
-      if (entry.game !== 'gomoku') return entry;
+      if (!isBoardGame(entry.game)) return entry;
       const { board: _board, ...summary } = entry;
       return summary;
     });

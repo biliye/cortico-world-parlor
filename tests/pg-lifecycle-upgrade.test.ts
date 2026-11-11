@@ -12,6 +12,34 @@ import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
 
+it('PG v12 升到 v13：保留五子棋桌并允许中国象棋桌', async () => {
+  db = await openTestDb();
+  const room = 'r-v13-upgrade';
+  const owner = 'coo-v13-upgrade';
+  await new CooAccountDb(db).registerCoo(owner, 'upgrade-secret-0123456789', 'pet', '旧玩家');
+  await createRoom(db, { id: room, ownerCooId: owner, name: '旧客厅' }, 4);
+  await db.exec(`
+    ALTER TABLE tables DROP CONSTRAINT tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku'));
+    UPDATE meta SET value='12' WHERE key='schema_version';
+  `);
+  await insertTable(db, 'old-gomoku', room, 'gomoku');
+  await expect(insertTable(db, 'new-xiangqi', room, 'xiangqi')).rejects.toThrow(/tables_game_check/);
+  await migrate(db);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(13);
+  await insertTable(db, 'new-xiangqi', room, 'xiangqi');
+  expect(await db.prepare('SELECT id, game FROM tables WHERE room_id=? ORDER BY id').all(room)).toEqual([
+    { id: 'new-xiangqi', game: 'xiangqi' }, { id: 'old-gomoku', game: 'gomoku' },
+  ]);
+
+  await db.exec("ALTER TABLE tables DROP CONSTRAINT tables_game_check; UPDATE meta SET value='12' WHERE key='schema_version';");
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(13);
+  await expect(insertTable(db, 'invalid-game', room, 'unknown-game')).rejects.toThrow(/tables_game_check/);
+});
+
 it('PG v11 升到 v12：保留旧终局，新逐席表从空表起算且可重复迁移', async () => {
   db = await openTestDb();
   const id = 'coo-v12-upgrade';

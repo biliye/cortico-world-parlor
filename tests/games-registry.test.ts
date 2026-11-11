@@ -60,7 +60,7 @@ describe('牌桌注册表', () => {
 
   it('World 不注册专属工具，开桌参数按需发现且不写死游戏枚举', () => {
     const names = new Set(PARLOR_TOOL_DECLS.map((decl) => decl.name));
-    expect([...names].some(name => /_(ddz|werewolf|gomoku|monopoly2d)_action$/.test(name))).toBe(false);
+    expect([...names].some(name => /_(ddz|werewolf|gomoku|xiangqi|monopoly2d)_action$/.test(name))).toBe(false);
     const open = operationHelp('table').table.find(entry => entry.op === 'open')!;
     const game = (open.parameters as { properties?: { game?: { enum?: string[] } } }).properties?.game;
     expect(game?.enum).toBeUndefined();

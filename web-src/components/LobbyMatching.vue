@@ -44,7 +44,7 @@ function tableNote(): string {
         <label class="board-select">想玩
           <select v-model="game" aria-label="快速匹配游戏" :disabled="busy">
             <option value="ddz">斗地主</option><option value="werewolf">狼人杀</option><option value="dice">骰子</option>
-            <option value="gomoku">五子棋</option><option value="monopoly2d">快局大富翁</option>
+            <option value="gomoku">五子棋</option><option value="xiangqi">中国象棋</option><option value="monopoly2d">快局大富翁</option>
           </select>
         </label>
         <button class="btn primary board-match" type="button" :disabled="busy || !!myTable" @click="join({ game })">{{ busy ? '正在加入…' : '快速匹配' }}</button>

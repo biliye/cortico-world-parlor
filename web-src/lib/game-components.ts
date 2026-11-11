@@ -50,6 +50,7 @@ const COMPONENTS: Record<string, Component> = {
   werewolf: WerewolfGame,
   monopoly2d: Monopoly2dGame,
   gomoku: lazyGame(() => import('../components/games/GomokuGame.vue')),
+  xiangqi: lazyGame(() => import('../components/games/XiangqiGame.vue')),
 };
 
 export function componentFor(game: string): Component | null {

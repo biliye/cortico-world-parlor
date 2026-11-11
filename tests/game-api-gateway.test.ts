@@ -29,6 +29,46 @@ async function post(token: string, body: unknown) {
 }
 
 describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
+  it('中国象棋从目录开桌，只有执棋方能收到提示和合法走法', async () => {
+    const [a, b, spectator] = await start();
+    const catalog = await a.client.games(a.token, { op: 'list' }, 'lobby');
+    expect(catalog.games).toContainEqual(expect.objectContaining({ id: 'xiangqi', label: '中国象棋' }));
+    const info = await a.client.games(a.token, { op: 'describe', game: 'xiangqi' }, 'lobby');
+    expect(info.game).toMatchObject({ revisionMode: 'strict', actions: [{ action: 'move' }, { action: 'resign' }] });
+    const opened = await a.client.action(a.token, { type: 'table_open', game: 'xiangqi', requestId: 'xiangqi-open' }, 'lobby');
+    const table = opened.tableId!;
+    await b.client.action(b.token, { type: 'table_join', table, requestId: 'xiangqi-join' }, 'lobby');
+    await a.client.action(a.token, { type: 'table_start', table, requestId: 'xiangqi-start' }, 'lobby');
+
+    const read = async (player: typeof a) => await player.client.games(player.token, { op: 'state', table }, 'lobby') as Record<string, any>;
+    const [first, second] = await Promise.all([read(a), read(b)]);
+    const [red, black, state] = first.tablePrivate.canAct ? [a, b, first] : [b, a, second];
+    const watching = await read(spectator);
+    expect(watching.table.board).toEqual(state.table.board);
+    expect(watching.table.hints).toBeUndefined();
+    expect(watching.tablePrivate).toBeNull();
+    expect(state.tablePrivate.hints).toHaveLength(3);
+    expect(state.tablePrivate.text).toContain('建议走法');
+    expect(state.availableActions.map((entry: { action: string }) => entry.action)).toEqual(['move', 'resign']);
+    const { from, to } = state.tablePrivate.hints[0];
+    const body = {
+      type: 'game_action', table, action: 'move', params: { from, to },
+      revision: state.table.revision, requestId: 'xiangqi-move',
+    };
+    expect((await post(red.token, { ...body, params: { from } })).status).toBe(400);
+    expect((await post(red.token, { ...body, revision: body.revision - 1 })).status).toBe(409);
+    expect((await post(spectator.token, body)).status).toBe(403);
+    const moved = await post(red.token, body);
+    expect(moved.status).toBe(200);
+    expect((await post(red.token, body)).body).toEqual(moved.body);
+    expect((await read(red)).tablePrivate.hints).toBeUndefined();
+    const reply = await read(black);
+    expect(reply.table.last).toMatchObject({ from, to });
+    expect(reply.tablePrivate.hints).toHaveLength(3);
+    expect((await post(black.token, { ...body, action: 'resign', params: {}, revision: reply.table.revision, requestId: 'xiangqi-resign' })).status).toBe(200);
+    expect((await read(spectator)).table).toMatchObject({ status: 'ended', cause: 'resign', winner: state.table.turn });
+  });
+
   it('认证后可发现目录和参数；别的客厅不能复用席位令牌', async () => {
     const [a] = await start();
     const unauthorized = await fetch(`${app!.url}/v1/games`);

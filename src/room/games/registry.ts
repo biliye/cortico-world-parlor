@@ -19,6 +19,8 @@ import { DoudizhuTable } from './doudizhu-table.ts';
 import { DEFAULT_RULES, SEAT_COUNT as MONOPOLY2D_SEATS } from './monopoly2d-rules.ts';
 import { Monopoly2dTable } from './monopoly2d-table.ts';
 import { GOMOKU_SIZE, GomokuTable } from './gomoku-table.ts';
+import { XiangqiTable } from './xiangqi-table.ts';
+import { XIANGQI_COLS, XIANGQI_ROWS, isMove, moveText } from './xiangqi.ts';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from './werewolf-table.ts';
 import type { WerewolfSeatCount } from './werewolf.ts';
 
@@ -379,7 +381,52 @@ const gomoku: GameDefinition = {
   },
 };
 
-export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf, monopoly2d, gomoku];
+const xiangqiPointSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    row: { type: 'integer', minimum: 0, maximum: XIANGQI_ROWS - 1 },
+    col: { type: 'integer', minimum: 0, maximum: XIANGQI_COLS - 1 },
+  },
+  required: ['row', 'col'],
+};
+
+const xiangqi: GameDefinition = {
+  id: 'xiangqi', rated: true, label: '中国象棋', icon: 'board',
+  openHint: '两席坐满后由桌主开局，随机分红黑，红方先行。',
+  rules: [
+    '九列十行，红先黑后。行 0–9 从黑方底线到红方底线，列 0–8 从棋盘左至右，双方使用同一套坐标。',
+    '按象棋棋子走法行棋。被将军必须应将，禁止将帅照面；将死或困毙均判负。',
+    '第三次出现同一棋盘和行棋方时，单方长将判负，其余判和。连续 60 回合不吃子也判和。',
+    '每手 60 秒，超时由服务器代走。轮到自己时可以认输。查看本人桌面可取得战术建议。',
+  ],
+  create: ({ host, turnMs, firstSeat }) => new XiangqiTable(host, turnMs, firstSeat),
+  actionType: 'xiangqi_action',
+  revisionMode: 'strict',
+  randomizeFirstSeat: true,
+  toAction: (body) => body.resign === true ? { resign: true } : { from: body.from, to: body.to },
+  actionKey: 'action',
+  availableActions: view => view.canAct === true ? ['move', 'resign'] : [],
+  action: {
+    description: '轮到你时用 move 走棋，params 要带 from 和 to，各含 row、col；用 resign 认输，params 为 {}。先用 parlor_game_info {op:"state"} 查看棋盘、revision 和走棋建议。',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['move', 'resign'] },
+        from: xiangqiPointSchema, to: xiangqiPointSchema,
+      },
+      required: ['action'],
+    },
+    toBody: ({ action, from, to }) => {
+      if (action === 'resign' && from === undefined && to === undefined) return { type: 'xiangqi_action', resign: true };
+      const move = { from, to };
+      if (action !== 'move' || !isMove(move)) throw new Error('move 要给 from 和 to；resign 不带坐标');
+      return { type: 'xiangqi_action', ...move };
+    },
+    done: body => isMove(body) ? `走棋 ${moveText(body)}。` : '认输了。',
+  },
+};
+
+export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf, monopoly2d, gomoku, xiangqi];
 
 const BY_ID = new Map(GAME_LIST.map((game) => [game.id, game]));
 const BY_ACTION = new Map(GAME_LIST.map((game) => [game.actionType, game]));

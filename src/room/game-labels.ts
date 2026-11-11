@@ -8,6 +8,7 @@ export const GAME_LABELS: Readonly<Record<string, string>> = {
   ddz: '斗地主',
   werewolf: '狼人杀',
   gomoku: '五子棋',
+  xiangqi: '中国象棋',
   monopoly2d: '快局大富翁',
 };
 

@@ -26,7 +26,7 @@ const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
 const boardChatInToolbar = computed(() => view.value === 'table'
-  && (activeTable.value?.game === 'monopoly2d' || activeTable.value?.game === 'gomoku'));
+  && ['monopoly2d', 'gomoku', 'xiangqi'].includes(activeTable.value?.game ?? ''));
 const switcherOpen = ref(false);
 const accountOpen = ref(false);
 const ratingsOpen = ref(false);

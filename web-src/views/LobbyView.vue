@@ -7,6 +7,7 @@ import LobbyMatching from '../components/LobbyMatching.vue';
 import LobbyScene from '../components/LobbyScene.vue';
 import { api } from '../api/client.ts';
 import { createRoomCarousel, type CarouselModel } from '../lib/room-carousel.ts';
+import { gameLabel } from '../lib/games.ts';
 import { ROOM_CAPACITY, createRoomBody } from '../lib/rooms.ts';
 import { isFavorite, toggleFavorite } from '../stores/club.ts';
 import { sheetOpen } from '../stores/chat.ts';
@@ -17,7 +18,11 @@ import {
 import type { RoomCard } from '../api/types.ts';
 
 const section = hallSection;
-const filter = ref<'all' | 'ddz' | 'werewolf' | 'gomoku' | 'monopoly2d'>('all');
+const filter = ref('all');
+const gameFilters = [
+  { id: 'all', label: '全部' },
+  ...['ddz', 'werewolf', 'gomoku', 'xiangqi', 'monopoly2d'].map(id => ({ id, label: gameLabel(id) })),
+];
 const query = ref('');
 const createName = ref('');
 const createVisibility = ref<'public' | 'unlisted' | 'private'>('public');
@@ -292,7 +297,7 @@ async function createRoom(): Promise<void> {
               <input v-model="query" class="search" type="search" placeholder="搜客厅名字、话题…" aria-label="搜索客厅">
               <div class="filters" aria-label="筛选客厅">
                 <button
-                  v-for="item in [{ id: 'all', label: '全部' }, { id: 'ddz', label: '斗地主' }, { id: 'werewolf', label: '狼人杀' }, { id: 'gomoku', label: '五子棋' }, { id: 'monopoly2d', label: '快局大富翁' }] as const"
+                  v-for="item in gameFilters"
                   :key="item.id"
                   class="filter"
                   type="button"
