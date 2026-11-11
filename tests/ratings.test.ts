@@ -4,7 +4,7 @@ import { fitRatings } from '../src/room/ratings/bt.ts';
 import { validSeatResults } from '../src/room/table-results.ts';
 
 const ratedFixtures: Record<string, number> = {
-  dice: 2, ddz: 3, werewolf: 6, monopoly2d: 4, gomoku: 2,
+  dice: 2, ddz: 3, werewolf: 6, monopoly2d: 4, gomoku: 2, xiangqi: 2,
 };
 
 it.each(GAME_LIST.filter(game => game.rated))('$id 正常终局符合统一的逐席赛果契约', game => {

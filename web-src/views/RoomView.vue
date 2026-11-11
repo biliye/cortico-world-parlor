@@ -45,7 +45,9 @@ function seatedAt(table: TableSummary): boolean {
 }
 
 function capacityOf(table: TableSummary): number {
-  return table.capacity ?? (table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : table.game === 'gomoku' ? 2 : 4);
+  if (table.capacity !== undefined) return table.capacity;
+  if (table.game === 'xiangqi' || table.game === 'gomoku') return 2;
+  return table.game === 'werewolf' ? 9 : table.game === 'ddz' ? 3 : 4;
 }
 
 async function run(task: () => Promise<unknown>): Promise<void> {
@@ -153,7 +155,7 @@ async function invite(): Promise<void> {
 
     <div class="club-section-head">
       <h2>挑张桌，坐下来</h2>
-      <span class="muted">斗地主 3 席 · 狼人杀 6／9／12 席 · 五子棋 2 席 · 大富翁 4 席</span>
+      <span class="muted">斗地主 3 席 · 狼人杀 6／9／12 席 · 五子棋和中国象棋 2 席 · 大富翁 4 席</span>
     </div>
 
     <p v-if="notice" class="warn">{{ notice }}</p>

@@ -69,6 +69,15 @@ export const GAMES: Record<string, GameDef> = {
       '结算后可点「再来一局」：本厅有同玩法的空桌就并进去，没有就开一张新的。',
     ],
   },
+  xiangqi: {
+    label: '中国象棋', icon: 'board', enabled: true, endScreen: true, minPlayers: 2, botFill: false,
+    blurb: '两人对弈，开局随机分红黑，红方先行。', foot: '双人 · 红先 · 下一步建议',
+    guide: [
+      '两席坐满后由桌主开局。选棋子、选落点，再确认走棋；也可以从「下一步建议」选一着。',
+      '每手 60 秒，超时由服务器代走。将死、困毙或认输判负。',
+      '同一局面和行棋方第三次出现时，单方长将判负，其余判和。连续 60 回合未吃子也判和。',
+    ],
+  },
   monopoly: {
     label: '大富翁', icon: 'board', enabled: false, endScreen: false, minPlayers: 2, botFill: true,
     blurb: '四到六人的长局，买地、升级、道具；这一版先收起来了。', foot: '买地 · 升级 · 道具',

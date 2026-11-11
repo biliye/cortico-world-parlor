@@ -159,6 +159,9 @@ export type ActionRequest =
     type: 'gomoku_action'; row: number; col: number;
     table?: string; requestId?: string; revision?: number;
   }
+  | ({
+    type: 'xiangqi_action'; table?: string; requestId?: string; revision?: number;
+  } & ({ from: { row: number; col: number }; to: { row: number; col: number } } | { resign: true }))
   | {
     /** 狼人杀动作：窗口制——windowId 必带，服务端校验窗口与动作槽；revision 不参与校验。 */
     type: 'werewolf_action';

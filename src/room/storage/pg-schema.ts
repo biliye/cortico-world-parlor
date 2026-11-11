@@ -16,7 +16,7 @@ import { NEWS_SCHEMA_SQL, SUPPORT_ADMIN_SCHEMA_SQL, SUPPORT_SCHEMA_SQL } from '.
 import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 
-export const PG_SCHEMA_VERSION = 12;
+export const PG_SCHEMA_VERSION = 13;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -498,4 +498,9 @@ export const PG_MIGRATIONS: PgMigration[] = [
     UPDATE support_announcements SET publish_id = 'legacy-' || id WHERE publish_id = '';
   ` },
   { version: 12, name: 'table-seat-results', sql: SEAT_RESULTS_SCHEMA_SQL },
+  { version: 13, name: 'tables-game-xiangqi', sql: `
+    ALTER TABLE tables DROP CONSTRAINT tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi'));
+  ` },
 ];
