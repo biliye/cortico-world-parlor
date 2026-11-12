@@ -134,6 +134,22 @@ describe('说书厅搭便车', () => {
     expect(await deferred.mock.calls[2][0].render()).toBeNull();
     expect(inboxCalls).toHaveLength(calls);
   });
+
+  it('旧场的搭便车回调还没执行时，新场也能挂单并正常投递', async () => {
+    const deferred = vi.spyOn(FakeHost.prototype, 'pushDeferred');
+    const first = { ...story, endsAt: Date.now() + 600_000 };
+    const next = { ...first, id: 'story-b', title: '灯下的人' };
+    inboxQueue = [{ story: first }, { story: next }];
+    await start();
+    // 第一场提前散场，没有自然唤醒，也没有宿主回调。
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deferred).toHaveBeenCalledTimes(2);
+    const calls = inboxCalls.length;
+    expect(await deferred.mock.calls[0][0].render()).toBeNull();
+    expect(inboxCalls).toHaveLength(calls);
+    inboxQueue = [{ story: next }];
+    expect(await deferred.mock.calls[1][0].render()).toContain('《灯下的人》');
+  });
 });
 
 describe('inbox 轮询', () => {

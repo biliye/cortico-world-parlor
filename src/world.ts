@@ -211,7 +211,7 @@ export class ParlorWorld implements World {
   private storyNoticeTask?: Promise<void>;
   private storyNoticeRefreshPending = false;
   private storyNoticeRetryMs = 0;
-  private storyHintPending?: StoryLiveHint;
+  private storyHintPending?: { roundId: string; token: string };
   private lastStoryHint?: { cooId: string; roundId: string };
   private cursorTimer?: NodeJS.Timeout;
   private historyTask?: Promise<void>;
@@ -1540,7 +1540,10 @@ export class ParlorWorld implements World {
         });
         // 请求在途时可能已经静音或停了：回来后再判一次，整份响应当场作废。
         if (this.autoSilenced) return;
-        if (view.story && this.token === token) this.armStoryHint(view.story, token);
+        if (this.token === token) {
+          if (view.story) this.armStoryHint(view.story, token);
+          else this.storyHintPending = undefined;
+        }
         await this.pushAnnouncements(view.announcements ?? []);
         if (this.ctx.cfg.news && view.news) await this.pushNews(view.news);
         if (this.ctx.cfg.recruitNotice && view.recruit) this.absorbRecruit(view.recruit.tables);
@@ -1560,16 +1563,19 @@ export class ParlorWorld implements World {
   private armStoryHint(hint: StoryLiveHint, token: string): void {
     const { client, host } = this;
     const cooId = this.identity?.cooId;
-    if (!client || !host || !cooId || this.storyHintPending
+    if (!client || !host || !cooId
+      || (this.storyHintPending?.roundId === hint.id && this.storyHintPending.token === token)
       || (this.lastStoryHint?.cooId === cooId && this.lastStoryHint.roundId === hint.id)) return;
-    this.storyHintPending = hint;
+    // 换场时替换挂单：旧回调可能尚未搭车，也可能已被隐藏的宿主丢弃。
+    const pending = { roundId: hint.id, token };
+    this.storyHintPending = pending;
     host.pushDeferred({
       type: 'parlor.message', senderKey: 'parlor', meta: { story: hint.id },
       render: async () => {
         try {
-          if (this.autoSilenced || this.token !== token || this.storyHintPending !== hint) return null;
+          if (this.autoSilenced || this.token !== token || this.storyHintPending !== pending) return null;
           const { story } = await client.inbox(token, { topics: ['story'], afterPublish: 0, afterId: '' }, 2_000);
-          if (this.autoSilenced || this.token !== token || this.storyHintPending !== hint || story?.id !== hint.id) return null;
+          if (this.autoSilenced || this.token !== token || this.storyHintPending !== pending || story?.id !== hint.id) return null;
           this.lastStoryHint = { cooId, roundId: story.id };
           this.saveCursor();
           const speaker = JSON.stringify(story.speaker).slice(1, -1);
@@ -1578,7 +1584,7 @@ export class ParlorWorld implements World {
         } catch {
           return null;
         } finally {
-          if (this.storyHintPending === hint) this.storyHintPending = undefined;
+          if (this.storyHintPending === pending) this.storyHintPending = undefined;
         }
       },
     }, { trigger: 'piggyback' });
