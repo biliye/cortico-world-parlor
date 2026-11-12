@@ -49,8 +49,8 @@ const mySeat = computed(() => seats.value.find(seat => seat.id === props.view.me
 const turn = computed(() => seats.value.find(seat => seat.id === table.value.turn));
 const winner = computed(() => seats.value.find(seat => table.value.winners?.includes(seat.id)));
 const yours = computed(() => !table.value.frozen && props.view.priv?.yourTurn === true && turn.value?.id === mySeat.value?.id);
-const die = computed(() => Number(table.value.die ?? last.value?.die ?? 0));
 const last = computed(() => table.value.last as { text: string; die: number } | null);
+const die = computed(() => table.value.phase === 'await_roll' ? 0 : Number(table.value.die ?? last.value?.die ?? 0));
 const moves = computed(() => yours.value && table.value.phase === 'await_move' ? (props.view.priv?.moves as AeroplaneMove[] ?? []) : []);
 const canRoll = computed(() => yours.value && table.value.phase === 'await_roll');
 const busy = ref(false);
@@ -125,7 +125,7 @@ async function submit(action: 'roll' | 'move', plane?: number): Promise<void> {
           <strong v-if="winner">{{ winner.name }} 赢得本局</strong>
           <strong v-else-if="table.frozen">牌桌已暂停</strong>
           <strong v-else-if="yours">{{ canRoll ? '轮到你掷骰' : `掷出 ${die} 点，选择飞机` }}</strong>
-          <strong v-else-if="turn">{{ turn.name }}{{ table.phase === 'await_move' ? ` 掷出 ${die} 点` : ' 正在掷骰' }}</strong>
+          <strong v-else-if="turn">{{ table.phase === 'await_move' ? `${turn.name} 掷出 ${die} 点` : `等待 ${turn.name} 掷骰` }}</strong>
           <span v-if="winner">四架飞机全部抵达终点。</span>
           <span v-else-if="last">{{ last.text }}</span>
           <span v-else>掷出 6 点即可起飞。</span>
