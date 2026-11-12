@@ -81,6 +81,7 @@
     "!src/web/assets/cards/cards.webp",
     "assets",
     "scripts",
+    "docs",
     "README.md",
     "TESTING.md",
     "CHANGELOG.md",
