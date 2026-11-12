@@ -616,14 +616,14 @@ let acting = false;
 /** 需要幂等键的动作；与旧 play.js 的 IDEMPOTENT_ACTIONS 一致。 */
 const IDEMPOTENT = new Set([
   'table_open', 'table_join', 'table_leave', 'table_start', 'table_rematch', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
-  'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'table_discovery',
+  'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'aeroplane_action', 'table_discovery',
 ]);
 
 /**
  * 严格版本（整桌 revision 乐观锁）的玩法动作。浏览器不引服务端注册表，
  * 这里维护一份最小清单；新增严格模式游戏时同步加一行，测试会盯住发送行为。
  */
-const STRICT_ACTIONS = new Set(['table_action', 'ddz_action', 'monopoly2d_action', 'gomoku_action', 'xiangqi_action']);
+const STRICT_ACTIONS = new Set(['table_action', 'ddz_action', 'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'aeroplane_action']);
 
 export function newRequestId(): string {
   try {

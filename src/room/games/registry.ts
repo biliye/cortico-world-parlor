@@ -23,6 +23,8 @@ import { XiangqiTable } from './xiangqi-table.ts';
 import { XIANGQI_COLS, XIANGQI_ROWS, isMove, moveText } from './xiangqi.ts';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from './werewolf-table.ts';
 import type { WerewolfSeatCount } from './werewolf.ts';
+import { AEROPLANE_RULES, PLANES_PER_SEAT } from './aeroplane-rules.ts';
+import { AeroplaneTable } from './aeroplane-table.ts';
 
 export interface GameCreateContext {
   /** 开桌者：id/name 之外带服务端席位类型与客户端能力版本（狼人杀开局校验用）。 */
@@ -426,7 +428,39 @@ const xiangqi: GameDefinition = {
   },
 };
 
-export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf, monopoly2d, gomoku, xiangqi];
+const aeroplane: GameDefinition = {
+  id: 'aeroplane', rated: false, label: '飞行棋', icon: 'board',
+  openHint: '2–4 人，由桌主开局。掷 6 起飞并获得一次再掷机会。',
+  rules: AEROPLANE_RULES,
+  create: ({ host, turnMs }) => new AeroplaneTable({ host, turnMs }),
+  actionType: 'aeroplane_action',
+  actionKey: 'action',
+  revisionMode: 'strict',
+  attachPrivateOnAct: true,
+  toAction: ({ action, plane }) => ({ action, plane }),
+  availableActions: view => view.yourTurn === true ? [view.phase === 'await_move' ? 'move' : 'roll'] : [],
+  action: {
+    description: '飞行棋轮到你时，用 roll 掷骰。拿到可飞飞机列表后，用 move 并给出飞机编号 plane（1–4）。',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['roll', 'move'] },
+        plane: { type: 'integer', minimum: 1, maximum: PLANES_PER_SEAT },
+      },
+      required: ['action'],
+    },
+    toBody: ({ action, plane }) => {
+      if (action === 'roll' && plane === undefined) return { type: 'aeroplane_action', action };
+      if (action === 'move' && typeof plane === 'number' && Number.isInteger(plane) && plane >= 1 && plane <= PLANES_PER_SEAT) {
+        return { type: 'aeroplane_action', action, plane };
+      }
+      throw new Error('roll 不带参数；move 要给飞机编号 plane（1–4）');
+    },
+    done: body => body.action === 'roll' ? '掷了骰子。' : `飞了 ${body.plane} 号机。`,
+  },
+};
+
+export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf, monopoly2d, gomoku, xiangqi, aeroplane];
 
 const BY_ID = new Map(GAME_LIST.map((game) => [game.id, game]));
 const BY_ACTION = new Map(GAME_LIST.map((game) => [game.actionType, game]));
