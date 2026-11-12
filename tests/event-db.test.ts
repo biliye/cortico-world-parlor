@@ -125,6 +125,39 @@ describe('客厅事件流', () => {
     expect((await events.recent('lobby', { cooId: A, limit: 2 })).map((event) => event.text)).toEqual(['#4', '#5']);
   });
 
+  it('补档和回放合并重叠到访，按同一游标对公开与私密事件分页', async () => {
+    for (let seq = 1; seq <= 5; seq += 1) await say('lobby', `公开 ${seq}`);
+    for (const [cooId, seatId] of [[A, 's1'], [B, 's2']]) {
+      await events.append('lobby', {
+        type: 'parlor.whisper', ts: 1000, from: 'system',
+        scope: { kind: 'seat', seatId }, text: `私聊 ${seatId}`, audience: [{ cooId, seatId }],
+      });
+    }
+    await say('lobby', '公开 8');
+    await say('lobby', '公开 9');
+    await db.prepare("UPDATE room_seats SET visible_from_seq=1, visible_to_seq=3, released_at=2 WHERE id='s1'").run();
+    const visit = db.prepare(`INSERT INTO room_seats
+      (room_id,id,coo_id,kind,name,tier,token_hash,joined_at,visible_from_seq,visible_to_seq,released_at)
+      VALUES ('lobby',?,?,'pet','阿岚','digest',?,3,?,?,?)`);
+    await visit.run('s1-old', A, 'token-old', 2, 4, 4);
+    await visit.run('s1-new', A, 'token-new', 7, null, null);
+    // Even an audience row must not grant access to a public event outside a visit.
+    await db.prepare("INSERT INTO event_audience(room_id,seq,coo_id,seat_id) VALUES ('lobby',5,?,'s1')").run(A);
+
+    const page = ({ events: items, more }: { events: { seq: number }[]; more: boolean }) => ({
+      seqs: items.map(item => item.seq), more,
+    });
+    expect(page(await events.archive('lobby', { cooId: A, after: 0 }))).toEqual({ seqs: [2, 3, 4, 6, 8, 9], more: false });
+    expect(page(await events.archive('lobby', { cooId: A, after: 2, limit: 2 }))).toEqual({ seqs: [3, 4], more: true });
+    expect(page(await events.archive('lobby', { cooId: A, after: 4, limit: 2 }))).toEqual({ seqs: [6, 8], more: true });
+    expect(page(await events.archive('lobby', { cooId: A, after: 8, limit: 1 }))).toEqual({ seqs: [9], more: false });
+    expect(await events.archive('lobby', { cooId: A, after: 9 })).toEqual({ events: [], more: false });
+
+    expect(await events.replay('lobby', { cooId: A, limit: 2 })).toMatchObject({ events: [{ seq: 8 }, { seq: 9 }], older: true });
+    expect(await events.replay('lobby', { cooId: A, before: 8, limit: 2 })).toMatchObject({ events: [{ seq: 4 }, { seq: 6 }], older: true });
+    expect(await events.replay('lobby', { cooId: A, before: 4, limit: 2 })).toMatchObject({ events: [{ seq: 2 }, { seq: 3 }], older: false });
+  });
+
   it('mentions/data/from 快照能读回', async () => {
     const event = await events.append('lobby', {
       type: 'parlor.ledger', ts: 1000, from: 'system',

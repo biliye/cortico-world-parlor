@@ -328,18 +328,42 @@ export class EventDb {
     forward: boolean,
   ): Promise<{ events: RoomEvent[]; more: boolean }> {
     const limit = clampLimit(query.limit, 50);
-    const before = query.before && query.before > 0 ? query.before : null;
+    const before = query.before && query.before > 0 ? query.before : 2147483647;
+    const order = forward ? 'ASC' : 'DESC';
+    // Start from the viewer's visits and audience entries. Each visit can use
+    // the room/seq index directly. UNION deduplicates overlapping old visits
+    // before the page limit, and only the winning rows fetch event payloads.
     const rows = await this.db.prepare(
-      `SELECT e.* FROM events e
-       LEFT JOIN event_audience a
-         ON a.room_id = e.room_id AND a.seq = e.seq AND a.coo_id = ?
-       WHERE e.room_id = ?
-         AND (e.seq < COALESCE(?, 2147483647))
-         AND e.seq > ?
-         AND ${replayVisibility}
-       ORDER BY e.seq ${forward ? 'ASC' : 'DESC'}
-       LIMIT ?`,
-    ).all(query.cooId, roomId, before, query.after ?? 0, query.cooId, limit + 1) as unknown as EventRow[];
+      `WITH viewer AS (
+         SELECT ?::text AS room_id, ?::text AS coo_id,
+                ?::bigint AS after_seq, ?::bigint AS before_seq
+       ), page AS (
+         SELECT visible.seq
+         FROM viewer v
+         JOIN room_seats s ON s.room_id = v.room_id AND s.coo_id = v.coo_id
+         CROSS JOIN LATERAL (
+           SELECT e.seq FROM events e
+           WHERE e.room_id = v.room_id
+             AND e.seq > GREATEST(v.after_seq, s.visible_from_seq)
+             AND e.seq < v.before_seq
+             AND e.seq <= COALESCE(s.visible_to_seq, 2147483647)
+             AND e.scope_kind IN ('room','hall')
+           ORDER BY e.seq ${order} LIMIT ?
+         ) visible
+         UNION
+         (SELECT a.seq
+          FROM viewer v
+          JOIN event_audience a ON a.room_id = v.room_id AND a.coo_id = v.coo_id
+          JOIN events e ON e.room_id = a.room_id AND e.seq = a.seq
+          WHERE a.seq > v.after_seq AND a.seq < v.before_seq
+            AND e.scope_kind NOT IN ('room','hall')
+          ORDER BY a.seq ${order} LIMIT ?)
+         ORDER BY seq ${order} LIMIT ?
+       )
+       SELECT e.* FROM page p
+       JOIN events e ON e.room_id = (SELECT room_id FROM viewer) AND e.seq = p.seq
+       ORDER BY p.seq ${order}`,
+    ).all<EventRow>(roomId, query.cooId, query.after ?? 0, before, limit + 1, limit + 1, limit + 1);
     return { events: rows.slice(0, limit).map(eventOf), more: rows.length > limit };
   }
 
