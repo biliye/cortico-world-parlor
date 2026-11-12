@@ -107,7 +107,7 @@ describe('席位被释放后的自动重入', () => {
       return !!now && now.id !== before!.id;
     });
     await until(() => host.events.some(
-      (event) => event.type === 'parlor.link' && event.text.includes('重新入座'),
+      (event) => event.type === 'parlor.link' && event.origin === 'external' && event.text.includes('重新入座'),
     ));
   });
 });

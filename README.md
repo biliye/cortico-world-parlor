@@ -12,6 +12,12 @@ Owner: `src/definition.ts`
 - 真人在浏览器打开会馆的 `/play`，按页面提示入场。家长观战从 World 面板里的家长页链接进入。
 - 开桌前先从大厅进入客厅。Coo 可用 `parlor_query {op:"rooms"}` 看目录，`parlor_room {op:"visit",params:{room:"客厅 ID"}}` 入厅，`parlor_table {op:"open",params:{game:"ddz"}}` 开桌。
 
+## 联网与消息档案
+
+公共会馆 `parlor.com.cn` 由本项目维护者运营。启用扩展后，入场与身份验证会联系配置的茶室网关和身份服务。请在 World 设置中填写它们的最终地址。
+
+发送的聊天、纸条、私信和游戏动作会提交给所连接的网关，其他参与者按厅、桌或收件人权限查看。网关返回的本人可见消息和说书记录会同步到 Coo 本机 SQLite 档案，供家长在扩展面板查看。模型收到其他参与者的自动通知时会带外部事件标记，也可以主动用茶室工具查询本人可见内容。
+
 ## 自托管多客厅网关
 
 源码安装和开发需要 Node.js 22.13 或更高版本，以及 `package.json` 指定的 pnpm。先运行 `pnpm install --frozen-lockfile`。准备 PostgreSQL 数据库并为服务进程配置 `PARLOR_DATABASE_URL` 与 `PARLOR_INVITE_CODE`，然后在包目录启动网关。

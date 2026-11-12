@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
+import type { EventOrigin, StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { PARLOR_CONFIG_GROUP, DEFAULT_INVITE_CODE, DEFAULT_ROOM_ID, DEFAULT_SERVER_URL, type ParlorConfigSection } from './config.ts';
@@ -190,7 +190,6 @@ export class ParlorWorld implements World {
   private readonly ambientBudget = new AmbientWakeBudget();
   private ambientTimer?: NodeJS.Timeout;
   private tableChatTimer?: NodeJS.Timeout;
-  private lastLinkAt = 0;
   private stopped = false;
   private supportTimer?: NodeJS.Timeout;
   private supportBusy = false;
@@ -230,10 +229,13 @@ export class ParlorWorld implements World {
 
   envPromptVars(): Record<string, string> {
     const cfg = this.ctx.cfg;
+    const room = this.currentRoom || cfg.room || DEFAULT_ROOM_ID;
+    const tier = this.seat?.tier;
     return {
-      'parlor.room': this.currentRoom || cfg.room || DEFAULT_ROOM_ID,
-      'parlor.seat': this.seat?.name ?? (cfg.seatName.trim() || this.ctx.botName),
-      'parlor.tier': this.seat?.tier ?? cfg.wakeTier,
+      'parlor.room': typeof room === 'string' && /^[a-z0-9_-]{1,64}$/i.test(room) ? room : '请查询当前客厅',
+      // 服务器返回的实际显示名走外部事件或查询结果，不进 system 前缀。
+      'parlor.seat': this.baseSeatName(),
+      'parlor.tier': tier && WAKE_TIERS.includes(tier) ? tier : cfg.wakeTier,
       'parlor.address': this.baseUrl || '（未连接）',
       'parlor.focus': this.focused ? '专注牌桌' : '普通',
     };
@@ -389,8 +391,8 @@ export class ParlorWorld implements World {
           path: ENV_PROMPT_FILE,
           role: 'envPrompt',
           vars: [
-            { name: 'parlor.room', description: '当前客厅。' },
-            { name: 'parlor.seat', description: '你在这个客厅里的席位名。' },
+            { name: 'parlor.room', description: '当前客厅的编号。' },
+            { name: 'parlor.seat', description: '本机配置的席位名。' },
             { name: 'parlor.tier', description: '当前提醒挡位。' },
             { name: 'parlor.address', description: '客厅地址；未连接时是占位。' },
             { name: 'parlor.focus', description: '专注牌桌 / 普通。' },
@@ -427,7 +429,7 @@ export class ParlorWorld implements World {
       type: 'parlor.started',
       ts: nowIso(this.ctx.timezone),
       source: this.id,
-      origin: 'internal',
+      origin: 'external',
       senderKey: this.id,
       text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.seat?.handle ? ` #${this.seat.handle}` : ''}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_query {op:"mail"} 看。` : ''}`,
       meta: { room: this.currentRoom, seat: this.seat?.id, address: this.baseUrl },
@@ -569,8 +571,8 @@ export class ParlorWorld implements World {
       this.currentRoom = target;
       this.clearPendingMessages();
       this.focused = false;
-      await this.reportLink(archived ? '原客厅已被房主删除，已回到大厅。'
-        : `原客厅不存在，已回到${target === DEFAULT_ROOM_ID ? '大厅' : target}。`, true);
+      await this.reportLink('internal', archived ? '原客厅已被房主删除，已回到大厅。'
+        : `原客厅不存在，已回到${target === DEFAULT_ROOM_ID ? '大厅' : target}。`);
     }
     if (joined.room) this.currentRoom = joined.room;
     this.token = joined.token;
@@ -599,7 +601,7 @@ export class ParlorWorld implements World {
       this.seat = { ...this.seat, name: renamed.name };
     } catch (error) {
       if (!(error instanceof ParlorHttpError) || ![404, 405].includes(error.status)) throw error;
-      await this.reportLink('服务器尚不支持同步席位名；请升级服务器，或释放原席位后重新入座让新名字生效。', true);
+      await this.reportLink('internal', '服务器尚不支持同步席位名；请升级服务器，或释放原席位后重新入座让新名字生效。');
     }
   }
 
@@ -612,7 +614,7 @@ export class ParlorWorld implements World {
     if (!client || !this.inviteCode) return false;
     try {
       await this.joinRoom(client);
-      await this.reportLink(`席位被释放了，已重新入座：${this.seat?.name ?? '未知'}。`, true);
+      await this.reportLink('external', `席位被释放了，已重新入座：${this.seat?.name ?? '未知'}。`);
       return true;
     } catch {
       return false;
@@ -738,11 +740,11 @@ export class ParlorWorld implements World {
     let disconnected = false;
     let lastDownAt = -Infinity;
     let lastUpAt = -Infinity;
-    const reportDisconnected = async (text: string) => {
+    const reportDisconnected = async (origin: EventOrigin, text: string) => {
       disconnected = true;
       if (Date.now() - lastDownAt < LINK_GAP_MS) return;
       lastDownAt = Date.now();
-      await this.reportLink(text, true);
+      await this.reportLink(origin, text);
     };
     while (!signal.aborted && !this.stopped) {
       const client = this.client;
@@ -768,7 +770,7 @@ export class ParlorWorld implements World {
               disconnected = false;
               if (Date.now() - lastUpAt >= LINK_GAP_MS) {
                 lastUpAt = Date.now();
-                void this.reportLink('客厅连接已恢复，继续从上次游标接收消息。', true);
+                void this.reportLink('internal', '客厅连接已恢复，继续从上次游标接收消息。');
               }
               void this.refreshFocus();
             }
@@ -788,14 +790,14 @@ export class ParlorWorld implements World {
           continue;
         }
         if (!disconnected) {
-          await reportDisconnected(`客厅连接断了：${messageOf(error)}。会自动重试，恢复后通知。`);
+          await reportDisconnected('external', `客厅连接断了：${messageOf(error)}。会自动重试，恢复后通知。`);
         }
       }
       if (signal.aborted || this.stopped) return;
       if (!current()) continue;
       if (clean) {
         if (!disconnected) {
-          await reportDisconnected('客厅连接已结束，会自动重新连接。');
+          await reportDisconnected('internal', '客厅连接已结束，会自动重新连接。');
         }
       }
       await new Promise<void>((resolve) => {
@@ -808,15 +810,12 @@ export class ParlorWorld implements World {
     }
   }
 
-  private async reportLink(text: string, force = false): Promise<void> {
-    const now = Date.now();
-    if (!force && now - this.lastLinkAt < LINK_GAP_MS) return;
-    this.lastLinkAt = now;
+  private async reportLink(origin: EventOrigin, text: string): Promise<void> {
     try { await this.host?.pushEvent({
       type: 'parlor.link',
       ts: nowIso(this.ctx.timezone),
       source: this.id,
-      origin: 'internal',
+      origin,
       senderKey: this.id,
       text,
       meta: { address: this.baseUrl },
@@ -2092,7 +2091,7 @@ export class ParlorWorld implements World {
       this.lastSeq = this.cursors[this.currentRoom] ?? 0;
       this.saveCursor();
       this.applySnapshot(await this.client.snapshot(this.token, this.lastSeq, 1, this.currentRoom));
-      await this.reportLink('服务器已更新席位位置，现已回到大厅。', true);
+      await this.reportLink('internal', '服务器已更新席位位置，现已回到大厅。');
       return true;
     } catch { return false; }
   }
@@ -2291,7 +2290,7 @@ export class ParlorWorld implements World {
       this.saveCursor();
       const snap = await this.client.snapshot(this.token, 0, 1, this.roomArg());
       this.applySnapshot(snap);
-      await this.reportLink(`已进入「${result.roomName}」并坐到牌桌。`, true);
+      await this.reportLink('external', `已进入「${result.roomName}」并坐到牌桌。`);
       return `已进入「${result.roomName}」并坐下，桌号 ${result.tableId}。等待桌主开局。\n${snap.table?.text || ''}`;
     } catch (error) {
       return this.failed(`${messageOf(error)}\n重试这次加入请沿用 requestId: ${requestId}；也可以先查看当前客厅确认是否已坐下。`);

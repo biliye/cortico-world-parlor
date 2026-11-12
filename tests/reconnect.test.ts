@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
-import { ParlorClient } from '../src/room/client.ts';
+import { ParlorClient, ParlorHttpError } from '../src/room/client.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 
 let world: ReturnType<typeof PARLOR.create> | undefined;
@@ -14,23 +14,40 @@ afterEach(async () => {
   await world?.stop(); world = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
   rmSync(dir, { recursive: true, force: true });
 });
-const start = async (host = new FakeHost()) => {
+const start = async (host = new FakeHost(), { name = '阿岚', room = 'lobby' } = {}) => {
   const ctx = fakeWorldContext(PARLOR, { scratchDir: dir });
   ctx.cfg.serverUrl = 'http://127.0.0.1:8790'; ctx.cfg.room = 'lobby';
   ctx.cfg.seatName = '阿岚';
   ctx.secret = name => name === 'PARLOR_SEAT_TOKEN' ? 'seat' : 'inv';
   vi.spyOn(ParlorClient.prototype, 'initializeIdentity').mockResolvedValue(true);
+  vi.spyOn(ParlorClient.prototype, 'location').mockResolvedValue({ room, seat: null });
+  vi.spyOn(ParlorClient.prototype, 'rename').mockResolvedValue({ name });
   vi.spyOn(ParlorClient.prototype, 'support').mockResolvedValue({ announcements: [] });
-  vi.spyOn(ParlorClient.prototype, 'snapshot').mockResolvedValue({ id: 'lobby', latest: 12, now: Date.now(), at: '',
-    seat: { id: 'mine', name: '阿岚', kind: 'pet', tier: 'full', joinedAt: Date.now() }, seats: [], events: [], maxSeats: 30 });
+  vi.spyOn(ParlorClient.prototype, 'snapshot').mockResolvedValue({ id: room, latest: 12, now: Date.now(), at: '',
+    seat: { id: 'mine', name, kind: 'pet', tier: 'full', joinedAt: Date.now() }, seats: [], events: [], maxSeats: 30 });
   world = PARLOR.create(ctx); await world.start(host); return host;
 };
 
 describe('断线恢复', () => {
+  it('远端实际席位名走外部事件，环境前缀只用本机席位名和有效的客厅编号', async () => {
+    vi.spyOn(ParlorClient.prototype, 'stream').mockResolvedValue(undefined);
+    const name = '服务端传来的席位名';
+    const host = await start(new FakeHost(), { name, room: '服务端传来的客厅文字' });
+    expect(host.events.find(event => event.type === 'parlor.started')).toMatchObject({
+      origin: 'external',
+      text: expect.stringContaining(name),
+    });
+    expect(await world!.envPromptVars()).toMatchObject({
+      'parlor.room': '请查询当前客厅',
+      'parlor.seat': '阿岚',
+    });
+  });
+
   it('持续 fetch failed 会持续退避；故障只提示一次，恢复后补游标并能再次收消息', async () => {
     let attempt = 0;
     const stream = vi.spyOn(ParlorClient.prototype, 'stream').mockImplementation(async (_token, since, receive, signal, _room, opened) => {
-      if (++attempt <= 8) throw new TypeError('fetch failed');
+      if (++attempt === 1) throw new ParlorHttpError(502, '远端故障详情');
+      if (attempt <= 8) throw new TypeError('fetch failed');
       expect(since).toBe(12); opened?.();
       receive({ seq: 13, ts: Date.now(), type: 'parlor.say', from: 'friend', scope: { kind: 'room' },
         mentions: ['mine'], text: '@阿岚 回来了', data: { name: '小满' } });
@@ -39,8 +56,12 @@ describe('断线恢复', () => {
     const host = await start();
     await vi.advanceTimersByTimeAsync(200_000);
     expect(stream).toHaveBeenCalledTimes(9);
-    expect(host.events.filter(e => e.type === 'parlor.link' && e.text.includes('断了'))).toHaveLength(1);
-    expect(host.events.filter(e => e.type === 'parlor.link' && e.text.includes('已恢复'))).toHaveLength(1);
+    expect(host.events.filter(e => e.type === 'parlor.link' && e.text.includes('断了'))).toEqual([
+      expect.objectContaining({ origin: 'external', text: expect.stringContaining('远端故障详情') }),
+    ]);
+    expect(host.events.filter(e => e.type === 'parlor.link' && e.text.includes('已恢复'))).toEqual([
+      expect.objectContaining({ origin: 'internal' }),
+    ]);
     expect(host.events.some(e => e.type === 'parlor.message' && e.text.includes('回来了'))).toBe(true);
   });
 
