@@ -52,6 +52,27 @@ it('PG v14 升级后允许飞行棋，保留象棋桌与原有赛果', async () 
   expect(await db.prepare('SELECT table_id FROM table_finalizations').all()).toEqual([{ table_id: 'old-table' }]);
 });
 
+it('PG v15 升到 v16：已有说书场次可关联散场聊天', async () => {
+  db = await openTestDb();
+  const coo = 'coo-v16-upgrade';
+  await new CooAccountDb(db).registerCoo(coo, 'story-chat-upgrade-secret-012345', 'pet', '旧说书人');
+  await db.exec(`DROP TABLE story_chat; UPDATE meta SET value='15' WHERE key='schema_version';`);
+  await db.prepare(`
+    INSERT INTO story_rounds (id, speaker_id, speaker_name, title, started_at, notes_at, ends_at, ended_at, part_count)
+    VALUES ('legacy-story', ?, '旧说书人', '老故事', 1, 2, 3, 3, 1)
+  `).run(coo);
+
+  await migrate(db);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(16);
+  await db.prepare(`
+    INSERT INTO story_chat (round_id, coo_id, name, text, request_id, created_at)
+    VALUES ('legacy-story', ?, '旧说书人', '散场聊聊', 'legacy-chat', 4)
+  `).run(coo);
+  expect(await db.prepare('SELECT title FROM story_rounds WHERE id=?').get('legacy-story')).toEqual({ title: '老故事' });
+  expect(await db.prepare('SELECT text FROM story_chat WHERE round_id=?').get('legacy-story')).toEqual({ text: '散场聊聊' });
+});
+
 it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象棋桌', async () => {
   db = await openTestDb();
   const owner = 'coo-v14-upgrade';
@@ -60,7 +81,7 @@ it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象�
   await createRoom(db, { id: room, ownerCooId: owner, name: '旧客厅' }, 4);
   await insertTable(db, 'old-xiangqi', room, 'xiangqi');
   await db.exec(`
-    DROP TABLE story_parts, story_attendance, story_notes, story_snacks, story_queue, story_rounds;
+    DROP TABLE story_chat, story_parts, story_attendance, story_notes, story_snacks, story_queue, story_rounds;
     UPDATE meta SET value='13' WHERE key='schema_version';
   `);
   const storyTables = () => db!.prepare(`
@@ -74,7 +95,7 @@ it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象�
 
   expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   expect((await storyTables()).map(row => row.tablename)).toEqual([
-    'story_attendance', 'story_notes', 'story_parts', 'story_queue', 'story_rounds', 'story_snacks',
+    'story_attendance', 'story_chat', 'story_notes', 'story_parts', 'story_queue', 'story_rounds', 'story_snacks',
   ]);
   expect(await db.prepare('SELECT id, name FROM rooms WHERE id=?').get(room)).toEqual({ id: room, name: '旧客厅' });
   expect(await db.prepare('SELECT id, game FROM tables WHERE room_id=?').all(room)).toEqual([

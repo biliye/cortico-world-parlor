@@ -16,6 +16,7 @@ import { gameLabelOf } from './room/game-labels.ts';
 import { IDENTITY_FILE, loadOrCreateIdentity, saveIdentity, type CooIdentity } from './room/identity.ts';
 import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
+import type { StoryLiveHint } from './room/story-protocol.ts';
 import { AmbientWakeBudget } from './wake-budget.ts';
 import { parseTableLink } from './room/table-discovery-db.ts';
 import { LocalHistory, type HistoryQuery } from './local-history.ts';
@@ -210,6 +211,8 @@ export class ParlorWorld implements World {
   private storyNoticeTask?: Promise<void>;
   private storyNoticeRefreshPending = false;
   private storyNoticeRetryMs = 0;
+  private storyHintPending?: { roundId: string; token: string };
+  private lastStoryHint?: { cooId: string; roundId: string };
   private cursorTimer?: NodeJS.Timeout;
   private historyTask?: Promise<void>;
   private historySyncUnsupported = false;
@@ -441,6 +444,7 @@ export class ParlorWorld implements World {
     this.cursorTimer = undefined;
     this.writeCursor();
     this.stopped = true;
+    this.storyHintPending = undefined;
     if (this.historyTimer) clearInterval(this.historyTimer);
     this.historyTimer = undefined;
     if (this.storyNoticeTimer) clearTimeout(this.storyNoticeTimer);
@@ -629,13 +633,18 @@ export class ParlorWorld implements World {
 
   /** 游标文件按客厅分开；旧格式 {room, seq} 还能读。 */
   private loadCursors(): void {
+    this.lastStoryHint = undefined;
     try {
       const raw = JSON.parse(readFileSync(this.cursorFile, 'utf8')) as {
         room?: string; seq?: number; rooms?: Record<string, unknown>; current?:string; server?:string;
         announcements?: string[];
         news?: { publishAt?: unknown; id?: unknown };
+        storyHint?: { cooId?: unknown; roundId?: unknown };
       };
       if (raw.server && raw.server !== this.baseUrl) return;
+      if (typeof raw.storyHint?.cooId === 'string' && typeof raw.storyHint.roundId === 'string') {
+        this.lastStoryHint = { cooId: raw.storyHint.cooId, roundId: raw.storyHint.roundId };
+      }
       if (raw.current) this.currentRoom = raw.current;
       const rooms: Record<string, number> = {};
       if (raw.rooms && typeof raw.rooms === 'object') {
@@ -727,6 +736,7 @@ export class ParlorWorld implements World {
         JSON.stringify({
           version: 3, server: this.baseUrl, current: this.currentRoom,
           rooms: this.cursors, announcements: this.seenAnnouncements, news: this.newsCursor,
+          storyHint: this.lastStoryHint,
         }),
         { mode: 0o600 },
       );
@@ -1006,6 +1016,9 @@ export class ParlorWorld implements World {
 
   private async storyView(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.multiRoom) return this.failed('说书厅需要连接多客厅服务器');
+    if (args.discussion === true) {
+      return JSON.stringify(await this.client.storyDiscussion(this.token, args.id as string | undefined, args.before as number | undefined));
+    }
     const after = args.after as number | undefined;
     if (typeof args.id === 'string') {
       const archive = await this.client.storyArchive(this.token, args.id);
@@ -1030,7 +1043,8 @@ export class ParlorWorld implements World {
 
   private async storyAction(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client || !this.multiRoom) return this.failed('说书厅需要连接多客厅服务器');
-    const body = args.action === 'speak' && !args.requestId ? { ...args, requestId: randomUUID() } : args;
+    const body = (args.action === 'speak' || args.action === 'chat') && !args.requestId
+      ? { ...args, requestId: randomUUID() } : args;
     const state = await this.client.storyAction(this.token, body);
     if (args.action === 'queue' || args.action === 'start') this.scheduleStoryNotice(0);
     if (args.action === 'finish') this.scheduleHistorySync();
@@ -1493,7 +1507,7 @@ export class ParlorWorld implements World {
   }
 
   /**
-   * 公告 / 新闻 / 招募共用同一次 60 秒请求，不新增定时器。
+   * 公告 / 新闻 / 招募 / 说书共用同一次 60 秒请求，不新增定时器。
    * `wakeTier='off'` 是总闸：连请求都不发，游标留在原位；恢复后只会补最新一条新闻。
    */
   private async pollInbox(): Promise<void> {
@@ -1514,9 +1528,11 @@ export class ParlorWorld implements World {
         'announcements',
         ...(this.ctx.cfg.news ? ['news'] : []),
         ...(this.ctx.cfg.recruitNotice ? ['recruit'] : []),
+        ...(this.client.storySupported ? ['story'] : []),
       ];
       try {
-        const view = await this.client.inbox(this.token, {
+        const token = this.token;
+        const view = await this.client.inbox(token, {
           topics,
           afterPublish: this.newsCursor.publishAt,
           afterId: this.newsCursor.id,
@@ -1524,6 +1540,10 @@ export class ParlorWorld implements World {
         });
         // 请求在途时可能已经静音或停了：回来后再判一次，整份响应当场作废。
         if (this.autoSilenced) return;
+        if (this.token === token) {
+          if (view.story) this.armStoryHint(view.story, token);
+          else this.storyHintPending = undefined;
+        }
         await this.pushAnnouncements(view.announcements ?? []);
         if (this.ctx.cfg.news && view.news) await this.pushNews(view.news);
         if (this.ctx.cfg.recruitNotice && view.recruit) this.absorbRecruit(view.recruit.tables);
@@ -1538,6 +1558,36 @@ export class ParlorWorld implements World {
       }
     } catch { /* 老服务器或临时断网：下次再查，不刷通知。 */ }
     finally { this.supportBusy = false; }
+  }
+
+  private armStoryHint(hint: StoryLiveHint, token: string): void {
+    const { client, host } = this;
+    const cooId = this.identity?.cooId;
+    if (!client || !host || !cooId
+      || (this.storyHintPending?.roundId === hint.id && this.storyHintPending.token === token)
+      || (this.lastStoryHint?.cooId === cooId && this.lastStoryHint.roundId === hint.id)) return;
+    // 换场时替换挂单：旧回调可能尚未搭车，也可能已被隐藏的宿主丢弃。
+    const pending = { roundId: hint.id, token };
+    this.storyHintPending = pending;
+    host.pushDeferred({
+      type: 'parlor.message', senderKey: 'parlor', meta: { story: hint.id },
+      render: async () => {
+        try {
+          if (this.autoSilenced || this.token !== token || this.storyHintPending !== pending) return null;
+          const { story } = await client.inbox(token, { topics: ['story'], afterPublish: 0, afterId: '' }, 2_000);
+          if (this.autoSilenced || this.token !== token || this.storyHintPending !== pending || story?.id !== hint.id) return null;
+          this.lastStoryHint = { cooId, roundId: story.id };
+          this.saveCursor();
+          const speaker = JSON.stringify(story.speaker).slice(1, -1);
+          const title = JSON.stringify(story.title).slice(1, -1);
+          return `【说书厅】${speaker} 正在讲《${title}》。要不要去听听？用 parlor_query {op:"story"} 看现场。`;
+        } catch {
+          return null;
+        } finally {
+          if (this.storyHintPending === pending) this.storyHintPending = undefined;
+        }
+      },
+    }, { trigger: 'piggyback' });
   }
 
   /** 旧服务器（0.38.0 及更早）只有公告：新闻与跨厅招募在这条通路上不存在。 */

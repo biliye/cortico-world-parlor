@@ -85,6 +85,73 @@ const table = (over: Partial<RecruitTableHint> = {}): RecruitTableHint => ({
   seats: 1, capacity: 2, deadlineAt: Date.now() + 3_600_000, recruitVersion: 1, ...over,
 });
 
+describe('说书厅搭便车', () => {
+  const story = { id: 'story-a', speaker: '阿岚', title: '桥边的灯', endsAt: 1_000_000 };
+
+  beforeEach(() => {
+    vi.mocked(ParlorClient.prototype.initializeIdentity).mockImplementation(async function (this: ParlorClient) {
+      this.storySupported = true;
+      return true;
+    });
+    vi.spyOn(ParlorClient.prototype, 'storyNotice').mockResolvedValue({ now: 0, queued: false, readyUntil: null, round: null });
+  });
+
+  it('同场只挂一条搭便车，渲染时复核，重启后也不重复', async () => {
+    const deferred = vi.spyOn(FakeHost.prototype, 'pushDeferred');
+    inboxQueue = [{ story }, { story }];
+    await start();
+    expect(inboxCalls[0].topics).toContain('story');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deferred).toHaveBeenCalledTimes(1);
+    const [event, options] = deferred.mock.calls[0];
+    expect(options?.trigger).toBe('piggyback');
+    expect(host.events.some(item => item.text.includes('要不要去听听'))).toBe(false);
+
+    inboxQueue = [{ story }];
+    expect(await event.render()).toContain('阿岚 正在讲《桥边的灯》。要不要去听听？');
+    expect(inboxCalls.at(-1)?.topics).toEqual(['story']);
+    await world.stop();
+    inboxQueue = [{ story }];
+    await start();
+    expect(deferred).toHaveBeenCalledTimes(1);
+  });
+
+  it('排队期间散场、换场或静音时不投递', async () => {
+    const deferred = vi.spyOn(FakeHost.prototype, 'pushDeferred');
+    inboxQueue = [{ story }, { story: null }];
+    await start();
+    expect(await deferred.mock.calls[0][0].render()).toBeNull();
+
+    const next = { ...story, id: 'story-b' };
+    inboxQueue = [{ story: next }, { story: { ...next, id: 'story-c' } }];
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await deferred.mock.calls[1][0].render()).toBeNull();
+
+    inboxQueue = [{ story: next }];
+    await vi.advanceTimersByTimeAsync(60_000);
+    cfg.wakeTier = 'off';
+    const calls = inboxCalls.length;
+    expect(await deferred.mock.calls[2][0].render()).toBeNull();
+    expect(inboxCalls).toHaveLength(calls);
+  });
+
+  it('旧场的搭便车回调还没执行时，新场也能挂单并正常投递', async () => {
+    const deferred = vi.spyOn(FakeHost.prototype, 'pushDeferred');
+    const first = { ...story, endsAt: Date.now() + 600_000 };
+    const next = { ...first, id: 'story-b', title: '灯下的人' };
+    inboxQueue = [{ story: first }, { story: next }];
+    await start();
+    // 第一场提前散场，没有自然唤醒，也没有宿主回调。
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deferred).toHaveBeenCalledTimes(2);
+    const calls = inboxCalls.length;
+    expect(await deferred.mock.calls[0][0].render()).toBeNull();
+    expect(inboxCalls).toHaveLength(calls);
+    inboxQueue = [{ story: next }];
+    expect(await deferred.mock.calls[1][0].render()).toContain('《灯下的人》');
+  });
+});
+
 describe('inbox 轮询', () => {
   it('新闻只推最新一条，把更早的折成 skipped；游标推进后不再重复', async () => {
     inboxQueue = [

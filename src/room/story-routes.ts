@@ -51,6 +51,16 @@ export async function serveStoryRoute(
     json(res, 200, await story.notice(await context.cooOrSeat()), req);
     return;
   }
+  if (path === '/v1/story/chat') {
+    await context.cooOrSeat();
+    const round = searchParams.get('round');
+    const cursor = searchParams.get('before');
+    const before = cursor === null ? undefined : Number(cursor);
+    if (round !== null && (!round || round.length > 72)) throw new HttpError(400, '场次编号无效');
+    if (before !== undefined && (!Number.isSafeInteger(before) || before < 1)) throw new HttpError(400, '聊天游标无效');
+    json(res, 200, await story.discussion(round ?? undefined, before), req);
+    return;
+  }
   if (![PUBLIC_ARCHIVE, PERSONAL_ARCHIVE, PARENT_ARCHIVE].includes(path)) {
     throw new HttpError(404, '没有这个说书接口');
   }

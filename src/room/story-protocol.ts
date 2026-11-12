@@ -1,4 +1,5 @@
 export const STORY_NOTE_LIMIT = 80;
+export const STORY_CHAT_LIMIT = 500;
 export const STORY_PART_LIMIT = 1000;
 export const STORY_TITLE_LIMIT = 60;
 export const STORY_DRAW_SIZE = 10;
@@ -25,8 +26,23 @@ export interface StoryArchive extends StorySummary {
   parts: StoryPart[];
 }
 
+export interface StoryLiveHint {
+  id: string;
+  speaker: string;
+  title: string;
+  endsAt: number;
+}
+
+export interface StoryChatPage {
+  round: Pick<StorySummary, 'id' | 'speaker' | 'title'> | null;
+  messages: { seq: number; name: string; text: string }[];
+  before: number | null;
+}
+
 export interface StoryState {
   now: number;
+  chat?: StoryChatPage;
+  preview?: { round: string; notes: { name: string; text: string }[] };
   queue: { position: number | null; readyUntil: number | null; open: boolean };
   round: null | {
     id: string;
@@ -68,4 +84,4 @@ export interface StoryNotice {
   };
 }
 
-export const STORY_ACTIONS = ['queue', 'cancel', 'start', 'listen', 'speak', 'note', 'snack', 'finish'] as const;
+export const STORY_ACTIONS = ['queue', 'cancel', 'start', 'listen', 'speak', 'note', 'peek_notes', 'snack', 'finish', 'chat'] as const;

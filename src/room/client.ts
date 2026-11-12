@@ -5,7 +5,7 @@ import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } f
 import type { MailPage, MailReadResult } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type { HistorySyncPage } from './history-sync.ts';
-import type { StoryArchive, StoryCursor, StoryNotice, StoryPage, StoryState } from './story-protocol.ts';
+import type { StoryArchive, StoryChatPage, StoryCursor, StoryNotice, StoryPage, StoryState } from './story-protocol.ts';
 import type { Announcement, Feedback } from './support-db.ts';
 import type { ParentMailView } from './mail-db.ts';
 import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
@@ -78,6 +78,13 @@ export class ParlorClient {
     return this.storyRequest(token, '/v1/story/notice');
   }
 
+  storyDiscussion(token: string, round?: string, before?: number): Promise<StoryChatPage> {
+    const params = new URLSearchParams();
+    if (round) params.set('round', round);
+    if (before !== undefined) params.set('before', String(before));
+    return this.storyRequest(token, '/v1/story/chat?' + params);
+  }
+
   storyHistory(token: string, cursor?: StoryCursor, personal = false, forward = false): Promise<StoryPage> {
     const params = new URLSearchParams();
     if (cursor) {
@@ -102,8 +109,9 @@ export class ParlorClient {
     return this.parse(response);
   }
 
-  /** 公告 + 新闻摘要 + 跨厅招募共用一次请求；旧服务器没有这条路由会抛 404。 */
-  async inbox(token: string, query: { topics: string[]; afterPublish: number; afterId: string; room?: string }): Promise<InboxView> {
+  /** 公告、新闻摘要、跨厅招募和说书共用一次请求；旧服务器没有这条路由会抛 404。 */
+  async inbox(token: string, query: { topics: string[]; afterPublish: number; afterId: string; room?: string },
+    timeoutMs = 15_000): Promise<InboxView> {
     const params = new URLSearchParams({
       topics: query.topics.join(','),
       after_publish: String(query.afterPublish),
@@ -111,9 +119,10 @@ export class ParlorClient {
     if (query.afterId) params.set('after_id', query.afterId);
     // 当前所在厅：服务端据此排掉同厅的桌，招募只搭「别的厅」。
     if (query.room) params.set('room', query.room);
+    const signal = AbortSignal.timeout(timeoutMs);
     const response = await fetchParlor(this.url(`/v1/support/inbox?${params.toString()}`), {
       headers: await this.headers({ authorization: `Bearer ${token}` }),
-      signal: AbortSignal.timeout(15_000),
+      signal,
     });
     return this.parse<InboxView>(response);
   }

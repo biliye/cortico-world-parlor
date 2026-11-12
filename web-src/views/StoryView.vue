@@ -2,10 +2,11 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { GIFTS } from '../../src/room/gifts/catalog.ts';
 import {
-  STORY_NOTE_LIMIT, STORY_PART_LIMIT, STORY_TITLE_LIMIT, type StoryArchive, type StoryCursor,
+  STORY_CHAT_LIMIT, STORY_NOTE_LIMIT, STORY_PART_LIMIT, STORY_TITLE_LIMIT, type StoryArchive, type StoryCursor,
   type StoryPage, type StoryState, type StorySummary,
 } from '../../src/room/story-protocol.ts';
 import { api } from '../api/client.ts';
+import StoryChat from '../components/StoryChat.vue';
 import { newRequestId } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 
@@ -19,6 +20,8 @@ const reader = ref<HTMLElement>();
 const compose = ref<'note' | 'snack' | 'start' | 'finish'>();
 const draft = ref('');
 const note = ref('');
+const preview = ref<StoryState['preview']>();
+const chatDraft = ref('');
 const title = ref('');
 const selectedSnack = ref('');
 const busy = ref(false);
@@ -36,11 +39,15 @@ let revision = 0;
 let offset = 0;
 let speechRequest = '';
 let speechText = '';
+let chatRequest = '';
+let chatText = '';
 let pollTimer: ReturnType<typeof setTimeout>;
 let clockTimer: ReturnType<typeof setInterval>;
 const serverNow = computed(() => countdown.value + offset);
 const secondsLeft = computed(() => Math.max(0, Math.ceil(((round.value?.endsAt ?? 0) - serverNow.value) / 1000)));
 const closing = computed(() => !!round.value && serverNow.value >= round.value.notesAt);
+const visibleNotes = computed(() => round.value?.batch ?? preview.value?.notes);
+const chat = computed(() => state.value?.chat);
 const canStart = computed(() => !!seat.value && !round.value && !!state.value
   && (state.value.queue.open || (state.value.queue.readyUntil ?? 0) > serverNow.value));
 const timer = computed(() => `${Math.floor(secondsLeft.value / 60)}:${String(secondsLeft.value % 60).padStart(2, '0')}`);
@@ -65,6 +72,7 @@ function apply(data: StoryState, delta = false): void {
     if (old) lastRound.value = old.id;
     draft.value = '';
     note.value = '';
+    preview.value = undefined;
     speechRequest = '';
     compose.value = undefined;
     following.value = true;
@@ -74,6 +82,11 @@ function apply(data: StoryState, delta = false): void {
     const additions = next.parts.filter(part => part.seq > latest);
     if (!following.value) unreadParts.value += additions.length;
     if (delta) next.parts = [...old.parts, ...additions];
+  }
+  if (data.preview) preview.value = data.preview;
+  if (old?.id !== next?.id || chat.value?.round?.id !== data.chat?.round?.id) {
+    chatDraft.value = '';
+    chatRequest = '';
   }
   state.value = data;
   if (following.value) void nextTick(() => jump(true));
@@ -141,6 +154,18 @@ async function speak(): Promise<void> {
   }
 }
 
+async function sendChat(): Promise<void> {
+  const text = chatDraft.value.trim();
+  if (!chat.value || !text) return;
+  if (!chatRequest || chatText !== text) chatRequest = newRequestId();
+  chatText = text;
+  const id = chat.value.round?.id;
+  if (await act('chat', { ...(id ? { round: id } : {}), text, requestId: chatRequest })) {
+    chatDraft.value = '';
+    chatRequest = '';
+  }
+}
+
 function openNote(): void {
   note.value = round.value?.note?.text ?? note.value;
   compose.value = 'note';
@@ -202,6 +227,9 @@ watch(() => seat.value?.cooId, () => {
   compose.value = undefined;
   draft.value = '';
   note.value = '';
+  preview.value = undefined;
+  chatDraft.value = '';
+  chatRequest = '';
   speechRequest = '';
   void poll();
 }, { flush: 'sync' });
@@ -251,10 +279,10 @@ onUnmounted(() => {
           <p v-for="part in round.parts" :key="part.seq">{{ part.text }}</p>
           <p v-if="!round.parts.length" class="story-muted">说书人正在准备开讲。</p>
         </div>
-        <section v-if="round.speaking && round.batch" class="story-notes" aria-label="收到的纸条">
-          <h3>听众纸条</h3>
-          <p v-if="!round.batch.length">这场还没有纸条。</p>
-          <blockquote v-for="(item, index) in round.batch" :key="index">
+        <section v-if="round.speaking && visibleNotes" class="story-notes" aria-label="收到的纸条">
+          <h3>{{ round.batch ? '听众纸条' : '当前收到的纸条' }}</h3>
+          <p v-if="!visibleNotes.length">这场还没有纸条。</p>
+          <blockquote v-for="(item, index) in visibleNotes" :key="index">
             <p>{{ item.text }}</p><cite>{{ item.name }}</cite>
           </blockquote>
         </section>
@@ -263,6 +291,9 @@ onUnmounted(() => {
           <textarea id="story-speech" v-model="draft" :maxlength="STORY_PART_LIMIT" rows="3" />
           <div class="story-actions">
             <button class="story-primary" :disabled="busy || !draft.trim() || !secondsLeft" type="submit">发到台上</button>
+            <button v-if="!closing" type="button" :disabled="busy || !secondsLeft" @click="act('peek_notes', { round: round.id })">
+              {{ preview ? '刷新纸条' : '看看纸条' }}
+            </button>
             <button type="button" @click="compose = compose === 'finish' ? undefined : 'finish'">提前下台</button>
           </div>
         </form>
@@ -320,6 +351,15 @@ onUnmounted(() => {
             <button type="button" @click="compose = undefined">取消</button>
           </div>
         </form>
+        <StoryChat v-if="seat && chat" :key="chat.round?.id ?? 'idle'" :live="chat">
+          <form class="story-form story-chat-form" @submit.prevent="sendChat">
+            <label for="story-chat-text">发一条聊天消息</label>
+            <textarea id="story-chat-text" v-model="chatDraft" :maxlength="STORY_CHAT_LIMIT" :disabled="busy" rows="2" />
+            <div class="story-actions">
+              <button class="story-primary" type="submit" :disabled="busy || !chatDraft.trim()">发送</button>
+            </div>
+          </form>
+        </StoryChat>
       </section>
       <p v-else-if="!problem" role="status">正在打开说书厅…</p>
       <div v-if="state?.queue.position" class="story-actions story-queue">
@@ -333,6 +373,7 @@ onUnmounted(() => {
         <h2>{{ archive.title }}</h2>
         <p class="story-muted">{{ archive.speaker }} · {{ formatTime.format(archive.startedAt) }} · {{ archive.snacks }} 份零食</p>
         <div class="story-archived-text"><p v-for="part in archive.parts" :key="part.seq">{{ part.text }}</p></div>
+        <StoryChat v-if="seat" :key="`${seat.cooId}:${archive.id}`" :archive-id="archive.id" />
       </article>
       <section v-else>
         <h2>最近 7 天</h2>
@@ -373,6 +414,7 @@ onUnmounted(() => {
 .story-transcript p, .story-archived-text p, .story-notes p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .story-form, .story-notes, .story-queue { margin-block: 1rem; padding: .85rem; border: 1px solid var(--line-2); border-radius: .65rem; background: var(--panel-2); }
 .story-form { display: grid; gap: .55rem; }
+.story-chat-form { border: 0; margin-bottom: 0; padding: 0; }
 .story-form p, .story-notes h3 { margin: 0; }
 .story-notes blockquote { margin: .65rem 0 0; padding-left: .8rem; border-left: 2px solid var(--line-2); }
 .story-notes blockquote p { margin: 0; }
