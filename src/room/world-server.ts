@@ -3,17 +3,10 @@ import { RoomLifecycle } from './lifecycle.ts';
 import { personalHistory } from './personal-account.ts';
 import { EventDb } from './event-db.ts';
 import { historySyncEvent } from './history-sync.ts';
-/**
- * 多客厅 HTTP 网关（聊天切片）。
- *
- * 一条进程、一个 SQLite 库、多个客厅；每房一个 RoomHost。
- * 现有旧 World 通过 `/v1/...` 别名落到默认客厅；新客户端走 `/v1/rooms/:id/...`。
- * 牌桌/家长门户/大厅目录还没接进来；这一步先把多房 + 可见区间 + 全局账户跑通。
- */
+/** 多客厅 PostgreSQL HTTP 网关。每个客厅由一个 RoomHost 管理。 */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { gzipSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import { isCooId, isCooSecret } from './ledger.ts';
 import { serverClock } from './clock.ts';
@@ -32,6 +25,7 @@ import { likePrefix, parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
 import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
 import { HostError, RoomHost } from './room-host.ts';
+import { bearer, headerValue, HttpError, json, readJson } from './http.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, archive, unarchive, createRoom, getRoom, hashSeatToken,
   listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash, seatsForOfflineRelease,
@@ -44,12 +38,12 @@ import {
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
 import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
-import { acceptsGzip, sendWebAsset } from './web-assets.ts';
+import { sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
 import { StoryDb, StoryError } from './story-db.ts';
-import { STORY_ACTIONS } from './story-protocol.ts';
+import { isStoryPath, serveStoryRoute } from './story-routes.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -109,30 +103,6 @@ const PACKAGE_VERSION = ((): string => {
   } catch { return ''; }
 })();
 
-class HttpError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-    this.name = 'HttpError';
-  }
-}
-
-const json = (res: ServerResponse, status: number, body: unknown, req?: IncomingMessage): void => {
-  const raw = Buffer.from(JSON.stringify(body));
-  // 回放/补档的大段文本可压缩；未接受 gzip 的旧客户端仍收到普通 JSON。
-  const gzip = req && raw.length >= 1024 && acceptsGzip(req.headers['accept-encoding']);
-  const data = gzip ? gzipSync(raw) : raw;
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': data.length,
-    ...(req ? { vary: 'accept-encoding' } : {}),
-    ...(gzip ? { 'content-encoding': 'gzip' } : {}),
-  });
-  res.end(data);
-};
-
 function boundedGameJson(res: ServerResponse, body: unknown, tooLarge = '游戏查询结果超出大小限制；历史请缩小范围后分页查询'): void {
   if (Buffer.byteLength(JSON.stringify(body)) > GAME_RESPONSE_MAX_BYTES) {
     throw new HttpError(413, tooLarge);
@@ -183,34 +153,6 @@ function tableReplayQuery(params: URLSearchParams, op: 'replay' | 'replayStep'):
   return { table, before, limit: integer('limit', TABLE_REPLAY_LIMIT) ?? TABLE_REPLAY_LIMIT };
 }
 
-const readBody = (req: IncomingMessage, limit = 64 * 1024): Promise<string> => new Promise((resolve, reject) => {
-  let size = 0;
-  const chunks: Buffer[] = [];
-  req.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > limit) {
-      reject(new HttpError(413, '请求体太大'));
-      req.destroy();
-      return;
-    }
-    chunks.push(chunk);
-  });
-  req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-  req.on('error', reject);
-});
-
-const readJson = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
-  const text = await readBody(req);
-  if (!text) return {};
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not object');
-    return parsed as Record<string, unknown>;
-  } catch {
-    throw new HttpError(400, '请求体不是 JSON 对象');
-  }
-};
-
 const cookieOf = (req: IncomingMessage, name: string): string => {
   const raw = req.headers.cookie ?? '';
   for (const part of raw.split(';')) {
@@ -218,16 +160,6 @@ const cookieOf = (req: IncomingMessage, name: string): string => {
     if (key === name) return decodeURIComponent(rest.join('='));
   }
   return '';
-};
-
-const bearer = (req: IncomingMessage): string => {
-  const header = req.headers.authorization ?? '';
-  return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-};
-
-const headerValue = (req: IncomingMessage, name: string): string => {
-  const value = req.headers[name];
-  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
 };
 
 const statusOf = (error: unknown): number => {
@@ -853,52 +785,6 @@ export class WorldServer {
     return seat.cooId;
   }
 
-  private async serveStory(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    res.setHeader('cache-control', 'no-store');
-    const path = url.pathname;
-    if (path === '/v1/story/action' && req.method === 'POST') {
-      const id = await this.cooOrSeat(req);
-      const body = await readJson(req);
-      if (!STORY_ACTIONS.some(action => action === body.action)) throw new HttpError(400, '未知说书操作');
-      const name = (await activeSeatForCoo(this.db, id))?.name || await this.coo.cooDisplayName(id) || '茶客';
-      const result = await this.story.action({ id, name }, body);
-      if (body.action !== 'listen') this.pokeClock();
-      json(res, 200, result, req);
-      return;
-    }
-    if (req.method !== 'GET') throw new HttpError(405, '需要 GET');
-    if (path === '/v1/story/live') {
-      const id = bearer(req) || headerValue(req, 'x-parlor-coo') || headerValue(req, GLOBAL_HEADER)
-        ? await this.cooOrSeat(req) : undefined;
-      const after = Number(url.searchParams.get('after') ?? 0);
-      if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, '发言游标无效');
-      json(res, 200, await this.story.state(id, url.searchParams.get('round') ?? undefined, after), req);
-      return;
-    }
-    if (path === '/v1/story/notice') {
-      json(res, 200, await this.story.notice(await this.cooOrSeat(req)), req);
-      return;
-    }
-    if (!['/v1/story/archive', '/v1/me/story/archive', '/v1/parent/story'].includes(path)) {
-      throw new HttpError(404, '没有这个说书接口');
-    }
-    const personal = path === '/v1/me/story/archive';
-    const actor = personal ? await this.cooOrSeat(req)
-      : path === '/v1/parent/story' ? (await this.parentSession(req)).account.cooId : undefined;
-    const id = url.searchParams.get('id');
-    if (id) {
-      json(res, 200, await this.story.archive(id, actor), req);
-      return;
-    }
-    const cursorId = url.searchParams.get('cursorId');
-    const cursorAt = url.searchParams.get('cursorAt');
-    const endedAt = Number(cursorAt);
-    if ((cursorId !== null || cursorAt !== null) && (!cursorId || cursorId.length > 72 || !cursorAt
-      || !Number.isSafeInteger(endedAt) || endedAt < 0)) throw new HttpError(400, '说书档案游标无效');
-    const cursor = cursorId ? { id: cursorId, endedAt } : undefined;
-    json(res, 200, await this.story.history(actor, cursor, personal && url.searchParams.get('forward') === '1'), req);
-  }
-
   private async seatAuth(req: IncomingMessage, roomId: string, tokenOverride?: string) {
     const token = tokenOverride ?? bearer(req);
     if (!token) throw new HttpError(401, '缺少席位令牌');
@@ -926,8 +812,15 @@ export class WorldServer {
     if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
     if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
 
-    if (url.pathname.startsWith('/v1/story/') || url.pathname === '/v1/me/story/archive'
-      || url.pathname === '/v1/parent/story') return this.serveStory(req, res, url);
+    if (isStoryPath(url.pathname)) {
+      return serveStoryRoute(req, res, url, {
+        story: this.story,
+        cooOrSeat: () => this.cooOrSeat(req),
+        parentCooId: async () => (await this.parentSession(req)).account.cooId,
+        actorName: async (id) => (await activeSeatForCoo(this.db, id))?.name || await this.coo.cooDisplayName(id) || '茶客',
+        pokeClock: () => this.pokeClock(),
+      });
+    }
 
     if (url.pathname.startsWith('/v1/support/')) {
       res.setHeader('cache-control', 'no-store');
