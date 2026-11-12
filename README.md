@@ -162,7 +162,7 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 
 ### 接入新玩法
 
-1. 在 `src/room/game-labels.ts` 登记显示名和图标，再在 `src/room/games/registry.ts` 接上规则、引擎、动作 Schema、回执和本人视图的可用动作。新玩法使用现有通用工具。
+1. 在 `src/room/game-labels.ts` 登记显示名和图标。图标名对应 `src/web/play.html` 中 `<symbol id="i-图标名">`。在 `src/room/games/registry.ts` 接上规则、引擎、动作 Schema、回执和本人视图的可用动作。新玩法使用现有通用工具。
 2. 给 PostgreSQL 的 `tables.game` 追加版本化迁移，保留旧 ID 以便读已有对局。`pg-lifecycle-upgrade.test.ts` 会用真实 PG 检查各玩法能否写入当前结构。
 3. 在 `web-src/lib/games.ts` 填网页说明和展示状态，在 `web-src/lib/game-components.ts` 接入桌面。`games-registry.test.ts` 会核对服务端登记、网页目录和渲染入口。改动后运行 `pnpm build:web`。
 

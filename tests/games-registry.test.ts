@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { GAME_PRESENTATION, gameLabelOf as historyGameLabelOf } from '../src/room/game-labels.ts';
 import {
@@ -53,6 +54,16 @@ describe('牌桌注册表', () => {
     expect(GAMES.monopoly.enabled).toBe(false);
     expect(componentFor('monopoly')).toBeNull();
     expect(mountFor('monopoly')).toBeTypeOf('function');
+  });
+
+  it('每个玩法图标都能引用到牌桌页的 SVG symbol', () => {
+    const html = readFileSync(new URL('../src/web/play.html', import.meta.url), 'utf8')
+      .replace(/<!--[\s\S]*?-->/g, '');
+    const icons = [...html.matchAll(/<symbol\b[^>]*\sid=(["'])i-([^"']+)\1/g)]
+      .map(([, , icon]) => icon);
+    for (const [id, { icon }] of Object.entries(GAMES)) {
+      expect(icons, id).toContain(icon);
+    }
   });
 
   it('动作类型能来回查，工具参数能翻成 /v1/action body', () => {
