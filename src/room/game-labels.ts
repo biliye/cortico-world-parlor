@@ -10,6 +10,7 @@ export const GAME_LABELS: Readonly<Record<string, string>> = {
   gomoku: '五子棋',
   xiangqi: '中国象棋',
   monopoly2d: '快局大富翁',
+  aeroplane: '飞行棋',
 };
 
 export function gameLabelOf(game: string, label?: string): string {

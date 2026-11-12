@@ -4,6 +4,7 @@ import { computed, ref } from 'vue';
 import AccessDialog from '../components/AccessDialog.vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import { ENABLED_GAMES, STATUS_LABELS, canStartTable, gameLabel, gameOf, tableStartBlockers } from '../lib/games.ts';
+import aeroplaneCover from '../assets/aeroplane-cover.webp';
 import { initialOf } from '../lib/text.ts';
 import {
   goRoom, joinRoomTable, leaveRoomTable, myTable, openRoomTable, snapshot, startRoomTable, tableIdOf, tableList,
@@ -212,7 +213,8 @@ async function invite(): Promise<void> {
     </div>
 
     <div class="game-grid">
-      <article v-for="game in ENABLED_GAMES" :key="game" class="game-card game-card-live game-card-hero">
+      <article v-for="game in ENABLED_GAMES" :key="game" class="game-card game-card-live game-card-hero" :class="{ 'aeroplane-card': game === 'aeroplane' }">
+        <img v-if="game === 'aeroplane'" :src="aeroplaneCover" class="aeroplane-cover" alt="" loading="lazy" width="760" height="510">
         <div class="game-card-body">
           <span class="eyebrow">{{ mine && mine.game === game ? '我的牌桌' : '开一张新桌' }}</span>
           <h2>{{ gameLabel(game) }}</h2>
@@ -257,3 +259,14 @@ async function invite(): Promise<void> {
     </div>
   </div>
 </template>
+
+<style scoped>
+.aeroplane-card { flex-direction: column; grid-template-columns: minmax(0, 1fr); }
+.aeroplane-cover {
+  display: block;
+  width: 100%;
+  height: clamp(100px, 14vw, 174px);
+  object-fit: cover;
+  object-position: center 47%;
+}
+</style>

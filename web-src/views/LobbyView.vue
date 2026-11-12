@@ -21,7 +21,7 @@ const section = hallSection;
 const filter = ref('all');
 const gameFilters = [
   { id: 'all', label: '全部' },
-  ...['ddz', 'werewolf', 'gomoku', 'xiangqi', 'monopoly2d'].map(id => ({ id, label: gameLabel(id) })),
+  ...['ddz', 'werewolf', 'gomoku', 'xiangqi', 'monopoly2d', 'aeroplane'].map(id => ({ id, label: gameLabel(id) })),
 ];
 const query = ref('');
 const createName = ref('');

@@ -1,6 +1,8 @@
 /** 网页侧的游戏清单。旧 `src/web/games/registry.js` 已随旧页在 0.40.0 删除；
  *  大厅与筛选只认这一份，服务端目录在 `src/room/games/registry.ts`。 */
 
+import { AEROPLANE_RULES } from '../../src/room/games/aeroplane-rules.ts';
+
 export interface GameDef {
   label: string;
   icon: string;
@@ -77,6 +79,12 @@ export const GAMES: Record<string, GameDef> = {
       '每手 60 秒，超时由服务器代走。将死、困毙或认输判负。',
       '同一局面和行棋方第三次出现时，单方长将判负，其余判和。连续 60 回合未吃子也判和。',
     ],
+  },
+  aeroplane: {
+    label: '飞行棋', icon: 'board', enabled: true, endScreen: true, minPlayers: 2, botFill: false,
+    blurb: '掷六起飞，穿过四色航线，先把四架飞机送到终点。',
+    foot: '2–4 人 · 掷骰 · 撞机',
+    guide: AEROPLANE_RULES,
   },
   monopoly: {
     label: '大富翁', icon: 'board', enabled: false, endScreen: false, minPlayers: 2, botFill: true,

@@ -12,6 +12,33 @@ import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
 
+it('PG v14 升级后允许飞行棋，保留象棋桌与原有赛果', async () => {
+  db = await openTestDb();
+  const owner = 'coo-v15-upgrade';
+  const room = 'r-v15-upgrade';
+  await new CooAccountDb(db).registerCoo(owner, 'aeroplane-upgrade-secret-012345', 'pet', '旧玩家');
+  await createRoom(db, { id: room, ownerCooId: owner, name: '旧客厅' }, 4);
+  await insertTable(db, 'old-table', room, 'xiangqi');
+  await db.prepare("INSERT INTO table_finalizations(table_id, kind, at) VALUES (?, 'result', ?)").run('old-table', 1000);
+  await db.exec(`
+    ALTER TABLE tables DROP CONSTRAINT tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi'));
+    UPDATE meta SET value='14' WHERE key='schema_version';
+  `);
+  await expect(insertTable(db, 'new-table', room, 'aeroplane')).rejects.toThrow(/tables_game_check/);
+
+  await migrate(db);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  await insertTable(db, 'new-table', room, 'aeroplane');
+  await expect(insertTable(db, 'invalid-table', room, 'not-a-game')).rejects.toThrow(/tables_game_check/);
+  expect(await db.prepare('SELECT id, game FROM tables WHERE room_id=? ORDER BY id').all(room)).toEqual([
+    { id: 'new-table', game: 'aeroplane' }, { id: 'old-table', game: 'xiangqi' },
+  ]);
+  expect(await db.prepare('SELECT table_id FROM table_finalizations').all()).toEqual([{ table_id: 'old-table' }]);
+});
+
 it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象棋桌', async () => {
   db = await openTestDb();
   const owner = 'coo-v14-upgrade';
@@ -32,7 +59,7 @@ it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象�
   await migrate(db);
   await migrate(db);
 
-  expect(await schemaVersion(db)).toBe(14);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   expect((await storyTables()).map(row => row.tablename)).toEqual([
     'story_attendance', 'story_notes', 'story_parts', 'story_queue', 'story_rounds', 'story_snacks',
   ]);
