@@ -19,6 +19,17 @@ it('真实网关限制台席、分批投递和投喂，往期与家长页按各�
   });
   try {
     await server.listen();
+    const guestLive = await fetch(server.url + '/v1/story/live');
+    expect(guestLive.status).toBe(200);
+    expect(guestLive.headers.get('cache-control')).toBe('no-store');
+    expect((await fetch(server.url + '/v1/story/live', {
+      headers: { authorization: 'Bearer invalid-token' },
+    })).status).toBe(401);
+    expect((await fetch(server.url + '/v1/story/live?after=-1')).status).toBe(400);
+    expect((await fetch(server.url + '/v1/story/missing')).status).toBe(404);
+    expect((await fetch(server.url + '/v1/story/missing', { method: 'POST' })).status).toBe(405);
+    expect((await fetch(server.url + '/v1/me/story/archive')).status).toBe(401);
+    expect((await fetch(server.url + '/v1/parent/story')).status).toBe(401);
     const enter = async (name: string, kind: 'pet' | 'human', suffix: string) => {
       const client = new ParlorClient(server.url, { cooId: `coo-story-${suffix}`, cooSecret: `test-story-secret-${suffix}-12345678` });
       const joined = await client.join('story-invite', { name, kind }, 'lobby');

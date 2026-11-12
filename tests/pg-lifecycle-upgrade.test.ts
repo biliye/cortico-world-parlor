@@ -8,9 +8,22 @@ import { LedgerDb } from '../src/room/ledger-db.ts';
 import { SupportDb } from '../src/room/support-db.ts';
 import { openStorage, parseStorageKind } from '../src/room/storage/open.ts';
 import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
+import { gameIds } from '../src/room/games/registry.ts';
 
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
+
+it('当前 PG 约束允许所有注册玩法及旧长局，拒绝未知玩法', async () => {
+  db = await openTestDb();
+  const owner = 'coo-game-catalog';
+  const room = 'r-game-catalog';
+  await new CooAccountDb(db).registerCoo(owner, 'game-catalog-secret-012345', 'pet', '桌主');
+  await createRoom(db, { id: room, ownerCooId: owner, name: '玩法检查' }, 1);
+  for (const game of [...gameIds(), 'monopoly']) {
+    await insertTable(db, `t-${game}`, room, game);
+  }
+  await expect(insertTable(db, 'invalid-table', room, 'not-a-game')).rejects.toThrow(/tables_game_check/);
+});
 
 it('PG v14 升级后允许飞行棋，保留象棋桌与原有赛果', async () => {
   db = await openTestDb();

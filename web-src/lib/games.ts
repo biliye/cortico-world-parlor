@@ -1,6 +1,6 @@
-/** 网页侧的游戏清单。旧 `src/web/games/registry.js` 已随旧页在 0.40.0 删除；
- *  大厅与筛选只认这一份，服务端目录在 `src/room/games/registry.ts`。 */
+/** 网页侧的玩法说明、开局提示与展示状态。显示名和图标与服务端共用。 */
 
+import { GAME_PRESENTATION, type GameId } from '../../src/room/game-labels.ts';
 import { AEROPLANE_RULES } from '../../src/room/games/aeroplane-rules.ts';
 
 export interface GameDef {
@@ -17,11 +17,11 @@ export interface GameDef {
 
 export const GAMES: Record<string, GameDef> = {
   dice: {
-    label: '骰子', icon: 'dice', enabled: false, endScreen: false, minPlayers: 2, botFill: false,
+    ...GAME_PRESENTATION.dice, enabled: false, endScreen: false, minPlayers: 2, botFill: false,
     blurb: '两到四人，暗骰、可重掷两次，合计最高者赢。', foot: '暗骰 · 重掷 · 比点数',
   },
   werewolf: {
-    label: '狼人杀', icon: 'moon', enabled: true, endScreen: true, minPlayers: 9, botFill: false,
+    ...GAME_PRESENTATION.werewolf, enabled: true, endScreen: true, minPlayers: 9, botFill: false,
     blurb: '可开 6／9／12 人局，支持全 Coo 或真人同桌。12 人局加入守卫。',
     foot: '6／9／12 席 · 夜谈 · 单次发言',
     guide: [
@@ -35,7 +35,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   ddz: {
-    label: '斗地主', icon: 'cards', enabled: true, endScreen: true, minPlayers: 1, botFill: true,
+    ...GAME_PRESENTATION.ddz, enabled: true, endScreen: true, minPlayers: 1, botFill: true,
     blurb: '三人一桌，空位由脚本陪练补；一个人也能开。', foot: '叫地主 · 出牌 · 脚本补位',
     guide: [
       '三人一桌；空位由脚本陪练补，一个人也能开。',
@@ -47,7 +47,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   monopoly2d: {
-    label: '快局大富翁', icon: 'board', enabled: true, endScreen: true, minPlayers: 4, botFill: false,
+    ...GAME_PRESENTATION.monopoly2d, enabled: true, endScreen: true, minPlayers: 4, botFill: false,
     blurb: '四人沿环形棋盘掷骰、买地、收租，也会遇到街区消息。',
     foot: '掷骰 · 买地 · 收租',
     guide: [
@@ -59,7 +59,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   gomoku: {
-    label: '五子棋', icon: 'board', enabled: true, endScreen: true, minPlayers: 2, botFill: false,
+    ...GAME_PRESENTATION.gomoku, enabled: true, endScreen: true, minPlayers: 2, botFill: false,
     blurb: '两人对弈，开局随机定谁执黑。15×15 棋盘，连成五颗或更多即胜。',
     foot: '双人 · 自由规则 · 下一步建议',
     guide: [
@@ -72,7 +72,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   xiangqi: {
-    label: '中国象棋', icon: 'board', enabled: true, endScreen: true, minPlayers: 2, botFill: false,
+    ...GAME_PRESENTATION.xiangqi, enabled: true, endScreen: true, minPlayers: 2, botFill: false,
     blurb: '两人对弈，开局随机分红黑，红方先行。', foot: '双人 · 红先 · 下一步建议',
     guide: [
       '两席坐满后由桌主开局。选棋子、选落点，再确认走棋；也可以从「下一步建议」选一着。',
@@ -81,7 +81,7 @@ export const GAMES: Record<string, GameDef> = {
     ],
   },
   aeroplane: {
-    label: '飞行棋', icon: 'board', enabled: true, endScreen: true, minPlayers: 2, botFill: false,
+    ...GAME_PRESENTATION.aeroplane, enabled: true, endScreen: true, minPlayers: 2, botFill: false,
     blurb: '掷六起飞，穿过四色航线，先把四架飞机送到终点。',
     foot: '2–4 人 · 掷骰 · 撞机',
     guide: AEROPLANE_RULES,
@@ -90,7 +90,7 @@ export const GAMES: Record<string, GameDef> = {
     label: '大富翁', icon: 'board', enabled: false, endScreen: false, minPlayers: 2, botFill: true,
     blurb: '四到六人的长局，买地、升级、道具；这一版先收起来了。', foot: '买地 · 升级 · 道具',
   },
-};
+} satisfies Record<GameId | 'monopoly', GameDef>;
 
 export const ENABLED_GAMES = Object.keys(GAMES).filter((id) => GAMES[id].enabled);
 
