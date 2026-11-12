@@ -2,22 +2,23 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-// These entry assets use the package version as their cache key.
-const versionedAssets = {
+const requiredAssets = {
   play: ['theme.js', 'club.css', 'appearance.css', 'night.css', 'vue-loader.js'],
   parent: ['parent.css', 'parent.js'],
 };
+const assetPrefixes = ['/play/assets/', '/parent/assets/'];
+const unversionedAssets = new Set(['/play/assets/play.css']);
 
 function checkAssetVersions(root, version) {
-  for (const [page, assets] of Object.entries(versionedAssets)) {
+  for (const [page, assets] of Object.entries(requiredAssets)) {
     const htmlPath = `src/web/${page}.html`;
     const html = readFileSync(join(root, htmlPath), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     const prefix = `/${page}/assets/`;
     const requiredPaths = assets.map(asset => prefix + asset);
-    const urls = [...html.matchAll(/<(?:script|link)\b[^>]*?\s(?:src|href)\s*=\s*(["'])(.*?)\1/gi)]
-      .map(([, , value]) => value)
-      .filter(value => value.startsWith(prefix))
-      .map(value => new URL(value, 'http://localhost'));
+    const urls = [...html.matchAll(/<[a-z][\w:-]*\b[^>]*?\s(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)]
+      .map(([, doubleQuoted, singleQuoted, unquoted]) => doubleQuoted ?? singleQuoted ?? unquoted)
+      .filter(value => assetPrefixes.some(assetPrefix => value.startsWith(assetPrefix)))
+      .map(value => new URL(value.replaceAll('&amp;', '&'), 'http://localhost'));
 
     for (const path of requiredPaths) {
       if (!urls.some(url => url.pathname === path)) {
@@ -26,7 +27,7 @@ function checkAssetVersions(root, version) {
     }
     for (const url of urls) {
       const versions = url.searchParams.getAll('v');
-      if (!requiredPaths.includes(url.pathname) && versions.length === 0) continue;
+      if (versions.length === 0 && unversionedAssets.has(url.pathname)) continue;
       if (versions.length !== 1 || versions[0] !== version) {
         const actual = versions.length === 0 ? '缺少 v' : JSON.stringify(versions);
         throw new Error(`${htmlPath} 的 ${url.pathname} 应带一个 v=${version}，实际为 ${actual}`);

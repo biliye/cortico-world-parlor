@@ -16,13 +16,15 @@
 
 ## 发布包装载检查
 
-从包源码目录用 `pnpm pack` 构建并生成候选包。把要发布的 `.tgz` 解到本包 `.task-tmp` 下一个新目录，再把解出的 `package` 目录传给检查命令。
+从包源码目录用 `pnpm pack` 构建并生成候选包。把要发布的 `.tgz` 解到本包 `.task-tmp` 下一个新目录，再手动对解出的 `package` 目录执行发布检查。
 
 ```sh
 pnpm check:release .task-tmp/release-check/package
 ```
 
 命令用 Node 的 `--experimental-strip-types` 从解包目录装载网关模块，核对 `package.json`、`PARLOR_CLIENT_VERSION` 和 `/play`、`/parent` 的静态资源 `v` 参数。检查只做模块装载，无需启动网关或连接 PG。WebUI 产物和 Cortico 扩展契约继续对同一个解包目录执行 `check:webui` 与框架的 `check:extension`。
+
+`play.html` 和 `parent.html` 中指向 `/play/assets/` 或 `/parent/assets/` 的 `src`、`href` 引用都应带一个与包版本相同的 `v`。兼容样式 `/play/assets/play.css` 沿用无版本链接，按静态资源的 300 秒缓存有效期更新。
 
 涉及服务端或存储时，按日常范围跑核心 PG，再按改动补定向 PG。例如飞行棋 HTTP 协议改动跑 `pnpm test:pg tests/aeroplane-gateway.test.ts`，说书厅入场和归档权限改动跑 `pnpm test:pg tests/storyteller.test.ts`。
 
