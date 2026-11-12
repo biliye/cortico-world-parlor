@@ -111,9 +111,19 @@ describe('Coo 快速匹配与牌桌分享', () => {
     const table = initial.table.id;
     await friend.action(friendToken, { type: 'table_join', table, requestId: 'generic-friend-join' }, 'lobby');
     await call('parlor_table_start', { table });
-    const state = JSON.parse(await call('parlor_game_info', { op: 'state', table }));
-    expect(state.availableActions).toMatchObject([{ action: 'place' }]);
+    const readState = async () => JSON.parse(await call('parlor_game_info', { op: 'state', table }));
+    let state = await readState();
     expect(state.table.board).toContain('\n 7 ...............');
+    const cooStarts = state.availableActions.length > 0;
+    if (!cooStarts) {
+      const first = await friend.games(friendToken, { op: 'state', table }, 'lobby') as Record<string, any>;
+      expect(first.availableActions).toMatchObject([{ action: 'place' }, { action: 'resign' }]);
+      await friend.action(friendToken, {
+        type: 'gomoku_action', table, row: 6, col: 6, revision: first.table.revision, requestId: 'generic-friend-first',
+      }, 'lobby');
+      state = await readState();
+    }
+    expect(state.availableActions).toMatchObject([{ action: 'place' }, { action: 'resign' }]);
     expect(state.tablePrivate.board).toBeUndefined();
     expect(state.tables.find((entry: { id: string }) => entry.id === table).board).toBeUndefined();
     await until(() => pushedText(host).includes('建议（行,列）：'), 8000);
@@ -124,9 +134,9 @@ describe('Coo 快速匹配与牌桌分享', () => {
     expect(result.table).toBeUndefined();
     expect(JSON.parse(await call('parlor_game_action', args))).toEqual(result);
     const updated = JSON.parse(await call('parlor_game_info', { op: 'state', table }));
-    expect(updated.table.board).toContain('\n 7 .......x.......');
+    expect(updated.table.board).toContain(`\n 7 .......${cooStarts ? 'x' : 'o'}.......`);
     const next = await friend.games(friendToken, { op: 'state', table }, 'lobby') as Record<string, any>;
-    expect(next.availableActions).toMatchObject([{ action: 'place' }]);
+    expect(next.availableActions).toMatchObject([{ action: 'place' }, { action: 'resign' }]);
     expect(next.table.revision).toBe(result.revision);
     expect(next.table.board).toHaveLength(225);
     expect(next.tablePrivate.board).toHaveLength(225);
@@ -152,6 +162,8 @@ describe('Coo 快速匹配与牌桌分享', () => {
     expect(await currentRoom()).toBe('hall');
     const result = await call('parlor_table_join', { game: 'ddz', requestId: 'coo-match-join' });
     expect(result).toContain('并坐下');
+    expect(host.events.find(event => event.type === 'parlor.link' && event.text.includes('公开匹配厅')))
+      .toMatchObject({ origin: 'external' });
     expect(await currentRoom()).toBe(room.id);
     const snap = await friend.snapshot(secrets.PARLOR_SEAT_TOKEN, 0, 1, room.id);
     expect(snap.tablePrivate?.tableId).toBe(snap.table?.id);
@@ -161,7 +173,7 @@ describe('Coo 快速匹配与牌桌分享', () => {
   });
 
   it('查看招募不移动，使用同一分享链接直接进入关闭匹配的桌', async () => {
-    const { friend, friendToken, secrets } = await startWorld({ room: 'hall' });
+    const { friend, friendToken, host } = await startWorld({ room: 'hall' });
     const room = (await friend.createRoom({ name: '分享直达厅', visibility: 'public' }, friendToken)).room;
     const moved = await friend.switchTo(friendToken, 'hall', room.id);
     const opened = await friend.action(moved.token, { type: 'table_open', game: 'ddz', requestId: 'coo-share-open' }, room.id);
@@ -170,6 +182,8 @@ describe('Coo 快速匹配与牌桌分享', () => {
     expect(await currentRoom()).toBe('hall');
     const link = server!.url + '/play?' + new URLSearchParams({ room: room.id, view: 'table', table: opened.tableId! });
     expect(await call('parlor_table_join', { link, requestId: 'coo-share-join' })).toContain('并坐下');
+    expect(host.events.find(event => event.type === 'parlor.link' && event.text.includes('分享直达厅')))
+      .toMatchObject({ origin: 'external' });
     expect(await currentRoom()).toBe(room.id);
     expect(await call('parlor_table_join', { link: 'https://other.example/play?room=x&view=table&table=t-abc' })).toContain('当前客厅服务器');
   });

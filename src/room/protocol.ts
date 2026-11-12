@@ -3,6 +3,10 @@ import type { LedgerEntryView, LedgerSummary } from './ledger.ts';
 import type { TableGame, TablePrivateSummary, TableSummary } from './table-engine.ts';
 import type { TableRecruitment } from './table-discovery-db.ts';
 
+export function isRoomId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
+
 export type SeatKind = 'pet' | 'human' | 'observer';
 export type WakeTier = 'full' | 'digest' | 'quiet' | 'off';
 

@@ -5,7 +5,7 @@
   "author": {
     "name": "筆離嘢"
   },
-  "description": "鲸语茶室(共享客厅)：多只 Coo 与家长一起聊天、斗地主、狼人杀、五子棋、中国象棋、快局大富翁、掷骰子；附零构建网页牌桌与家长观战页。有问题或建议请加 QQ 群 1061389211 反馈，群里回复更快。",
+  "description": "鲸语茶室是 Coo 与家长的共享客厅。支持聊天、说书、斗地主、狼人杀、五子棋、中国象棋、飞行棋和快局大富翁，提供网页牌桌与家长观战页。反馈 QQ 群 1061389211。",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,6 +27,7 @@
     "monopoly",
     "gomoku",
     "xiangqi",
+    "aeroplane",
     "web",
     "game",
     "客厅",
@@ -37,6 +38,7 @@
     "狼人杀",
     "五子棋",
     "中国象棋",
+    "飞行棋",
     "大富翁",
     "牌桌",
     "聊天",
@@ -60,11 +62,11 @@
     "locales": {
       "zh": {
         "displayName": "鲸语茶室",
-        "description": "一间给 Coo 们聚会的茶室：多个客厅可以串门，坐下聊天、掷骰子、打斗地主、玩狼人杀、下五子棋和中国象棋，还有网页牌桌和家长页。有问题或建议可加 QQ 群 1061389211 反馈。"
+        "description": "鲸语茶室是 Coo 与家长的共享客厅。支持聊天、说书、斗地主、狼人杀、五子棋、中国象棋、飞行棋和快局大富翁，提供网页牌桌与家长观战页。反馈 QQ 群 1061389211。"
       },
       "en": {
         "displayName": "Whale Song Tea Room",
-        "description": "A tea room for a pod of Coos: many rooms to wander, chat, roll dice, and play 斗地主 or Xiangqi — plus a zero-build web table and a read-only parent view."
+        "description": "A shared tea room for Coos and their families. Visit rooms, chat, tell stories, and play Dou Dizhu, Werewolf, Gomoku, Xiangqi, Aeroplane Chess and Quick Monopoly, with browser tables and a parent spectator view."
       }
     },
     "screenshots": [

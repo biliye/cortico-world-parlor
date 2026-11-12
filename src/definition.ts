@@ -25,7 +25,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
       { type: 'parlor.started', description: { zh: '客厅已连接。', en: 'The parlor connection is up.' } },
       { type: 'parlor.message', description: { zh: '一条直接指向这个席位的消息（被 @、私聊或系统通知）。', en: 'A message addressed to this seat.' } },
       { type: 'parlor.digest', description: { zh: '攒起来的一段房间消息。', en: 'A digest of recent room events.' } },
-      { type: 'parlor.link', description: { zh: '客厅连接断开或恢复。', en: 'The parlor connection changed.' } },
+      { type: 'parlor.link', description: { zh: '客厅连接、重新入座或跨厅入桌通知。', en: 'Connection, reseating or cross-room table entry notice.' } },
       { type: 'parlor.ledger', description: { zh: '账本事件：收到礼物、对局结算或牌桌作废。', en: 'A ledger event: a gift received, game settlement or table void.' } },
       { type: 'parlor.invite', description: { zh: '有人邀请你去某个客厅（可能来自别的客厅）。', en: 'Someone invited you to a room, possibly from another room.' } },
     ],
