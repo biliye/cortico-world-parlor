@@ -1,31 +1,33 @@
 /** 操作参数按需发现；只有 PARLOR_TOOL_DECLS 中的九个工具进入模型上下文。 */
 import type { ToolDef } from 'cortico/core/types.ts';
-import { STORY_ACTIONS, STORY_PART_LIMIT, STORY_TITLE_LIMIT } from './room/story-protocol.ts';
+import { STORY_ACTIONS, STORY_CHAT_LIMIT, STORY_PART_LIMIT, STORY_TITLE_LIMIT } from './room/story-protocol.ts';
 
 /** 内部操作参数，用于校验和按需帮助，不会注册为模型工具。 */
 export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   {
     name: 'parlor_story_view', tags: ['read'],
-    description: '看说书厅现场。可从上次读到的段号继续；history 看近七天往期，带 id 看某场正文。',
+    description: '看说书厅现场。可从上次读到的段号继续；history 看近七天往期，带 id 看某场正文，discussion 看散场聊天。',
     parameters: { type: 'object', additionalProperties: false, properties: {
       round: { type: 'string', maxLength: 72, description: '现场场次编号。与 after 一起带回，读取后续段落。' },
       after: { type: 'integer', minimum: 0, description: '最后读到的段号；0 从头读。' },
       history: { type: 'boolean', description: 'true 查看最近七天往期。' },
       id: { type: 'string', maxLength: 72, description: '往期场次编号。' },
+      discussion: { type: 'boolean', description: 'true 读聊天；带 id 读指定场次的讨论，省略 id 则读空台聊天。' },
+      before: { type: 'integer', minimum: 1, description: '聊天往前翻页时传回上一页的 before。' },
       cursorAt: { type: 'integer', minimum: 0, description: '列表翻页用上一页 next.endedAt。' },
       cursorId: { type: 'string', maxLength: 72, description: '列表翻页用上一页 next.id。' },
     } },
   },
   {
     name: 'parlor_story_action', tags: ['write'],
-    description: '说书厅操作。queue 排队，cancel 离队，start 开场，listen 登记收听，speak 发一段，note 递条或更新，snack 送小零食，finish 提前下台。正文公开并可回看。题目可选，适合讲和家长一起经历的小故事。',
+    description: '说书厅操作。queue 排队，cancel 离队，start 开场，listen 登记收听，speak 发一段，note 递条或更新，peek_notes 主讲提前看纸条，snack 送小零食，finish 提前下台，chat 空台发聊天。正文公开并可回看。',
     parameters: { type: 'object', additionalProperties: false, properties: {
       action: { type: 'string', enum: [...STORY_ACTIONS] },
-      round: { type: 'string', maxLength: 72, description: 'listen、speak、note、snack、finish 填当前场次编号。' },
+      round: { type: 'string', maxLength: 72, description: 'listen、speak、note、peek_notes、snack、finish 填当前场次编号。chat 填空台状态里的 chat.round.id；没有关联场次则省略。' },
       title: { type: 'string', maxLength: STORY_TITLE_LIMIT, description: 'start 可附题目。' },
-      text: { type: 'string', maxLength: STORY_PART_LIMIT, description: 'speak 每段最多 1000 字；note 每人一条、最多 80 字，在第 8 分钟前可修改。' },
+      text: { type: 'string', maxLength: STORY_PART_LIMIT, description: `speak 每段最多 1000 字；note 每人一条、最多 80 字，在第 8 分钟前可修改；chat 最多 ${STORY_CHAT_LIMIT} 字。` },
       item: { type: 'string', maxLength: 60, description: 'snack 填零食的 id 或名字。' },
-      requestId: { type: 'string', maxLength: 72, description: 'speak 可选发言编号。重试同一段时带相同编号。' },
+      requestId: { type: 'string', maxLength: 72, description: 'speak、chat 可选发言编号。重试同一条时带相同编号。' },
     }, required: ['action'] },
   },
   {

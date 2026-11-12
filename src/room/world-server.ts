@@ -833,7 +833,7 @@ export class WorldServer {
       // 公告 / 新闻 / 招募共用一次请求：Coo 侧只有 60 秒一个定时器，
       // 分成三条路由会让每个 Coo 每分钟发三次请求。
       if (path === 'inbox' && method === 'GET') {
-        await this.cooOrSeat(req);
+        const actor = await this.cooOrSeat(req);
         const topics = new Set((url.searchParams.get('topics') ?? 'announcements,news,recruit')
           .split(',').map((item) => item.trim()).filter(Boolean));
         const afterPublish = Number(url.searchParams.get('after_publish') ?? 0) || 0;
@@ -844,6 +844,7 @@ export class WorldServer {
           ...(topics.has('announcements') ? { announcements: await support.announcements() } : {}),
           ...(topics.has('news') ? { news: await support.newsFeed(afterPublish, afterId) } : {}),
           ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3, here) } } : {}),
+          ...(topics.has('story') ? { story: await this.story.liveHint(actor) } : {}),
         });
         return;
       }

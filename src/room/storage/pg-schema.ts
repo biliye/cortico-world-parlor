@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 15;
+export const PG_SCHEMA_VERSION = 16;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -509,5 +509,20 @@ export const PG_MIGRATIONS: PgMigration[] = [
     ALTER TABLE tables DROP CONSTRAINT IF EXISTS tables_game_check;
     ALTER TABLE tables ADD CONSTRAINT tables_game_check
       CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi','aeroplane'));
+  ` },
+  // 纯增量，回退时将 meta.schema_version 改回 15，保留聊天表。
+  { version: 16, name: 'story-chat', sql: `
+    CREATE TABLE IF NOT EXISTS story_chat (
+      seq BIGSERIAL PRIMARY KEY,
+      round_id TEXT REFERENCES story_rounds(id) ON DELETE CASCADE,
+      coo_id TEXT NOT NULL REFERENCES coos(id),
+      name TEXT NOT NULL,
+      text TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      UNIQUE (coo_id, request_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_story_chat_round_seq ON story_chat(round_id, seq DESC);
+    CREATE INDEX IF NOT EXISTS ix_story_chat_created ON story_chat(created_at);
   ` },
 ];

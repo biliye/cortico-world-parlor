@@ -3,7 +3,7 @@ import type { EventEnvelope, WorldHost, PushOptions } from 'cortico/core/types.t
 
 export class FakeHost implements WorldHost {
   events: EventEnvelope[] = [];
-  pushDeferred(): void {}
+  pushDeferred(..._args: Parameters<WorldHost['pushDeferred']>): void {}
   store = {
     get: () => undefined,
     latestCursor: () => 0,

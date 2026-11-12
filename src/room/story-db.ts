@@ -3,9 +3,10 @@ import { withTransaction, type Db } from './db.ts';
 import { resolveGift } from './gifts/catalog.ts';
 import { LedgerDb } from './ledger-db.ts';
 import {
-  STORY_DRAW_SIZE, STORY_NOTE_LIMIT, STORY_PART_LIMIT, STORY_QUEUE_MS, STORY_RETENTION_MS,
+  STORY_CHAT_LIMIT, STORY_DRAW_SIZE, STORY_NOTE_LIMIT, STORY_PART_LIMIT, STORY_QUEUE_MS, STORY_RETENTION_MS,
   STORY_TALK_MS, STORY_TITLE_LIMIT, STORY_TOTAL_MS,
-  type StoryArchive, type StoryCursor, type StoryNotice, type StoryPage, type StoryPart, type StoryState,
+  type StoryArchive, type StoryChatPage, type StoryCursor, type StoryLiveHint, type StoryNotice,
+  type StoryPage, type StoryPart, type StoryState,
 } from './story-protocol.ts';
 
 type StoryActor = { id: string; name: string };
@@ -16,6 +17,7 @@ type RoundRow = {
   part_count: number; snack_count: number; batch_ready: number;
 };
 type Note = { coo_id: string; name: string; text: string };
+type ChatRound = Pick<RoundRow, 'id' | 'speaker_name' | 'title'>;
 
 function confirmationDeadline(entry: QueueRow | undefined, now: number): number | null {
   if (entry?.ready_at == null) return null;
@@ -95,6 +97,54 @@ export class StoryDb {
     };
   }
 
+  async liveHint(actor: string): Promise<StoryLiveHint | null> {
+    const row = await this.db.prepare(`
+      SELECT id, speaker_name, title, ends_at FROM story_rounds r
+      WHERE ended_at IS NULL AND ends_at > ? AND part_count > 0 AND speaker_id <> ?
+        AND NOT EXISTS (SELECT 1 FROM story_attendance a WHERE a.round_id = r.id AND a.coo_id = ?)
+    `).get<Pick<RoundRow, 'id' | 'speaker_name' | 'title' | 'ends_at'>>(this.now(), actor, actor);
+    return row ? { id: row.id, speaker: row.speaker_name, title: row.title, endsAt: row.ends_at } : null;
+  }
+
+  private latestFinished(now: number, current?: RoundRow): Promise<ChatRound | undefined> {
+    // 即使时钟还没落库，读到的空台也应当关联刚到期的场次。
+    if (current && current.ends_at <= now && current.ends_at > now - STORY_RETENTION_MS && current.part_count > 0) {
+      return Promise.resolve(current);
+    }
+    return this.db.prepare(`
+      SELECT id, speaker_name, title FROM story_rounds
+      WHERE ended_at > ? AND part_count > 0 ORDER BY ended_at DESC, started_at DESC, id DESC LIMIT 1
+    `).get<ChatRound>(now - STORY_RETENTION_MS);
+  }
+
+  private async chatPage(round: ChatRound | undefined, now: number, before?: number): Promise<StoryChatPage> {
+    const rows = await this.db.prepare(`
+      SELECT seq, name, text FROM story_chat
+      WHERE ${round ? 'round_id = ?' : 'round_id IS NULL'} AND created_at > ?
+        ${before === undefined ? '' : 'AND seq < ?'} ORDER BY seq DESC LIMIT 21
+    `).all<StoryChatPage['messages'][number]>(
+      ...(round ? [round.id] : []), now - STORY_RETENTION_MS, ...(before === undefined ? [] : [before]),
+    );
+    const messages = rows.slice(0, 20).reverse();
+    return { round: round ? { id: round.id, speaker: round.speaker_name, title: round.title } : null,
+      messages, before: rows.length > messages.length ? messages[0].seq : null };
+  }
+
+  async discussion(id?: string, before?: number): Promise<StoryChatPage> {
+    const now = this.now();
+    if (id) {
+      const round = await this.db.prepare(`
+        SELECT id, speaker_name, title FROM story_rounds
+        WHERE id = ? AND part_count > 0 AND (ended_at > ? OR (ended_at IS NULL AND ends_at > ? AND ends_at <= ?))
+      `).get<ChatRound>(id, now - STORY_RETENTION_MS, now - STORY_RETENTION_MS, now);
+      if (!round) throw new StoryError(404, '这场说书已过期或找不到');
+      return this.chatPage(round, now, before);
+    }
+    const current = await this.current();
+    if (current && current.ends_at > now) throw new StoryError(409, '台上正在说书，现场聊天暂时关闭');
+    return this.chatPage(await this.latestFinished(now, current), now, before);
+  }
+
   private attend(round: string, actor: string) {
     return this.db.prepare('INSERT INTO story_attendance (round_id, coo_id) VALUES (?, ?) ON CONFLICT DO NOTHING')
       .run(round, actor);
@@ -114,7 +164,8 @@ export class StoryDb {
       readyUntil: confirmationDeadline(queued, now),
       open: !round && !head,
     };
-    if (!round) return { now, queue, round: null };
+    if (!round) return { now, queue, round: null,
+      ...(actor ? { chat: await this.chatPage(await this.latestFinished(now, current), now) } : {}) };
     const id = round.id;
     const speaking = actor === round.speaker_id;
     const notesOpen = now < round.notes_at;
@@ -203,10 +254,15 @@ export class StoryDb {
       }
       return this.state(actor.id);
     }
-    await withTransaction(this.db, async () => {
+    const preview = await withTransaction(this.db, async () => {
       await this.lock();
       const now = this.now();
       const round = await this.advance(now);
+      if (body.action === 'chat') {
+        if (round) throw new StoryError(409, '台上正在说书，现场聊天暂时关闭');
+        await this.sendChat(actor, body, now);
+        return;
+      }
       if (body.action === 'queue') {
         if (round?.speaker_id === actor.id) throw new StoryError(409, '你正在台上');
         await this.db.prepare('INSERT INTO story_queue (coo_id, queued_at) VALUES (?, ?) ON CONFLICT DO NOTHING')
@@ -235,6 +291,12 @@ export class StoryDb {
         return;
       }
       if (!round || body.round !== round.id) throw new StoryError(409, '本场已结束');
+      if (body.action === 'peek_notes') {
+        if (round.speaker_id !== actor.id) throw new StoryError(403, '只有本场说书人能提前看纸条');
+        if (now >= round.notes_at) return; // 收尾阶段直接返回正式批次。
+        const notes = (await this.draw(round.id)).map(({ name, text }) => ({ name, text }));
+        return { round: round.id, notes };
+      }
       if (body.action === 'speak' || body.action === 'finish') {
         if (round.speaker_id !== actor.id) throw new StoryError(403, '只有本场说书人能在台上发言或结束本场');
         if (body.action === 'finish') {
@@ -259,7 +321,25 @@ export class StoryDb {
       }
       await this.attend(round.id, actor.id);
     });
-    return this.state(actor.id);
+    const state = await this.state(actor.id);
+    return preview && preview.round === state.round?.id ? { ...state, preview } : state;
+  }
+
+  private async sendChat(actor: StoryActor, body: Record<string, unknown>, now: number): Promise<void> {
+    const round = (await this.latestFinished(now))?.id ?? null;
+    if (body.round !== undefined && typeof body.round !== 'string') throw new StoryError(400, '场次编号无效');
+    if ((body.round ?? null) !== round) throw new StoryError(409, '讨论场次已变，请刷新后再发');
+    const message = text(body.text, STORY_CHAT_LIMIT, '聊天消息');
+    const requestId = text(body.requestId, 72, '发言编号');
+    const inserted = await this.db.prepare(`
+      INSERT INTO story_chat (round_id, coo_id, name, text, request_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (coo_id, request_id) DO NOTHING
+    `).run(round, actor.id, actor.name, message, requestId, now);
+    if (!inserted.changes) {
+      const previous = await this.db.prepare('SELECT round_id, text FROM story_chat WHERE coo_id = ? AND request_id = ?')
+        .get<{ round_id: string | null; text: string }>(actor.id, requestId);
+      if (previous?.round_id !== round || previous.text !== message) throw new StoryError(409, '这个发言编号已用于另一条消息');
+    }
   }
 
   private async speak(round: RoundRow, body: Record<string, unknown>, now: number) {
@@ -327,6 +407,7 @@ export class StoryDb {
   }
 
   async prune(now: number): Promise<void> {
+    await this.db.prepare('DELETE FROM story_chat WHERE created_at <= ?').run(now - STORY_RETENTION_MS);
     await this.db.prepare('DELETE FROM story_rounds WHERE ended_at <= ?').run(now - STORY_RETENTION_MS);
   }
 }
