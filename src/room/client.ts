@@ -15,10 +15,6 @@ import type {
   NewsItemView, NewsSummaryView, RoomEvent, RoomSnapshot, RoomSummary, SwitchResponse,
 } from './protocol.ts';
 
-// 身份头和入场请求体只发送给配置的茶室网关，不能随重定向转发。
-const fetchParlor = (url: string, init: RequestInit): Promise<Response> =>
-  fetch(url, { ...init, redirect: 'error' });
-
 export interface ReplayResponse {
   room: string;
   latest: number;
@@ -44,6 +40,16 @@ export class ParlorHttpError extends Error {
     this.status = status;
     this.name = 'ParlorHttpError';
   }
+}
+
+async function fetchParlor(url: string, init: RequestInit): Promise<Response> {
+  // 身份头和入场请求体只发送给配置的茶室网关，不能随重定向转发。
+  const response = await fetch(url, { ...init, redirect: 'manual' });
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400 && response.status !== 304)) {
+    void response.body?.cancel().catch(() => {});
+    throw new ParlorHttpError(response.status, '茶室网关返回了重定向，请在 World 设置中填写最终的服务器地址');
+  }
+  return response;
 }
 
 export class ParlorClient {
@@ -512,6 +518,7 @@ export class ParlorClient {
   ): Promise<void> {
     // 服务端每 15 秒发心跳；覆盖连响应头都收不到、以及 TCP 半开不再收数据的情况。
     const connection = new AbortController();
+    const requestSignal = connection.signal;
     const abort = () => connection.abort(signal?.reason);
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
@@ -523,26 +530,31 @@ export class ParlorClient {
     };
     arm();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    try {
-    const query = new URLSearchParams({ since: String(since) });
-    const response = await fetchParlor(`${this.path('stream', roomId)}?${query}`, {
-      headers: await this.headers({ authorization: `Bearer ${token}`, accept: 'text/event-stream' }),
-      signal: connection.signal,
-    });
-    if (!response.ok || !response.body) {
-      throw new ParlorHttpError(response.status, await errorText(response));
-    }
-    onOpen?.();
-    reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-      for (;;) {
+    const consume = async () => {
+      const query = new URLSearchParams({ since: String(since) });
+      const headers = await this.headers({ authorization: `Bearer ${token}`, accept: 'text/event-stream' });
+      requestSignal.throwIfAborted();
+      const response = await fetchParlor(`${this.path('stream', roomId)}?${query}`, { headers, signal: requestSignal });
+      if (requestSignal.aborted) {
+        void response.body?.cancel().catch(() => {});
+        requestSignal.throwIfAborted();
+      }
+      if (!response.ok || !response.body) {
+        throw new ParlorHttpError(response.status, await errorText(response));
+      }
+      reader = response.body.getReader();
+      onOpen?.();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (!requestSignal.aborted) {
         const { value, done } = await reader.read();
+        requestSignal.throwIfAborted();
         if (done) return;
         arm();
         buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         let boundary: number;
         while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+          requestSignal.throwIfAborted();
           const chunk = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
           const data = chunk.split('\n')
@@ -555,10 +567,19 @@ export class ParlorClient {
           } catch { /* 单条坏消息不影响后续 */ }
         }
       }
+    };
+    try {
+      requestSignal.throwIfAborted();
+      // Windows Node 22 上 fetch 偶尔在中止后仍不结束。直接用信号结束本次订阅。
+      await new Promise<void>((resolve, reject) => {
+        const rejectOnAbort = () => reject(requestSignal.reason);
+        requestSignal.addEventListener('abort', rejectOnAbort, { once: true });
+        void consume().finally(() => requestSignal.removeEventListener('abort', rejectOnAbort)).then(resolve, reject);
+      });
     } finally {
       clearTimeout(watchdog!);
       signal?.removeEventListener('abort', abort);
-      try { await reader?.cancel(); } catch { /* 已结束 */ }
+      void reader?.cancel().catch(() => {});
     }
   }
 

@@ -81,32 +81,70 @@ describe('断线恢复', () => {
     expect(stream).toHaveBeenCalledTimes(attempts);
   });
 
-  it('连响应头都没有时 45 秒中止请求', async () => {
+  it('45 秒没收到响应头时结束订阅，即使 fetch 在中止后仍挂起', async () => {
     let aborted = false;
-    vi.stubGlobal('fetch', vi.fn((_url, init) => new Promise((_resolve, reject) => {
-      init.signal.addEventListener('abort', () => { aborted = true; reject(init.signal.reason); });
+    let failure: unknown;
+    vi.stubGlobal('fetch', vi.fn((_url, init) => new Promise(() => {
+      init.signal.addEventListener('abort', () => { aborted = true; }, { once: true });
     })));
-    const result = new ParlorClient('http://127.0.0.1:8790').stream('t', 0, () => {}).catch(e => e);
+    void new ParlorClient('http://127.0.0.1:8790').stream('t', 0, () => {}).catch(error => { failure = error; });
     await vi.advanceTimersByTimeAsync(45_000);
-    expect(aborted).toBe(true); expect((await result).message).toContain('45 秒');
+    expect(aborted).toBe(true);
+    expect(failure).toMatchObject({ message: expect.stringContaining('45 秒') });
+  });
+
+  it('主动中止时结束挂起的订阅并释放迟到的响应', async () => {
+    let respond!: (response: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>(resolve => { respond = resolve; }));
+    vi.stubGlobal('fetch', fetch);
+    const abort = new AbortController();
+    const onOpen = vi.fn();
+    const onEvent = vi.fn();
+    let failure: unknown;
+    void new ParlorClient('http://127.0.0.1:8790').stream('t', 0, onEvent, abort.signal, 'lobby', onOpen)
+      .catch(error => { failure = error; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce();
+    const reason = new Error('切换客厅');
+    abort.abort(reason);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failure).toBe(reason);
+
+    const cancel = vi.fn();
+    respond(new Response(new ReadableStream({ cancel })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
   });
 
   it('半开流超时；收到 SSE 心跳会延后超时；停用会取消流', async () => {
     let writer: ReadableStreamDefaultController<Uint8Array>;
-    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
-      const body = new ReadableStream<Uint8Array>({ start(controller) {
-        writer = controller; init.signal.addEventListener('abort', () => controller.error(init.signal.reason));
-      } });
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { writer = controller; },
+        cancel,
+      });
       return new Response(body, { status: 200 });
     }));
-    let ended = false;
+    let failure: unknown;
     const abort = new AbortController();
-    const task = new ParlorClient('http://127.0.0.1:8790').stream('t', 0, () => {}, abort.signal).catch(e => e).finally(() => { ended = true; });
+    const client = new ParlorClient('http://127.0.0.1:8790');
+    void client.stream('t', 0, () => {}, abort.signal).catch(error => { failure = error; });
     await vi.advanceTimersByTimeAsync(30_000);
     writer!.enqueue(new TextEncoder().encode(': ping\n\n'));
-    await vi.advanceTimersByTimeAsync(30_000); expect(ended).toBe(false);
-    await vi.advanceTimersByTimeAsync(15_000); expect((await task).message).toContain('45 秒');
-    const stopped = new ParlorClient('http://127.0.0.1:8790').stream('t', 0, () => {}, abort.signal).catch(e => e);
-    await vi.advanceTimersByTimeAsync(0); abort.abort(); await stopped;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(failure).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(failure).toMatchObject({ message: expect.stringContaining('45 秒') });
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    void client.stream('t', 0, () => {}, abort.signal).catch(error => { failure = error; });
+    await vi.advanceTimersByTimeAsync(0);
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failure).toBe(abort.signal.reason);
+    expect(cancel).toHaveBeenCalledTimes(2);
   });
 });

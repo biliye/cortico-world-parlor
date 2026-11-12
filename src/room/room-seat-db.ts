@@ -17,7 +17,7 @@ import { withTransaction, type Db } from './db.ts';
 import { lockCooRows, lockRoomRow } from './storage/locks.ts';
 import { isCooId } from './ledger.ts';
 import { MAX_USER_ROOM_CAPACITY } from './schema.ts';
-import type { SeatKind, WakeTier } from './protocol.ts';
+import { isRoomId, type SeatKind, type WakeTier } from './protocol.ts';
 
 export const MIN_ROOM_CAPACITY = 2;
 /** 建厅/改容量的上限：普通客厅 30 人；大厅另由 HALL_CAPACITY 管，库级兜底 500。 */
@@ -33,7 +33,6 @@ export type RoomVisibility = 'public' | 'unlisted' | 'private';
 const ROOM_VISIBILITIES: readonly RoomVisibility[] = ['public', 'unlisted', 'private'];
 const SEAT_KINDS: readonly SeatKind[] = ['pet', 'human', 'observer'];
 const WAKE_TIERS: readonly WakeTier[] = ['full', 'digest', 'quiet', 'off'];
-const ROOM_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export type RoomSeatErrorCode =
   | 'invalid'
@@ -259,7 +258,7 @@ const cleanCapacity = (value: unknown): number => {
 
 const cleanRoomId = (value: unknown): string => {
   const id = typeof value === 'string' ? value.trim() : '';
-  if (!ROOM_ID.test(id)) throw new RoomSeatError('invalid', '客厅 id 只能用字母、数字、下划线、连字符，最多 64 个字');
+  if (!isRoomId(id)) throw new RoomSeatError('invalid', '客厅 id 只能用字母、数字、下划线、连字符，最多 64 个字');
   return id;
 };
 

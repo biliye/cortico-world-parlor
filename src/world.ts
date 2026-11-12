@@ -20,7 +20,7 @@ import { AmbientWakeBudget } from './wake-budget.ts';
 import { parseTableLink } from './room/table-discovery-db.ts';
 import { LocalHistory, type HistoryQuery } from './local-history.ts';
 import {
-  WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed,
+  WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed, isRoomId,
   type ActionRequest, type ActionResponse, type HallView, type InboxNews, type MeView,
   type RecruitTableHint, type RoomEvent, type RoomSnapshot, type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
@@ -232,7 +232,7 @@ export class ParlorWorld implements World {
     const room = this.currentRoom || cfg.room || DEFAULT_ROOM_ID;
     const tier = this.seat?.tier;
     return {
-      'parlor.room': typeof room === 'string' && /^[a-z0-9_-]{1,64}$/i.test(room) ? room : '请查询当前客厅',
+      'parlor.room': isRoomId(room) ? room : '请查询当前客厅',
       // 服务器返回的实际显示名走外部事件或查询结果，不进 system 前缀。
       'parlor.seat': this.baseSeatName(),
       'parlor.tier': tier && WAKE_TIERS.includes(tier) ? tier : cfg.wakeTier,
