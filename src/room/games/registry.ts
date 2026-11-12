@@ -1,5 +1,5 @@
 /**
- * 牌桌注册表：**加一张新桌子 = 写一个 GameDefinition，再在 GAME_LIST 里登记一行。**
+ * 多客厅牌桌注册表。接入新玩法的检查清单见 README。
  *
  * 一份定义同时管三件事，三处都从这里取，不再各写一份 if：
  * - 服务器：`TableHost` 用 `create()` 造引擎、用 `label` 写回执；`WorldServer` 用
@@ -7,12 +7,12 @@
  * - 通用 HTTP/World：动作说明、参数 Schema 与转换放在 `action` 里，
  *   `availableActions()` 根据本人私视图提供当前动作。新游戏不再添加工具。
  *   游戏目录与动作说明按需返回，不登记专属工具。
- * - 网页：`icon` 与 `label` 给牌桌栏/大厅卡片用（网页那份清单在
- *   `web-src/lib/games.ts`，加游戏时同样登记一行——两个运行时不能共享模块）。
+ * - 网页与 World：显示名和图标来自共用的 `game-labels.ts`。
  *
  * 旧单厅服务器（`kernel.ts`）仍只认 dice/ddz：它是自托管与回退用的老路，不跟着扩展。
  */
 import type { TableEngine, TableLogQuery } from '../table-engine.ts';
+import { GAME_PRESENTATION } from '../game-labels.ts';
 import { DiceTable } from '../table.ts';
 import { RANKS } from './doudizhu.ts';
 import { DoudizhuTable } from './doudizhu-table.ts';
@@ -99,8 +99,7 @@ export interface GameDefinition {
 const dice: GameDefinition = {
   id: 'dice',
   rated: true,
-  label: '骰子',
-  icon: 'dice',
+  ...GAME_PRESENTATION.dice,
   openHint: '等人坐下后用 parlor_table {op:"start"} 开始。',
   rules: ['每人两颗暗骰，回合中可重掷一颗或停牌，每人最多重掷两次。', '结束后揭晓骰子，点数和最高者获胜，同分并列；超时自动停牌。'],
   create: (ctx) => new DiceTable({
@@ -139,8 +138,7 @@ const dice: GameDefinition = {
 const ddz: GameDefinition = {
   id: 'ddz',
   rated: true,
-  label: '斗地主',
-  icon: 'cards',
+  ...GAME_PRESENTATION.ddz,
   openHint: '（3 席，空位由脚本陪练补）用 parlor_table {op:"start"} 开始；叫地主时会叫你。',
   rules: ['三席斗地主，先叫地主，再轮流出牌；地主独自对抗两名农民，先出完手牌的一方获胜。', '同型同长度比主牌，炸弹压普通牌，王炸最大；领出不能过牌。牌用点数表示，小王 SJ、大王 BJ。', '本人桌面提供手牌、可过判断及合法出牌建议，超时按服务端规则代打。'],
   create: (ctx) => new DoudizhuTable({ host: ctx.host, now: ctx.now, firstBidder: ctx.firstSeat }),
@@ -189,8 +187,7 @@ const ddz: GameDefinition = {
 const werewolf: GameDefinition = {
   id: 'werewolf',
   rated: true,
-  label: '狼人杀',
-  icon: 'moon',
+  ...GAME_PRESENTATION.werewolf,
   openHint: `开桌可选 6／9／12 席（默认 9），至少一只 Coo。坐满后用 parlor_table {op:"start"} 开局，届时会校验每只 Coo 的扩展版本 ≥ ${WEREWOLF_MIN_CLIENT}。`,
   rules: [
     '六、九或十二席狼人杀，服务端分配身份。本人桌面只显示获准知道的身份、查验与队内消息。',
@@ -291,8 +288,7 @@ const werewolf: GameDefinition = {
 const monopoly2d: GameDefinition = {
   id: 'monopoly2d',
   rated: true,
-  label: '快局大富翁',
-  icon: 'board',
+  ...GAME_PRESENTATION.monopoly2d,
   openHint: `（${MONOPOLY2D_SEATS} 席，坐满后由开桌的人开始）${DEFAULT_RULES.board.length} 格地图，${DEFAULT_RULES.rounds} 轮共 ${DEFAULT_RULES.rounds * MONOPOLY2D_SEATS} 手，最后按金币加地产估值排名。`,
   rules: ['轮到本人先掷骰，落在无主地产后决定购买或放弃，其他落点按服务端规则结算。地图和总轮数以当前桌面为准。', '动作必须带本人桌面的 turnNo；购买与掷骰是两个操作阶段。', '终局按现金加地产原价 85% 的合计估值排名，同分并列。'],
   create: (ctx) => new Monopoly2dTable({
@@ -345,8 +341,7 @@ const monopoly2d: GameDefinition = {
 const gomoku: GameDefinition = {
   id: 'gomoku',
   rated: true,
-  label: '五子棋',
-  icon: 'board',
+  ...GAME_PRESENTATION.gomoku,
   openHint: '两席坐满后开局，谁执黑由开局随机决定。',
   rules: ['十五乘十五棋盘，开局随机决定谁执黑先行，之后双方轮流在空格落子；行列从 0 到 14。', '横、竖或斜向连续至少五子获胜，棋盘下满仍无赢家则和棋；本人桌面提供落点建议。', '轮到自己时可以认输，对面直接获胜并正常结算。'],
   create: ({ host, turnMs, firstSeat }) => new GomokuTable(host, turnMs, firstSeat),
@@ -393,7 +388,7 @@ const xiangqiPointSchema = {
 };
 
 const xiangqi: GameDefinition = {
-  id: 'xiangqi', rated: true, label: '中国象棋', icon: 'board',
+  id: 'xiangqi', rated: true, ...GAME_PRESENTATION.xiangqi,
   openHint: '两席坐满后由桌主开局，随机分红黑，红方先行。',
   rules: [
     '九列十行，红先黑后。行 0–9 从黑方底线到红方底线，列 0–8 从棋盘左至右，双方使用同一套坐标。',
@@ -429,7 +424,7 @@ const xiangqi: GameDefinition = {
 };
 
 const aeroplane: GameDefinition = {
-  id: 'aeroplane', rated: false, label: '飞行棋', icon: 'board',
+  id: 'aeroplane', rated: false, ...GAME_PRESENTATION.aeroplane,
   openHint: '2–4 人，由桌主开局。掷 6 起飞并获得一次再掷机会。',
   rules: AEROPLANE_RULES,
   create: ({ host, turnMs }) => new AeroplaneTable({ host, turnMs }),

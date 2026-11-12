@@ -1,13 +1,15 @@
-/**
- * 牌桌注册表：新增一张桌子只登记一条。这里盯住「三处确实都从同一份清单来」，
- * 免得以后加游戏时又回到 World/server/web 各写一份。
- */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { GAME_PRESENTATION, gameLabelOf as historyGameLabelOf } from '../src/room/game-labels.ts';
 import {
   GAME_LIST, gameByActionType, gameById, gameIds, gameLabelOf,
 } from '../src/room/games/registry.ts';
 import { PARLOR_TOOL_DECLS } from '../src/world.ts';
 import { operationHelp } from '../src/tool-contract.ts';
+import { GAMES } from '../web-src/lib/games.ts';
+
+// 检查真实组件注册表的接线，SFC 的编译由 build:web 验证。
+vi.mock('../web-src/components/games/DdzGame.vue', () => ({ default: {} }));
+vi.mock('../web-src/components/games/WerewolfGame.vue', () => ({ default: {} }));
 
 describe('牌桌注册表', () => {
   it('每个游戏一条登记，id / 动作类型 / 工具名不撞', () => {
@@ -31,6 +33,26 @@ describe('牌桌注册表', () => {
       expect(engine.label).toBe(game.label);
       expect(engine.seatIds()).toEqual(['seat-1']);
     }
+  });
+
+  it('服务端登记、网页目录和桌面渲染一一对应，旧长局可查看', async () => {
+    // 网页模块在 Vitest 中加载，服务端 tsc 仍使用无 DOM 的配置。
+    const { componentFor } = await vi.importActual<{ componentFor(game: string): unknown }>(
+      '../web-src/lib/game-components.ts',
+    );
+    const { mountFor } = await vi.importActual<{ mountFor(game: string): unknown }>(
+      '../web-src/lib/legacy-games.ts',
+    );
+    expect(Object.keys(GAME_PRESENTATION).sort()).toEqual(gameIds().sort());
+    expect(Object.keys(GAMES).sort()).toEqual([...gameIds(), 'monopoly'].sort());
+    for (const { id, label, icon } of GAME_LIST) {
+      expect(GAMES[id], id).toMatchObject({ label, icon });
+      expect(historyGameLabelOf(id), id).toBe(label);
+      expect(Boolean(componentFor(id)) !== Boolean(mountFor(id)), id).toBe(true);
+    }
+    expect(GAMES.monopoly.enabled).toBe(false);
+    expect(componentFor('monopoly')).toBeNull();
+    expect(mountFor('monopoly')).toBeTypeOf('function');
   });
 
   it('动作类型能来回查，工具参数能翻成 /v1/action body', () => {

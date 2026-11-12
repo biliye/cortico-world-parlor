@@ -77,7 +77,23 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     expect(catalog.protocol).toBe('parlor.game.v1');
     expect(catalog.games).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'gomoku' })]));
     const desc = await a.client.games(a.token, { op: 'describe', game: 'gomoku' }, 'lobby');
-    expect(desc.game).toMatchObject({ id: 'gomoku', revisionMode: 'strict', actions: [{ action: 'place', parameters: { required: ['row', 'col'] } }] });
+    expect(desc.game).toMatchObject({
+      id: 'gomoku',
+      revisionMode: 'strict',
+      actions: [
+        {
+          action: 'place',
+          parameters: {
+            additionalProperties: false,
+            properties: {
+              row: { type: 'integer', minimum: 0, maximum: 14 },
+              col: { type: 'integer', minimum: 0, maximum: 14 },
+            },
+          },
+        },
+        { action: 'resign' },
+      ],
+    });
     await expect(a.client.games(a.token, { op: 'describe', game: 'nope' }, 'lobby')).rejects.toMatchObject({ status: 404 });
     const room = (await a.client.createRoom({ name: '另一个客厅', visibility: 'public' }, a.token)).room;
     await expect(a.client.games(a.token, { op: 'state' }, room.id)).rejects.toMatchObject({ status: 401 });
@@ -89,32 +105,35 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     const table = opened.tableId!;
     await b.client.action(b.token, { type: 'table_join', table, requestId: 'join' }, 'lobby');
     await a.client.action(a.token, { type: 'table_start', table, requestId: 'start' }, 'lobby');
-    const state = await a.client.games(a.token, { op: 'state' }, 'lobby') as Record<string, any>;
-    expect(state.availableActions).toMatchObject([{ action: 'place' }]);
+    const read = async (player: typeof a) =>
+      await player.client.games(player.token, { op: 'state', table }, 'lobby') as Record<string, any>;
+    const [aState, bState] = await Promise.all([read(a), read(b)]);
+    const [black, white, state] = aState.tablePrivate.canAct ? [a, b, aState] : [b, a, bState];
+    expect(state.availableActions).toMatchObject([{ action: 'place' }, { action: 'resign' }]);
     expect(state.game.actions).toBeUndefined();
     expect(state.tables[0].board).toBeUndefined();
     const body = { type: 'game_action', table, action: 'place', params: { row: 7, col: 7 }, requestId: 'place', revision: state.table.revision };
-    expect((await post(a.token, { ...body, revision: body.revision - 1 })).status).toBe(409);
-    expect((await post(a.token, { ...body, revision: undefined })).status).toBe(400);
+    expect((await post(black.token, { ...body, revision: body.revision - 1 })).status).toBe(409);
+    expect((await post(black.token, { ...body, revision: undefined })).status).toBe(400);
     for (const params of [{ row: '7', col: 7 }, { row: 99, col: 7 }, { row: 7 }, { row: 7, col: 7, player_id: 'other' }]) {
-      expect((await post(a.token, { ...body, params })).status).toBe(400);
+      expect((await post(black.token, { ...body, params })).status).toBe(400);
     }
-    expect((await post(a.token, { ...body, player_id: 'other' })).status).toBe(400);
-    expect((await post(a.token, { ...body, requestId: '' })).status).toBe(400);
+    expect((await post(black.token, { ...body, player_id: 'other' })).status).toBe(400);
+    expect((await post(black.token, { ...body, requestId: '' })).status).toBe(400);
     expect((await post(c.token, body)).status).toBe(403);
-    const first = await post(a.token, body);
+    const first = await post(black.token, body);
     expect(first.status).toBe(200);
     expect(first.body).toMatchObject({ protocol: 'parlor.game.v1', tableId: table, requestId: 'place', revision: body.revision + 1 });
     expect(first.body.table).toBeUndefined();
     expect(first.body.tablePrivate).toBeUndefined();
-    expect((await post(a.token, body)).body).toEqual(first.body);
-    expect((await post(a.token, { ...body, params: { row: 6, col: 6 } })).status).toBe(409);
-    expect((await post(b.token, { ...body, requestId: 'stale-white', params: { row: 8, col: 8 } })).status).toBe(409);
-    const white = await b.client.games(b.token, { op: 'state', table }, 'lobby') as Record<string, any>;
-    await b.client.action(b.token, { type: 'gomoku_action', table, row: 8, col: 8, revision: white.table.revision, requestId: 'legacy-white' }, 'lobby');
-    const after = await a.client.games(a.token, { op: 'state', table }, 'lobby') as Record<string, any>;
+    expect((await post(black.token, body)).body).toEqual(first.body);
+    expect((await post(black.token, { ...body, params: { row: 6, col: 6 } })).status).toBe(409);
+    expect((await post(white.token, { ...body, requestId: 'stale-white', params: { row: 8, col: 8 } })).status).toBe(409);
+    const whiteState = await read(white);
+    await white.client.action(white.token, { type: 'gomoku_action', table, row: 8, col: 8, revision: whiteState.table.revision, requestId: 'legacy-white' }, 'lobby');
+    const after = await read(black);
     expect(after.table.revision).toBe(body.revision + 2);
-    expect(after.availableActions).toMatchObject([{ action: 'place' }]);
+    expect(after.availableActions).toMatchObject([{ action: 'place' }, { action: 'resign' }]);
   });
 
   it('暗骰只给本人；查看别桌不会夹带本人原桌的暗骰', async () => {
