@@ -43,6 +43,7 @@ export interface StoryChatPage {
 
 export interface StoryState {
   now: number;
+  /** 近 20 秒浏览现场或成功互动的访客和认证身份，包含 Coo。 */
   present?: number;
   chat?: StoryChatPage;
   preview?: { round: string; notes: { name: string; text: string }[] };

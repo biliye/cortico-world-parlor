@@ -8,9 +8,23 @@ import { CooAccountDb } from '../src/room/coo-account-db.ts';
 import { createRoom } from '../src/room/room-seat-db.ts';
 import { StoryDb } from '../src/room/story-db.ts';
 import { STORY_PRESENCE_MS, STORY_RETENTION_MS, STORY_TALK_MS, STORY_TOTAL_MS } from '../src/room/story-protocol.ts';
+import { StoryPresence } from '../src/room/story-routes.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
+
+it('匿名记录达到上限时仍续期已有访客和认证身份，到期后可接纳新访客', () => {
+  let now = 0;
+  const presence = new StoryPresence(() => now);
+  for (let index = 0; index < 5_000; index++) presence.count(undefined, String(index));
+  expect(presence.count(undefined, 'overflow')).toBe(5_000);
+  now++;
+  expect(presence.count(undefined, '0')).toBe(5_000);
+  expect(presence.count('authenticated')).toBe(5_001);
+  now = STORY_PRESENCE_MS;
+  expect(presence.count()).toBe(2);
+  expect(presence.count(undefined, 'overflow')).toBe(3);
+});
 
 it('说书厅在场人数按身份和访客去重，停止轮询后到期', async () => {
   let now = Date.now();
@@ -31,15 +45,19 @@ it('说书厅在场人数按身份和访客去重，停止轮询后到期', asyn
     const { token } = await client.join('story-invite', { name: '阿岚', kind: 'human' }, 'lobby');
     const joined = await fetch(`${url}?visitor=${visitor}`, { headers: { authorization: `Bearer ${token}` } });
     expect(await joined.json()).toMatchObject({ present: 1 });
+    // 另一未登录的页面继续轮询时，仍算作独立的匿名访客。
     expect(await watch(visitor)).toMatchObject({ present: 2 });
     expect(await client.storyLive(token)).toMatchObject({ present: 2 });
     expect(await client.storyLive(token)).toMatchObject({ present: 2 });
+    now++;
     expect(await client.storyAction(token, { action: 'start' })).toMatchObject({ present: 2, round: { speaking: true } });
 
-    now += STORY_PRESENCE_MS - 1;
+    now += STORY_PRESENCE_MS - 2;
     const during = await watch(visitor);
     expect(during).toMatchObject({ present: 2, round: { speaking: false } });
     expect(during).not.toHaveProperty('chat');
+    now++;
+    expect(await fetch(url).then(response => response.json())).toMatchObject({ present: 2 });
     now++;
     expect(await fetch(url).then(response => response.json())).toMatchObject({ present: 1 });
     now += STORY_PRESENCE_MS;

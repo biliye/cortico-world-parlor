@@ -223,7 +223,7 @@ const roomSummary = async (db: Db, room: RoomRow) => {
 
 export class WorldServer {
   private readonly story: StoryDb;
-  private readonly storyPresence = new StoryPresence();
+  private readonly storyPresence: StoryPresence;
   private readonly db: Db;
   private readonly operatorHash?: Buffer;
   private readonly identityAuthority?: string;
@@ -285,6 +285,7 @@ export class WorldServer {
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.story = new StoryDb(db, this.now, () => this.hallId);
+    this.storyPresence = new StoryPresence(options.now);
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.ratingBoards = new RatingBoards(db, this.now);
     this.recruitSnapshot = new RecruitSnapshot(db, this.now);
@@ -818,7 +819,6 @@ export class WorldServer {
       return serveStoryRoute(req, res, url, {
         story: this.story,
         presence: this.storyPresence,
-        now: this.now,
         cooOrSeat: () => this.cooOrSeat(req),
         parentCooId: async () => (await this.parentSession(req)).account.cooId,
         actorName: async (id) => (await activeSeatForCoo(this.db, id))?.name || await this.coo.cooDisplayName(id) || '茶客',

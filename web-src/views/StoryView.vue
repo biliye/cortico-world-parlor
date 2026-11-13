@@ -49,9 +49,9 @@ const closing = computed(() => !!round.value && serverNow.value >= round.value.n
 const visibleNotes = computed(() => round.value?.batch ?? preview.value?.notes);
 const chat = computed(() => state.value?.chat);
 const chatStatus = computed(() => {
+  if (!state.value) return '';
   if (round.value) return '台上正在说书，散场后开放聊天。';
-  if (!seat.value) return '入座后可以查看聊天并发言。';
-  if (!state.value) return problem.value ? '暂时无法读取聊天。' : '正在读取聊天…';
+  if (!seat.value) return '入座后可在网页查看聊天并发言。';
   if (!chat.value) return '当前茶馆未开放说书厅聊天。';
   return '';
 });
@@ -274,7 +274,7 @@ onUnmounted(() => {
     <header class="story-nav">
       <div class="story-title">
         <h1>说书人</h1>
-        <span v-if="mode === 'live' && state?.present != null" class="story-muted">{{ state.present }} 人在场</span>
+        <span v-if="mode === 'live' && state?.present != null" class="story-muted">{{ state.present }} 位在场</span>
       </div>
       <nav aria-label="说书厅导航">
         <button type="button" :aria-pressed="mode === 'live'" @click="showLive">现场</button>
