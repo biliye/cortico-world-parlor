@@ -237,6 +237,7 @@ export class WorldServer {
   /** 招募快照按网关共享 30 秒：132 个 Coo 每分钟要的是同一份，不必各查一次。 */
   private readonly recruitSnapshot: RecruitSnapshot;
   private readonly now: () => number;
+  private readonly startedAt = performance.now();
   private readonly defaultRoomId: string;
   private readonly inviteCode: string;
   private readonly allowGuestJoin: boolean;
@@ -959,6 +960,7 @@ export class WorldServer {
         version: PACKAGE_VERSION,
         protocol: 2,
         storage: 'postgres',
+        uptimeSeconds: Math.floor((performance.now() - this.startedAt) / 1000),
         capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled','storyteller-v1'],
         ...(this.identityAuthority ? { globalIdentity: { authority: this.authorityUrl(), audience: this.audienceUrl() } } : {}),
         guestJoin: this.allowGuestJoin,

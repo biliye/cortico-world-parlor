@@ -36,7 +36,7 @@ watch(() => props.art, warmArt);
     :class="classes"
     :style="style"
     :disabled="!clickable"
-    :aria-pressed="clickable ? String(!!selected) : undefined"
+    :aria-pressed="clickable ? !!selected : undefined"
     :aria-label="clickable ? cardLabel(card) : undefined"
     @click="clickable && $emit('pick')"
   >{{ cardLabel(card) }}</button>

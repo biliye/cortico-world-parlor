@@ -51,14 +51,6 @@ vi.mock('../web-src/stores/view.ts', async () => {
   return { watchTableId: ref(''), backToRoom: vi.fn(), enterTable: vi.fn(), readView: vi.fn() };
 });
 
-class Stream {
-  onopen?: () => void;
-  onmessage?: (message: { data: string }) => void;
-  onerror?: () => void;
-  constructor(readonly url: string) {}
-  close() {}
-}
-
 let store: any;
 let session: any;
 let client: any;
@@ -75,7 +67,7 @@ beforeEach(async () => {
   });
   vi.stubGlobal('performance', { getEntriesByType: () => [] });
   vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
-  vi.stubGlobal('EventSource', Stream);
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
   vi.stubGlobal('window', { setTimeout, clearTimeout });
   // 计算式 import 让 Node 侧 tsconfig 不把整套 DOM 源码纳入服务端类型检查。
   const sessionPath = '../web-src/stores/session.ts';

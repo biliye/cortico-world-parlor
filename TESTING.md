@@ -16,6 +16,10 @@
 
 ## 发布包装载检查
 
+修改 `package.json` 里的版本后运行 `pnpm sync:version`，同步客户端版本和网页资源版本。构建与 CI 会检查同步结果。
+
+私有部署附带包外牌图时，在可信素材目录执行 `node scripts/check-deploy-assets.mjs --record <部署目录>`，保留生成的 `deploy-manifest.json`。部署候选复制已记录的清单和素材后，切换服务前执行 `node scripts/check-deploy-assets.mjs --check <候选目录>`。缺清单、缺素材或哈希不符时停止切换。公开包继续通过 `check:release` 验证限制分发的牌图未入包。
+
 从源码目录用 pnpm 生成两份候选包。World 打包时会去掉源码开发命令，只保留 `serve`。两份 tarball 使用同一版本，在同一批发布中用 `npm publish <已验证的 tarball>` 分别上传。
 
 ```sh

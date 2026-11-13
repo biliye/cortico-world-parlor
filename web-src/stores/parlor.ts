@@ -29,7 +29,7 @@ export const bootError = ref('');
 export const log = ref<ChatEvent[]>([]);
 export const roomTransition = ref<{ from: string; to: string; name: string; error: string } | null>(null);
 
-let stream: EventSource | null = null;
+let stream: AbortController | null = null;
 /**
  * 地址栏里那把家长钥匙的页内副本。
  *
@@ -465,46 +465,69 @@ export async function syncLocation(): Promise<boolean> {
 }
 
 export function connect(refreshOnOpen = true): void {
-  if (!seat.value) return;
+  const currentSeat = seat.value;
+  if (!currentSeat) return;
   disconnect();
   connection.value = 'connecting';
-  const source = new EventSource(scopedPath('/v1/stream?cap=seat-location-v1&since=' + latest.value + '&token=' + encodeURIComponent(seat.value.token)));
+  const source = new AbortController();
   stream = source;
-  source.onopen = () => {
-    if (stream !== source) return;
+  const path = scopedPath('/v1/stream?cap=seat-location-v1&since=' + latest.value);
+  void readRoomStream(path, currentSeat.token, source, refreshOnOpen);
+}
+
+async function readRoomStream(path: string, token: string, source: AbortController, refreshOnOpen: boolean): Promise<void> {
+  let watchdog: number | undefined;
+  const arm = () => {
+    window.clearTimeout(watchdog);
+    watchdog = window.setTimeout(() => source.abort(), 45_000);
+  };
+  try {
+    arm();
+    const response = await fetch(path, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+      signal: source.signal,
+    });
+    if (stream !== source || !response.ok || !response.body) return;
     connection.value = 'on';
     reconnectFailures = 0;
     if (refreshOnOpen) scheduleRefresh();
     else if (snapshot.value && seat.value && snapshot.value.id === seat.value.room) {
-      // 首屏刚取过；连接确认后只补上本人在线状态，避免又拉一次整厅。
       snapshot.value = { ...snapshot.value, online: [...new Set([...(snapshot.value.online || []), seat.value.seatId])] };
     }
-  };
-  source.onmessage = (message) => {
-    if (stream !== source) return;
-    let event: { seq?: number; type?: string };
-    try {
-      event = JSON.parse(message.data);
-    } catch {
-      return;
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = '';
+    while (stream === source) {
+      const { value, done } = await reader.read();
+      if (done || stream !== source) return;
+      arm();
+      buffer += value;
+      let boundary: RegExpExecArray | null;
+      while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+        const data = buffer.slice(0, boundary.index).split(/\r?\n/)
+          .filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        if (!data) continue;
+        try { handleEvent(JSON.parse(data) as ChatEvent); } catch { /* Ignore an invalid event. */ }
+      }
     }
-    handleEvent(event);
-  };
-  source.onerror = () => {
-    if (stream !== source) return;
-    connection.value = 'off';
-    source.close();
-    if (stream === source) stream = null;
-    const delay = Math.min(30000, 3000 * 2 ** Math.min(reconnectFailures++, 4)) + Math.floor(Math.random()*1500);
-    reconnectTimer = window.setTimeout(() => { void syncLocation().then(() => { if (seat.value && !stream) connect(); }); }, delay);
-  };
+  } catch { /* The current stream reconnects below. */ }
+  finally {
+    window.clearTimeout(watchdog);
+    source.abort();
+    if (stream === source) {
+      stream = null;
+      connection.value = 'off';
+      const delay = Math.min(30000, 3000 * 2 ** Math.min(reconnectFailures++, 4)) + Math.floor(Math.random() * 1500);
+      reconnectTimer = window.setTimeout(() => { void syncLocation().then(() => { if (seat.value && !stream) connect(); }); }, delay);
+    }
+  }
 }
 
 export function disconnect(): void {
   window.clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
   if (stream) {
-    stream.close();
+    stream.abort();
     stream = null;
   }
   connection.value = 'idle';

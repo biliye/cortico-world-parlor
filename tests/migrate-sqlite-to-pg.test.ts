@@ -102,7 +102,7 @@ describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
       const target = await openStorage({ storage: 'postgres', url });
       try {
         const row = await target.prepare('SELECT * FROM table_discovery WHERE table_id=?').get(tableId);
-        expect(row).toEqual(legacy ? undefined : { table_id: tableId, match_open: 1, recruit_text: '迁库后继续招募', author_coo_id: A, updated_at: 1_770_000_000_000 });
+        expect(row).toEqual(legacy ? undefined : { table_id: tableId, match_open: 1, recruit_text: '迁库后继续招募', author_coo_id: A, updated_at: 1_770_000_000_000, recruit_version: 0 });
         const receipt = await target.prepare('SELECT receipt_json, source_token_hash FROM table_entry_receipts WHERE request_id=?').get('entry-1');
         expect(receipt).toEqual(legacy ? undefined : { receipt_json: '{"tableId":"retained"}', source_token_hash: 'source-hash' });
       } finally { await target.close(); }
@@ -120,6 +120,10 @@ describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
         const item = await support.submit(A, '阿岚', '持久反馈', 'request-1');
         await support.reply(item.id, '已处理', 'closed');
         await support.announce('迁库公告', 'notice-1');
+        await db.exec(`INSERT INTO news_items (id, issue_date, title, summary, body, publish_at, created_at, revision, updated_at, publish_id)
+          VALUES ('news-test', '2026-11-13', '茶室小报', '摘要', '正文', 100, 50, 2, 80, 'pub-test');
+          INSERT INTO support_audit (id, at, action, target_id, after_json)
+          VALUES ('audit-test', 80, 'news.edit', 'news-test', '{"title":"茶室小报"}');`);
       }
       await db.close();
       const url = await targetUrl();
@@ -133,6 +137,10 @@ describe.skipIf(!pgTestEnabled())('SQLite → PostgreSQL 迁移', () => {
         } else {
           expect((await support.feedback(A))[0]).toMatchObject({ text: '持久反馈', reply: '已处理', status: 'closed' });
           expect((await support.announcements())[0].text).toBe('迁库公告');
+          expect(await target.prepare('SELECT title, revision, publish_id FROM news_items WHERE id = ?').get('news-test'))
+            .toEqual({ title: '茶室小报', revision: 2, publish_id: 'pub-test' });
+          expect(await target.prepare('SELECT after_json FROM support_audit WHERE id = ?').get('audit-test'))
+            .toEqual({ after_json: '{"title":"茶室小报"}' });
         }
       } finally { await target.close(); }
     }

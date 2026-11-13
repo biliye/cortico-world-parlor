@@ -222,7 +222,7 @@ html.vue-app .topbar .brand {
 html.vue-app .brand b { font-size: 21px; font-weight: 700; letter-spacing: .06em; }
 html.vue-app .brand span { font-family: var(--num); font-size: 9px; letter-spacing: .3em; color: var(--muted); }
 html.vue-app .topbar .room-pill {
-  display: inline-flex !important;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   height: 32px;

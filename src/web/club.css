@@ -30,7 +30,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { 
 .brand-mark .icon { width:40px; height:40px; stroke-width:1.6; }
 .brand-name { font-size:23px; font-weight:600; letter-spacing:3px; }
 .brand-sub { display:block; color:var(--muted); font-size:8px; letter-spacing:1.2px; margin-top:5px; }
-.room-pill,.view-switch { display:none!important; }
+.view-switch { display:none; }
 .top-right { margin-left:auto; gap:14px; flex-shrink:0; }
 .top-me { border:0; padding:0; gap:8px; }
 .top-me-name { max-width:110px; font-size:12px; }
@@ -146,7 +146,7 @@ input::placeholder,textarea::placeholder { color:#92a69a; }
 .club-room-card { position:relative; border:1px solid #354b3e; background:#1a2a27; border-radius:14px; overflow:hidden; transition:border-color .2s,transform .2s; min-width:0; }
 .club-room-card:hover { border-color:#6d8b5d; transform:translateY(-2px); }
 .club-room-card>.club-scene { border-radius:0; }
-.club-favorite { position:absolute; right:10px; top:10px; z-index:2; padding:0; min-height:30px; width:30px; border-radius:50%; background:#14251fcc!important; font-size:20px; border:1px solid #8ea47a55; color:var(--accent); }
+.club-favorite { position:absolute; right:10px; top:10px; z-index:2; padding:0; min-height:30px; width:30px; border-radius:50%; background:#14251fcc; font-size:20px; border:1px solid #8ea47a55; color:var(--accent); }
 .club-room-copy { padding:18px 16px; }.club-room-copy h3 { font-weight:550; font-size:17px; margin:11px 0; overflow-wrap:anywhere; }
 .club-room-copy>p { color:var(--muted); font-size:10px; line-height:1.8; min-height:36px; }
 .club-room-foot { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; border-top:1px solid var(--line); padding-top:13px; margin-top:15px; font-size:10px; color:#b6c9a5; }

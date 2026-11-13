@@ -43,13 +43,18 @@ function pointFor(colour: number, progress: number, plane: number): Point {
   return circuit[trackIndex(colour, progress)];
 }
 
-const table = computed(() => props.view.table);
+const table = computed(() => props.view.table as GameView['table'] & {
+  winners?: string[];
+  last?: { text: string; die: number };
+  phase?: 'await_roll' | 'await_move';
+  die?: number;
+});
 const seats = computed(() => (table.value.seats || []) as Seat[]);
 const mySeat = computed(() => seats.value.find(seat => seat.id === props.view.me.id));
 const turn = computed(() => seats.value.find(seat => seat.id === table.value.turn));
 const winner = computed(() => seats.value.find(seat => table.value.winners?.includes(seat.id)));
 const yours = computed(() => !table.value.frozen && props.view.priv?.yourTurn === true && turn.value?.id === mySeat.value?.id);
-const last = computed(() => table.value.last as { text: string; die: number } | null);
+const last = computed(() => table.value.last);
 const die = computed(() => table.value.phase === 'await_roll' ? 0 : Number(table.value.die ?? last.value?.die ?? 0));
 const moves = computed(() => yours.value && table.value.phase === 'await_move' ? (props.view.priv?.moves as AeroplaneMove[] ?? []) : []);
 const canRoll = computed(() => yours.value && table.value.phase === 'await_roll');

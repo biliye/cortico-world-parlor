@@ -20,11 +20,18 @@ vi.mock('../web-src/stores/view.ts', async () => {
 
 class Stream {
   static last: Stream;
-  onmessage?: (message: { data: string }) => void;
-  url: string;
-  constructor(url: string) { this.url = url; Stream.last = this; }
-  close() {}
-  emit(seq: number, type = 'parlor.table.action') { this.onmessage?.({ data: JSON.stringify({ seq, type }) }); }
+  private resolve!: (response: Response) => void;
+  readonly response = new Promise<Response>(resolve => { this.resolve = resolve; });
+  private controller!: ReadableStreamDefaultController<Uint8Array>;
+  private readonly body = new ReadableStream<Uint8Array>({ start: controller => { this.controller = controller; } });
+  constructor(readonly url: string, readonly token: string, readonly signal: AbortSignal) { Stream.last = this; }
+  onopen() { this.resolve(new Response(this.body)); }
+  onerror() { if (!this.signal.aborted) this.resolve(new Response(null, { status: 503 })); }
+  onmessage(message: { data: string }) {
+    this.onopen();
+    this.controller.enqueue(new TextEncoder().encode(`data: ${message.data}\n\n`));
+  }
+  emit(seq: number, type = 'parlor.table.action') { this.onmessage({ data: JSON.stringify({ seq, type }) }); }
 }
 const table = (revision: number, id = 't1') => ({ game: 'ddz', status: 'playing', tableId: id, revision });
 const patch = (revision: number, seq = revision) => ({
@@ -45,7 +52,8 @@ beforeEach(async () => {
   vi.resetModules();
   vi.useFakeTimers();
   vi.stubGlobal('window', { setTimeout, clearTimeout });
-  vi.stubGlobal('EventSource', Stream);
+  vi.stubGlobal('fetch', vi.fn((path: string, init: RequestInit) => new Stream(path,
+    new Headers(init.headers).get('Authorization') ?? '', init.signal!).response));
   vi.stubGlobal('location', { pathname: '/play', search: '?room=room1', hash: '', reload: vi.fn(), assign: navigation.assign });
   vi.stubGlobal('history', { state: null, pushState: navigation.pushState, replaceState: navigation.replaceState });
   mocks.api.mockReset(); mocks.toast.mockReset();
@@ -94,7 +102,8 @@ describe('H2/H3：多个窗口跟随最新席位', () => {
     expect(store.snapshot.value.id).toBe('hall');
     expect(store.log.value).toEqual([]);
     expect(address.search).toBe('?room=hall');
-    expect(Stream.last.url).toContain('new-token');
+    expect(Stream.last.token).toBe('Bearer new-token');
+    expect(Stream.last.url).not.toContain('new-token');
     expect(session.saveSeat).not.toHaveBeenCalled();
     expect(mocks.api.mock.calls.some(([path]) => path.endsWith('/switch'))).toBe(false);
     expect(address.reload).not.toHaveBeenCalled();
@@ -104,7 +113,7 @@ describe('H2/H3：多个窗口跟随最新席位', () => {
     store.log.value = [{ seq: 1, text: '仍在当前牌桌' }];
     stored = nextSeat('room1', 'rotated', 's1'); changed();
     await vi.advanceTimersByTimeAsync(0);
-    expect(Stream.last.url).toContain('rotated');
+    expect(Stream.last.token).toBe('Bearer rotated');
     expect(address.search).toContain('table=t1');
     expect(store.log.value[0].text).toBe('仍在当前牌桌');
   });
@@ -114,7 +123,7 @@ describe('H2/H3：多个窗口跟随最新席位', () => {
     stored = nextSeat(); (old as any).onerror();
     await vi.advanceTimersByTimeAsync(5000);
     const current = Stream.last;
-    expect(current.url).toContain('new-token');
+    expect(current.token).toBe('Bearer new-token');
     expect(session.seat.value.room).toBe('hall');
     (old as any).onerror();
     await vi.advanceTimersByTimeAsync(35000);
@@ -214,6 +223,7 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
     chat.noteChatEvent.mockClear();
     store.connect();
     Stream.last.onmessage?.({ data: JSON.stringify({ ...hidden, seq: 12 }) });
+    await vi.advanceTimersByTimeAsync(0);
     expect(store.latest.value).toBe(12);
     expect(chat.noteChatEvent).not.toHaveBeenCalled();
     expect(store.log.value.map((event:any) => event.text)).toEqual(['进入一次']);
@@ -266,7 +276,7 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
   it('自己动作的 SSE 先到也等回执覆盖，不重复拉 room 或 table', async () => {
     const post = deferred();
     mocks.api.mockReturnValue(post.promise);
-    store.connect();
+    store.connect(false);
     const action = store.act({ type: 'ddz_action', move: 'pass' });
     Stream.last.emit(2); Stream.last.emit(3, 'parlor.table.turn');
     await vi.advanceTimersByTimeAsync(200);
@@ -280,7 +290,7 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
 
   it('其他人的一批牌桌事件只拉一次 table 增量', async () => {
     mocks.api.mockResolvedValue({ ...patch(3), tables: [table(3)] });
-    store.connect();
+    store.connect(false);
     Stream.last.emit(2); Stream.last.emit(3, 'parlor.table.turn');
     await vi.advanceTimersByTimeAsync(300);
     expect(tableCalls()).toHaveLength(1);
@@ -291,7 +301,7 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
   it('在途旧 table 响应不能覆盖更新的动作回执', async () => {
     const old = deferred();
     mocks.api.mockImplementation((path) => path === '/v1/table' ? old.promise : Promise.resolve(patch(4)));
-    store.connect(); Stream.last.emit(2);
+    store.connect(false); Stream.last.emit(2);
     await vi.advanceTimersByTimeAsync(120);
     await store.act({ type: 'ddz_action', move: 'pass' });
     old.resolve(patch(2));
@@ -348,7 +358,7 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
   it('旧服务器无 table 接口时回退一次完整快照', async () => {
     mocks.api.mockImplementation(path => path === '/v1/table'
       ? Promise.reject(Object.assign(new Error('not found'), { status: 404 })) : Promise.resolve(snap(2)));
-    store.connect(); Stream.last.emit(2);
+    store.connect(false); Stream.last.emit(2);
     await vi.advanceTimersByTimeAsync(500);
     expect(tableCalls()).toHaveLength(1);
     expect(roomCalls()).toHaveLength(1);
@@ -365,7 +375,7 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
 
   it('table 接口只返回 ok 时也回退完整快照，不误标已同步', async () => {
     mocks.api.mockImplementation(path => Promise.resolve(path === '/v1/table' ? { ok: true } : snap(2)));
-    store.connect(); Stream.last.emit(2);
+    store.connect(false); Stream.last.emit(2);
     await vi.advanceTimersByTimeAsync(500);
     expect(tableCalls()).toHaveLength(1);
     expect(roomCalls()).toHaveLength(1);

@@ -48,6 +48,7 @@ export interface Snapshot {
   seats?: HallSeat[];
   maxSeats?: number;
   online?: string[];
+  mailUnread?: number;
   tables?: TableSummary[];
   table?: TableSummary | null;
   tablePrivate?: { tableId?: string; id?: string; revision?: number } | null;
@@ -62,6 +63,7 @@ export interface TableSeat {
 }
 
 export interface TableSummary {
+  frozen?: boolean;
   startBlockers?: string[];
   requireHuman?: boolean;
   capacity?: number;
