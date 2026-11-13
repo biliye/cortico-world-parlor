@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { StoryChatPage } from '../../src/room/story-protocol.ts';
 import { api, ApiError } from '../api/client.ts';
 
-const props = defineProps<{ live?: StoryChatPage; archiveId?: string }>();
+const props = defineProps<{ live?: StoryChatPage; archiveId?: string; status?: string }>();
 const archive = ref<StoryChatPage>();
 const earlier = ref<StoryChatPage>();
 const loading = ref(false);
@@ -64,12 +64,13 @@ onUnmounted(() => { alive = false; });
 </script>
 
 <template>
-  <section v-if="page || error" class="story-chat" aria-label="说书厅聊天">
+  <section v-if="page || error || status" class="story-chat" aria-label="说书厅聊天">
     <h3>{{ page?.round ? `《${page.round.title}》散场讨论` : '说书厅聊天' }}</h3>
     <button v-if="before" type="button" :disabled="loading" @click="load(true)">更早的消息</button>
     <button v-if="error && !page" type="button" :disabled="loading" @click="load()">重试</button>
     <p v-if="error" role="alert">{{ error }}</p>
-    <ol v-if="messages.length" ref="log" class="story-chat-log" tabindex="0">
+    <p v-if="status">{{ status }}</p>
+    <ol v-else-if="messages.length" ref="log" class="story-chat-log" tabindex="0">
       <li v-for="message in messages" :key="message.seq">
         <strong>{{ message.name }}</strong>
         <p>{{ message.text }}</p>

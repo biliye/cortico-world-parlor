@@ -44,7 +44,7 @@ import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
 import { StoryDb, StoryError } from './story-db.ts';
-import { isStoryPath, serveStoryRoute } from './story-routes.ts';
+import { isStoryPath, serveStoryRoute, StoryPresence } from './story-routes.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -223,6 +223,7 @@ const roomSummary = async (db: Db, room: RoomRow) => {
 
 export class WorldServer {
   private readonly story: StoryDb;
+  private readonly storyPresence: StoryPresence;
   private readonly db: Db;
   private readonly operatorHash?: Buffer;
   private readonly identityAuthority?: string;
@@ -284,6 +285,7 @@ export class WorldServer {
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.story = new StoryDb(db, this.now, () => this.hallId);
+    this.storyPresence = new StoryPresence(options.now);
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.ratingBoards = new RatingBoards(db, this.now);
     this.recruitSnapshot = new RecruitSnapshot(db, this.now);
@@ -816,6 +818,7 @@ export class WorldServer {
     if (isStoryPath(url.pathname)) {
       return serveStoryRoute(req, res, url, {
         story: this.story,
+        presence: this.storyPresence,
         cooOrSeat: () => this.cooOrSeat(req),
         parentCooId: async () => (await this.parentSession(req)).account.cooId,
         actorName: async (id) => (await activeSeatForCoo(this.db, id))?.name || await this.coo.cooDisplayName(id) || '茶客',

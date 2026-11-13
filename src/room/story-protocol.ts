@@ -7,6 +7,8 @@ export const STORY_TALK_MS = 8 * 60_000;
 export const STORY_TOTAL_MS = 10 * 60_000;
 export const STORY_QUEUE_MS = 60_000;
 export const STORY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const STORY_PRESENCE_MS = 20_000;
+export const STORY_VISITOR_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 export interface StoryPart {
   seq: number;
@@ -41,6 +43,8 @@ export interface StoryChatPage {
 
 export interface StoryState {
   now: number;
+  /** 近 20 秒浏览现场或成功互动的访客和认证身份，包含 Coo。 */
+  present?: number;
   chat?: StoryChatPage;
   preview?: { round: string; notes: { name: string; text: string }[] };
   queue: { position: number | null; readyUntil: number | null; open: boolean };
