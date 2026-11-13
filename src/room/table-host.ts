@@ -1267,6 +1267,18 @@ export class TableHost {
 
   /** 把一步引擎结果写进事件流：公开事件 + 每个席位的私视图；结束时结算。 */
   private async recordStep(table: LiveTable, engine: TableEngine, step: TableStep, now: number): Promise<void> {
+    if (table.engine.offlineReminder) {
+      const expired: string[] = [];
+      for (const seatId of table.engine.seatIds()) {
+        const previous = table.engine.offlineReminder(seatId);
+        if (!previous) continue;
+        const current = engine.offlineReminder?.(seatId);
+        if (!current?.pending || current.windowId !== previous.windowId) {
+          expired.push(`${table.id}/${previous.windowId}/${seatId}`);
+        }
+      }
+      await this.mail.readTableReminders(this.roomId, expired, now);
+    }
     let ended: TableEvent | undefined;
     for (const event of step.events) {
       await this.appendTableEvent(table, event, now);
@@ -1296,7 +1308,8 @@ export class TableHost {
         },
       });
       // 决策唤醒才考虑离线提醒；正文不带任何角色/阵营/目标信息。
-      if (decision) await this.mailOfflineReminder(table, seatId, String(view.windowId ?? ''));
+      const reminder = decision ? engine.offlineReminder?.(seatId) : undefined;
+      if (reminder?.pending) await this.mailOfflineReminder(table, seatId, reminder.windowId);
     };
     for (const seatId of step.views) await writeTurn(seatId, true);
     for (const seatId of step.refreshViews ?? []) await writeTurn(seatId, false);
@@ -1308,7 +1321,6 @@ export class TableHost {
    * 幂等键带窗口号：同一窗口只提醒一次；在线判断用席位最近活跃时刻。
    */
   private async mailOfflineReminder(table: LiveTable, seatId: string, windowId: string): Promise<void> {
-    if (!windowId) return;
     const seat = await this.seatById(seatId);
     if (!seat) return;
     const lastSeen = seat.lastSeenAt ?? 0;
@@ -1405,6 +1417,7 @@ export class TableHost {
     // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
     if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN
       (SELECT coo_id FROM table_seats WHERE table_id=? AND coo_id IS NOT NULL) AND released_at IS NULL`).run(now, this.roomId, table.id);
+    if (table.engine.offlineReminder) await this.mail.readAllTableReminders(this.roomId, table.id, now);
     await this.markTableSeatsLeft(table.id, now);
     await this.clearActivePlayers(table.id);
   }
@@ -1414,6 +1427,7 @@ export class TableHost {
     const now = this.now();
     await withTransaction(this.db, async () => {
       if (table.engine.status !== 'open') await this.refund(table, reason, now);
+      if (table.engine.offlineReminder) await this.mail.readAllTableReminders(this.roomId, table.id, now);
       await this.markTableSeatsLeft(table.id, now);
       await this.clearActivePlayers(table.id);
       await this.updateTableRow(table.id, 'abandoned', now, { endedAt: now, endReason: reason });
@@ -1574,6 +1588,7 @@ export class TableHost {
     };
     await withTransaction(this.db, async () => {
       if (row.status !== 'open') await this.refund(stub, reason, now);
+      if (row.status !== 'open') await this.mail.readAllTableReminders(this.roomId, row.id, now);
       await this.markTableSeatsLeft(row.id, now);
       await this.clearActivePlayers(row.id);
       await this.updateTableRow(row.id, 'abandoned', now, { endedAt: now, endReason: reason });
@@ -1592,6 +1607,7 @@ export class TableHost {
     await withTransaction(this.db, async () => {
       await this.db.prepare('UPDATE tables SET frozen_at = ?, recovery_error = ? WHERE id = ?')
         .run(now, message.slice(0, 500), row.id);
+      await this.mail.readAllTableReminders(this.roomId, row.id, now);
       await this.events.append(this.roomId, {
         type: 'parlor.table.frozen',
         ts: now,

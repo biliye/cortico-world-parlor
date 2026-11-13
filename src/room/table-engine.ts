@@ -101,6 +101,8 @@ export interface TableEngine {
   public(): unknown;
   /** 只给该席位看的一段话；不在桌上返回 null。 */
   privateText(seatId: string, now: number): string | null;
+  /** The current offline reminder window and whether this seat still needs the reminder. */
+  offlineReminder?(seatId: string): { windowId: string; pending: boolean } | undefined;
   /** 房间公开的一段话。 */
   publicText(): string;
   /**

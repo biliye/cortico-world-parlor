@@ -271,6 +271,21 @@ export class MailDb {
     return Number(result.changes) > 0;
   }
 
+  async readTableReminders(room: string, keys: readonly string[], now: number): Promise<void> {
+    if (keys.length === 0) return;
+    const slots = keys.map(() => '?').join(', ');
+    await this.db.prepare(`UPDATE mail SET read_at = ?
+      WHERE room_id = ? AND kind = 'ledger' AND action = 'table' AND read_at IS NULL AND key IN (${slots})`)
+      .run(now, room, ...keys);
+  }
+
+  async readAllTableReminders(room: string, tableId: string, now: number): Promise<void> {
+    // Table IDs are generated UUIDs; the slash is part of the reminder key, before the window and seat IDs.
+    await this.db.prepare(`UPDATE mail SET read_at = ?
+      WHERE room_id = ? AND kind = 'ledger' AND action = 'table' AND read_at IS NULL AND key LIKE ?`)
+      .run(now, room, `${tableId}/%`);
+  }
+
   /** 最近几封（含已读），新的在前；不动已读状态。 */
   async recent(cooId: string, room?: string, limit = DEFAULT_RECENT): Promise<MailView[]> {
     const requested = Math.trunc(Number(limit));
