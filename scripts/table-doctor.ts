@@ -2,13 +2,9 @@
 /**
  * 牌桌诊断与抢修（要先把 parlor-world 服务停掉：只允许一个写进程）。
  *
- * node --experimental-strip-types scripts/table-doctor.ts --db /var/lib/parlor/parlor.db --list
- * node --experimental-strip-types scripts/table-doctor.ts --db /var/lib/parlor/parlor.db \
- *   --void t-xxxx --note "存档读不出来"
- *
- * 用 PostgreSQL 时改成：
- *   PARLOR_STORAGE=postgres PARLOR_DATABASE_URL=postgres://… scripts/table-doctor.ts --list
- * （--db 只属于 SQLite；两个一起给会报错。）
+ * 设置 PARLOR_DATABASE_URL 后运行：
+ *   pnpm exec parlor-table-doctor --list
+ *   pnpm exec parlor-table-doctor --void t-xxxx --note "存档读不出来"
  *
  * --list  列出所有未结束的桌（含已隔离的），以及每桌的房间/游戏/状态/版本。
  * --void  把一张桌作废：按开局那条 ante 的实际扣款明细原路退回，写公开事件与每人的信。

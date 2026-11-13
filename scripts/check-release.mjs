@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import ts from 'typescript';
 
 const requiredAssets = {
   play: ['theme.js', 'club.css', 'appearance.css', 'night.css', 'vue-loader.js'],
@@ -8,6 +9,13 @@ const requiredAssets = {
 };
 const assetPrefixes = ['/play/assets/', '/parent/assets/'];
 const unversionedAssets = new Set(['/play/assets/play.css']);
+const localServerScript = 'node --experimental-strip-types scripts/serve.ts';
+const cliProbes = [
+  { command: 'parlor-gateway', args: ['--database-url', ''], status: 2, message: '必须配 PARLOR_DATABASE_URL' },
+  { command: 'parlor-migrate-json', args: [], status: 2, message: '用法：parlor-migrate-json' },
+  { command: 'parlor-migrate-pg', args: ['--help'], status: 0, message: '用法: --source' },
+  { command: 'parlor-table-doctor', args: ['--list'], status: 1, message: '必须配 PARLOR_DATABASE_URL' },
+];
 
 function checkAssetVersions(root, version, pages) {
   for (const page of pages) {
@@ -27,6 +35,10 @@ function checkAssetVersions(root, version, pages) {
       }
     }
     for (const url of urls) {
+      const file = url.pathname.replace(/^\/(?:play|parent)\/assets\//, '');
+      if (!statSync(join(root, 'src/web', file), { throwIfNoEntry: false })?.isFile()) {
+        throw new Error(`${htmlPath} 引用的资源未打包：${url.pathname}`);
+      }
       const versions = url.searchParams.getAll('v');
       if (versions.length === 0 && unversionedAssets.has(url.pathname)) continue;
       if (versions.length !== 1 || versions[0] !== version) {
@@ -35,6 +47,44 @@ function checkAssetVersions(root, version, pages) {
       }
     }
   }
+}
+
+function checkWorldModules(root, entry) {
+  const seen = new Set();
+  const pending = [resolve(root, entry), join(root, 'scripts/serve.ts')];
+  while (pending.length) {
+    const file = pending.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    if (!statSync(file, { throwIfNoEntry: false })?.isFile()) {
+      throw new Error('World 缺少引用文件：' + relative(root, file));
+    }
+    const { importedFiles } = ts.preProcessFile(readFileSync(file, 'utf8'), true);
+    for (const { fileName } of importedFiles) {
+      if (fileName.startsWith('./') || fileName.startsWith('../')) pending.push(resolve(dirname(file), fileName));
+      if (fileName === 'pg' || fileName.startsWith('pg/')) throw new Error('World 模块引用 pg：' + relative(root, file));
+    }
+  }
+}
+
+function checkGatewayCommands(root, bin) {
+  const env = Object.fromEntries(Object.entries(process.env)
+    .filter(([key]) => !/^(?:PARLOR_|NODE_OPTIONS$)/i.test(key)));
+  for (const { command, args, status, message } of cliProbes) {
+    const entry = bin?.[command];
+    if (!entry?.endsWith('.js') || !readFileSync(join(root, entry), 'utf8').startsWith('#!/usr/bin/env node')) {
+      throw new Error('网关缺少可直接运行的 Node 命令：' + command);
+    }
+    const result = spawnSync(process.execPath, [join(root, entry), ...args], {
+      cwd: root, env, encoding: 'utf8', timeout: 15_000,
+    });
+    if (result.error) throw result.error;
+    const output = result.stdout + result.stderr;
+    if (result.status !== status || !output.includes(message)) {
+      throw new Error(`网关命令 ${command} 装载检查失败（退出码 ${result.status}）：${output.trim()}`);
+    }
+  }
+  if (!existsSync(join(root, 'src/room/ratings/worker.js'))) throw new Error('网关缺少排行榜 worker.js');
 }
 
 function checkModules(root, entry, ...params) {
@@ -69,8 +119,11 @@ function checkRelease(packageDir) {
   if (existsSync(join(root, 'src/web/assets/cards/cards.webp'))) throw new Error('发布包包含限制分发的牌面素材');
 
   if (name === 'cortico-world-parlor') {
-    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies']) {
       if (Object.hasOwn(manifest[field] ?? {}, 'pg')) throw new Error('World 安装依赖含 pg');
+    }
+    if (Object.keys(manifest.scripts ?? {}).length !== 1 || manifest.scripts.serve !== localServerScript) {
+      throw new Error('World 包脚本应只保留本机单厅 serve');
     }
     for (const path of [
       'src/room/world-server.ts', 'src/room/global-identity.ts', 'src/room/storage', 'src/room/migration',
@@ -79,18 +132,15 @@ function checkRelease(packageDir) {
     ]) {
       if (existsSync(join(root, path))) throw new Error('World 发布包含网关文件：' + path);
     }
+    if (typeof manifest.main !== 'string') throw new Error('World 缺少入口 main');
+    checkWorldModules(root, manifest.main);
     checkAssetVersions(root, version, ['play']);
     checkModules(root, 'src/room/client.ts', version);
   } else if (name === 'cortico-parlor-gateway') {
     if (!manifest.dependencies?.pg || manifest.cortico) throw new Error('网关包清单缺少 pg 或包含 World 注册');
     checkAssetVersions(root, version, ['play', 'parent']);
     checkModules(root, 'src/room/world-server.js');
-    for (const command of ['parlor-gateway', 'parlor-migrate-json', 'parlor-migrate-pg', 'parlor-table-doctor']) {
-      const entry = manifest.bin?.[command];
-      if (!entry?.endsWith('.js') || !readFileSync(join(root, entry), 'utf8').startsWith('#!/usr/bin/env node')) {
-        throw new Error('网关缺少可直接运行的 Node 命令：' + command);
-      }
-    }
+    checkGatewayCommands(root, manifest.bin);
   } else {
     throw new Error('未知发布包：' + name);
   }

@@ -3,8 +3,8 @@
  * SQLite → PostgreSQL 的迁移/核验工具（M3）。
  *
  * 用法：
- *   pnpm migrate:pg --source <备份.db> --target 'postgres://用户:密码@主机:5432/空库' [--dry-run]
- *   pnpm migrate:pg --source <备份.db> --dry-run            # 只审计来源，不连目标
+ *   pnpm exec parlor-migrate-pg --source <备份.db> --target 'postgres://用户:密码@主机:5432/空库' [--dry-run]
+ *   pnpm exec parlor-migrate-pg --source <备份.db> --dry-run
  *
  * 选项：
  *   --dry-run       只审计与预估，不写任何东西

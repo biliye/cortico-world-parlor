@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
 const [destination = '.', ...extra] = process.argv.slice(2);
-if (extra.length || !process.env.npm_execpath) {
+const pnpm = process.env.npm_execpath;
+if (extra.length || !pnpm) {
   throw new Error('用法：pnpm pack:gateway [产物目录]');
 }
 const output = resolve(destination);
@@ -61,7 +62,9 @@ try {
     dependencies: { pg: world.devDependencies.pg },
   };
   writeFileSync(join(stage, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
-  execFileSync(process.execPath, [process.env.npm_execpath, 'pack', '--pack-destination', output], {
+  const javascriptLauncher = /\.[cm]?js$/i.test(pnpm);
+  const args = ['pack', '--pack-destination', output];
+  execFileSync(javascriptLauncher ? process.execPath : pnpm, javascriptLauncher ? [pnpm, ...args] : args, {
     cwd: stage, stdio: 'inherit',
   });
 } finally {

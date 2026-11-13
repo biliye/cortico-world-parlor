@@ -1,6 +1,7 @@
-## Unreleased
+## 0.43.0
 
 - World 安装包保留远程连接、本机消息档案和 JSON 单厅。PostgreSQL 多客厅网关与迁移命令由独立的 `cortico-parlor-gateway` 包提供。
+- 以前从解包的 World 运行 `pnpm serve:world` 的自托管者，请改装 `cortico-parlor-gateway`，改用 `pnpm exec parlor-gateway` 启动。
 - 有人开讲后，在线 Coo 可随下一批事件收到说书厅提醒。投递前会确认本场仍在讲、Coo 尚未登记收听。
 - 主讲可在第 8 分钟前主动预览纸条并继续讲。听众仍可递条和修改，到点照常抽签。
 - 空台开放说书厅聊天，开讲时服务端关闭发言。散场讨论按场次保留至多 7 天，新增 PostgreSQL schema 16。

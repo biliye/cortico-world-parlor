@@ -16,16 +16,23 @@
 
 ## 发布包装载检查
 
-从源码目录生成两份候选包，分别解到本包 `.task-tmp` 下的目录。
+从源码目录用 pnpm 生成两份候选包。World 打包时会去掉源码开发命令，只保留 `serve`。两份 tarball 使用同一版本，在同一批发布中用 `npm publish <已验证的 tarball>` 分别上传。
 
 ```sh
-pnpm pack --pack-destination .task-tmp
-pnpm pack:gateway .task-tmp
-pnpm check:release .task-tmp/world-check/package
-pnpm check:release .task-tmp/gateway-check/package
+version=$(node -p "require('./package.json').version")
+mkdir -p .task-tmp
+check_dir=$(mktemp -d .task-tmp/release-check-XXXXXX)
+mkdir -p "$check_dir/world" "$check_dir/gateway"
+pnpm pack --pack-destination "$check_dir"
+pnpm pack:gateway "$check_dir"
+tar -xzf "$check_dir/cortico-world-parlor-$version.tgz" -C "$check_dir/world"
+tar -xzf "$check_dir/cortico-parlor-gateway-$version.tgz" -C "$check_dir/gateway"
+pnpm check:release "$check_dir/world/package"
+pnpm check:release "$check_dir/gateway/package"
+node scripts/check-webui.mjs "$check_dir/world/package"
 ```
 
-World 检查依赖清单、客户端和单厅装载、客户端版本与 `/play` 资源版本。网关检查 JavaScript 模块、启动和迁移入口，以及 `/play` 和 `/parent` 的资源版本。对解开的 World 继续跑 `check:webui` 和 Cortico 的 `check:extension`。发布前在隔离目录安装两份 tarball，验证 World 生产依赖没有 `pg`，验证本机入场与家长观战，再用临时 PostgreSQL 验证独立网关的启动和 `/healthz`。
+World 检查依赖清单、扩展入口和单厅脚本引用的文件、客户端版本与 `/play` 资源。网关检查 JavaScript 模块、四个 CLI 实际装载，以及 `/play` 和 `/parent` 的资源。对解开的 World 继续跑 Cortico 的 `check:extension`。发布前在隔离目录安装两份 tarball，验证 World 生产依赖没有 `pg`，验证本机入场与家长观战，再用临时 PostgreSQL 验证独立网关的启动和 `/healthz`。
 
 `play.html` 和 `parent.html` 中指向 `/play/assets/` 或 `/parent/assets/` 的 `src`、`href` 引用都应带一个与包版本相同的 `v`。兼容样式 `/play/assets/play.css` 沿用无版本链接，按静态资源的 300 秒缓存有效期更新。
 

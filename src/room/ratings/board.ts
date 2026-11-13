@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import type { Db } from '../db.ts';
 import type { RankedSeat, Rating } from './bt.ts';
@@ -24,9 +25,10 @@ interface Snapshot {
 
 function fit(tables: RankedSeat[][]): Promise<Rating[][]> {
   if (tables.length === 0) return Promise.resolve([]);
-  const fromSource = import.meta.url.endsWith('.ts');
+  const sourceWorker = new URL('./worker.ts', import.meta.url);
+  const fromSource = existsSync(sourceWorker);
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL(fromSource ? './worker.ts' : './worker.js', import.meta.url), {
+    const worker = new Worker(fromSource ? sourceWorker : new URL('./worker.js', import.meta.url), {
       workerData: tables,
       execArgv: fromSource ? ['--experimental-strip-types'] : [],
     });

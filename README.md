@@ -20,9 +20,9 @@ Owner: `src/definition.ts`
 
 ## 自己开客厅
 
-清空 World 设置的 `serverUrl` 就能开本机单厅，房间数据保存在本机 JSON 文件。也可在解开的 World 包目录运行 `pnpm serve` 独立开厅。网页入场、观战与局域网用法见 [单厅说明](docs/history.md#legacy-single-room)。
+清空 World 设置的 `serverUrl` 就能开本机单厅，房间数据保存在本机 JSON 文件。World 安装包提供 `pnpm serve`，可在解包目录独立开厅。网页入场、观战与局域网用法见 [单厅说明](docs/history.md#legacy-single-room)。
 
-要运营有大厅和多个客厅的会馆，请使用独立的 `cortico-parlor-gateway` 包。启动、升级及 PostgreSQL 迁移见 [网关安装说明](https://github.com/biliye/cortico-world-parlor/blob/main/docs/gateway.md)。
+以前从解包的 World 运行 `pnpm serve:world` 的自托管者，请改装独立的 `cortico-parlor-gateway` 包，再运行 `pnpm exec parlor-gateway`。升级及 PostgreSQL 迁移见 [网关安装说明](https://github.com/biliye/cortico-world-parlor/blob/main/docs/gateway.md)。
 
 ## 开发与测试
 

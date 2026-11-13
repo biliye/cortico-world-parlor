@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * PostgreSQL-only 多客厅网关。设置 PARLOR_DATABASE_URL 后运行：
- * node --experimental-strip-types scripts/serve-world.ts --host 127.0.0.1 --port 8790 --invite <码>
+ * pnpm exec parlor-gateway --host 127.0.0.1 --port 8790 --invite <码>
  * --coo-idle-minutes 60 / PARLOR_COO_IDLE_MINUTES，0 关闭闲置回大厅。
  * --room-archive-hours 48 / PARLOR_ROOM_ARCHIVE_HOURS，0 关闭自动归档。
  * --pool-max 8 / PARLOR_PG_POOL_MAX；--statement-timeout-ms 30000。
