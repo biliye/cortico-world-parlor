@@ -49,8 +49,13 @@ const mySeat = computed(() => seats.value.find(seat => seat.id === props.view.me
 const turn = computed(() => seats.value.find(seat => seat.id === table.value.turn));
 const winner = computed(() => seats.value.find(seat => table.value.winners?.includes(seat.id)));
 const yours = computed(() => !table.value.frozen && props.view.priv?.yourTurn === true && turn.value?.id === mySeat.value?.id);
-const last = computed(() => table.value.last as { text: string; die: number } | null);
-const die = computed(() => table.value.phase === 'await_roll' ? 0 : Number(table.value.die ?? last.value?.die ?? 0));
+const last = computed(() => table.value.last as { text: string; die: number; seat: string } | null);
+const die = computed(() => Number(table.value.die ?? last.value?.die ?? 0));
+const lastRollLabel = computed(() => {
+  if (table.value.phase !== 'await_roll' || !last.value) return '';
+  const previous = seats.value.find(seat => seat.id === last.value?.seat);
+  return previous ? `上一掷 · ${previous.name} · ${die.value} 点` : `上一掷 · ${die.value} 点`;
+});
 const moves = computed(() => yours.value && table.value.phase === 'await_move' ? (props.view.priv?.moves as AeroplaneMove[] ?? []) : []);
 const canRoll = computed(() => yours.value && table.value.phase === 'await_roll');
 const busy = ref(false);
@@ -129,6 +134,7 @@ async function submit(action: 'roll' | 'move', plane?: number): Promise<void> {
           <span v-if="winner">四架飞机全部抵达终点。</span>
           <span v-else-if="last">{{ last.text }}</span>
           <span v-else>掷出 6 点即可起飞。</span>
+          <span v-if="lastRollLabel">{{ lastRollLabel }}</span>
         </div>
         <button v-if="canRoll" type="button" class="btn primary flight-action" :disabled="busy" @click="submit('roll')">掷骰</button>
         <div v-if="moves.length" class="flight-moves">
