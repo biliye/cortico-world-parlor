@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { GIFTS } from '../../src/room/gifts/catalog.ts';
 import {
-  STORY_CHAT_LIMIT, STORY_NOTE_LIMIT, STORY_PART_LIMIT, STORY_TITLE_LIMIT, type StoryArchive, type StoryCursor,
+  STORY_CHAT_LIMIT, STORY_NOTE_LIMIT, STORY_PART_LIMIT, STORY_TITLE_LIMIT, STORY_VISITOR_ID, type StoryArchive, type StoryCursor,
   type StoryPage, type StoryState, type StorySummary,
 } from '../../src/room/story-protocol.ts';
 import { api } from '../api/client.ts';
@@ -48,9 +48,30 @@ const secondsLeft = computed(() => Math.max(0, Math.ceil(((round.value?.endsAt ?
 const closing = computed(() => !!round.value && serverNow.value >= round.value.notesAt);
 const visibleNotes = computed(() => round.value?.batch ?? preview.value?.notes);
 const chat = computed(() => state.value?.chat);
+const chatStatus = computed(() => {
+  if (round.value) return '台上正在说书，散场后开放聊天。';
+  if (!seat.value) return '入座后可以查看聊天并发言。';
+  if (!state.value) return problem.value ? '暂时无法读取聊天。' : '正在读取聊天…';
+  if (!chat.value) return '当前茶馆未开放说书厅聊天。';
+  return '';
+});
 const canStart = computed(() => !!seat.value && !round.value && !!state.value
   && (state.value.queue.open || (state.value.queue.readyUntil ?? 0) > serverNow.value));
 const timer = computed(() => `${Math.floor(secondsLeft.value / 60)}:${String(secondsLeft.value % 60).padStart(2, '0')}`);
+let guestId: string | undefined;
+
+function storyGuestId(): string {
+  if (guestId) return guestId;
+  guestId = newRequestId();
+  // 同一浏览器打开多个访客标签页时只计一次。
+  try {
+    const key = 'parlor-story-guest';
+    const stored = localStorage.getItem(key);
+    if (stored && STORY_VISITOR_ID.test(stored)) guestId = stored;
+    else localStorage.setItem(key, guestId);
+  } catch { /* 存储不可用时，以当前页面为访客。 */ }
+  return guestId;
+}
 
 function jump(toEnd: boolean): void {
   following.value = toEnd;
@@ -98,7 +119,7 @@ async function poll(): Promise<void> {
   const request = revision;
   try {
     const current = round.value;
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ visitor: storyGuestId() });
     if (current) {
       params.set('round', current.id);
       params.set('after', String(current.parts.at(-1)?.seq ?? 0));
@@ -156,7 +177,7 @@ async function speak(): Promise<void> {
 
 async function sendChat(): Promise<void> {
   const text = chatDraft.value.trim();
-  if (!chat.value || !text) return;
+  if (!seat.value || round.value || !chat.value || !text) return;
   if (!chatRequest || chatText !== text) chatRequest = newRequestId();
   chatText = text;
   const id = chat.value.round?.id;
@@ -251,7 +272,10 @@ onUnmounted(() => {
 <template>
   <section class="story-page" :class="{ 'story-guest': !seat }" aria-label="说书厅">
     <header class="story-nav">
-      <h1>说书人</h1>
+      <div class="story-title">
+        <h1>说书人</h1>
+        <span v-if="mode === 'live' && state?.present != null" class="story-muted">{{ state.present }} 人在场</span>
+      </div>
       <nav aria-label="说书厅导航">
         <button type="button" :aria-pressed="mode === 'live'" @click="showLive">现场</button>
         <button type="button" :aria-pressed="mode === 'archive'" @click="showArchive()">往期</button>
@@ -351,17 +375,17 @@ onUnmounted(() => {
             <button type="button" @click="compose = undefined">取消</button>
           </div>
         </form>
-        <StoryChat v-if="seat && chat" :key="chat.round?.id ?? 'idle'" :live="chat">
-          <form class="story-form story-chat-form" @submit.prevent="sendChat">
-            <label for="story-chat-text">发一条聊天消息</label>
-            <textarea id="story-chat-text" v-model="chatDraft" :maxlength="STORY_CHAT_LIMIT" :disabled="busy" rows="2" />
-            <div class="story-actions">
-              <button class="story-primary" type="submit" :disabled="busy || !chatDraft.trim()">发送</button>
-            </div>
-          </form>
-        </StoryChat>
       </section>
       <p v-else-if="!problem" role="status">正在打开说书厅…</p>
+      <StoryChat :key="chat?.round?.id ?? 'idle'" :live="chat" :status="chatStatus">
+        <form v-if="seat && chat && !round" class="story-form story-chat-form" @submit.prevent="sendChat">
+          <label for="story-chat-text">发一条聊天消息</label>
+          <textarea id="story-chat-text" v-model="chatDraft" :maxlength="STORY_CHAT_LIMIT" :disabled="busy" rows="2" />
+          <div class="story-actions">
+            <button class="story-primary" type="submit" :disabled="busy || !chatDraft.trim()">发送</button>
+          </div>
+        </form>
+      </StoryChat>
       <div v-if="state?.queue.position" class="story-actions story-queue">
         <span>{{ canStart ? '请在确认窗口内上台' : '排队中 · 第 ' + state.queue.position + ' 位' }}</span>
         <button type="button" :disabled="busy" @click="act('cancel')">退出排队</button>
@@ -396,7 +420,7 @@ onUnmounted(() => {
 <style scoped>
 .story-page { width: min(100%, 49rem); margin-inline: auto; padding: clamp(1rem, 4vw, 2.75rem); color: var(--text); }
 .story-guest { min-height: 100vh; }
-.story-nav, .story-heading, .story-actions, .story-reading { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+.story-nav, .story-title, .story-heading, .story-actions, .story-reading { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
 .story-nav, .story-heading { justify-content: space-between; }
 .story-nav { border-bottom: 1px solid var(--line-2); padding-bottom: .9rem; margin-bottom: 1.4rem; }
 .story-nav nav { display: flex; align-items: center; gap: .4rem; }

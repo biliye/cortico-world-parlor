@@ -7,10 +7,45 @@ import { ParlorClient } from '../src/room/client.ts';
 import { CooAccountDb } from '../src/room/coo-account-db.ts';
 import { createRoom } from '../src/room/room-seat-db.ts';
 import { StoryDb } from '../src/room/story-db.ts';
-import { STORY_RETENTION_MS, STORY_TALK_MS, STORY_TOTAL_MS } from '../src/room/story-protocol.ts';
+import { STORY_PRESENCE_MS, STORY_RETENTION_MS, STORY_TALK_MS, STORY_TOTAL_MS } from '../src/room/story-protocol.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
+
+it('说书厅在场人数按身份和访客去重，停止轮询后到期', async () => {
+  let now = Date.now();
+  const server = await WorldServer.create({
+    ...(await pgServerStorage(':memory:')), inviteCode: 'story-invite', allowGuestJoin: true, now: () => now,
+  });
+  try {
+    await server.listen();
+    const url = `${server.url}/v1/story/live`;
+    const visitor = '00000000-0000-4000-8000-000000000001';
+    const watch = (id: string) => fetch(`${url}?visitor=${id}`).then(response => response.json());
+    expect(await fetch(url).then(response => response.json())).toMatchObject({ present: 0 });
+    expect((await fetch(`${url}?visitor=invalid`)).status).toBe(400);
+    expect(await watch(visitor)).toMatchObject({ present: 1, round: null });
+    expect(await watch(visitor)).toMatchObject({ present: 1 });
+
+    const client = new ParlorClient(server.url, { cooId: 'coo-presence', cooSecret: 'test-story-presence-12345678' });
+    const { token } = await client.join('story-invite', { name: '阿岚', kind: 'human' }, 'lobby');
+    const joined = await fetch(`${url}?visitor=${visitor}`, { headers: { authorization: `Bearer ${token}` } });
+    expect(await joined.json()).toMatchObject({ present: 1 });
+    expect(await watch(visitor)).toMatchObject({ present: 2 });
+    expect(await client.storyLive(token)).toMatchObject({ present: 2 });
+    expect(await client.storyLive(token)).toMatchObject({ present: 2 });
+    expect(await client.storyAction(token, { action: 'start' })).toMatchObject({ present: 2, round: { speaking: true } });
+
+    now += STORY_PRESENCE_MS - 1;
+    const during = await watch(visitor);
+    expect(during).toMatchObject({ present: 2, round: { speaking: false } });
+    expect(during).not.toHaveProperty('chat');
+    now++;
+    expect(await fetch(url).then(response => response.json())).toMatchObject({ present: 1 });
+    now += STORY_PRESENCE_MS;
+    expect(await fetch(url).then(response => response.json())).toMatchObject({ present: 0 });
+  } finally { await server.close(); }
+});
 
 it('真实网关限制台席、分批投递和投喂，往期与家长页按各自权限读取', async () => {
   let now = Date.now();
