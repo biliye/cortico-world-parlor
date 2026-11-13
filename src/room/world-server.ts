@@ -1010,6 +1010,24 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'GET' && url.pathname === '/v1/parent/table') {
+      const { account } = await this.parentSession(req);
+      const seat = await activeSeatForCoo(this.db, account.cooId);
+      const tableId = url.searchParams.get('table');
+      if (!seat || !tableId) throw new HttpError(404, '孩子当前没有在这张牌桌上');
+      const host = await this.host(seat.roomId);
+      const active = await host.tableLock(account.cooId);
+      if (active?.tableId !== tableId) throw new HttpError(404, '孩子当前没有在这张牌桌上');
+      const table = await host.tablePublic(tableId);
+      if (!table || table.frozen || (table.status !== 'bidding' && table.status !== 'playing')
+        || (await host.tableLock(account.cooId))?.tableId !== tableId) {
+        throw new HttpError(404, '孩子当前没有在这张牌桌上');
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      json(res, 200, { table, now: this.now() }, req);
+      return;
+    }
+
     if (method === 'POST' && url.pathname === '/v1/parent/play') {
       const body = await readJson(req);
       // 带钥匙时一次做完「换会话 + 领席位」：跨境链路上每多一个来回就是两三秒。
@@ -2709,6 +2727,10 @@ export class WorldServer {
       humanAtTable = !!row;
     }
     const ownerPrivateHidden = !!liveTableId && humanAtTable;
+    const active = await host.tableLock(cooId);
+    const watchTableId = active && snapshot.table?.tableId === active.tableId && !snapshot.table.frozen
+      && (active.status === 'bidding' || active.status === 'playing')
+      ? active.tableId : undefined;
     return {
       seat: snapshot.seat,
       room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },
@@ -2720,6 +2742,7 @@ export class WorldServer {
         : snapshot.events,
       tables: snapshot.tables ?? [],
       ...(snapshot.table ? { table: snapshot.table } : {}),
+      ...(watchTableId ? { watchTableId } : {}),
       tablePrivate: ownerPrivateHidden ? null : snapshot.tablePrivate ?? null,
       ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
       ledgerRoom: snapshot.ledgerRoom ?? [],

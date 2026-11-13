@@ -59,6 +59,51 @@ const getWith = async (base: string, path: string, headers: Record<string, strin
 const cookieOf = (response: Response): string => (response.headers.get('set-cookie') || '').split(';')[0];
 
 describe('家长下场', () => {
+  it('家长用只读会话观战孩子当前桌，满厅仍可看且不入座', async () => {
+    const app = await start();
+    const headers = { ...cooHeaders(COO), 'x-parlor-invite': 'inv' };
+    const room = 'lobby';
+    const child = await post(app.url, `/v1/rooms/${room}/join`, { name: '小满' }, headers);
+    expect(child.status).toBe(200);
+    const second = await post(app.url, `/v1/rooms/${room}/join`, { name: '对手' }, {
+      ...cooHeaders('coo-parenttest2'), 'x-parlor-invite': 'inv',
+    });
+    expect(second.status).toBe(200);
+    const childSeat = { authorization: `Bearer ${child.body.token as string}` };
+    const secondSeat = { authorization: `Bearer ${second.body.token as string}` };
+    const act = (body: Json, seat = childSeat) => post(app.url, `/v1/rooms/${room}/action`, body, seat);
+    const opened = await act({ type: 'table_open', game: 'gomoku', requestId: 'open-watch' });
+    expect(opened.status).toBe(200);
+    const table = opened.body.tableId as string;
+    expect((await act({ type: 'table_join', table, requestId: 'join-watch' }, secondSeat)).status).toBe(200);
+    expect((await act({ type: 'table_start', table, requestId: 'start-watch' })).status).toBe(200);
+    const capacity = child.body.maxSeats as number;
+    for (let i = 2; i < capacity; i++) {
+      const filler = await post(app.url, `/v1/rooms/${room}/join`, { name: `茶客 ${i}` }, {
+        ...cooHeaders(`coo-watchfiller${i}`), 'x-parlor-invite': 'inv',
+      });
+      expect(filler.status).toBe(200);
+    }
+    const session = await post(app.url, '/v1/parent/session', { key: child.body.ownerKey });
+    expect(session.status).toBe(200);
+    const auth = { cookie: (session.headers.get('set-cookie') ?? '').split(';')[0] };
+    expect((await getWith(app.url, '/v1/parent/view', auth)).body.watchTableId).toBe(table);
+    const endpoint = '/v1/parent/table?table=' + encodeURIComponent(table);
+    expect((await getWith(app.url, endpoint, {})).status).toBe(401);
+    expect((await getWith(app.url, '/v1/parent/table?table=other', auth)).status).toBe(404);
+    const watched = await getWith(app.url, endpoint, auth);
+    expect(watched.status).toBe(200);
+    expect(watched.body).toMatchObject({ table: { tableId: table, status: 'playing', board: expect.any(Array) } });
+    expect(Object.keys(watched.body).sort()).toEqual(['now', 'table']);
+    const roomView = await getWith(app.url, `/v1/rooms/${room}/room`, childSeat);
+    expect((roomView.body.seats as unknown[]).length).toBe(capacity);
+    const resigning = (watched.body.table as { turn: string }).turn === (child.body.seat as { id: string }).id
+      ? childSeat : secondSeat;
+    const revision = (watched.body.table as { revision: number }).revision;
+    expect((await act({ type: 'game_action', table, revision, action: 'resign', params: {}, requestId: 'end-watch' }, resigning)).status).toBe(200);
+    expect((await getWith(app.url, endpoint, auth)).status).toBe(404);
+  });
+
   it('同一链接固定一个玩家身份；孩子席位与账本不受影响', async () => {
     const app = await start();
     // 孩子：一个 Coo 进默认客厅，第一次进会拿到 ownerKey。
