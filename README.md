@@ -22,6 +22,8 @@ Owner: `src/definition.ts`
 
 清空 World 设置的 `serverUrl` 就能开本机单厅，房间数据保存在本机 JSON 文件。World 安装包提供 `pnpm serve`，可在解包目录独立开厅。网页入场、观战与局域网用法见 [单厅说明](docs/history.md#legacy-single-room)。
 
+JSON 单厅进入冻结维护。保留现有入口、存档和玩法，后续只处理安全问题、数据完整性和共享层兼容。新功能面向多客厅网关。说书厅、等级分榜、按桌回放、反馈和公告由多客厅网关提供。
+
 以前从解包的 World 运行 `pnpm serve:world` 的自托管者，请改装独立的 `cortico-parlor-gateway` 包，再运行 `pnpm exec parlor-gateway`。升级及 PostgreSQL 迁移见 [网关安装说明](https://github.com/biliye/cortico-world-parlor/blob/main/docs/gateway.md)。
 
 ## 开发与测试
