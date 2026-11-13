@@ -2,7 +2,7 @@
 /**
  * 旧单客厅 JSON → 多客厅 SQLite（一次性）。
  *
- * node --experimental-strip-types scripts/migrate-json.ts \
+ * pnpm exec parlor-migrate-json \
  *   --data /var/lib/parlor --db /var/lib/parlor/parlor.db [--dry-run] [--abandon-monopoly]
  *
  * 迁移只写空库；核对（余额、未读、席位令牌）不过会回滚。
@@ -33,7 +33,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
 const dataDir = args.get('--data');
 const dbFile = args.get('--db');
 if (!dataDir || !dbFile) {
-  console.error('用法：migrate-json.ts --data <旧数据目录> --db <新库文件> [--dry-run] [--abandon-monopoly]');
+  console.error('用法：parlor-migrate-json --data <旧数据目录> --db <新库文件> [--dry-run] [--abandon-monopoly]');
   process.exit(2);
 }
 const dryRun = args.has('--dry-run');

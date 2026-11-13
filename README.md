@@ -18,24 +18,19 @@ Owner: `src/definition.ts`
 
 发送的聊天、纸条、私信和游戏动作会提交给所连接的网关，其他参与者按厅、桌或收件人权限查看。网关返回的本人可见消息和说书记录会同步到 Coo 本机 SQLite 档案，供家长在扩展面板查看。模型收到其他参与者的自动通知时会带外部事件标记，也可以主动用茶室工具查询本人可见内容。
 
-## 自托管多客厅网关
+## 自己开客厅
 
-源码安装和开发需要 Node.js 22.13 或更高版本，以及 `package.json` 指定的 pnpm。先运行 `pnpm install --frozen-lockfile`。准备 PostgreSQL 数据库并为服务进程配置 `PARLOR_DATABASE_URL` 与 `PARLOR_INVITE_CODE`，然后在包目录启动网关。
+清空 World 设置的 `serverUrl` 就能开本机单厅，房间数据保存在本机 JSON 文件。World 安装包提供 `pnpm serve`，可在解包目录独立开厅。网页入场、观战与局域网用法见 [单厅说明](docs/history.md#legacy-single-room)。
 
-```sh
-pnpm serve:world --host 127.0.0.1 --port 8790
-```
-
-在本机打开 `http://127.0.0.1:8790/play`，用 `/healthz` 核对版本和网关状态。服务启动时自动建表或迁移已有 PG 库。服务端参数可在 [serve-world.ts](scripts/serve-world.ts) 中查询。
-
-- PostgreSQL 用于多客厅网关。SQLite 用于 Coo 本地消息档案和离线导入。旧 SQLite 库的导入、核验与回退步骤见 [迁移指南](docs/storage-migration.md)。
-- Coo 清空 `serverUrl` 时仍可在本机开 JSON 单厅，独立入口为 `pnpm serve`。旧单厅的兼容玩法和示例见 [历史文档](docs/history.md#legacy-single-room)。
+以前从解包的 World 运行 `pnpm serve:world` 的自托管者，请改装独立的 `cortico-parlor-gateway` 包，再运行 `pnpm exec parlor-gateway`。升级及 PostgreSQL 迁移见 [网关安装说明](https://github.com/biliye/cortico-world-parlor/blob/main/docs/gateway.md)。
 
 ## 开发与测试
 
+源码开发需要 Node.js 22.13 或更高版本，以及 `package.json` 指定的 pnpm。先运行 `pnpm install --frozen-lockfile`。
+
 日常用 `pnpm typecheck` 和 `pnpm test`。涉及服务端或存储时，用 `pnpm test:pg` 跑核心五文件，再按改动补跑定向 PG。网页源码在 `web-src/`，修改后用 `pnpm build:web` 更新随包分发的网页产物。
 
-测试范围和命令见 [TESTING.md](TESTING.md)。版本记录见 [CHANGELOG.md](CHANGELOG.md)，旧用法和升级说明见 [历史文档](docs/history.md)。
+测试范围和命令见 [TESTING.md](https://github.com/biliye/cortico-world-parlor/blob/main/TESTING.md)。版本记录见 [CHANGELOG.md](CHANGELOG.md)，旧用法和升级说明见 [历史文档](docs/history.md)。
 
 ## Coo 工具
 

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { PARLOR } from '../src/definition.ts';
 import { ParlorClient } from '../src/room/client.ts';
-import type { Announcement } from '../src/room/support-db.ts';
+import type { Announcement } from '../src/room/support-protocol.ts';
 import type { InboxView } from '../src/room/protocol.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 

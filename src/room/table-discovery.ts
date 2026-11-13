@@ -7,7 +7,8 @@ import { lockCooRows, lockRoomRow } from './storage/locks.ts';
 import { jsonValue } from './storage/json.ts';
 import { versionAtLeast } from './games/werewolf.ts';
 import { WEREWOLF_MIN_CLIENT } from './games/werewolf-table.ts';
-import { tableCapacity, type TableEntryInput, type TableEntryResponse, type TableEntryResult, type TableRecruitment } from './table-discovery-db.ts';
+import { tableCapacity } from './table-discovery-db.ts';
+import type { TableEntryInput, TableEntryResponse, TableEntryResult, TableRecruitment } from './table-discovery-protocol.ts';
 
 interface Candidate { id: string; room_id: string; room_name: string; game: string; created_at: number; n: number }
 interface RecruitmentRow {

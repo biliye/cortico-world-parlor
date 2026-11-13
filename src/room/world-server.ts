@@ -23,7 +23,8 @@ import { GAME_RESPONSE_MAX_BYTES, type TableLogQuery } from './table-engine.ts';
 import { TABLE_REPLAY_LIMIT, readTableReplay, type TableReplayQuery } from './table-replay.ts';
 import { likePrefix, parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
-import { GLOBAL_HEADER, IdentityRegistry, enableGlobalIdentity, registeredHandle, identityOrigin, identityRequest, type GlobalPerson } from './global-identity.ts';
+import { IdentityRegistry, enableGlobalIdentity, registeredHandle } from './global-identity.ts';
+import { GLOBAL_HEADER, identityOrigin, identityRequest, type GlobalPerson } from './identity-protocol.ts';
 import { HostError, RoomHost } from './room-host.ts';
 import { bearer, headerValue, HttpError, json, readJson } from './http.ts';
 import {

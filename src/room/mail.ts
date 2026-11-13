@@ -55,6 +55,14 @@ export interface MailView {
   read: boolean;
 }
 
+/** 家长只读信箱：只提供孩子收到的信的已读状态。 */
+export type ParentMailView = Omit<MailView, 'read'> & {
+  fromMe: boolean;
+  read?: boolean;
+  toName?: string;
+  toHandle?: string;
+};
+
 export interface MailPage {
   /** 这次读取前，查询范围里有多少封未读。 */
   unread: number;

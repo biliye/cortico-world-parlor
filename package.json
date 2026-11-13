@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-parlor",
-  "version": "0.42.1",
+  "version": "0.43.0",
   "type": "module",
   "author": {
     "name": "筆離嘢"
@@ -78,14 +78,40 @@
     "webUiStyle": "dist/webui.css"
   },
   "files": [
-    "src",
+    "src/*.ts",
+    "src/ENV_PROMPT.md",
+    "src/room/activity-store.ts",
+    "src/room/client.ts",
+    "src/room/clock.ts",
+    "src/room/game-api.ts",
+    "src/room/game-labels.ts",
+    "src/room/games",
+    "src/room/gifts",
+    "src/room/handles.ts",
+    "src/room/history-sync.ts",
+    "src/room/identity.ts",
+    "src/room/kernel.ts",
+    "src/room/ledger.ts",
+    "src/room/mail.ts",
+    "src/room/mentions.ts",
+    "src/room/ports.ts",
+    "src/room/protocol.ts",
+    "src/room/*-protocol.ts",
+    "src/room/replay.ts",
+    "src/room/server.ts",
+    "src/room/table.ts",
+    "src/room/table-engine.ts",
+    "src/room/web-assets.ts",
+    "src/web",
     "dist",
     "!src/web/assets/cards/cards.webp",
+    "!src/web/identity.*",
+    "!src/web/parent.*",
+    "!src/web/support.*",
     "assets",
-    "scripts",
-    "docs",
+    "scripts/serve.ts",
+    "docs/history.md",
     "README.md",
-    "TESTING.md",
     "CHANGELOG.md",
     "describe.json",
     "LICENSE"
@@ -100,6 +126,7 @@
     "build:webui": "vite build --config vite.webui.config.ts",
     "check:webui": "node scripts/check-webui.mjs",
     "check:release": "node scripts/check-release.mjs",
+    "pack:gateway": "pnpm build:web && node scripts/pack-gateway.mjs",
     "prepack": "pnpm build:web && pnpm build:webui && pnpm check:webui",
     "serve": "node --experimental-strip-types scripts/serve.ts",
     "serve:world": "node --experimental-strip-types scripts/serve-world.ts",
@@ -113,13 +140,11 @@
     "@vitejs/plugin-vue": "^6.0.10",
     "cortico": "^0.2.6",
     "embedded-postgres": "18.6.0-beta.19",
+    "pg": "^8.23.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^8.3.5",
     "vitest": "^2.1.8",
     "vue": "^3.5.44"
-  },
-  "dependencies": {
-    "pg": "^8.23.1"
   }
 }

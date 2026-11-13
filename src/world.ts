@@ -18,7 +18,7 @@ import type { MailPage } from './room/mail.ts';
 import { ParlorServer } from './room/server.ts';
 import type { StoryLiveHint } from './room/story-protocol.ts';
 import { AmbientWakeBudget } from './wake-budget.ts';
-import { parseTableLink } from './room/table-discovery-db.ts';
+import { parseTableLink } from './room/table-discovery-protocol.ts';
 import { LocalHistory, type HistoryQuery } from './local-history.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed, isRoomId,

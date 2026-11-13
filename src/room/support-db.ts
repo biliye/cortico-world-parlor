@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
 import { lockCooRows } from './storage/locks.ts';
 import { HostError } from './host-error.ts';
+import type { Announcement, Feedback } from './support-protocol.ts';
 
 export const SUPPORT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS support_feedback (
@@ -59,15 +60,6 @@ CREATE TABLE IF NOT EXISTS support_audit (
 CREATE INDEX IF NOT EXISTS ix_support_audit_at ON support_audit(at DESC, id DESC);
 `;
 
-export interface Feedback {
-  id: string; coo_id: string; name: string; text: string; created_at: number; reply: string; status: string;
-}
-export interface Announcement {
-  id: string; text: string; created_at: number;
-  /** schema 9 起：编辑次数与最后编辑时刻（老行按 1 / 0 读）。 */
-  revision?: number;
-  updated_at?: number;
-}
 /**
  * 运营侧看到的公告：多带一个 `publishId`。
  *
