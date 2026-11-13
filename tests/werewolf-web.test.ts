@@ -71,9 +71,9 @@ describe('狼人杀网页：素材与打包完整性', () => {
     }
   });
 
-  it('打包 files 覆盖 src/ 且没有排除规则挡角色牌，六张 jpg 会进 npm 包', () => {
+  it('World 打包 files 覆盖 src/web 且没有排除规则挡角色牌，六张 jpg 会进 npm 包', () => {
     const files = pkgFiles();
-    expect(files, 'files 里要有 src（角色牌都在 src/ 下）').toContain('src');
+    expect(files, 'files 里要有 src/web（角色牌都在 src/web/ 下）').toContain('src/web');
     for (const role of ROLES) {
       const rel = 'src/web/assets/werewolf/roles/' + role + '.jpg';
       const covered = files.some((entry) => {

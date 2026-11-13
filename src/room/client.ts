@@ -1,14 +1,13 @@
 /** 客厅客户端：World 用它与服务器说话。只发请求，不判断可见性。 */
 import type { CooIdentity } from './identity.ts';
 import { COO_HEADER, COO_SECRET_HEADER } from './identity.ts';
-import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } from './global-identity.ts';
-import type { MailPage, MailReadResult } from './mail.ts';
+import { GLOBAL_HEADER, identityOrigin, identityRequest, type IdentityTicket } from './identity-protocol.ts';
+import type { MailPage, MailReadResult, ParentMailView } from './mail.ts';
 import type { ReplayEventView } from './replay.ts';
 import type { HistorySyncPage } from './history-sync.ts';
 import type { StoryArchive, StoryChatPage, StoryCursor, StoryNotice, StoryPage, StoryState } from './story-protocol.ts';
-import type { Announcement, Feedback } from './support-db.ts';
-import type { ParentMailView } from './mail-db.ts';
-import type { TableEntryInput, TableEntryResponse } from './table-discovery-db.ts';
+import type { Announcement, Feedback } from './support-protocol.ts';
+import type { TableEntryInput, TableEntryResponse } from './table-discovery-protocol.ts';
 import type { GameQuery } from './game-api.ts';
 import type {
   ActionRequest, ActionResponse, HallView, InboxView, InviteResponse, JoinRequest, JoinResponse, MeView,

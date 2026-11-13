@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { migrate, withTransaction, type Db } from './db.ts';
 import { registeredHandle } from './global-identity.ts';
-import type { MailItem, MailKind, MailPage, MailReadResult, MailView } from './mail.ts';
+import type { MailItem, MailKind, MailPage, MailReadResult, MailView, ParentMailView } from './mail.ts';
 
 /** 投递一封新信时需要的字段；id/seq/ts/read 由 store 填。 */
 export type MailInput = Omit<MailItem, 'id' | 'seq' | 'ts' | 'read'>;
@@ -36,14 +36,6 @@ export interface DmThreadMessage {
   fromMe: boolean;
   unread: boolean;
 }
-
-/** 家长只读信箱：只提供孩子收到的信的已读状态。 */
-export type ParentMailView = Omit<MailView, 'read'> & {
-  fromMe: boolean;
-  read?: boolean;
-  toName?: string;
-  toHandle?: string;
-};
 
 export interface MailDbOptions {
   now?: () => number;

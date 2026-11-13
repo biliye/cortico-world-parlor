@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * SQLite → PostgreSQL 的迁移/核验工具（M3）。
  *

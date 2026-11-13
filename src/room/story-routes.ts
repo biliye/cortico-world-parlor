@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { GLOBAL_HEADER } from './global-identity.ts';
+import { GLOBAL_HEADER } from './identity-protocol.ts';
 import { bearer, headerValue, HttpError, json, readJson } from './http.ts';
 import type { StoryDb } from './story-db.ts';
 import { STORY_ACTIONS } from './story-protocol.ts';

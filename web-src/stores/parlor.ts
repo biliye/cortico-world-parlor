@@ -14,7 +14,7 @@ import { saveSeat, seat, clearSeat, readStoredSeat, adoptSeat, STORE_KEY } from 
 import { showToast } from './ui.ts';
 import { backToRoom, enterTable, readView, watchTableId } from './view.ts';
 import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, SeatConfig, Snapshot, TableSummary } from '../api/types.ts';
-import type { TableEntryResponse, TableRecruitment } from '../../src/room/table-discovery-db.ts';
+import type { TableEntryResponse, TableRecruitment } from '../../src/room/table-discovery-protocol.ts';
 
 export const snapshot = ref<Snapshot | null>(null);
 export const offset = ref(0);

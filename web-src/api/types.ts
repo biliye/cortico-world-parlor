@@ -90,7 +90,7 @@ export interface Directory {
 
 export interface HallPayload {
   hall?: { seats?: HallSeat[] };
-  recruitments?: import('../../src/room/table-discovery-db.ts').TableRecruitment[];
+  recruitments?: import('../../src/room/table-discovery-protocol.ts').TableRecruitment[];
 }
 
 export interface JoinResult {

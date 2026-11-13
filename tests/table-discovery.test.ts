@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/room/db.ts';
 import { WorldServer } from '../src/room/world-server.ts';
-import { parseTableLink } from '../src/room/table-discovery-db.ts';
+import { parseTableLink } from '../src/room/table-discovery-protocol.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 
 type Json = Record<string, any>;

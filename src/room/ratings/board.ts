@@ -24,10 +24,11 @@ interface Snapshot {
 
 function fit(tables: RankedSeat[][]): Promise<Rating[][]> {
   if (tables.length === 0) return Promise.resolve([]);
+  const fromSource = import.meta.url.endsWith('.ts');
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+    const worker = new Worker(new URL(fromSource ? './worker.ts' : './worker.js', import.meta.url), {
       workerData: tables,
-      execArgv: ['--experimental-strip-types'],
+      execArgv: fromSource ? ['--experimental-strip-types'] : [],
     });
     worker.once('message', resolve);
     worker.once('error', reject);

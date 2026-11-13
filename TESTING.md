@@ -16,13 +16,16 @@
 
 ## 发布包装载检查
 
-从包源码目录用 `pnpm pack` 构建并生成候选包。把要发布的 `.tgz` 解到本包 `.task-tmp` 下一个新目录，再手动对解出的 `package` 目录执行发布检查。
+从源码目录生成两份候选包，分别解到本包 `.task-tmp` 下的目录。
 
 ```sh
-pnpm check:release .task-tmp/release-check/package
+pnpm pack --pack-destination .task-tmp
+pnpm pack:gateway .task-tmp
+pnpm check:release .task-tmp/world-check/package
+pnpm check:release .task-tmp/gateway-check/package
 ```
 
-命令用 Node 的 `--experimental-strip-types` 从解包目录装载网关模块，核对 `package.json`、`PARLOR_CLIENT_VERSION` 和 `/play`、`/parent` 的静态资源 `v` 参数。检查只做模块装载，无需启动网关或连接 PG。WebUI 产物和 Cortico 扩展契约继续对同一个解包目录执行 `check:webui` 与框架的 `check:extension`。
+World 检查依赖清单、客户端和单厅装载、客户端版本与 `/play` 资源版本。网关检查 JavaScript 模块、启动和迁移入口，以及 `/play` 和 `/parent` 的资源版本。对解开的 World 继续跑 `check:webui` 和 Cortico 的 `check:extension`。发布前在隔离目录安装两份 tarball，验证 World 生产依赖没有 `pg`，验证本机入场与家长观战，再用临时 PostgreSQL 验证独立网关的启动和 `/healthz`。
 
 `play.html` 和 `parent.html` 中指向 `/play/assets/` 或 `/parent/assets/` 的 `src`、`href` 引用都应带一个与包版本相同的 `v`。兼容样式 `/play/assets/play.css` 沿用无版本链接，按静态资源的 300 秒缓存有效期更新。
 

@@ -1,6 +1,6 @@
 # 历史 README
 
-以下为以往版本的说明，保留当时的工具名、配置和兼容性信息。当前接入、启动和开发入口见 [README.md](../README.md)。SQLite 迁移步骤见 [迁移指南](storage-migration.md)。
+以下为以往版本的说明，保留当时的工具名、配置和兼容性信息。当前接入、启动和开发入口见 [README.md](../README.md)。SQLite 迁移步骤见 [迁移指南](https://github.com/biliye/cortico-world-parlor/blob/main/docs/storage-migration.md)。
 
 ## 0.42.0：经典飞行棋、说书人客厅与中国象棋
 

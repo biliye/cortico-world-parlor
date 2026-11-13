@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "noEmitOnError": true,
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": "."
+  },
+  "files": [
+    "scripts/serve-world.ts",
+    "scripts/migrate-json.ts",
+    "scripts/migrate-sqlite-to-pg.ts",
+    "scripts/table-doctor.ts",
+    "src/room/ratings/worker.ts"
+  ],
+  "include": []
+}

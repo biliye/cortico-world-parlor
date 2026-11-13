@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const requiredAssets = {
@@ -9,8 +9,9 @@ const requiredAssets = {
 const assetPrefixes = ['/play/assets/', '/parent/assets/'];
 const unversionedAssets = new Set(['/play/assets/play.css']);
 
-function checkAssetVersions(root, version) {
-  for (const [page, assets] of Object.entries(requiredAssets)) {
+function checkAssetVersions(root, version, pages) {
+  for (const page of pages) {
+    const assets = requiredAssets[page];
     const htmlPath = `src/web/${page}.html`;
     const html = readFileSync(join(root, htmlPath), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     const prefix = `/${page}/assets/`;
@@ -36,31 +37,64 @@ function checkAssetVersions(root, version) {
   }
 }
 
-function checkRelease(packageDir) {
-  const root = resolve(packageDir);
-  const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  if (typeof version !== 'string' || !version) throw new Error('package.json 缺少版本号');
-  checkAssetVersions(root, version);
-
+function checkModules(root, entry, ...params) {
   const probe = `
     import { pathToFileURL } from 'node:url';
-    const [gatewayFile, clientFile, version] = process.argv.slice(1);
-    const { WorldServer } = await import(pathToFileURL(gatewayFile).href);
-    if (typeof WorldServer?.create !== 'function') throw new Error('网关缺少 WorldServer.create');
-    const { PARLOR_CLIENT_VERSION } = await import(pathToFileURL(clientFile).href);
-    if (PARLOR_CLIENT_VERSION !== version) {
-      throw new Error('PARLOR_CLIENT_VERSION 应为 ' + version + '，实际为 ' + PARLOR_CLIENT_VERSION);
+    const [file, version] = process.argv.slice(1);
+    const url = pathToFileURL(file);
+    const entry = await import(url);
+    if (version) {
+      if (entry.PARLOR_CLIENT_VERSION !== version) {
+        throw new Error('PARLOR_CLIENT_VERSION 应为 ' + version + '，实际为 ' + entry.PARLOR_CLIENT_VERSION);
+      }
+      const { ParlorServer } = await import(new URL('./server.ts', url));
+      if (typeof ParlorServer !== 'function') throw new Error('缺少本机单厅入口');
+    } else if (typeof entry.WorldServer?.create !== 'function') {
+      throw new Error('网关缺少 WorldServer.create');
     }
   `;
-  // A preload such as tsx can hide syntax rejected by the deployed Node loader.
   const result = spawnSync(process.execPath, [
-    '--experimental-strip-types', '--input-type=module', '-e', probe, '--',
-    join(root, 'src/room/world-server.ts'), join(root, 'src/room/client.ts'), version,
+    ...(entry.endsWith('.ts') ? ['--experimental-strip-types'] : []),
+    '--input-type=module', '-e', probe, '--', join(root, entry), ...params,
   ], { env: { ...process.env, NODE_OPTIONS: '' }, stdio: 'inherit' });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error('网关 strip-only 装载或客户端版本检查失败');
+  if (result.status !== 0) throw new Error('装载或版本检查失败：' + entry);
+}
 
-  console.log(`发布包检查通过（${version}）：网关 strip-only 装载、客户端和网页资源版本。`);
+function checkRelease(packageDir) {
+  const root = resolve(packageDir);
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const { name, version } = manifest;
+  if (typeof version !== 'string' || !version) throw new Error('package.json 缺少版本号');
+  if (existsSync(join(root, 'src/web/assets/cards/cards.webp'))) throw new Error('发布包包含限制分发的牌面素材');
+
+  if (name === 'cortico-world-parlor') {
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      if (Object.hasOwn(manifest[field] ?? {}, 'pg')) throw new Error('World 安装依赖含 pg');
+    }
+    for (const path of [
+      'src/room/world-server.ts', 'src/room/global-identity.ts', 'src/room/storage', 'src/room/migration',
+      'scripts/serve-world.ts', 'scripts/migrate-json.ts', 'scripts/migrate-sqlite-to-pg.ts', 'scripts/table-doctor.ts',
+      'src/web/parent.html', 'src/web/support.html', 'src/web/identity.html',
+    ]) {
+      if (existsSync(join(root, path))) throw new Error('World 发布包含网关文件：' + path);
+    }
+    checkAssetVersions(root, version, ['play']);
+    checkModules(root, 'src/room/client.ts', version);
+  } else if (name === 'cortico-parlor-gateway') {
+    if (!manifest.dependencies?.pg || manifest.cortico) throw new Error('网关包清单缺少 pg 或包含 World 注册');
+    checkAssetVersions(root, version, ['play', 'parent']);
+    checkModules(root, 'src/room/world-server.js');
+    for (const command of ['parlor-gateway', 'parlor-migrate-json', 'parlor-migrate-pg', 'parlor-table-doctor']) {
+      const entry = manifest.bin?.[command];
+      if (!entry?.endsWith('.js') || !readFileSync(join(root, entry), 'utf8').startsWith('#!/usr/bin/env node')) {
+        throw new Error('网关缺少可直接运行的 Node 命令：' + command);
+      }
+    }
+  } else {
+    throw new Error('未知发布包：' + name);
+  }
+  console.log(`发布包检查通过：${name}@${version}`);
 }
 
 try {

@@ -1,13 +1,13 @@
 # 从 SQLite 迁移到 PostgreSQL
 
-在包目录运行 `pnpm migrate:pg`。迁移工具以只读方式打开来源库，导入当前迁移表清单中的数据，包括旧 `monopoly_*` 与历史 `migration_runs`。导入后逐行核验内容，校准 `mail.seq`、`ledger_entries.ord`、`ledger_transfers.id` 三个自增序列，并在目标库留下来源哈希、表级行数、工具版本与起止时刻。脚本见 [migrate-sqlite-to-pg.ts](../scripts/migrate-sqlite-to-pg.ts)。
+安装 `cortico-parlor-gateway` 后运行 `pnpm exec parlor-migrate-pg`，从源码运行则用 `pnpm migrate:pg`。迁移工具以只读方式打开来源库，导入当前迁移表清单中的数据，包括旧 `monopoly_*` 与历史 `migration_runs`。导入后逐行核验内容，校准 `mail.seq`、`ledger_entries.ord`、`ledger_transfers.id` 三个自增序列，并在目标库留下来源哈希、表级行数、工具版本与起止时刻。脚本见 [migrate-sqlite-to-pg.ts](https://github.com/biliye/cortico-world-parlor/blob/main/scripts/migrate-sqlite-to-pg.ts)。
 
 ```bash
 # 1. 先审计（不连目标、不写任何东西）
-pnpm migrate:pg --source ./parlor-backup.db --dry-run
+pnpm exec parlor-migrate-pg --source ./parlor-backup.db --dry-run
 
 # 2. 搬到空库；拷贝 + 序列校准 + 核验在同一个事务里，核验不过整笔回滚
-pnpm migrate:pg --source ./parlor-backup.db --target 'postgres://用户:密码@主机:5432/parlor'
+pnpm exec parlor-migrate-pg --source ./parlor-backup.db --target 'postgres://用户:密码@主机:5432/parlor'
 ```
 
 - **来源必须是一致性备份**：停写之后用 SQLite 的 Backup API，或完全关闭连接后的状态。直接复制
