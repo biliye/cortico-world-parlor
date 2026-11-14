@@ -7,7 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { ADDED_TABLE_VERSIONS, MIGRATION_TABLES, OBSOLETE_COLUMNS, OBSOLETE_TABLES, targetColumns } from './schema-map.ts';
+import { addedSourceColumns, ADDED_TABLE_VERSIONS, MIGRATION_TABLES, OBSOLETE_COLUMNS, OBSOLETE_TABLES, sourceColumnMap } from './schema-map.ts';
 import { SQLITE_SCHEMA_VERSION } from '../storage/migrate.ts';
 
 // Vite 5 的 builtin 列表还不认识 node:sqlite，走 getBuiltinModule 绕过打包器解析。
@@ -74,7 +74,10 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
 
   // —— 结构：表、列、schema 版本 ——
   const present = new Set(sourceTables(db));
-  const expected = new Map(MIGRATION_TABLES.map((table) => [table.name, targetColumns().get(table.name) ?? []]));
+  const mapped = sourceColumnMap();
+  const expected = new Map(MIGRATION_TABLES.map(table => [table.name, mapped.get(table.name) ?? []]));
+  const schemaRow = present.has('meta') ? db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() : undefined;
+  const schemaVersion = Number(schemaRow?.value ?? 0) || 0;
 
   for (const table of MIGRATION_TABLES) {
     if (!present.has(table.name) && !ADDED_TABLE_VERSIONS[table.name]) issues.push({ code: 'missing_table', table: table.name, detail: '来源库没有这张表' });
@@ -91,16 +94,11 @@ export const auditSource = (db: SqliteHandle, file: string, options: { deep?: bo
     const want = expected.get(table.name) ?? [];
     const drop = OBSOLETE_COLUMNS[table.name] ?? [];
     const extra = actual.filter((column) => !want.includes(column) && !drop.includes(column));
-    const missing = want.filter((column) => !actual.includes(column));
+    const missing = want.filter(column => !actual.includes(column) && (addedSourceColumns[table.name]?.[column] ?? 0) <= schemaVersion);
     if (extra.length) issues.push({ code: 'unknown_column', table: table.name, detail: `多出列：${extra.join(', ')}` });
     if (missing.length) issues.push({ code: 'missing_column', table: table.name, detail: `缺列：${missing.join(', ')}` });
   }
 
-  let schemaVersion = 0;
-  if (present.has('meta')) {
-    const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value?: string } | undefined;
-    schemaVersion = Number(row?.value ?? 0) || 0;
-  }
   if (schemaVersion < 1) issues.push({ code: 'unknown_schema_version', detail: 'meta.schema_version 缺失或不是正整数' });
   for (const [name, addedIn] of Object.entries(ADDED_TABLE_VERSIONS)) {
     if (schemaVersion >= addedIn && !present.has(name)) issues.push({ code: 'missing_table', table: name, detail: '来源库没有这张表' });

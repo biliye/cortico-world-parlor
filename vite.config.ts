@@ -10,7 +10,11 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue({
+    features: {
+      componentIdGenerator: (path, source, production, hash) => hash(path + (production ? source.replace(/\r\n/g, '\n') : '')),
+    },
+  })],
   base: '/play/assets/vue/',
   build: {
     outDir: 'src/web/vue',

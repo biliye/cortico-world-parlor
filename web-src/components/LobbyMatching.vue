@@ -8,7 +8,7 @@
  */
 import { computed, ref } from 'vue';
 import { enterDiscoveredTable, loadHall, myTable, recruitments } from '../stores/parlor.ts';
-import type { TableRecruitment } from '../../src/room/table-discovery-db.ts';
+import type { TableRecruitment } from '../../src/room/table-discovery-protocol.ts';
 
 const game = ref('ddz');
 const busy = ref(false);

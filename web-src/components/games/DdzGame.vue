@@ -127,7 +127,7 @@ const playSlots = computed(() => [
 const sideColumns = computed(() => [
   { side: 'left', seat: leftSeat.value },
   { side: 'right', seat: rightSeat.value },
-].filter((column) => !!column.seat));
+].filter((column): column is { side: string; seat: Seat } => column.seat !== null));
 
 function playName(side: string, seat: Seat): string {
   const whose = side === 'me' && !spectating.value ? '你' : nameOf(seat.id, seat.name);
