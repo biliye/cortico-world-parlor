@@ -46,7 +46,9 @@ log {
 }
 ```
 
-访问日志保留路径、状态码、响应 `size` 和 `duration`。用带虚拟查询参数的请求验证日志只写路径，再按时段和路径汇总 `size`。SSE 通常在断开后才写访问日志。仍在线的流量可查网关每分钟的 `parlor: SSE 流量`，其中 `bytes` 是写入响应的 SSE 帧字节，`initialReplayBytes` 和 `turnBytes` 是其中的初始补发及牌桌回合事件字节，两者可以重叠。用 `opened`、`closed` 观察短时重连，再查同一窗口的开关日志和 `source`。计费流量以云平台流量包为准。
+访问日志保留路径、状态码、响应 `size` 和 `duration`。用带虚拟查询参数的请求验证日志只写路径，再按时段和路径汇总 `size`。SSE 通常在断开后才写访问日志。仍在线的流量可查网关每分钟的 `parlor: SSE 流量`，其中 `bytes` 是写入响应的 SSE 帧字节，`initialReplayBytes` 和 `turnBytes` 是其中的初始补发及牌桌回合事件字节，两者可以重叠。计费流量以云平台流量包为准。
+
+`bytesBySource`、`turnBytesBySource` 和 `activeBySource` 分别给出各来源的帧字节、回合字节和采样时刻的活跃连接数。`web` 是声明精简协议的网页，`coo` 是携带客户端版本的连接，`other` 包含旧网页和其他未标明的客户端。用 `opened`、`closed` 观察短时重连，再查同一窗口的开关日志和 `source`。
 
 ## 从源码构建
 

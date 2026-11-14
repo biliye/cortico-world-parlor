@@ -101,14 +101,30 @@ interface SseClient {
 
 const SSE_TRAFFIC_INTERVAL_MS = 60_000;
 
+function sseSourceCounts() {
+  return { web: 0, coo: 0, other: 0 };
+}
+
+function sseTrafficCounters() {
+  return {
+    bytes: 0,
+    bytesBySource: sseSourceCounts(),
+    // 补发与回合都是 bytes 的子集，同一帧可以同时计入两项。
+    initialReplayBytes: 0,
+    turnBytes: 0,
+    turnBytesBySource: sseSourceCounts(),
+    opened: 0,
+    closed: 0,
+  };
+}
+
 function payloadVersion(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 22);
 }
 
 function compactParentEvent(event: RoomEvent) {
-  const showText = !event.type.startsWith('parlor.table.') || event.type === 'parlor.table.say';
   return {
-    seq: event.seq, ts: event.ts, type: event.type, from: event.from, text: showText ? event.text : '',
+    seq: event.seq, ts: event.ts, type: event.type, from: event.from, text: event.text,
     data: { name: event.data?.name, presenceWeb: event.data?.presenceWeb },
   };
 }
@@ -295,7 +311,7 @@ export class WorldServer {
   private pumpScheduled = false;
   private lastSweepAt = 0;
   private sseTrafficSince = Date.now();
-  private sseTraffic = { bytes: 0, initialReplayBytes: 0, turnBytes: 0, opened: 0, closed: 0 };
+  private sseTraffic = sseTrafficCounters();
   /** 大厅 id 的同步快照：init() 建完大厅后填上，供 hallId 这个同步属性读。 */
   private hallIdValue = '';
 
@@ -2767,7 +2783,7 @@ export class WorldServer {
     }
     const room = await getRoom(this.db, seat.roomId);
     const host = await this.host(seat.roomId);
-    const snapshot = await host.snapshot(cooId, { since, limit });
+    const snapshot = await host.snapshot(cooId, { since, limit, parentMessagesOnly: compact });
     // 家长防偷看：桌上还有「真人」席位时，藏起孩子的暗牌与私牌事件。同桌的 Coo 不算真人。
     const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
       ? snapshot.table.id ?? snapshot.table.tableId
@@ -2910,8 +2926,12 @@ export class WorldServer {
     const ready = client.res.write(frame);
     const bytes = Buffer.byteLength(frame);
     this.sseTraffic.bytes += bytes;
+    this.sseTraffic.bytesBySource[client.source] += bytes;
     if (replay) this.sseTraffic.initialReplayBytes += bytes;
-    if (turn) this.sseTraffic.turnBytes += bytes;
+    if (turn) {
+      this.sseTraffic.turnBytes += bytes;
+      this.sseTraffic.turnBytesBySource[client.source] += bytes;
+    }
     return ready;
   }
 
@@ -2936,13 +2956,17 @@ export class WorldServer {
     const wallTime = Date.now();
     const elapsed = wallTime - this.sseTrafficSince;
     if (elapsed >= SSE_TRAFFIC_INTERVAL_MS) {
-      const active = [...this.sse.values()].reduce((count, clients) => count + clients.size, 0);
+      const activeBySource = sseSourceCounts();
+      for (const clients of this.sse.values()) {
+        for (const client of clients) activeBySource[client.source] += 1;
+      }
+      const active = activeBySource.web + activeBySource.coo + activeBySource.other;
       const traffic = this.sseTraffic;
       if (active || traffic.opened || traffic.closed || traffic.bytes) {
-        console.log(`parlor: SSE 流量 ${JSON.stringify({ intervalMs: elapsed, active, ...traffic })}`);
+        console.log(`parlor: SSE 流量 ${JSON.stringify({ intervalMs: elapsed, active, activeBySource, ...traffic })}`);
       }
       this.sseTrafficSince = wallTime;
-      this.sseTraffic = { bytes: 0, initialReplayBytes: 0, turnBytes: 0, opened: 0, closed: 0 };
+      this.sseTraffic = sseTrafficCounters();
     }
     // 有 dirty 就只推那些客厅；每 2 秒补一次全扫，兜住漏掉的通知与 ping。
     const fullSweep = now - this.lastSweepAt >= 2_000;

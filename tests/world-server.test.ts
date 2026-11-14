@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -234,35 +234,64 @@ describe('WorldServer 聊天网关', () => {
     expect((await action(a.body.token, { type: 'table_start', table, requestId: 'start' })).status).toBe(200);
     expect((await action(a.body.token, { type: 'say', text: '历史读到这里' })).status).toBe(200);
 
-    const read = async (token: unknown, compact: boolean) => {
+    const controllers: AbortController[] = [];
+    const read = async (token: unknown, source: 'web' | 'coo' | 'other') => {
       const controller = new AbortController();
-      try {
-        const response = await fetch(`${app.url}${room}/stream?since=0`, {
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]),
-          headers: { ...headers(token), ...(compact ? { 'x-parlor-stream': 'compact-table-v1' } : {}) },
-        });
-        expect(response.status).toBe(200);
-        const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-        let frames = '';
-        while (!frames.includes('历史读到这里')) {
-          const chunk = await reader.read();
-          if (chunk.done) throw new Error('SSE ended before marker');
-          frames += chunk.value;
-        }
-        return frames.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
-      } finally {
-        controller.abort();
+      controllers.push(controller);
+      const response = await fetch(`${app.url}${room}/stream?since=0`, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(4000)]),
+        headers: {
+          ...headers(token),
+          ...(source === 'web' ? { 'x-parlor-stream': 'compact-table-v1' } : {}),
+          ...(source === 'coo' ? { 'x-parlor-client': 'test-coo' } : {}),
+        },
+      });
+      expect(response.status).toBe(200);
+      const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+      let frames = '';
+      while (!frames.includes('历史读到这里')) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('SSE ended before marker');
+        frames += chunk.value;
       }
+      return frames.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
     };
-    const legacyA = await read(a.body.token, false);
-    const actor = legacyA.some(event => event.type === 'parlor.table.turn') ? a : b;
-    const legacy = actor === a ? legacyA : await read(b.body.token, false);
-    const web = await read(actor.body.token, true);
-    const type = 'parlor.table.turn';
-    const turn = legacy.find(event => event.type === type);
-    expect(turn).toMatchObject({ scope: { kind: 'seat' }, data: { table: { revision: expect.any(Number) } } });
-    expect(web.find(event => event.type === type)).toEqual({ seq: turn.seq, type });
-    expect((await read(observer.body.token, true)).some(event => event.type === type)).toBe(false);
-    expect(web.filter(event => event.type !== type)).toEqual(legacy.filter(event => event.type !== type));
+
+    try {
+      const cooA = await read(a.body.token, 'coo');
+      const actor = cooA.some(event => event.type === 'parlor.table.turn') ? a : b;
+      const coo = actor === a ? cooA : await read(b.body.token, 'coo');
+      const web = await read(actor.body.token, 'web');
+      const type = 'parlor.table.turn';
+      const turn = coo.find(event => event.type === type);
+      expect(turn).toMatchObject({ scope: { kind: 'seat' }, data: { table: { revision: expect.any(Number) } } });
+      expect(web.find(event => event.type === type)).toEqual({ seq: turn.seq, type });
+      expect((await read(observer.body.token, 'web')).some(event => event.type === type)).toBe(false);
+      expect((await read(observer.body.token, 'other')).some(event => event.type === type)).toBe(false);
+      expect(web.filter(event => event.type !== type)).toEqual(coo.filter(event => event.type !== type));
+
+      const log = vi.spyOn(console, 'log');
+      const now = Date.now;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + 61_000);
+      try {
+        const prefix = 'parlor: SSE 流量 ';
+        await vi.waitFor(() => {
+          const entry = log.mock.calls.find(([message]) => typeof message === 'string' && message.startsWith(prefix));
+          expect(entry).toBeDefined();
+          const traffic = JSON.parse(entry![0].slice(prefix.length));
+          expect(traffic.activeBySource).toEqual({ web: 2, coo: actor === a ? 1 : 2, other: 1 });
+          expect(traffic.bytes).toBe(Object.values<number>(traffic.bytesBySource).reduce((sum, bytes) => sum + bytes, 0));
+          expect(traffic.bytesBySource.other).toBeGreaterThan(0);
+          expect(traffic.turnBytesBySource.web).toBeGreaterThan(0);
+          expect(traffic.turnBytesBySource.coo).toBeGreaterThan(traffic.turnBytesBySource.web);
+          expect(traffic.turnBytesBySource.other).toBe(0);
+        }, { timeout: 1500 });
+      } finally {
+        clock.mockRestore();
+        log.mockRestore();
+      }
+    } finally {
+      for (const controller of controllers) controller.abort();
+    }
   });
 });

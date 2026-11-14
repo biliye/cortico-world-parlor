@@ -43,6 +43,7 @@ export interface EventQuery {
   interval?: EventInterval;
   since?: number;
   limit?: number;
+  parentMessagesOnly?: boolean;
 }
 
 interface EventRow {
@@ -379,6 +380,9 @@ export class EventDb {
          AND e.seq > ?
          AND (e.seq <= COALESCE(?, 2147483647))
          AND (e.scope_kind IN ('room','hall') OR a.coo_id IS NOT NULL)
+         ${query.parentMessagesOnly ? `AND (e.type NOT LIKE 'parlor.table.%' OR e.type = 'parlor.table.say')
+           AND (e.type NOT IN ('parlor.joined', 'parlor.left')
+                OR (e.data_json -> 'presenceWeb') IS DISTINCT FROM 'false'::jsonb)` : ''}
        ORDER BY e.seq ${order}
        LIMIT ?`,
     ).all(query.cooId, roomId, from, until, limit) as unknown as EventRow[];
