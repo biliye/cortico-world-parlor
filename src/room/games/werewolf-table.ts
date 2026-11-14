@@ -1139,6 +1139,15 @@ export class WerewolfTable implements TableEngine {
     return null;
   }
 
+  offlineReminder(seatId: string): { windowId: string; pending: boolean } | undefined {
+    const seat = this.seatOf(seatId);
+    if (!seat || this.status !== 'playing') return undefined;
+    return {
+      windowId: this.phase.windowId,
+      pending: this.phase.kind === 'reveal' || this.pendingMoveFor(seat) !== null,
+    };
+  }
+
   view(seatId: string): unknown | null {
     const seat = this.seatOf(seatId);
     if (!seat) return null;

@@ -64,13 +64,41 @@ it('PG v15 升到 v16：已有说书场次可关联散场聊天', async () => {
 
   await migrate(db);
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(16);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   await db.prepare(`
     INSERT INTO story_chat (round_id, coo_id, name, text, request_id, created_at)
     VALUES ('legacy-story', ?, '旧说书人', '散场聊聊', 'legacy-chat', 4)
   `).run(coo);
   expect(await db.prepare('SELECT title FROM story_rounds WHERE id=?').get('legacy-story')).toEqual({ title: '老故事' });
   expect(await db.prepare('SELECT text FROM story_chat WHERE round_id=?').get('legacy-story')).toEqual({ text: '散场聊聊' });
+});
+
+it('PG v16 升级后只将失效的旧牌桌提醒标为已读', async () => {
+  db = await openTestDb();
+  const coo = 'coo-v17-upgrade';
+  const room = 'r-v17-upgrade';
+  const table = 't-00000000-0000-0000-0000-000000000001';
+  await new CooAccountDb(db).registerCoo(coo, 'table-reminder-secret-012345', 'pet', '旧玩家');
+  await createRoom(db, { id: room, ownerCooId: coo, name: '旧客厅' }, 1);
+  await insertTable(db, table, room, 'werewolf');
+  await db.prepare("UPDATE tables SET status='playing', state_json=? WHERE id=?")
+    .run(JSON.stringify({ phase: { windowId: 'w2', stage: 'act' } }), table);
+  const insert = db.prepare(`INSERT INTO mail(id, ts, coo_id, room_id, kind, action, from_name, text, key)
+    VALUES (?, 1, ?, ?, 'ledger', ?, '客厅', '保留正文', ?)`);
+  await insert.run('expired', coo, room, 'table', `${table}/w1/seat`);
+  await insert.run('current', coo, room, 'table', `${table}/w2/seat`);
+  await insert.run('settled', coo, room, 'table', 't-00000000-0000-0000-0000-000000000002/w1/seat');
+  await insert.run('unrelated', coo, room, 'other', `${table}/w3/seat`);
+  await db.exec("UPDATE meta SET value='16' WHERE key='schema_version'");
+  await migrate(db);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  expect(await db.prepare('SELECT id, text, read_at IS NOT NULL AS read FROM mail ORDER BY id').all()).toEqual([
+    { id: 'current', text: '保留正文', read: 0 },
+    { id: 'expired', text: '保留正文', read: 1 },
+    { id: 'settled', text: '保留正文', read: 1 },
+    { id: 'unrelated', text: '保留正文', read: 0 },
+  ]);
 });
 
 it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象棋桌', async () => {
