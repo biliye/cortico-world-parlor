@@ -20,12 +20,17 @@ vi.mock('../web-src/stores/view.ts', async () => {
 
 class Stream {
   static last: Stream;
+  private opened = false;
   private resolve!: (response: Response) => void;
   readonly response = new Promise<Response>(resolve => { this.resolve = resolve; });
   private controller!: ReadableStreamDefaultController<Uint8Array>;
   private readonly body = new ReadableStream<Uint8Array>({ start: controller => { this.controller = controller; } });
   constructor(readonly url: string, readonly token: string, readonly signal: AbortSignal) { Stream.last = this; }
-  onopen() { this.resolve(new Response(this.body)); }
+  onopen() {
+    if (this.opened) return;
+    this.opened = true;
+    this.resolve(new Response(this.body));
+  }
   onerror() { if (!this.signal.aborted) this.resolve(new Response(null, { status: 503 })); }
   chunk(text: string) {
     this.onopen();
