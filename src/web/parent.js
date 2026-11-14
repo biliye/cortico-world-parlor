@@ -19,6 +19,8 @@ const ui = {
   statGames: document.getElementById('stat-games'),
   people: document.getElementById('room-people'),
   tableStatus: document.getElementById('table-status'),
+  tableWatchEntry: document.getElementById('table-watch-entry'),
+  tableWatch: document.getElementById('table-watch'),
   tableText: document.getElementById('table-text'),
   tablePrivate: document.getElementById('table-private'),
   privateNote: document.getElementById('private-note'),
@@ -275,6 +277,11 @@ function renderTable(view) {
   const table = view.table;
   ui.tableStatus.textContent = table ? (table.label || table.game || '牌桌') : '空闲';
   ui.tableText.textContent = table ? (table.text || '') : '现在没有桌子。';
+  if (ui.tableWatchEntry && ui.tableWatch) {
+    ui.tableWatchEntry.hidden = !view.watchTableId;
+    if (view.watchTableId) ui.tableWatch.href = '/play?' + new URLSearchParams({ parentWatch: view.watchTableId });
+    else ui.tableWatch.removeAttribute('href');
+  }
 
   const priv = view.tablePrivate && view.tablePrivate.text ? view.tablePrivate.text : '';
   if (priv) {

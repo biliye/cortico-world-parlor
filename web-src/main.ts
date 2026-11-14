@@ -6,10 +6,13 @@
  */
 import { createApp } from 'vue';
 import App from './App.vue';
+import ParentWatchView from './views/ParentWatchView.vue';
 
 document.documentElement.classList.add('vue-app');
 
 const host = document.getElementById('app') || document.body;
 host.replaceChildren();
 
-createApp(App).mount(host);
+const parentWatch = new URLSearchParams(location.search).get('parentWatch');
+if (parentWatch) createApp(ParentWatchView, { tableId: parentWatch }).mount(host);
+else createApp(App).mount(host);
