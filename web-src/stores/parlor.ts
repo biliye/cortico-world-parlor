@@ -642,6 +642,7 @@ let acting = false;
 const IDEMPOTENT = new Set([
   'table_open', 'table_join', 'table_leave', 'table_start', 'table_rematch', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
   'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'aeroplane_action', 'table_discovery',
+  'mahjong-sichuan_action', 'mahjong-guangdong_action',
 ]);
 
 /**
@@ -748,7 +749,8 @@ function withTableFields(body: Record<string, unknown>): Record<string, unknown>
     }
     return out;
   }
-  if (!type.startsWith('table_') && !STRICT_ACTIONS.has(type) && type !== 'werewolf_action') return out;
+  if (!type.startsWith('table_') && !STRICT_ACTIONS.has(type) && type !== 'werewolf_action'
+    && type !== 'mahjong-sichuan_action' && type !== 'mahjong-guangdong_action') return out;
   const mine = tableIdOf(myTable.value);
   if (mine && !out.table) out.table = mine;
   if (STRICT_ACTIONS.has(type)) {

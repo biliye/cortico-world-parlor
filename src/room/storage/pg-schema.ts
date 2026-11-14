@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 17;
+export const PG_SCHEMA_VERSION = 18;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -536,5 +536,11 @@ export const PG_MIGRATIONS: PgMigration[] = [
           AND t.state_json -> 'phase' ->> 'windowId' = split_part(m.key, '/', 2)
           AND t.state_json -> 'phase' ->> 'stage' IS DISTINCT FROM 'read'
       );
+  ` },
+  { version: 18, name: 'tables-game-mahjong', sql: `
+    ALTER TABLE tables DROP CONSTRAINT IF EXISTS tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi','aeroplane',
+        'mahjong-sichuan','mahjong-guangdong'));
   ` },
 ];

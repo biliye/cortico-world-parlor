@@ -169,6 +169,11 @@ export type ActionRequest =
   | ({ type: 'aeroplane_action'; table?: string; requestId?: string; revision?: number }
     & ({ action: 'roll' } | { action: 'move'; plane: number }))
   | {
+    type: 'mahjong-sichuan_action' | 'mahjong-guangdong_action'; table?: string; requestId?: string;
+    action: 'exchange' | 'missing' | 'discard' | 'pung' | 'kong' | 'hu' | 'pass';
+    windowId: string; tile?: number; tiles?: number[]; suit?: number;
+  }
+  | {
     /** 狼人杀动作：窗口制——windowId 必带，服务端校验窗口与动作槽；revision 不参与校验。 */
     type: 'werewolf_action';
     move: 'speak' | 'pass_speech' | 'vote' | 'wolf_chat' | 'wolf_kill' | 'inspect' | 'guard' | 'witch' | 'shoot';

@@ -142,6 +142,33 @@ describe('Coo 快速匹配与牌桌分享', () => {
     expect(next.tablePrivate.board).toHaveLength(225);
   });
 
+  it('麻将行动通知携带牌号和记牌，Coo 用通用动作直接换牌', async () => {
+    const { friend, friendToken, host } = await startWorld({ tier: 'quiet' });
+    expect(await call('parlor_table_open', { game: 'mahjong-sichuan' })).toContain('四川血战到底');
+    const initial = JSON.parse(await call('parlor_game_info', { op: 'state' }));
+    const table = initial.table.id;
+    await friend.action(friendToken, { type: 'table_join', table, requestId: 'mahjong-join' }, 'lobby');
+    for (const [cooId, name] of [['coo-mahjong-l', '小李'], ['coo-mahjong-g', '桂圆']]) {
+      const client = new ParlorClient(server!.url, { cooId, cooSecret: cooId + '-test-secret' });
+      const joined = await client.join('inv', { name }, 'lobby');
+      await client.action(joined.token, { type: 'table_join', table, requestId: 'mahjong-join' }, 'lobby');
+    }
+    await call('parlor_table_start', { table });
+    await until(() => pushedText(host).includes('建议换'), 8000);
+    const notification = pushedText(host);
+    expect(notification).toContain('未见张数');
+    const windowId = notification.match(/windowId (m\d+)/)?.[1];
+    const tiles = notification.match(/建议换 (.*?)。/)?.[1].match(/\d+/g)?.map(Number);
+    expect(windowId).toBe('m1');
+    expect(tiles).toHaveLength(3);
+    const result = JSON.parse(await call('parlor_game_action', {
+      action: 'exchange', params: { windowId, tiles }, requestId: 'coo-exchange',
+    }));
+    expect(result).toMatchObject({ ok: true, tableId: table });
+    const updated = JSON.parse(await call('parlor_game_info', { op: 'state', table }));
+    expect(updated.availableActions).toEqual([]);
+  });
+
   it('招募清单会带上只开了快速匹配的桌，并提示直接 join', async () => {
     const { friend, friendToken } = await startWorld({ room: 'hall' });
     const room = (await friend.createRoom({ name: '只开匹配厅', visibility: 'public' }, friendToken)).room;

@@ -9,6 +9,7 @@ import DmWindow from './DmWindow.vue';
 import Icon from './Icon.vue';
 import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
+import { MAHJONG_GAMES } from '../../src/room/games/mahjong-rules.ts';
 import AccountPanel from './AccountPanel.vue';
 import RatingsPanel from './RatingsPanel.vue';
 import GiftPanel from './GiftPanel.vue';
@@ -27,8 +28,10 @@ defineProps<{ showStory: boolean }>();
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
+const onMahjong = computed(() => view.value === 'table'
+  && MAHJONG_GAMES.some(game => game === activeTable.value?.game));
 const boardChatInToolbar = computed(() => view.value === 'table'
-  && ['monopoly2d', 'gomoku', 'xiangqi', 'aeroplane'].includes(activeTable.value?.game ?? ''));
+  && (onMahjong.value || ['monopoly2d', 'gomoku', 'xiangqi', 'aeroplane'].includes(activeTable.value?.game ?? '')));
 const switcherOpen = ref(false);
 const accountOpen = ref(false);
 const ratingsOpen = ref(false);
@@ -86,7 +89,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="shell" :class="{ 'chat-open': view !== 'story' && chatExpanded(), 'in-hall': inHall, 'on-werewolf': werewolfTableKey }">
+  <div class="shell" :class="{ 'chat-open': view !== 'story' && chatExpanded(), 'in-hall': inHall, 'on-werewolf': werewolfTableKey, 'on-mahjong': onMahjong }">
     <aside class="rail" aria-label="会馆门牌">
       <a class="rail-mark" href="/play" aria-label="鲸语会馆">
         <Icon name="whale" />
@@ -181,6 +184,9 @@ onMounted(() => {
 
 <style scoped>
 .tool.board-chat-tool { display: inline-flex; }
+@media (min-width: 1101px) {
+  .shell.on-mahjong.chat-open .stage-body { padding-right: 350px; }
+}
 .shell.on-werewolf > .chat-fab {
   border: 1px solid var(--line-2);
   background: var(--panel-2);
