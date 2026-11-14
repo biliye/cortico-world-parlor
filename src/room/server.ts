@@ -937,6 +937,46 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     for (const event of (page.events || [])) log.append(line(event));
     while (log.children.length > 300) log.firstElementChild.remove();
   }
+  async function streamEvents() {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    let pageHidden = false;
+    const onPageHide = () => { pageHidden = true; stop(); };
+    window.addEventListener('pagehide', onPageHide, { once: true });
+    let watchdog;
+    const arm = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(stop, 45000);
+    };
+    try {
+      arm();
+      const response = await fetch('/v1/stream?since=' + latest, { headers, signal: controller.signal });
+      if (!response.ok || !response.body) return;
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        arm();
+        buffer += value;
+        let boundary;
+        while ((boundary = buffer.indexOf('\\n\\n')) !== -1) {
+          const event = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (event.startsWith('data:')) {
+            try { addEvent(JSON.parse(event.slice(5))); } catch {}
+          }
+        }
+      }
+    } catch { /* The stream reconnects below. */ }
+    finally {
+      clearTimeout(watchdog);
+      controller.abort();
+      window.removeEventListener('pagehide', onPageHide);
+      if (!pageHidden) setTimeout(streamEvents, 3000);
+    }
+  }
+  window.addEventListener('pageshow', (event) => { if (event.persisted) void streamEvents(); });
   async function load() {
     const response = await fetch('/v1/room?limit=1', { headers });
     if (!response.ok) { showError('令牌无效，或房间已经重开。'); return; }
@@ -948,9 +988,7 @@ const ownerHtml = (room: string, seatName: string): string => `<!doctype html>
     refreshReplay();
     await seedLog();
     latest = snapshot.latest;
-    const source = new EventSource('/v1/stream?since=' + latest + '&token=' + encodeURIComponent(token));
-    source.onmessage = (message) => { try { addEvent(JSON.parse(message.data)); } catch {} };
-    source.onerror = () => { /* 浏览器自动重连 */ };
+    void streamEvents();
   }
   document.getElementById('save').onclick = async () => {
     const response = await fetch('/v1/action', {

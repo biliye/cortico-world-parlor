@@ -120,9 +120,10 @@
     "test": "node scripts/test.mjs unit",
     "test:unit": "node scripts/test.mjs unit",
     "test:all": "node scripts/test.mjs all",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.webui.json",
-    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "build:web": "vite build",
+    "typecheck": "tsc --noEmit && pnpm typecheck:web && tsc --noEmit -p tsconfig.webui.json",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
+    "sync:version": "node scripts/sync-release-version.mjs",
+    "build:web": "node scripts/sync-release-version.mjs --check && vite build",
     "build:webui": "vite build --config vite.webui.config.ts",
     "check:webui": "node scripts/check-webui.mjs",
     "check:release": "node scripts/check-release.mjs",
@@ -145,6 +146,7 @@
     "typescript": "^5.7.2",
     "vite": "^8.3.5",
     "vitest": "^2.1.8",
-    "vue": "^3.5.44"
+    "vue": "^3.5.44",
+    "vue-tsc": "^3.3.14"
   }
 }

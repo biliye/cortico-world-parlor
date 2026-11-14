@@ -77,6 +77,19 @@ const makePrivate = async (app: WorldServer, owner: string, name: string): Promi
 };
 
 describe('切厅首屏快照', () => {
+  it('不公开客厅仍在房主可进入的列表里，陌生身份看不到', async () => {
+    const { app } = await start();
+    await enter(app, O, '房主');
+    await enter(app, U, '访客');
+    const created = await post(app.url, '/v1/rooms', { name: '不公开客厅', visibility: 'unlisted' }, cooHeaders(O));
+    expect(created.status).toBe(200);
+    const room = created.body.room as { id: string };
+    const owner = await get(app.url, '/v1/me', cooHeaders(O));
+    const visitor = await get(app.url, '/v1/me', cooHeaders(U));
+    expect(owner.body.rooms).toContainEqual(expect.objectContaining({ id: room.id, visibility: 'unlisted' }));
+    expect(visitor.body.rooms).not.toContainEqual(expect.objectContaining({ id: room.id }));
+  });
+
   it('附带快照与目的地本人GET投影一致，旧客户端不额外构建首屏', async () => {
     const { app } = await start();
     const token = await enter(app, O, '房主');

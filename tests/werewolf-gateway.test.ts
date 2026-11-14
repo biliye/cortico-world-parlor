@@ -213,6 +213,19 @@ describe('狼人杀 · 牌桌时限基准', () => {
     };
     await until(async () => (await privOf()) === 'night', 5_000);
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+    const tokens = [playerToken, ...petTokens];
+    let firstSpeaker: string | undefined;
+    await until(async () => {
+      const views = await Promise.all(tokens.map(token => get(app.url, '/v1/rooms/lobby/table', token)));
+      const index = views.findIndex(({ body }) => (body.tablePrivate as { myMove?: string; speechKind?: string } | null)?.myMove === 'speak');
+      if (index < 0) return false;
+      firstSpeaker = tokens[index];
+      return true;
+    }, 5_000);
+    const feed = await get(app.url, '/v1/rooms/lobby/replay?limit=200', firstSpeaker!);
+    const events = feed.body.events as Array<{ type: string; text: string; data?: { decision?: boolean; tableId?: string } }>;
+    expect(events.some(event => event.type === 'parlor.table.turn' && event.data?.tableId === tableId
+      && event.data.decision !== false && event.text.includes('轮到你发言'))).toBe(true);
   });
 });
 

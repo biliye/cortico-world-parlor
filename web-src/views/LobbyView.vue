@@ -415,7 +415,7 @@ async function createRoom(): Promise<void> {
           <div class="mine-copy">
             <div class="mine-title">
               <h3>{{ room.name }}</h3>
-              <span class="mine-tag">{{ visibilityLabel(room) }}</span>
+              <span class="mine-tag">{{ visibilityLabel(room) }}<template v-if="room.visibility !== 'public'"> · 你可进入</template></span>
             </div>
             <p>{{ room.topic || '牌可以慢慢打，话也可以慢慢聊。' }}</p>
             <div class="mine-meta">

@@ -5,10 +5,7 @@
  * JSON 列（TEXT → JSONB）。列清单不在这里手抄一遍，而是从 PG 的 DDL 解析出来——
  * 两边 schema 一旦漂移，先在这里被拦下，不会悄悄漏列。
  */
-import { PG_SCHEMA_SQL } from '../storage/pg-schema.ts';
-import { SUPPORT_SCHEMA_SQL } from '../support-db.ts';
-import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
-import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
+import { PG_MIGRATIONS } from '../storage/pg-schema.ts';
 
 export interface TableMap {
   name: string;
@@ -24,6 +21,7 @@ export interface TableMap {
 export const ADDED_TABLE_VERSIONS: Readonly<Record<string, number>> = {
   support_feedback: 7, support_announcements: 7,
   table_discovery: 8, table_entry_receipts: 8,
+  news_items: 9, support_audit: 10,
   table_seat_results: 13,
 };
 
@@ -71,6 +69,8 @@ export const MIGRATION_TABLES: TableMap[] = [
   { name: 'identity_tickets', key: ['token_hash'] },
   { name: 'support_feedback', key: ['id'] },
   { name: 'support_announcements', key: ['id'] },
+  { name: 'news_items', key: ['id'] },
+  { name: 'support_audit', key: ['id'] },
   { name: 'table_discovery', key: ['table_id'] },
   { name: 'table_entry_receipts', key: ['coo_id', 'request_id'] },
 ];
@@ -78,7 +78,8 @@ export const MIGRATION_TABLES: TableMap[] = [
 /** 从 PG 的 DDL 里解析出每张表的列名，供「来源库列 === 目标库列」的比对用。 */
 export const targetColumns = (): Map<string, string[]> => {
   const out = new Map<string, string[]>();
-  const blocks = (PG_SCHEMA_SQL + SUPPORT_SCHEMA_SQL + TABLE_DISCOVERY_SCHEMA_SQL + SEAT_RESULTS_SCHEMA_SQL)
+  const sql = PG_MIGRATIONS.map(migration => migration.sql).join('\n');
+  const blocks = sql
     .split(/CREATE TABLE IF NOT EXISTS /).slice(1);
   for (const block of blocks) {
     const name = /^([a-z_][a-z0-9_]*)/.exec(block)?.[1];
@@ -94,6 +95,10 @@ export const targetColumns = (): Map<string, string[]> => {
     }
     out.set(name, columns);
   }
+  for (const [, table, column] of sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN (?:IF NOT EXISTS )?(\w+)/g)) {
+    const columns = out.get(table);
+    if (columns && !columns.includes(column)) columns.push(column);
+  }
   // 迁移之后的真实形状：已下线的表不出现，已下线的列不算目标列。
   for (const name of [...out.keys()]) {
     if (OBSOLETE_TABLES.has(name)) { out.delete(name); continue; }
@@ -102,6 +107,27 @@ export const targetColumns = (): Map<string, string[]> => {
   }
   return out;
 };
+
+// These columns are added by the PG runtime migrations only. The import leaves their defaults in place.
+const pgOnlyColumns: Readonly<Record<string, readonly string[]>> = {
+  rooms: ['business_active_at', 'archive_reason'],
+  room_seats: ['business_active_at', 'location_capable'],
+  coo_sessions: ['return_room_id'],
+};
+
+export const addedSourceColumns: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  table_discovery: { recruit_version: 9 },
+  news_items: { updated_at: 10, revision: 10, publish_id: 11 },
+  support_announcements: { updated_at: 10, revision: 10, publish_id: 12 },
+};
+
+export function sourceColumnMap(): Map<string, string[]> {
+  const columns = targetColumns();
+  for (const [table, excluded] of Object.entries(pgOnlyColumns)) {
+    columns.set(table, (columns.get(table) ?? []).filter(column => !excluded.includes(column)));
+  }
+  return columns;
+}
 
 /** 表名 → 映射。 */
 export const TABLE_BY_NAME = new Map(MIGRATION_TABLES.map((table) => [table.name, table]));

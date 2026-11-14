@@ -195,8 +195,8 @@ function openNote(): void {
 async function submitInteraction(action: 'note' | 'snack'): Promise<void> {
   const id = round.value?.id;
   if (!id) return;
-  const values = action === 'note' ? { text: note.value.trim() } : { item: selectedSnack.value };
-  if (await act(action, { round: id, ...values } as Record<string, string>)) {
+  const values: Record<string, string> = action === 'note' ? { text: note.value.trim() } : { item: selectedSnack.value };
+  if (await act(action, { round: id, ...values })) {
     compose.value = undefined;
   }
 }
