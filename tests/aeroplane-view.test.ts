@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { AeroplaneTable } from '../src/room/games/aeroplane-table.ts';
 import { gameComponent } from './helpers/game-component.ts';
 
-it('飞行棋交棒后保留上一掷并标出掷骰者，下一次掷骰更新点数', async () => {
+it('飞行棋交棒后标记上一掷并保留行动说明，下一次掷骰更新点数', async () => {
   const die = [3, 6];
   const table = new AeroplaneTable({
     host: { id: 'red', name: '阿红' }, firstSeat: () => 0, rollDie: () => die.shift()!,
@@ -19,7 +19,8 @@ it('飞行棋交棒后保留上一掷并标出掷骰者，下一次掷骰更新�
   const waiting = await render();
   expect(waiting.match(/class="flight-dice"[^>]*>([^<]*)/)?.[1]).toBe('⚂');
   expect(waiting).toContain('等待 阿绿 掷骰');
-  expect(waiting).toContain('上一掷 · 阿红 · 3 点');
+  expect(waiting).toContain('aria-label="上一掷 3 点"');
+  expect(waiting).toContain('阿红掷出 3。没有可飞的飞机，换下一位。');
 
   table.act('green', { action: 'roll' }, 1002);
   const rolled = await render();
@@ -29,5 +30,6 @@ it('飞行棋交棒后保留上一掷并标出掷骰者，下一次掷骰更新�
   table.act('green', { action: 'move', plane: 1 }, 1003);
   const reroll = await render();
   expect(reroll).toContain('等待 阿绿 掷骰');
-  expect(reroll).toContain('上一掷 · 阿绿 · 6 点');
+  expect(reroll).toContain('aria-label="上一掷 6 点"');
+  expect(reroll).toContain('阿绿的 1 号机起飞。再掷一次。');
 });
