@@ -25,7 +25,9 @@ it('飞行棋交棒后标记上一掷并保留行动说明，下一次掷骰更�
   table.act('green', { action: 'roll' }, 1002);
   const rolled = await render();
   expect(rolled.match(/class="flight-dice rolling"[^>]*>([^<]*)/)?.[1]).toBe('⚅');
-  expect(rolled).toContain('阿绿 掷出 6 点');
+  expect(rolled).toContain('阿绿 掷出 6 点，正在选飞机');
+  expect(rolled).not.toContain('阿绿掷出 6。');
+  expect(rolled).not.toContain('掷出 6 点即可起飞。');
   expect(rolled).not.toContain('上一掷');
   table.act('green', { action: 'move', plane: 1 }, 1003);
   const reroll = await render();

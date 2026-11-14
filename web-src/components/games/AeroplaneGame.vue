@@ -135,10 +135,10 @@ async function submit(action: 'roll' | 'move', plane?: number): Promise<void> {
           <strong v-if="winner">{{ winner.name }} 赢得本局</strong>
           <strong v-else-if="table.frozen">牌桌已暂停</strong>
           <strong v-else-if="yours">{{ canRoll ? '轮到你掷骰' : `掷出 ${die} 点，选择飞机` }}</strong>
-          <strong v-else-if="turn">{{ table.phase === 'await_move' ? `${turn.name} 掷出 ${die} 点` : `等待 ${turn.name} 掷骰` }}</strong>
+          <strong v-else-if="turn">{{ table.phase === 'await_move' ? `${turn.name} 掷出 ${die} 点，正在选飞机` : `等待 ${turn.name} 掷骰` }}</strong>
           <span v-if="winner">四架飞机全部抵达终点。</span>
-          <span v-else-if="last">{{ last.text }}</span>
-          <span v-else>掷出 6 点即可起飞。</span>
+          <span v-else-if="last && (table.frozen || table.phase !== 'await_move')">{{ last.text }}</span>
+          <span v-else-if="!last">掷出 6 点即可起飞。</span>
         </div>
         <button v-if="canRoll" type="button" class="btn primary flight-action" :disabled="busy" @click="submit('roll')">掷骰</button>
         <div v-if="moves.length" class="flight-moves">
