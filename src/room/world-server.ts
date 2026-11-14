@@ -237,6 +237,7 @@ export class WorldServer {
   /** 招募快照按网关共享 30 秒：132 个 Coo 每分钟要的是同一份，不必各查一次。 */
   private readonly recruitSnapshot: RecruitSnapshot;
   private readonly now: () => number;
+  private readonly startedAt = performance.now();
   private readonly defaultRoomId: string;
   private readonly inviteCode: string;
   private readonly allowGuestJoin: boolean;
@@ -959,6 +960,7 @@ export class WorldServer {
         version: PACKAGE_VERSION,
         protocol: 2,
         storage: 'postgres',
+        uptimeSeconds: Math.floor((performance.now() - this.startedAt) / 1000),
         capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled','storyteller-v1'],
         ...(this.identityAuthority ? { globalIdentity: { authority: this.authorityUrl(), audience: this.audienceUrl() } } : {}),
         guestJoin: this.allowGuestJoin,
@@ -1019,12 +1021,20 @@ export class WorldServer {
       const active = await host.tableLock(account.cooId);
       if (active?.tableId !== tableId) throw new HttpError(404, '孩子当前没有在这张牌桌上');
       const table = await host.tablePublic(tableId);
-      if (!table || table.frozen || (table.status !== 'bidding' && table.status !== 'playing')
-        || (await host.tableLock(account.cooId))?.tableId !== tableId) {
+      if (!table || (table.status !== 'bidding' && table.status !== 'playing')) {
         throw new HttpError(404, '孩子当前没有在这张牌桌上');
       }
-      res.setHeader('Cache-Control', 'no-store');
-      json(res, 200, { table, now: this.now() }, req);
+      if (table.frozen) throw new HttpError(409, '这张牌桌已暂停，暂时无法观看。');
+      const tableSeats = new Set((table.seats as Array<{ id: string }> | undefined)?.map(player => player.id));
+      const seats = (await activeSeats(this.db, seat.roomId)).filter(player => tableSeats.has(player.id))
+        .map(({ id, name, kind }) => ({ id, name, kind }));
+      const online = this.onlineSeatIds(seat.roomId).filter(id => tableSeats.has(id));
+      // Reading the public view and its seat metadata can overlap with settlement.
+      if ((await host.tableLock(account.cooId))?.tableId !== tableId) {
+        throw new HttpError(404, '孩子当前没有在这张牌桌上');
+      }
+      res.setHeader('Cache-Control', 'private, no-store');
+      json(res, 200, { table, seats, online, now: this.now() }, req);
       return;
     }
 

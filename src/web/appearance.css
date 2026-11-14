@@ -74,7 +74,7 @@ html[data-theme="light"] .club-room-card:hover { border-color:var(--accent-text)
 html[data-theme="light"] .club-filters .btn.is-active { background:var(--chrome-active); border-color:var(--accent-border); color:var(--accent-text-strong); }
 html[data-theme="light"] .club-empty { border-color:var(--edge); }
 html[data-theme="light"] :is(.club-stay strong,.members .panel-head h2) { color:var(--text); }
-html[data-theme="light"] .club-favorite { background:var(--chrome-active)!important; border-color:var(--accent-border); color:var(--accent-text); }
+html[data-theme="light"] .club-favorite { background:var(--chrome-active); border-color:var(--accent-border); color:var(--accent-text); }
 
 html[data-theme="light"] .msg-body p { background:var(--chrome-row); color:var(--text); }
 html[data-theme="light"] .composer-row { background:var(--field); border-color:var(--edge); }

@@ -1,0 +1,33 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm sync:version --check
+      - run: pnpm typecheck
+      - name: Check committed web assets
+        if: matrix.node == 24
+        run: |
+          pnpm build:web
+          git diff --exit-code -- src/web/vue
+          test -z "$(git ls-files --others --exclude-standard -- src/web/vue)"
+      - run: pnpm test

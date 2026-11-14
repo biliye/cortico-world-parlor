@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import type { TableSummary } from '../api/types.ts';
+import type { HallSeat, TableSummary } from '../api/types.ts';
 import { componentFor } from '../lib/game-components.ts';
 import { mountFor, type GameCtx, type GameInstance, type GameView } from '../lib/legacy-games.ts';
 
 const props = defineProps<{ tableId: string }>();
-const table = shallowRef<TableSummary | null>(null);
+const live = shallowRef<{ table: TableSummary; seats: HallSeat[]; online: string[]; now: number } | null>(null);
+const table = computed(() => live.value?.table ?? null);
 const status = ref('正在连接牌桌…');
 const legacyRoot = ref<HTMLElement | null>(null);
 const component = computed(() => table.value ? componentFor(table.value.game) : null);
@@ -27,14 +28,15 @@ const ctx: GameCtx = {
 };
 
 const gameView = computed<GameView | null>(() => {
-  if (!table.value) return null;
+  if (!live.value) return null;
   const names = new Map<string, string>();
   const classes = new Map<string, string>();
-  for (const [index, seat] of (table.value.seats ?? []).entries()) {
+  for (const [index, seat] of (live.value.table.seats ?? []).entries()) {
     names.set(seat.id, seat.name);
     classes.set(seat.id, 's' + (index % 6));
   }
-  return { table: table.value, priv: null, me, seats: [], names, classes, online: [], now: ctx.serverNow(), endEvent: null, recent: [] };
+  const { table, seats, online } = live.value;
+  return { table, priv: null, me, seats, names, classes, online, now: ctx.serverNow(), endEvent: null, recent: [] };
 });
 
 watch([gameView, legacyRoot], ([view, root]) => {
@@ -52,15 +54,20 @@ async function refresh(): Promise<void> {
   try {
     const response = await fetch('/v1/parent/table?' + query, { signal: controller.signal });
     if (response.status === 401 || response.status === 404) {
-      table.value = null;
+      live.value = null;
       status.value = response.status === 401 ? '家长会话已失效，请返回家长页重新打开。' : '孩子已离开这张桌，或牌局已经结束。';
       return;
     }
-    if (!response.ok) throw new Error('牌桌暂不可用');
-    const data = await response.json() as { table: TableSummary; now: number };
-    clockOffset = data.now - Date.now();
-    table.value = data.table;
-    status.value = '';
+    if (response.status === 409) {
+      live.value = null;
+      status.value = '这张牌桌已暂停，暂时无法观看。';
+    } else {
+      if (!response.ok) throw new Error('牌桌暂不可用');
+      const data = await response.json() as NonNullable<typeof live.value>;
+      clockOffset = data.now - Date.now();
+      live.value = data;
+      status.value = '';
+    }
   } catch {
     status.value = '暂时无法更新牌桌，正在重试。';
   }

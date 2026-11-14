@@ -1665,7 +1665,7 @@ export class ParlorWorld implements World {
       if (sorted.length === 0) lines.push('- 暂时没有公开客厅；可以自己开一个（parlor_room create）。');
       for (const room of sorted) {
         lines.push(`- ${room.name}（${room.id}）· ${room.seats}/${room.capacity} 人`
-          + ` · ${room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开' : '私密'}`
+          + ` · ${room.visibility === 'public' ? '公开' : room.visibility === 'unlisted' ? '不公开（你可进入）' : '私密（你可进入）'}`
           + `${room.id === here ? ' · 我在这里' : ''}`
           + `${room.topic ? ` · ${room.topic}` : ''}`);
       }
@@ -1995,7 +1995,7 @@ export class ParlorWorld implements World {
       }, this.roomArg());
       return this.receipt(
         result,
-        `承诺已经记下${due ? `（${due} 前）` : ''}；等对方用 parlor_respond 回应。`,
+        `承诺已经记下${due ? `（${due} 前）` : ''}，正在等对方回应。`,
       );
     } catch (error) {
       return this.failed(messageOf(error));

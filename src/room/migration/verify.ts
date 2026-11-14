@@ -102,6 +102,11 @@ const keysetPredicate = (keyColumns: string[], paramBase: '?' | '$'): string => 
     : `(${keyColumns.join(', ')}) > (${slots.join(', ')})`;
 };
 
+function importedColumns(audit: SourceAudit, table: string): string[] {
+  const available = audit.columns[table] ?? [];
+  return (targetColumns().get(table) ?? []).filter(column => available.includes(column));
+}
+
 export const digestSource = async (
   source: SqliteHandle,
   audit: SourceAudit,
@@ -114,7 +119,7 @@ export const digestSource = async (
   if (audit.counts[tableName] === undefined) return null;
   // 历史 SQLite 的 ALTER ADD 把列追加在末尾，PG 则按新 DDL 排列。
   // 值按列名已经正确搬运，两侧摘要也必须使用相同的规范列顺序。
-  const columns = targetColumns().get(tableName) ?? [];
+  const columns = importedColumns(audit, tableName);
   if (columns.length === 0) return null;
   const jsonSet = new Set(table.json ?? []);
   const hash = createHash('sha256');
@@ -156,10 +161,11 @@ export const digestTarget = async (
   tableName: string,
   limit = 2_000,
   extraFilters: RowFilters = {},
+  imported?: string[],
 ): Promise<TableDigest | null> => {
   const table = MIGRATION_TABLES.find((entry) => entry.name === tableName);
   if (!table) throw new Error(`不认识的表：${tableName}`);
-  const columns = targetColumns().get(tableName) ?? [];
+  const columns = imported ?? targetColumns().get(tableName) ?? [];
   if (columns.length === 0) return null;
   const jsonSet = new Set(table.json ?? []);
   const hash = createHash('sha256');
@@ -275,7 +281,7 @@ export const verifyAll = async (
 
   for (const table of MIGRATION_TABLES) {
     const left = await digestSource(source, audit, table.name, options.limit, extra);
-    const right = await digestTarget(target, table.name, options.limit, extra);
+    const right = await digestTarget(target, table.name, options.limit, extra, left ? importedColumns(audit, table.name) : undefined);
     // 来源早于建表版本时可缺少新增表；目标必须仍为空才算迁移一致。
     if (!left && ADDED_TABLE_VERSIONS[table.name] > audit.schemaVersion && right?.rows === 0) continue;
     if (!left && !right) continue;

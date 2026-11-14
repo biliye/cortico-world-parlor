@@ -3,12 +3,13 @@
  * 关键约束：同一个家长链接在任何浏览器都是同一个玩家身份（cooId 不变），
  * 但账本/筹码与孩子那份分开；孩子自己的席位不受影响。
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorldServer } from '../src/room/world-server.ts';
+import { RoomHost } from '../src/room/room-host.ts';
 
 const COO = 'coo-parenttest1';
 
@@ -94,7 +95,15 @@ describe('家长下场', () => {
     const watched = await getWith(app.url, endpoint, auth);
     expect(watched.status).toBe(200);
     expect(watched.body).toMatchObject({ table: { tableId: table, status: 'playing', board: expect.any(Array) } });
-    expect(Object.keys(watched.body).sort()).toEqual(['now', 'table']);
+    expect(Object.keys(watched.body).sort()).toEqual(['now', 'online', 'seats', 'table']);
+    expect(watched.body.seats).toHaveLength(2);
+    expect(watched.body.seats).toContainEqual({ id: (child.body.seat as { id: string }).id, name: '小满', kind: 'pet' });
+    const paused = vi.spyOn(RoomHost.prototype, 'tablePublic').mockResolvedValueOnce({
+      ...(watched.body.table as NonNullable<Awaited<ReturnType<RoomHost['tablePublic']>>>), frozen: true,
+    });
+    try {
+      expect((await getWith(app.url, endpoint, auth)).status).toBe(409);
+    } finally { paused.mockRestore(); }
     const roomView = await getWith(app.url, `/v1/rooms/${room}/room`, childSeat);
     expect((roomView.body.seats as unknown[]).length).toBe(capacity);
     const resigning = (watched.body.table as { turn: string }).turn === (child.body.seat as { id: string }).id

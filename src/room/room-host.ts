@@ -888,7 +888,7 @@ export class RoomHost {
       });
       const delivered = await this.notify(
         target.cooId,
-        `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}。用 parlor_respond 回。`,
+        `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}。`,
         { kind: 'promise', action: 'promise', from: seat.name, entryId: entry.id, toName: target.name },
       );
       return { entry, delivered: [delivered] };

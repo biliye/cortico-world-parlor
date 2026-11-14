@@ -16,5 +16,5 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["web-src/**/*.ts", "web-src/**/*.d.ts", "vite.config.ts"]
+  "include": ["web-src/**/*.ts", "web-src/**/*.d.ts", "web-src/**/*.vue", "vite.config.ts"]
 }

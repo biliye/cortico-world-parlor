@@ -866,7 +866,7 @@ onBeforeUnmount(() => {
                       <span class="wf-vote-from">{{ line.seatNo }}号</span>
                       <span class="wf-vote-arrow">→</span>
                       <span class="wf-vote-to">
-                        {{ line.target === null ? (line.timeout ? '超时弃票' : '弃票') : `${line.target}号 ${nameOfNo(line.target)}` }}
+                        {{ line.target == null ? (line.timeout ? '超时弃票' : '弃票') : `${line.target}号 ${nameOfNo(line.target)}` }}
                       </span>
                     </div>
                     <p v-if="round.exiled !== undefined" class="wf-votes-note">放逐：{{ seatLabel(round.exiled) }}</p>

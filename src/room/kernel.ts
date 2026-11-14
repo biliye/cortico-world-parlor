@@ -518,7 +518,7 @@ export class RoomKernel {
       ...(dueAt !== undefined ? { due: dueAt } : {}),
       data: { fromName: seat.name, toName: target.name },
     });
-    const delivered = this.notifyLedger([target.id], `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}。用 parlor_respond 回。`, {
+    const delivered = this.notifyLedger([target.id], `${seat.name} 对你许了个承诺：${body}${dueAt ? `（${dueLabel(dueAt)} 前）` : ''}。`, {
       entryId: entry.id, kind: 'promise', action: 'promise', from: seat.name,
     });
     return { ...entry, ...(delivered.length ? { delivered } : {}) };
