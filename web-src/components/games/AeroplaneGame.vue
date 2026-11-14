@@ -45,7 +45,7 @@ function pointFor(colour: number, progress: number, plane: number): Point {
 
 const table = computed(() => props.view.table as GameView['table'] & {
   winners?: string[];
-  last?: { text: string; die: number };
+  last?: { text: string; die: number } | null;
   phase?: 'await_roll' | 'await_move';
   die?: number;
 });
@@ -55,7 +55,8 @@ const turn = computed(() => seats.value.find(seat => seat.id === table.value.tur
 const winner = computed(() => seats.value.find(seat => table.value.winners?.includes(seat.id)));
 const yours = computed(() => !table.value.frozen && props.view.priv?.yourTurn === true && turn.value?.id === mySeat.value?.id);
 const last = computed(() => table.value.last);
-const die = computed(() => table.value.phase === 'await_roll' ? 0 : Number(table.value.die ?? last.value?.die ?? 0));
+const previousRoll = computed(() => table.value.phase === 'await_roll' ? last.value : null);
+const die = computed(() => Number(previousRoll.value?.die ?? table.value.die ?? last.value?.die ?? 0));
 const moves = computed(() => yours.value && table.value.phase === 'await_move' ? (props.view.priv?.moves as AeroplaneMove[] ?? []) : []);
 const canRoll = computed(() => yours.value && table.value.phase === 'await_roll');
 const busy = ref(false);
@@ -125,15 +126,19 @@ async function submit(action: 'roll' | 'move', plane?: number): Promise<void> {
 
     <aside class="flight-side" aria-label="飞行棋回合信息">
       <div class="flight-control">
-        <div class="flight-dice" :class="{ rolling: table.phase === 'await_move' }" aria-hidden="true">{{ dieFaces[die] || '–' }}</div>
+        <div class="flight-roll">
+          <div class="flight-dice" :class="{ rolling: table.phase === 'await_move' }"
+            role="img" :aria-hidden="!previousRoll" :aria-label="previousRoll ? `上一掷 ${previousRoll.die} 点` : undefined">{{ dieFaces[die] || '–' }}</div>
+          <small v-if="previousRoll" aria-hidden="true">上一掷</small>
+        </div>
         <div class="flight-turn" role="status">
           <strong v-if="winner">{{ winner.name }} 赢得本局</strong>
           <strong v-else-if="table.frozen">牌桌已暂停</strong>
           <strong v-else-if="yours">{{ canRoll ? '轮到你掷骰' : `掷出 ${die} 点，选择飞机` }}</strong>
-          <strong v-else-if="turn">{{ table.phase === 'await_move' ? `${turn.name} 掷出 ${die} 点` : `等待 ${turn.name} 掷骰` }}</strong>
+          <strong v-else-if="turn">{{ table.phase === 'await_move' ? `${turn.name} 掷出 ${die} 点，正在选飞机` : `等待 ${turn.name} 掷骰` }}</strong>
           <span v-if="winner">四架飞机全部抵达终点。</span>
-          <span v-else-if="last">{{ last.text }}</span>
-          <span v-else>掷出 6 点即可起飞。</span>
+          <span v-else-if="last && (table.frozen || table.phase !== 'await_move')">{{ last.text }}</span>
+          <span v-else-if="!last">掷出 6 点即可起飞。</span>
         </div>
         <button v-if="canRoll" type="button" class="btn primary flight-action" :disabled="busy" @click="submit('roll')">掷骰</button>
         <div v-if="moves.length" class="flight-moves">
@@ -183,6 +188,8 @@ async function submit(action: 'roll' | 'move', plane?: number): Promise<void> {
 .flight-target { z-index: 2; margin: 1px; border: 2px solid #513d20; outline: 1px solid #fff9e7; border-radius: 25%; pointer-events: none; }
 .flight-side { display: grid; gap: 12px; min-width: 0; }
 .flight-control { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-2); }
+.flight-roll { display: grid; justify-items: center; gap: 4px; }
+.flight-roll small { color: var(--muted); }
 .flight-dice { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 11px; background: #fff3d9; color: #50392a; font-size: 38px; line-height: 1; box-shadow: inset 0 0 0 1px #cdb481; }
 .flight-dice.rolling { animation: flight-dice-in 190ms ease-out; }
 @keyframes flight-dice-in { from { transform: rotate(-12deg) scale(.8); } to { transform: none; } }
