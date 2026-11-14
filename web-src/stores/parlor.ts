@@ -507,7 +507,9 @@ async function readRoomStream(path: string, token: string, source: AbortControll
           .filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
         buffer = buffer.slice(boundary.index + boundary[0].length);
         if (!data) continue;
-        try { handleEvent(JSON.parse(data) as ChatEvent); } catch { /* Ignore an invalid event. */ }
+        let event: ChatEvent;
+        try { event = JSON.parse(data) as ChatEvent; } catch { continue; }
+        try { handleEvent(event); } catch (error) { console.error('客厅事件处理失败', error); }
       }
     }
   } catch { /* The current stream reconnects below. */ }

@@ -24,4 +24,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm sync:version --check
       - run: pnpm typecheck
+      - name: Check committed web assets
+        if: matrix.node == 24
+        run: |
+          pnpm build:web
+          git diff --exit-code -- src/web/vue
+          test -z "$(git ls-files --others --exclude-standard -- src/web/vue)"
       - run: pnpm test

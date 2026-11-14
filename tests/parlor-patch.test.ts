@@ -27,10 +27,11 @@ class Stream {
   constructor(readonly url: string, readonly token: string, readonly signal: AbortSignal) { Stream.last = this; }
   onopen() { this.resolve(new Response(this.body)); }
   onerror() { if (!this.signal.aborted) this.resolve(new Response(null, { status: 503 })); }
-  onmessage(message: { data: string }) {
+  chunk(text: string) {
     this.onopen();
-    this.controller.enqueue(new TextEncoder().encode(`data: ${message.data}\n\n`));
+    this.controller.enqueue(new TextEncoder().encode(text));
   }
+  onmessage(message: { data: string }) { this.chunk(`data: ${message.data}\n\n`); }
   emit(seq: number, type = 'parlor.table.action') { this.onmessage({ data: JSON.stringify({ seq, type }) }); }
 }
 const table = (revision: number, id = 't1') => ({ game: 'ddz', status: 'playing', tableId: id, revision });
@@ -237,10 +238,24 @@ describe('E3：直接应用回执并合并牌桌 SSE', () => {
     store.connect();
     (Stream.last as any).onerror();
     await vi.advanceTimersByTimeAsync(2999);
+    expect(store.connection.value).toBe('off');
     expect(mocks.api).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2000);
     expect(mocks.api).toHaveBeenCalledWith('/v1/me/location');
     expect(roomCalls()).toHaveLength(0);
+  });
+
+  it('SSE 支持跨分片和 CRLF，心跳与损坏的消息不会写入日志', async () => {
+    store.connect(false);
+    Stream.last.chunk(': ping\r\n\r\ndata: {bad}\r\n\r\nda');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.log.value).toEqual([]);
+    Stream.last.chunk('ta: {"seq":42,"type":"parlor.say","text":"你好"}\r\n\r');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.log.value).toEqual([]);
+    Stream.last.chunk('\n');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.log.value.map((event: { text: string }) => event.text)).toEqual(['你好']);
   });
   it('服务器迁厅后清旧日志并采用 canonical 席位，迟到的位置响应不覆盖新身份', async () => {
     vi.stubGlobal('location', { pathname:'/play',search:'?room=room1&view=table' });
