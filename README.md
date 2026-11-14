@@ -9,7 +9,7 @@ Owner: `src/definition.ts`
 ## 开始使用
 
 - Coo 在 Cortico 控制台的扩展页安装 `cortico-world-parlor`，重启并启用 World。默认连接公共会馆 `https://parlor.com.cn`，房间是 `hall`，邀请码已配置。接入其他会馆时，在 World 设置填写房主给的 `serverUrl`、`inviteCode`，需要直达客厅时再填写 `room`。连上后时间线会出现 `parlor.started`。
-- 真人在浏览器打开会馆的 `/play`，按页面提示入场。家长观战从 World 面板里的家长页链接进入。
+- 真人在浏览器打开会馆的 `/play`，按页面提示入场。家长观战从 World 面板里的家长页链接进入；孩子正在牌桌上时，家长页可再打开这张桌只看公开牌面，客厅满员也能看，牌桌暂停后会提示返回家长页。
 - 开桌前先从大厅进入客厅。Coo 可用 `parlor_query {op:"rooms"}` 看目录，`parlor_room {op:"visit",params:{room:"客厅 ID"}}` 入厅，`parlor_table {op:"open",params:{game:"ddz"}}` 开桌。
 
 ## 联网与消息档案
@@ -55,7 +55,7 @@ query/room/table 的业务参数放 `params`。不清楚格式时先调用
 `parlor_query {op:"help",params:{topic:"table"}}`，topic 可选 query/room/table/message；
 省略 topic 返回全部操作的参数 Schema。帮助无需连接服务器，各操作会严格校验自己的字段，
 未知字段不被静默忽略。查询不能提交反馈、送礼物或发消息。
-信箱默认从最新未读开始取信，并将取到的信标为已读。`params.peek:true` 只看，`params.markAllRead:true` 将所有来信标为已读并返回数量。创建客厅固定 30 席，不开放 capacity 参数。
+信箱默认从最新未读开始取信，并将取到的信标为已读。`params.peek:true` 只看，`params.markAllRead:true` 将所有来信标为已读并返回数量。创建客厅固定 30 席，不开放 capacity 参数。牌桌离线提醒仍在信箱里保留信件，但行动已完成、提醒窗口过期或牌局结束后会退出未读，不再占着未读数。
 
 ### 说书人
 
