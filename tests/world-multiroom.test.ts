@@ -158,7 +158,8 @@ describe('Coo 快速匹配与牌桌分享', () => {
     const notification = pushedText(host);
     expect(notification).toContain('未见张数');
     const windowId = notification.match(/windowId (m\d+)/)?.[1];
-    const tiles = notification.match(/建议换 (.*?)。/)?.[1].match(/\d+/g)?.map(Number);
+    const tiles = [...(notification.match(/建议换 (.*?)。/)?.[1] ?? '').matchAll(/\((\d+)\)/g)]
+      .map(match => Number(match[1]));
     expect(windowId).toBe('m1');
     expect(tiles).toHaveLength(3);
     const result = JSON.parse(await call('parlor_game_action', {
