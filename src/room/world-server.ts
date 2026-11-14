@@ -38,7 +38,7 @@ import {
   listRoomAccess, pendingInvitationsForCoo, pendingInvitationsForRoom, revokeInvitationsFor,
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
-import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
+import type { InboxView, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 import { sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
@@ -84,6 +84,8 @@ export interface WorldServerOptions {
 
 interface SseClient {
   locationCapable: boolean;
+  compactTableEvents: boolean;
+  source: 'web' | 'coo' | 'other';
   cooId: string;
   seatId: string;
   seatName: string;
@@ -95,6 +97,36 @@ interface SseClient {
   closed: boolean;
   blockedAt?: number;
   res: ServerResponse;
+}
+
+const SSE_TRAFFIC_INTERVAL_MS = 60_000;
+
+function sseSourceCounts() {
+  return { web: 0, coo: 0, other: 0 };
+}
+
+function sseTrafficCounters() {
+  return {
+    bytes: 0,
+    bytesBySource: sseSourceCounts(),
+    // 补发与回合都是 bytes 的子集，同一帧可以同时计入两项。
+    initialReplayBytes: 0,
+    turnBytes: 0,
+    turnBytesBySource: sseSourceCounts(),
+    opened: 0,
+    closed: 0,
+  };
+}
+
+function payloadVersion(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 22);
+}
+
+function compactParentEvent(event: RoomEvent) {
+  return {
+    seq: event.seq, ts: event.ts, type: event.type, from: event.from, text: event.text,
+    data: { name: event.data?.name, presenceWeb: event.data?.presenceWeb },
+  };
 }
 
 const PACKAGE_VERSION = ((): string => {
@@ -278,6 +310,8 @@ export class WorldServer {
   private readonly dirtyRooms = new Set<string>();
   private pumpScheduled = false;
   private lastSweepAt = 0;
+  private sseTrafficSince = Date.now();
+  private sseTraffic = sseTrafficCounters();
   /** 大厅 id 的同步快照：init() 建完大厅后填上，供 hallId 这个同步属性读。 */
   private hallIdValue = '';
 
@@ -845,8 +879,18 @@ export class WorldServer {
         const afterId = url.searchParams.get('after_id') ?? '';
         // 同厅的桌已经走 SSE 即时通知；这里排掉，别让两条通路说同一桌、也别白占前三的名额。
         const here = (url.searchParams.get('room') ?? '').trim();
+        const announcement: Pick<InboxView, 'announcements' | 'announcementVersion'> = {};
+        if (topics.has('announcements')) {
+          const items = await support.announcements();
+          if (url.searchParams.has('announcement_version')) {
+            announcement.announcementVersion = payloadVersion(items);
+          }
+          if (!announcement.announcementVersion || announcement.announcementVersion !== url.searchParams.get('announcement_version')) {
+            announcement.announcements = items;
+          }
+        }
         json(res, 200, {
-          ...(topics.has('announcements') ? { announcements: await support.announcements() } : {}),
+          ...announcement,
           ...(topics.has('news') ? { news: await support.newsFeed(afterPublish, afterId) } : {}),
           ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3, here) } } : {}),
           ...(topics.has('story') ? { story: await this.story.liveHint(actor) } : {}),
@@ -1008,7 +1052,22 @@ export class WorldServer {
       const session = await this.parentSession(req);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      json(res, 200, await this.parentView(session.account.cooId, since, limit));
+      const compact = url.searchParams.get('view') === 'compact-v1';
+      const view = await this.parentView(session.account.cooId, since, limit, compact);
+      res.setHeader('cache-control', 'private, no-store');
+      if (!compact) {
+        json(res, 200, view, req);
+        return;
+      }
+      const { events: rawEvents, mail, ...state } = view;
+      const events = rawEvents.map(compactParentEvent);
+      const versions = { state: payloadVersion(state), events: payloadVersion(events), mail: payloadVersion(mail) };
+      json(res, 200, {
+        now: this.now(), versions,
+        ...(versions.state === url.searchParams.get('stateVersion') ? {} : { state }),
+        ...(versions.events === url.searchParams.get('eventsVersion') ? {} : { events }),
+        ...(versions.mail === url.searchParams.get('mailVersion') ? {} : { mail }),
+      }, req);
       return;
     }
 
@@ -2447,6 +2506,9 @@ export class WorldServer {
     const seat = await host.seatByToken(token);
     const locationCapable = headerValue(req, 'x-parlor-capabilities').split(',').map(value => value.trim()).includes('seat-location-v1')
       || new URL(req.url ?? '/', 'http://localhost').searchParams.get('cap') === 'seat-location-v1';
+    const compactTableEvents = headerValue(req, 'x-parlor-stream') === 'compact-table-v1';
+    const clientVersion = headerValue(req, 'x-parlor-client').trim();
+    const source = compactTableEvents ? 'web' : clientVersion ? 'coo' : 'other';
     if (locationCapable) {
       await this.db.prepare('UPDATE room_seats SET location_capable=1 WHERE room_id=? AND id=? AND location_capable=0').run(roomId,seat.id);
     }
@@ -2454,16 +2516,17 @@ export class WorldServer {
     if (allClients.length >= 2000 || allClients.filter(client => client.cooId === seat.cooId).length >= 6) {
       throw new HttpError(429, '实时连接过多，请关闭多余页面后重试');
     }
-    await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
+    await host.refreshClientVersion(seat.cooId, clientVersion);
     // PG 查询会让出事件循环。发出 200 之前先完成在线登记，否则客户端已
     // 看到 SSE 建连成功时，离线清理仍可能把它当成没有连接的旧席位释放。
     const initial = await host.eventsSince(seat.cooId, since, 200);
     const now = this.now();
     await touchSeatSeen(this.db, roomId, seat.id, now);
     if (req.destroyed || res.destroyed) return;
-    const cursor = initial.length > 0 ? initial[initial.length - 1]!.seq : since;
     const client: SseClient = {
       locationCapable,
+      compactTableEvents,
+      source,
       cooId: seat.cooId,
       seatId: seat.id,
       seatName: seat.name,
@@ -2481,8 +2544,9 @@ export class WorldServer {
     const latestClients = [...this.sse.values()].flatMap(set => [...set]);
     if (latestClients.length >= 2000 || latestClients.filter(c => c.cooId === seat.cooId).length >= 6) throw new HttpError(429,'实时连接过多，请关闭多余页面后重试');
     clients.add(client);
+    this.sseTraffic.opened += 1;
     // 掉线排查用：一行开、一行关（谁断的、持续多久）。不带令牌。
-    console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条）`);
+    console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条） source=${client.source}`);
     req.on('close', () => {
       clients?.delete(client);
       if (clients?.size === 0) this.sse.delete(roomId);
@@ -2490,8 +2554,9 @@ export class WorldServer {
       void touchSeatSeen(this.db, roomId, seat.id, this.now()).catch(() => { /* 席位已释放/库关了 */ });
       if (client.closed) return;
       client.closed = true;
+      this.sseTraffic.closed += 1;
       const ms = Math.max(0, this.now() - client.openedAt);
-      console.log(`parlor: SSE 关闭 ${roomId}/${client.seatName} 持续 ${Math.round(ms / 1000)} 秒（${client.closeReason ?? '客户端断开'}）`);
+      console.log(`parlor: SSE 关闭 ${roomId}/${client.seatName} 持续 ${Math.round(ms / 1000)} 秒（${client.closeReason ?? '客户端断开'}） source=${client.source}`);
     });
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -2500,8 +2565,8 @@ export class WorldServer {
       'x-accel-buffering': 'no',
     });
     res.flushHeaders?.();
-    res.write('retry: 3000\n\n');
-    for (const event of initial) if (!this.writeEvent(roomId, client, event)) break;
+    this.writeSseFrame(client, 'retry: 3000\n\n');
+    for (const event of initial) if (!this.writeEvent(roomId, client, event, true)) break;
   }
 
   private checkParentKeyRate(req: IncomingMessage): void {
@@ -2701,7 +2766,7 @@ export class WorldServer {
   }
 
   /** 家长只读视图：跟孩子当前席位走，可见范围与孩子自己完全一致。 */
-  private async parentView(cooId: string, since: number, limit: number): Promise<Record<string, unknown>> {
+  private async parentView(cooId: string, since: number, limit: number, compact: boolean) {
     const now = this.now();
     const seat = await activeSeatForCoo(this.db, cooId);
     const mail = new MailDb(this.db, { now: this.now });
@@ -2709,9 +2774,7 @@ export class WorldServer {
       return {
         seat: null,
         room: null,
-        latest: 0,
-        now,
-        at: serverClock(now),
+        ...(compact ? {} : { latest: 0, now, at: serverClock(now) }),
         events: [],
         tablePrivate: null,
         mail: await mail.parentRecent(cooId, limit),
@@ -2720,7 +2783,7 @@ export class WorldServer {
     }
     const room = await getRoom(this.db, seat.roomId);
     const host = await this.host(seat.roomId);
-    const snapshot = await host.snapshot(cooId, { since, limit });
+    const snapshot = await host.snapshot(cooId, { since, limit, parentMessagesOnly: compact });
     // 家长防偷看：桌上还有「真人」席位时，藏起孩子的暗牌与私牌事件。同桌的 Coo 不算真人。
     const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
       ? snapshot.table.id ?? snapshot.table.tableId
@@ -2744,16 +2807,17 @@ export class WorldServer {
     return {
       seat: snapshot.seat,
       room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },
-      latest: snapshot.latest,
-      now: snapshot.now,
-      at: snapshot.at,
+      ...(compact ? {} : { latest: snapshot.latest, now: snapshot.now, at: snapshot.at }),
       events: ownerPrivateHidden
         ? snapshot.events.filter((event) => event.type !== 'parlor.table.turn')
         : snapshot.events,
-      tables: snapshot.tables ?? [],
-      ...(snapshot.table ? { table: snapshot.table } : {}),
+      ...(compact ? {} : { tables: snapshot.tables ?? [] }),
+      ...(snapshot.table ? { table: compact
+        ? { label: snapshot.table.label, game: snapshot.table.game, text: snapshot.table.text }
+        : snapshot.table } : {}),
       ...(watchTableId ? { watchTableId } : {}),
-      tablePrivate: ownerPrivateHidden ? null : snapshot.tablePrivate ?? null,
+      tablePrivate: ownerPrivateHidden || !snapshot.tablePrivate ? null
+        : compact ? { text: snapshot.tablePrivate.text } : snapshot.tablePrivate,
       ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
       ledgerRoom: snapshot.ledgerRoom ?? [],
       mailUnread: snapshot.mailUnread ?? 0,
@@ -2858,8 +2922,23 @@ export class WorldServer {
     });
   }
 
-  private writeEvent(room: string, client: SseClient, event: RoomEvent): boolean {
-    const ready = client.res.write(`data: ${JSON.stringify(event)}\n\n`);
+  private writeSseFrame(client: SseClient, frame: string, replay = false, turn = false): boolean {
+    const ready = client.res.write(frame);
+    const bytes = Buffer.byteLength(frame);
+    this.sseTraffic.bytes += bytes;
+    this.sseTraffic.bytesBySource[client.source] += bytes;
+    if (replay) this.sseTraffic.initialReplayBytes += bytes;
+    if (turn) {
+      this.sseTraffic.turnBytes += bytes;
+      this.sseTraffic.turnBytesBySource[client.source] += bytes;
+    }
+    return ready;
+  }
+
+  private writeEvent(room: string, client: SseClient, event: RoomEvent, replay = false): boolean {
+    const turn = event.type === 'parlor.table.turn';
+    const payload = client.compactTableEvents && turn ? { seq: event.seq, type: event.type } : event;
+    const ready = this.writeSseFrame(client, `data: ${JSON.stringify(payload)}\n\n`, replay, turn);
     client.since = event.seq; // write(false) has accepted this event into the bounded buffer
     if (!ready) {
       client.blockedAt = this.now();
@@ -2874,6 +2953,21 @@ export class WorldServer {
     if (this.pumping) return;
     this.pumping = true;
     const now = this.now();
+    const wallTime = Date.now();
+    const elapsed = wallTime - this.sseTrafficSince;
+    if (elapsed >= SSE_TRAFFIC_INTERVAL_MS) {
+      const activeBySource = sseSourceCounts();
+      for (const clients of this.sse.values()) {
+        for (const client of clients) activeBySource[client.source] += 1;
+      }
+      const active = activeBySource.web + activeBySource.coo + activeBySource.other;
+      const traffic = this.sseTraffic;
+      if (active || traffic.opened || traffic.closed || traffic.bytes) {
+        console.log(`parlor: SSE 流量 ${JSON.stringify({ intervalMs: elapsed, active, activeBySource, ...traffic })}`);
+      }
+      this.sseTrafficSince = wallTime;
+      this.sseTraffic = sseTrafficCounters();
+    }
     // 有 dirty 就只推那些客厅；每 2 秒补一次全扫，兜住漏掉的通知与 ping。
     const fullSweep = now - this.lastSweepAt >= 2_000;
     if (fullSweep) this.lastSweepAt = now;
@@ -2907,7 +3001,7 @@ export class WorldServer {
               if (!this.writeEvent(roomId, client, event)) break;
             }
             if (events.length === 0 && now - client.lastPing >= 15_000) {
-              client.res.write(': ping\n\n');
+              this.writeSseFrame(client, ': ping\n\n');
               client.lastPing = now;
             }
           } catch (error) {

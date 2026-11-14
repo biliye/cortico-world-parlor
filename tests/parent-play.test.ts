@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorldServer } from '../src/room/world-server.ts';
 import { RoomHost } from '../src/room/room-host.ts';
+import { EventDb } from '../src/room/event-db.ts';
 
 const COO = 'coo-parenttest1';
 
@@ -60,6 +61,78 @@ const getWith = async (base: string, path: string, headers: Record<string, strin
 const cookieOf = (response: Response): string => (response.headers.get('set-cookie') || '').split(';')[0];
 
 describe('家长下场', () => {
+  it('先过滤不展示的事件再取最近消息，牌桌推进不会重发消息区块', async () => {
+    const app = await start();
+    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, {
+      ...cooHeaders(COO), 'x-parlor-invite': 'inv',
+    });
+    expect((await post(app.url, '/v1/rooms/lobby/join', { name: '其他玩家' }, {
+      ...cooHeaders('coo-otherplayer'), 'x-parlor-invite': 'inv',
+    })).status).toBe(200);
+    const session = await post(app.url, '/v1/parent/session', { key: joined.body.ownerKey });
+    expect(session.status).toBe(200);
+    const auth = { cookie: (session.headers.get('set-cookie') ?? '').split(';')[0] };
+    const endpoint = '/v1/parent/view?view=compact-v1&limit=2';
+    const events = new EventDb(app.dbHandle);
+    const event = { ts: Date.now(), from: 'system', scope: { kind: 'room' } as const };
+    const seatId = (joined.body.seat as { id: string }).id;
+    await events.append('lobby', { ...event, type: 'parlor.say', text: '普通消息' });
+    const tableChat = await events.append('lobby', {
+      ...event, type: 'parlor.table.say', text: '桌边聊天', data: { name: '小满' },
+      scope: { kind: 'table', tableId: 'test-table', seats: [seatId] }, audience: [{ cooId: COO, seatId }],
+    });
+    await events.append('lobby', {
+      ...event, type: 'parlor.table.say', text: '其他桌的聊天',
+      scope: { kind: 'table', tableId: 'other-table', seats: [] }, audience: [{ cooId: 'coo-otherplayer' }],
+    });
+    await events.append('lobby', { ...event, type: 'parlor.table.action', text: '牌桌动作' });
+    const first = await getWith(app.url, endpoint, auth);
+    expect(first.status).toBe(200);
+    expect(first.body.events).toMatchObject([
+      { type: 'parlor.say', text: '普通消息' },
+      { seq: tableChat.seq, type: 'parlor.table.say', text: '桌边聊天', data: { name: '小满' } },
+    ]);
+    const { events: eventsVersion } = first.body.versions as { events: string };
+    await events.append('lobby', {
+      ...event, type: 'parlor.table.turn', text: '回合', scope: { kind: 'seat', seatId },
+    });
+    await events.append('lobby', { ...event, type: 'parlor.left', text: '限频的离开提示', data: { presenceWeb: false } });
+    const updated = await getWith(app.url, `${endpoint}&eventsVersion=${eventsVersion}`, auth);
+    expect(updated.body.versions).toMatchObject({ events: eventsVersion });
+    expect(updated.body.events).toBeUndefined();
+    const legacy = await getWith(app.url, '/v1/parent/view?limit=2', auth);
+    expect(legacy.body.events).toMatchObject([{ type: 'parlor.table.turn' }, { type: 'parlor.left' }]);
+  });
+
+  it('家长紧凑视图只发送变化的区块，并在退出席位后清空历史', async () => {
+    const app = await start();
+    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, {
+      ...cooHeaders(COO), 'x-parlor-invite': 'inv',
+    });
+    const session = await post(app.url, '/v1/parent/session', { key: joined.body.ownerKey });
+    const auth = { cookie: (session.headers.get('set-cookie') ?? '').split(';')[0] };
+    const endpoint = '/v1/parent/view?view=compact-v1&limit=80';
+    const first = await getWith(app.url, endpoint, auth);
+    expect(first.body).toMatchObject({ state: { room: { id: 'lobby' } }, events: expect.any(Array), mail: [] });
+    const versions = first.body.versions as Record<string, string>;
+    const poll = endpoint + '&' + new URLSearchParams({
+      stateVersion: versions.state, eventsVersion: versions.events, mailVersion: versions.mail,
+    });
+    expect(Object.keys((await getWith(app.url, poll, auth)).body).sort()).toEqual(['now', 'versions']);
+    expect((await getWith(app.url, poll, {})).status).toBe(401);
+
+    const player = { authorization: `Bearer ${joined.body.token as string}` };
+    const said = await post(app.url, '/v1/rooms/lobby/action', { type: 'say', text: '一条新消息' }, player);
+    expect(said.status).toBe(200);
+    const changed = await getWith(app.url, poll, auth);
+    expect(changed.body.events).toContainEqual(expect.objectContaining({ text: '一条新消息' }));
+    expect(changed.body.mail).toBeUndefined();
+
+    const left = await post(app.url, '/v1/rooms/lobby/leave', {}, player);
+    expect(left.status).toBe(200);
+    expect((await getWith(app.url, poll, auth)).body).toMatchObject({ state: { seat: null, room: null }, events: [] });
+  });
+
   it('家长用只读会话观战孩子当前桌，满厅仍可看且不入座', async () => {
     const app = await start();
     const headers = { ...cooHeaders(COO), 'x-parlor-invite': 'inv' };

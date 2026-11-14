@@ -194,6 +194,7 @@ export class ParlorWorld implements World {
   private stopped = false;
   private supportTimer?: NodeJS.Timeout;
   private supportBusy = false;
+  private announcementVersion = '';
   /** 探测过一次 404 就记住：回退到 0.38.0 之后每轮直接走旧公告接口，不再先撞一次。 */
   private inboxMissing = false;
   /** 上次探测失败的时刻；服务器升上来之后最多 10 分钟重新试一次，别永久锁在旧通道。 */
@@ -512,6 +513,7 @@ export class ParlorWorld implements World {
     this.identity = loadOrCreateIdentity(this.identityFile);
     const client = new ParlorClient(baseUrl, this.identity);
     this.client = client;
+    this.announcementVersion = '';
     try {
       this.multiRoom = !this.server && await client.initializeIdentity(
         cfg.identityUrl || DEFAULT_SERVER_URL, DEFAULT_INVITE_CODE, this.baseSeatName(),
@@ -1532,19 +1534,22 @@ export class ParlorWorld implements World {
       ];
       try {
         const token = this.token;
-        const view = await this.client.inbox(token, {
+        const client = this.client;
+        const view = await client.inbox(token, {
           topics,
           afterPublish: this.newsCursor.publishAt,
           afterId: this.newsCursor.id,
+          announcementVersion: this.announcementVersion,
           ...(this.currentRoom && this.currentRoom !== 'hall' ? { room: this.currentRoom } : {}),
         });
         // 请求在途时可能已经静音或停了：回来后再判一次，整份响应当场作废。
-        if (this.autoSilenced) return;
+        if (this.autoSilenced || this.client !== client) return;
         if (this.token === token) {
           if (view.story) this.armStoryHint(view.story, token);
           else this.storyHintPending = undefined;
         }
         await this.pushAnnouncements(view.announcements ?? []);
+        if (this.client === client) this.announcementVersion = view.announcementVersion ?? '';
         if (this.ctx.cfg.news && view.news) await this.pushNews(view.news);
         if (this.ctx.cfg.recruitNotice && view.recruit) this.absorbRecruit(view.recruit.tables);
         this.inboxMissing = false;

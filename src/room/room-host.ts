@@ -557,7 +557,7 @@ export class RoomHost {
     return this.events.archive(this.roomId, { cooId, after, limit });
   }
 
-  async snapshot(cooId: string, options: { since?: number; limit?: number } = {}): Promise<RoomSnapshot> {
+  async snapshot(cooId: string, options: { since?: number; limit?: number; parentMessagesOnly?: boolean } = {}): Promise<RoomSnapshot> {
     const seat = await this.requireSeat(cooId);
     const interval = { visibleFromSeq: seat.visibleFromSeq, visibleUntilSeq: seat.visibleToSeq };
     const now = this.now();
@@ -584,6 +584,7 @@ export class RoomHost {
         interval,
         ...(options.since !== undefined ? { since: options.since } : {}),
         limit: options.limit ?? 30,
+        parentMessagesOnly: options.parentMessagesOnly,
       }),
       mailUnread: await this.mail.unreadCount(cooId),
       tables: await this.tableHost.list(),
