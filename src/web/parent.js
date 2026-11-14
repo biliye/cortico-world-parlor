@@ -43,6 +43,11 @@ const ui = {
 let timer = 0;
 let lastSignature = '';
 let toastTimer = 0;
+const VIEW_LIMIT = 80;
+let viewRequest;
+let viewGeneration = 0;
+let viewVersions;
+let currentView;
 
 const el = (tag, cls = '', text = '') => {
   const node = document.createElement(tag);
@@ -80,6 +85,11 @@ const KIND = { pet: 'Coo', human: '人', observer: '观看' };
 
 function showGate(message = '') {
   clearTimeout(timer);
+  viewGeneration += 1;
+  viewRequest = undefined;
+  viewVersions = undefined;
+  currentView = undefined;
+  lastSignature = '';
   ui.gate.hidden = false;
   ui.view.hidden = true;
   ui.stories.replaceChildren();
@@ -228,20 +238,55 @@ async function boot() {
   }
 }
 
-async function loadView() {
+function scheduleView(delay = 3000) {
   clearTimeout(timer);
-  try {
-    const view = await api('/v1/parent/view?limit=80');
-    render(view);
-    timer = setTimeout(loadView, 3000);
-  } catch (error) {
-    if (error.status === 401) {
-      showGate('家长会话已经失效，请重新打开家长链接。');
-      return;
-    }
-    toast(error.message || '刷新失败');
-    timer = setTimeout(loadView, 5000);
+  if (!ui.view.hidden) timer = setTimeout(loadView, document.hidden ? 30000 : delay);
+}
+
+function loadView() {
+  if (ui.view.hidden) return Promise.resolve(false);
+  if (viewRequest) return viewRequest;
+  clearTimeout(timer);
+  const generation = viewGeneration;
+  const query = new URLSearchParams({ limit: String(VIEW_LIMIT), view: 'compact-v1' });
+  if (viewVersions) {
+    for (const key of ['state', 'events', 'mail']) query.set(`${key}Version`, viewVersions[key]);
   }
+  viewRequest = (async () => {
+    try {
+      const update = await api('/v1/parent/view?' + query);
+      if (generation !== viewGeneration) return false;
+      if (update.versions) {
+        currentView = {
+          ...(update.state ?? currentView),
+          events: update.events ?? currentView?.events ?? [],
+          mail: update.mail ?? currentView?.mail ?? [],
+          now: update.now,
+          at: true,
+        };
+        viewVersions = update.versions;
+      } else {
+        // 滚动部署时旧网关仍返回原有完整视图。
+        viewVersions = undefined;
+        currentView = update;
+      }
+      render(currentView);
+      scheduleView();
+      return true;
+    } catch (error) {
+      if (generation !== viewGeneration) return false;
+      if (error.status === 401) {
+        showGate('家长会话已经失效，请重新打开家长链接。');
+        return false;
+      }
+      toast(error.message || '刷新失败');
+      scheduleView(5000);
+      return false;
+    } finally {
+      if (generation === viewGeneration) viewRequest = undefined;
+    }
+  })();
+  return viewRequest;
 }
 
 function render(view) {
@@ -491,11 +536,15 @@ ui.gateForm.addEventListener('submit', (event) => {
 ui.refresh?.addEventListener('click', async () => {
   ui.refresh.disabled = true;
   try {
-    await loadView();
-    toast('已经是最新的了');
+    if (await loadView()) toast('已经是最新的了');
   } finally {
     ui.refresh.disabled = false;
   }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) scheduleView();
+  else void loadView();
 });
 
 void boot();

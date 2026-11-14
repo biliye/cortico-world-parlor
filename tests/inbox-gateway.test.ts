@@ -48,6 +48,30 @@ async function operator(path: string, body?: unknown, key = OPERATOR, method = '
 const publish = (body: unknown, key?: string) => operator('news', body, key);
 
 describe('统一 inbox 网关（真实 PG）', () => {
+  it('公告版本相同时省略正文，修改和删除会更新版本，旧客户端仍收到完整列表', async () => {
+    const { client, token } = await start();
+    const path = 'announcements';
+    const created = await operator(path, { requestId: 'versioned', text: '原公告' });
+    expect(created.status).toBe(200);
+    const query = { topics: ['announcements'], afterPublish: 0, afterId: '' };
+    const first = await client.inbox(token, { ...query, announcementVersion: '' });
+    expect(first.announcements).toMatchObject([{ text: '原公告' }]);
+    expect(first.announcementVersion).toEqual(expect.any(String));
+    expect(await client.inbox(token, { ...query, announcementVersion: first.announcementVersion }))
+      .toEqual({ announcementVersion: first.announcementVersion });
+    expect(await client.inbox(token, query)).toMatchObject({ announcements: [{ text: '原公告' }] });
+
+    const list = await operator(path, undefined, OPERATOR, 'GET');
+    const { revision, publishId } = list.body.announcements[0];
+    expect((await operator(path, { id: 'versioned', revision, publishId, text: '修改后' }, OPERATOR, 'PATCH')).status).toBe(200);
+    const edited = await client.inbox(token, { ...query, announcementVersion: first.announcementVersion });
+    expect(edited.announcements).toMatchObject([{ text: '修改后' }]);
+    expect(edited.announcementVersion).not.toBe(first.announcementVersion);
+    expect((await operator(`${path}?id=versioned&revision=${revision + 1}&publishId=${publishId}`, undefined, OPERATOR, 'DELETE')).status).toBe(200);
+    expect(await client.inbox(token, { ...query, announcementVersion: edited.announcementVersion }))
+      .toMatchObject({ announcements: [] });
+  });
+
   it('默认一次给三块；topics 能只要其中一块，新闻只给摘要不给正文', async () => {
     const { client, token } = await start();
     const published = await publish({ issueDate: '2026-11-09', title: '今天的茶馆', summary: '摘要', body: '正文' });

@@ -219,4 +219,50 @@ describe('WorldServer 聊天网关', () => {
     expect(text).toContain('流里的话');
     controller.abort();
   });
+
+  it('网页只接收牌桌更新通知，原协议和旁观者的可见范围照旧', async () => {
+    const app = await start();
+    const room = '/v1/rooms/lobby';
+    const a = await post(app.url, `${room}/join`, { name: '甲' }, cooHeaders(A));
+    const b = await post(app.url, `${room}/join`, { name: '乙' }, cooHeaders(B));
+    const observer = await post(app.url, `${room}/join`, { name: '丙' }, cooHeaders(C));
+    const headers = (token: unknown) => ({ authorization: `Bearer ${String(token)}` });
+    const action = (token: unknown, body: unknown) => post(app.url, `${room}/action`, body, headers(token));
+    const opened = await action(a.body.token, { type: 'table_open', game: 'gomoku', requestId: 'open' });
+    const table = opened.body.tableId;
+    expect((await action(b.body.token, { type: 'table_join', table, requestId: 'join' })).status).toBe(200);
+    expect((await action(a.body.token, { type: 'table_start', table, requestId: 'start' })).status).toBe(200);
+    expect((await action(a.body.token, { type: 'say', text: '历史读到这里' })).status).toBe(200);
+
+    const read = async (token: unknown, compact: boolean) => {
+      const controller = new AbortController();
+      try {
+        const response = await fetch(`${app.url}${room}/stream?since=0`, {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]),
+          headers: { ...headers(token), ...(compact ? { 'x-parlor-stream': 'compact-table-v1' } : {}) },
+        });
+        expect(response.status).toBe(200);
+        const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+        let frames = '';
+        while (!frames.includes('历史读到这里')) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error('SSE ended before marker');
+          frames += chunk.value;
+        }
+        return frames.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      } finally {
+        controller.abort();
+      }
+    };
+    const legacyA = await read(a.body.token, false);
+    const actor = legacyA.some(event => event.type === 'parlor.table.turn') ? a : b;
+    const legacy = actor === a ? legacyA : await read(b.body.token, false);
+    const web = await read(actor.body.token, true);
+    const type = 'parlor.table.turn';
+    const turn = legacy.find(event => event.type === type);
+    expect(turn).toMatchObject({ scope: { kind: 'seat' }, data: { table: { revision: expect.any(Number) } } });
+    expect(web.find(event => event.type === type)).toEqual({ seq: turn.seq, type });
+    expect((await read(observer.body.token, true)).some(event => event.type === type)).toBe(false);
+    expect(web.filter(event => event.type !== type)).toEqual(legacy.filter(event => event.type !== type));
+  });
 });

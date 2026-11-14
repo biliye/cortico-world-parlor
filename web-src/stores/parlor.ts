@@ -484,7 +484,7 @@ async function readRoomStream(path: string, token: string, source: AbortControll
   try {
     arm();
     const response = await fetch(path, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+      headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream', 'X-Parlor-Stream': 'compact-table-v1' },
       signal: source.signal,
     });
     if (stream !== source || !response.ok || !response.body) return;

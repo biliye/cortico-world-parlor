@@ -21,6 +21,33 @@ pnpm exec parlor-gateway --host 127.0.0.1 --port 8790
 - `pnpm exec parlor-migrate-pg` 把一致性的旧 SQLite 备份迁移到 PostgreSQL，见 [迁移指南](storage-migration.md)。
 - `pnpm exec parlor-table-doctor` 在停止网关写入后诊断或修复牌桌。
 
+### 流量排查
+
+使用 Caddy 反代时，可把下列 `log` 配置放进茶室站点块。先确认服务用户可写日志目录，再执行 `caddy validate --config /etc/caddy/Caddyfile`，验证通过后重新加载配置。
+
+```caddyfile
+log {
+	output file /var/log/caddy/parlor-access.json {
+		mode 0600
+		roll_size 50MiB
+		roll_keep 5
+	}
+	format filter {
+		wrap json
+		fields {
+			request>uri regexp "[?].*$" ""
+			request>headers delete
+			request>remote_ip delete
+			request>remote_port delete
+			request>client_ip delete
+			resp_headers delete
+		}
+	}
+}
+```
+
+访问日志保留路径、状态码、响应 `size` 和 `duration`。用带虚拟查询参数的请求验证日志只写路径，再按时段和路径汇总 `size`。SSE 通常在断开后才写访问日志。仍在线的流量可查网关每分钟的 `parlor: SSE 流量`，其中 `bytes` 是写入响应的 SSE 帧字节，`initialReplayBytes` 和 `turnBytes` 是其中的初始补发及牌桌回合事件字节，两者可以重叠。用 `opened`、`closed` 观察短时重连，再查同一窗口的开关日志和 `source`。计费流量以云平台流量包为准。
+
 ## 从源码构建
 
 在源码根目录安装开发依赖后运行 `pnpm pack:gateway <产物目录>`，生成与 World 同版本的网关 tarball。源码开发仍可使用 `pnpm serve:world`。

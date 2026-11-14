@@ -376,6 +376,7 @@ export interface RecruitTableHint {
 /** 公告 / 新闻 / 招募 / 说书共用一次请求；topics 没要的部分不会出现。 */
 export interface InboxView {
   announcements?: Array<{ id: string; text: string; created_at: number }>;
+  announcementVersion?: string;
   news?: InboxNews;
   recruit?: { tables: RecruitTableHint[] };
   story?: import('./story-protocol.ts').StoryLiveHint | null;
