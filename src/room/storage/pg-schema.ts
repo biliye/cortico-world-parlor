@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 16;
+export const PG_SCHEMA_VERSION = 17;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -524,5 +524,17 @@ export const PG_MIGRATIONS: PgMigration[] = [
     );
     CREATE INDEX IF NOT EXISTS ix_story_chat_round_seq ON story_chat(round_id, seq DESC);
     CREATE INDEX IF NOT EXISTS ix_story_chat_created ON story_chat(created_at);
+  ` },
+  { version: 17, name: 'expire-stale-table-reminders', sql: `
+    UPDATE mail AS m SET read_at = (EXTRACT(EPOCH FROM statement_timestamp()) * 1000)::bigint
+    WHERE m.read_at IS NULL AND m.kind = 'ledger' AND m.action = 'table'
+      AND m.key ~ '^t-[0-9a-f-]{36}/w[0-9]+/[^/]+$'
+      AND NOT EXISTS (
+        SELECT 1 FROM tables AS t
+        WHERE t.id = split_part(m.key, '/', 1) AND t.room_id = m.room_id
+          AND t.status = 'playing' AND t.frozen_at IS NULL
+          AND t.state_json -> 'phase' ->> 'windowId' = split_part(m.key, '/', 2)
+          AND t.state_json -> 'phase' ->> 'stage' IS DISTINCT FROM 'read'
+      );
   ` },
 ];

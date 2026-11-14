@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { sourceFunction } from './helpers/game-component.ts';
 
 class TestNode {
   children: TestNode[] = [];
@@ -58,4 +59,27 @@ describe('家长页消息渲染', () => {
     ] });
     expect(nodes.get('log')!.children.map(row => row.children[2].textContent)).toEqual(['公开回复', '桌聊回复']);
   });
+});
+
+it('家长观战遇到暂停桌时停止轮询，暂时故障仍会重试', async () => {
+  const setTimeout = vi.fn();
+  const live = { value: { table: { label: '飞行棋' } } };
+  const status = { value: '' };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValueOnce(new Response(null, { status: 409 }));
+  const refresh = sourceFunction('web-src/views/ParentWatchView.vue', 'refresh', {
+    props: { tableId: 't1' }, controller: new AbortController(),
+    window: { setTimeout }, timer: undefined, fetch, live, status,
+  });
+
+  await refresh();
+  expect(status.value).toBe('暂时无法更新牌桌，正在重试。');
+  expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 2500);
+  setTimeout.mockClear();
+
+  await refresh();
+  expect(live.value).toBeNull();
+  expect(status.value).toBe('这张牌桌已暂停，暂时无法观看。');
+  expect(setTimeout).not.toHaveBeenCalled();
 });

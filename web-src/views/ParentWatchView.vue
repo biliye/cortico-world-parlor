@@ -61,13 +61,13 @@ async function refresh(): Promise<void> {
     if (response.status === 409) {
       live.value = null;
       status.value = '这张牌桌已暂停，暂时无法观看。';
-    } else {
-      if (!response.ok) throw new Error('牌桌暂不可用');
-      const data = await response.json() as NonNullable<typeof live.value>;
-      clockOffset = data.now - Date.now();
-      live.value = data;
-      status.value = '';
+      return;
     }
+    if (!response.ok) throw new Error('牌桌暂不可用');
+    const data = await response.json() as NonNullable<typeof live.value>;
+    clockOffset = data.now - Date.now();
+    live.value = data;
+    status.value = '';
   } catch {
     status.value = '暂时无法更新牌桌，正在重试。';
   }
