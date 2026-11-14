@@ -280,10 +280,11 @@ export class MailDb {
   }
 
   async readAllTableReminders(room: string, tableId: string, now: number): Promise<void> {
-    // Table IDs are generated UUIDs; the slash is part of the reminder key, before the window and seat IDs.
+    const prefix = `${tableId}/`;
     await this.db.prepare(`UPDATE mail SET read_at = ?
-      WHERE room_id = ? AND kind = 'ledger' AND action = 'table' AND read_at IS NULL AND key LIKE ?`)
-      .run(now, room, `${tableId}/%`);
+      WHERE room_id = ? AND kind = 'ledger' AND action = 'table' AND read_at IS NULL
+        AND substr(key, 1, length(?)) = ?`)
+      .run(now, room, prefix, prefix);
   }
 
   /** 最近几封（含已读），新的在前；不动已读状态。 */

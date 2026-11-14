@@ -856,6 +856,10 @@ describe('狼人杀 · 宿主层', () => {
     const diceId = dice.tableId;
     await fixture.host.joinTable(EXTRA_COOS[1], diceId, 'join-dice', CLIENT_OK);
     await fixture.host.startTable(EXTRA_COOS[0], diceId);
+    const mail = fixture.db.prepare(`INSERT INTO mail (id, ts, coo_id, room_id, kind, action, from_name, text, key)
+      VALUES (?, ?, ?, 'lobby', 'ledger', 'table', '客厅', '测试提醒', ?)`);
+    await mail.run('frozen-reminder', fixture.clock.now, COOS[1], `${tableId}/w2/test-seat`);
+    await mail.run('other-table-reminder', fixture.clock.now, COOS[1], `${diceId}/w2/test-seat`);
     // 落盘后把狼人杀桌的存档改成对不上版本的数据。
     await fixture.db.prepare("UPDATE tables SET state_json = '{\"version\":999}' WHERE id = ?").run(tableId);
     await fixture.close();
@@ -866,6 +870,10 @@ describe('狼人杀 · 宿主层', () => {
     // 狼人杀桌被隔离：公开摘要带 frozen，动作被拒，私视图不再发。
     const frozen = await host2.tablePublic(tableId) as { frozen?: boolean };
     expect(frozen.frozen).toBe(true);
+    const readAt = async (id: string) => (await db2.prepare('SELECT read_at FROM mail WHERE id = ?')
+      .get<{ read_at: number | null }>(id))?.read_at;
+    expect(await readAt('frozen-reminder')).toBe(clock2.now);
+    expect(await readAt('other-table-reminder')).toBeNull();
     await expect(host2.tableAction(COOS[1], {
       type: 'werewolf_action', windowId: 'w9', move: 'wolf_chat', text: '试试还能不能交',
     }, { tableId, requestId: 'frozen-wolf' })).rejects.toThrow(/隔离/);
