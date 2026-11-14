@@ -455,6 +455,49 @@ describe('狼人杀 · 宿主层', () => {
     await fixture.close();
   });
 
+  it('离线提醒按席位退出未读；过期、作废与重试不影响其他来信', async () => {
+    const fixture = await setup();
+    try {
+      const seatIds = await enterAll(fixture);
+      const tableId = await openWerewolf(fixture);
+      await fixture.db.prepare('UPDATE room_seats SET last_seen_at = ?')
+        .run(fixture.clock.now - 10 * 60_000);
+      await startTable(fixture, tableId);
+      const reveal = (await privOf(fixture, COOS[0])).windowId;
+      const readAt = async (key: string) => (await fixture.db.prepare('SELECT read_at FROM mail WHERE key = ?')
+        .get<{ read_at: number | null }>(key))?.read_at;
+      expect(await readAt(`${tableId}/${reveal}/${seatIds[0]}`)).toBeNull();
+
+      fixture.clock.now += 20_000;
+      await fixture.host.tickClock();
+      expect(await readAt(`${tableId}/${reveal}/${seatIds[0]}`)).not.toBeNull();
+      const views = await Promise.all(COOS.map(cooId => privOf(fixture, cooId)));
+      const wolfIndex = views.findIndex(view => view.role === 'wolf');
+      const seerIndex = views.findIndex(view => view.role === 'seer');
+      const window = views[wolfIndex].windowId;
+      const wolfKey = `${tableId}/${window}/${seatIds[wolfIndex]}`;
+      const seerKey = `${tableId}/${window}/${seatIds[seerIndex]}`;
+      expect(await readAt(wolfKey)).toBeNull();
+      expect(await readAt(seerKey)).toBeNull();
+      expect((await action(fixture, COOS[wolfIndex], { move: 'wolf_chat', text: '先讨论' })).error).toBeUndefined();
+      expect(await readAt(wolfKey)).toBeNull(); // 可选狼聊之后仍欠刀票。
+      for (let i = 0; i < 2; i++) {
+        expect((await action(fixture, COOS[wolfIndex], { move: 'wolf_kill' }, 'same-knife')).error).toBeUndefined();
+      }
+      expect(await readAt(wolfKey)).not.toBeNull();
+      expect(await readAt(seerKey)).toBeNull();
+
+      await fixture.db.prepare(`INSERT INTO mail (id, ts, coo_id, room_id, kind, from_name, text, key)
+        VALUES (?, ?, ?, 'lobby', 'whisper', '发信人', '私信', ?)`)
+        .run('unrelated-mail', fixture.clock.now, COOS[seerIndex], 'unrelated-mail');
+      expect(await fixture.host.voidTable(tableId, '测试作废')).toBe(true);
+      expect(await readAt(seerKey)).not.toBeNull();
+      expect(await readAt('unrelated-mail')).toBeNull();
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it('恢复：夜间中断重启 → 身份与阶段保留、截止平移、能继续打完；坏版本隔离', async () => {
     dir = mkdtempSync(join(tmpdir(), 'parlor-wolf-'));
     const file = join(dir, 'parlor.db');
@@ -655,12 +698,22 @@ describe('狼人杀 · 宿主层', () => {
     await fixture.host.tickClock(); // 首夜
     expect((await privOf(fixture, COOS[0])).phase).toBe('night');
 
-    // 同一客厅再开一张斗地主桌：另两个人坐，第三席由脚本陪练补。
+    // 三位真人/Coo 坐满斗地主桌，按随机抽到的先手提交叫地主。
     const ddz = await fixture.host.openTable(EXTRA_COOS[0], { game: 'ddz' });
     const ddzId = ddz.tableId;
     await fixture.host.joinTable(EXTRA_COOS[1], ddzId, 'join-ddz', CLIENT_OK);
+    const thirdCoo = 'coo-extra0003';
+    await fixture.db.prepare('INSERT INTO coos(id, kind, display_name, secret_hash, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(thirdCoo, 'pet', '第三席', null, fixture.clock.now);
+    const thirdSeat = await fixture.host.join(thirdCoo, { name: '第三席', kind: 'pet' });
+    await fixture.host.joinTable(thirdCoo, ddzId, 'join-ddz-third', CLIENT_OK);
+    const bidders = [...EXTRA_COOS, thirdCoo];
+    const bidderSeats = [...extraSeats, thirdSeat.seat.id];
     await fixture.host.startTable(EXTRA_COOS[0], ddzId);
-    expect(((await fixture.host.tablePublic(ddzId)) as { status?: string }).status).toBe('bidding');
+    const bidding = await fixture.host.tablePublic(ddzId) as { status?: string; turn: string };
+    expect(bidding.status).toBe('bidding');
+    const bidder = bidders[bidderSeats.indexOf(bidding.turn)];
+    expect(bidder).toBeDefined();
 
     // 交错走动作：狼聊暗号 → 斗地主叫地主 → 刀票 → 斗地主领出。每张回执都归属自己的桌。
     const wolves: string[] = [];
@@ -672,19 +725,19 @@ describe('狼人杀 · 宿主层', () => {
     expect(chat.error).toBeUndefined();
     expect(chat.receipt.tableId).toBe(tableId);
     const ddzRevision = async (): Promise<number> => ((await fixture.host.tablePublic(ddzId)) as { revision: number }).revision;
-    const bid = await fixture.host.tableAction(EXTRA_COOS[0], { type: 'ddz_action', move: 'bid', call: true }, {
+    const bid = await fixture.host.tableAction(bidder, { type: 'ddz_action', move: 'bid', call: true }, {
       tableId: ddzId, revision: await ddzRevision(), requestId: 'ddz-bid',
     });
     expect(bid.tableId).toBe(ddzId);
     const kill = await action(fixture, wolves[0], { move: 'wolf_kill', target: killTarget });
     expect(kill.error).toBeUndefined();
     expect(kill.receipt.tableId).toBe(tableId);
-    // 地主（开桌人）按服务端提示领出第一手。
-    const landlordPriv = await fixture.host.tablePrivate(extraSeats[0]) as unknown as
+    // 地主按服务端提示领出第一手。
+    const landlordPriv = await fixture.host.tablePrivate(bidding.turn) as unknown as
       { yourTurn?: boolean; hint?: { cards?: string[]; pass?: boolean } };
     expect(landlordPriv?.yourTurn).toBe(true);
     expect(landlordPriv.hint?.cards?.length ?? 0).toBeGreaterThan(0);
-    const play = await fixture.host.tableAction(EXTRA_COOS[0], {
+    const play = await fixture.host.tableAction(bidder, {
       type: 'ddz_action', move: 'play', cards: landlordPriv.hint!.cards,
     }, { tableId: ddzId, revision: await ddzRevision(), requestId: 'ddz-play' });
     expect(play.tableId).toBe(ddzId);
@@ -803,6 +856,10 @@ describe('狼人杀 · 宿主层', () => {
     const diceId = dice.tableId;
     await fixture.host.joinTable(EXTRA_COOS[1], diceId, 'join-dice', CLIENT_OK);
     await fixture.host.startTable(EXTRA_COOS[0], diceId);
+    const mail = fixture.db.prepare(`INSERT INTO mail (id, ts, coo_id, room_id, kind, action, from_name, text, key)
+      VALUES (?, ?, ?, 'lobby', 'ledger', 'table', '客厅', '测试提醒', ?)`);
+    await mail.run('frozen-reminder', fixture.clock.now, COOS[1], `${tableId}/w2/test-seat`);
+    await mail.run('other-table-reminder', fixture.clock.now, COOS[1], `${diceId}/w2/test-seat`);
     // 落盘后把狼人杀桌的存档改成对不上版本的数据。
     await fixture.db.prepare("UPDATE tables SET state_json = '{\"version\":999}' WHERE id = ?").run(tableId);
     await fixture.close();
@@ -813,6 +870,10 @@ describe('狼人杀 · 宿主层', () => {
     // 狼人杀桌被隔离：公开摘要带 frozen，动作被拒，私视图不再发。
     const frozen = await host2.tablePublic(tableId) as { frozen?: boolean };
     expect(frozen.frozen).toBe(true);
+    const readAt = async (id: string) => (await db2.prepare('SELECT read_at FROM mail WHERE id = ?')
+      .get<{ read_at: number | null }>(id))?.read_at;
+    expect(await readAt('frozen-reminder')).toBe(clock2.now);
+    expect(await readAt('other-table-reminder')).toBeNull();
     await expect(host2.tableAction(COOS[1], {
       type: 'werewolf_action', windowId: 'w9', move: 'wolf_chat', text: '试试还能不能交',
     }, { tableId, requestId: 'frozen-wolf' })).rejects.toThrow(/隔离/);
