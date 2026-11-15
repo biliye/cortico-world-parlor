@@ -3,7 +3,7 @@ export const unitTests = [
   'accounts', 'aeroplane-table', 'aeroplane-view', 'announcement-rules', 'check-release', 'client-redirect', 'club-state', 'ddz-e2e-flow', 'ddz-end-web',
   'describe-contract', 'doudizhu-assist', 'doudizhu-bot', 'doudizhu-table', 'doudizhu',
   'focus', 'game-actions', 'game-api', 'games-registry', 'gift-catalog', 'gomoku-table', 'gomoku-view', 'history-panel',
-  'history-sync', 'identity', 'ledger', 'local-history-web', 'local-history', 'mail', 'mentions',
+  'history-sync', 'identity', 'ledger', 'local-history-web', 'local-history', 'mail', 'mahjong-table', 'mentions',
   'monopoly-activity', 'monopoly-bot', 'monopoly-hardening', 'monopoly-integration',
   'monopoly-rules', 'monopoly-table', 'monopoly2d-rules', 'monopoly2d-table',
   'parent-entry-retry', 'parent-web', 'parlor-patch', 'play-seat-expiry', 'play',

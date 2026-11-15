@@ -44,9 +44,12 @@ function lazyGame(loader: () => Promise<Component>): Component {
  * 冷进桌的额外传输量按这个 chunk 加美术算（预算 500 KB）。
  */
 const Monopoly2dGame = lazyGame(() => import('../components/games/Monopoly2dGame.vue'));
+const MahjongGame = lazyGame(() => import('../components/games/MahjongGame.vue'));
 
 const COMPONENTS: Record<string, Component> = {
   ddz: DdzGame,
+  'mahjong-sichuan': MahjongGame,
+  'mahjong-guangdong': MahjongGame,
   werewolf: WerewolfGame,
   monopoly2d: Monopoly2dGame,
   gomoku: lazyGame(() => import('../components/games/GomokuGame.vue')),

@@ -7,12 +7,12 @@ import { pgServerStorage } from './helpers/pg.ts';
 let app: WorldServer | undefined;
 afterEach(async () => { await app?.close(); app = undefined; });
 
-async function start(clock?: { now: number }) {
+async function start(clock?: { now: number }, suffixes = ['a', 'b', 'c']) {
   app = await WorldServer.create({ ...(await pgServerStorage(':memory:')), port: 0,
     inviteCode: 'inv', ...(clock ? { now: () => clock.now } : {}),
   });
   await app.listen();
-  const players = await Promise.all(['a', 'b', 'c'].map(async suffix => {
+  const players = await Promise.all(suffixes.map(async suffix => {
     const client = new ParlorClient(app!.url, { cooId: `coo-generic-${suffix}`, cooSecret: `secret-generic-${suffix}-0123456789` });
     const joined = await client.join('inv', { name: suffix }, 'lobby');
     return { client, token: joined.token };
@@ -29,6 +29,64 @@ async function post(token: string, body: unknown) {
 }
 
 describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
+  it('麻将同一窗口可并发提交，旁观者只看公开牌河，通知只发到行动席位', async () => {
+    const players = await start(undefined, ['a', 'b', 'c', 'd', 'spectator']);
+    const [host, , , , spectator] = players;
+    const catalog = await host.client.games(host.token, { op: 'list' }, 'lobby');
+    expect(catalog.games).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'mahjong-sichuan' }),
+      expect.objectContaining({ id: 'mahjong-guangdong' }),
+    ]));
+    const opened = await host.client.action(host.token, {
+      type: 'table_open', game: 'mahjong-sichuan', requestId: 'mahjong-open',
+    }, 'lobby');
+    const table = opened.tableId!;
+    for (const p of players.slice(1, 4)) {
+      await p.client.action(p.token, { type: 'table_join', table, requestId: 'mahjong-join' }, 'lobby');
+    }
+    await host.client.action(host.token, { type: 'table_start', table, requestId: 'mahjong-start' }, 'lobby');
+    const read = (player: typeof host) => player.client.games(player.token, { op: 'state', table }, 'lobby') as Promise<Record<string, any>>;
+    const watches = await read(spectator);
+    expect(watches.tablePrivate).toBeNull();
+    expect(watches.table.seats.every((p: Record<string, unknown>) => !('hand' in p))).toBe(true);
+    const states = await Promise.all(players.slice(0, 4).map(read));
+    const exchanges = states.map((state, i) => {
+      const { windowId, hand } = state.tablePrivate;
+      expect(state.tablePrivate.text).toContain('未见张数');
+      expect(state.availableActions[0]).toMatchObject({ action: 'exchange', defaults: { windowId } });
+      const suits = [0, 1, 2].map(suit => (hand as number[]).filter(t => Math.floor(t / 9) === suit));
+      const tiles = suits.find(suit => suit.length >= 3)!.slice(0, 3);
+      return { type: 'game_action', table, action: 'exchange', params: { windowId, tiles }, requestId: 'exchange-' + i };
+    });
+    const replies = await Promise.all(exchanges.map((action, i) => post(players[i].token, action)));
+    expect(replies.map(reply => reply.status)).toEqual([200, 200, 200, 200]);
+    expect((await post(host.token, exchanges[0])).body).toEqual(replies[0].body);
+    expect((await post(host.token, { ...exchanges[0], requestId: 'stale' })).status).toBe(409);
+    const missingStates = await Promise.all(players.slice(0, 4).map(read));
+    for (const [i, p] of players.slice(0, 4).entries()) {
+      const reply = await post(p.token, { type: 'game_action', table, action: 'missing',
+        params: { windowId: missingStates[i].tablePrivate.windowId, suit: 2 }, requestId: 'missing-' + i });
+      expect(reply.status).toBe(200);
+    }
+    const ready = await Promise.all(players.slice(0, 4).map(read));
+    const dealer = ready.findIndex(s => s.tablePrivate.yourTurn);
+    const own = ready[dealer].tablePrivate;
+    const tile = own.discardable[0];
+    expect(own.hints.length).toBeGreaterThan(0);
+    const discard = { type: ready[dealer].table.game + '_action', table, action: 'discard',
+      windowId: own.windowId, tile, requestId: 'mahjong-discard' };
+    const reply = await post(players[dealer].token, discard);
+    expect(reply.status).toBe(200);
+    expect(reply.body.table.seats[dealer].river).toEqual([{ tile, order: 1 }]);
+    const observed = await read(spectator);
+    expect(observed.table.seats[dealer].river).toEqual([{ tile, order: 1 }]);
+    expect(observed.tablePrivate).toBeNull();
+    const spectatorEvents = await fetch(app!.url + '/v1/rooms/lobby/room', {
+      headers: { authorization: 'Bearer ' + spectator.token },
+    }).then(res => res.json()) as { events: Array<{ type: string }> };
+    expect(spectatorEvents.events.some(event => event.type === 'parlor.table.turn')).toBe(false);
+  });
+
   it('中国象棋从目录开桌，只有执棋方能收到提示和合法走法', async () => {
     const [a, b, spectator] = await start();
     const catalog = await a.client.games(a.token, { op: 'list' }, 'lobby');

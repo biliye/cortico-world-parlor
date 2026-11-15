@@ -1,6 +1,7 @@
 /** 网页侧的玩法说明、开局提示与展示状态。显示名和图标与服务端共用。 */
 
 import { GAME_PRESENTATION, type GameId } from '../../src/room/game-labels.ts';
+import { MAHJONG_RULES } from '../../src/room/games/mahjong-rules.ts';
 import { AEROPLANE_RULES } from '../../src/room/games/aeroplane-rules.ts';
 
 export interface GameDef {
@@ -85,6 +86,16 @@ export const GAMES: Record<string, GameDef> = {
     blurb: '掷六起飞，穿过四色航线，先把四架飞机送到终点。',
     foot: '2–4 人 · 掷骰 · 撞机',
     guide: AEROPLANE_RULES,
+  },
+  'mahjong-sichuan': {
+    ...GAME_PRESENTATION['mahjong-sichuan'], enabled: true, endScreen: true, minPlayers: 4, botFill: false,
+    blurb: '换三张、定缺。一家胡牌后，其余玩家接着打。', foot: '四人 · 108 张',
+    guide: MAHJONG_RULES['mahjong-sichuan'],
+  },
+  'mahjong-guangdong': {
+    ...GAME_PRESENTATION['mahjong-guangdong'], enabled: true, endScreen: true, minPlayers: 4, botFill: false,
+    blurb: '东南西北、中发白齐全，红中百搭，只能自摸。', foot: '四人 · 136 张',
+    guide: MAHJONG_RULES['mahjong-guangdong'],
   },
   monopoly: {
     label: '大富翁', icon: 'board', enabled: false, endScreen: false, minPlayers: 2, botFill: true,

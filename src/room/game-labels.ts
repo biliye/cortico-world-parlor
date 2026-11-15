@@ -7,6 +7,8 @@ export const GAME_PRESENTATION = {
   xiangqi: { label: '中国象棋', icon: 'board' },
   monopoly2d: { label: '快局大富翁', icon: 'board' },
   aeroplane: { label: '飞行棋', icon: 'board' },
+  'mahjong-sichuan': { label: '四川血战到底', icon: 'cards' },
+  'mahjong-guangdong': { label: '广东推倒胡·红中', icon: 'cards' },
 } as const;
 
 export type GameId = keyof typeof GAME_PRESENTATION;

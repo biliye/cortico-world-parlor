@@ -117,7 +117,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
         </div>
       </div>
       <div class="turn-box">
-        <div v-if="table.game !== 'werewolf' || table.turn" class="turn-copy">
+        <div v-if="table.turn || myTurn" class="turn-copy">
           <span class="turn-kicker">{{ myTurn ? '轮到你' : '轮到' }}</span>
           <span class="turn-name">{{ myTurn ? meName : (botTurn ? turnName + ' · 脚本' : turnName) }}</span>
         </div>
