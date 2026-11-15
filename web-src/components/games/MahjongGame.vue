@@ -4,10 +4,9 @@ import { SUITS, TILES, suitOf } from '../../../src/room/games/mahjong-rules.ts';
 import type { MahjongTable } from '../../../src/room/games/mahjong-table.ts';
 import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
 import { mahjongArt, preloadMahjongArt } from '../../lib/mahjong-art.ts';
-import clothUrl from '../../assets/table/cloth.webp';
 import MahjongTileFace from './MahjongTileFace.vue';
 
-preloadMahjongArt();
+preloadMahjongArt(true);
 
 const props = defineProps<{ view: GameView; ctx: GameCtx }>();
 type PublicTable = ReturnType<MahjongTable['public']>;
@@ -156,7 +155,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
   <section class="mahjong" :class="{ ended }" :style="{
     '--mj-board-img': mahjongArt.board || 'none',
     '--mj-faces-img': mahjongArt.faces,
-    '--mj-cloth-img': mahjongArt.faces ? `url(${clothUrl})` : 'none',
+    '--mj-cloth-img': mahjongArt.cloth || 'none',
   }" aria-label="麻将牌桌">
     <header class="hud">
       <div class="hud-line">
@@ -726,6 +725,7 @@ html[data-theme="light"] .mahjong {
   .melds-col .sz-mini { width: 15px; height: 18px; font-size: 8px; }
   .sz-show { width: 22px; height: 26px; font-size: 11.5px; }
   .sz-mini { width: 20px; height: 24px; font-size: 10px; }
+  .dock { block-size: 44px; }
   .dock .act { min-width: 50px; padding: 8px 11px; font-size: 13px; }
   .hand { flex-wrap: nowrap; justify-content: start; overflow-x: auto; padding: 10px 3px 4px; scrollbar-width: thin; }
   .sz-hand { width: 40px; height: 52px; font-size: 17px; }

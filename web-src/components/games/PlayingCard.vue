@@ -23,7 +23,7 @@ const classes = computed(() => [
 ].filter(Boolean).join(' '));
 
 function warmArt(): void {
-  if (props.art || hasArt.value) probeCardArt();
+  if (hasArt.value) probeCardArt(true);
 }
 
 onMounted(warmArt);
