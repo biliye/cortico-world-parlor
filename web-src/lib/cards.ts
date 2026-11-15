@@ -1,4 +1,5 @@
 /** 牌与时钟的小工具：规则与旧渲染器 src/web/common.js 保持一致，供 Vue 桌面组件使用。 */
+import { tableImage } from './image.ts';
 
 export type CardArt = { rank?: string; suit?: string | null } | null;
 
@@ -35,23 +36,12 @@ export function sortHand(hand: string[]): Array<{ card: string; index: number }>
       || left.index - right.index);
 }
 
-let artState: 'idle' | 'loading' | 'ready' | 'missing' = 'idle';
-
-/** 牌面雪碧图第一次真要画牌时才拉；和旧页共用 html.card-art-ready / no-card-art 两个类。 */
-export function probeCardArt(): void {
-  if (artState !== 'idle') return;
-  artState = 'loading';
-  const img = new Image();
-  img.addEventListener('load', () => {
-    artState = 'ready';
-    document.documentElement.classList.add('card-art-ready');
-  });
-  img.addEventListener('error', () => {
-    artState = 'missing';
-    document.documentElement.classList.add('no-card-art');
-  });
-  img.src = '/play/assets/assets/cards/cards.webp';
-}
+/** 进桌先请求雪碧图，解码结束后再把点数换成牌面。 */
+export const probeCardArt = tableImage('/play/assets/assets/cards/cards.webp', () => {
+  const classes = document.documentElement.classList;
+  classes.remove('no-card-art');
+  classes.add('card-art-ready');
+}, { onError: () => document.documentElement.classList.add('no-card-art') });
 
 export const pad = (value: number): string => String(value).padStart(2, '0');
 

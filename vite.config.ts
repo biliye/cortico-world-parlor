@@ -8,13 +8,25 @@
  */
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import manifest from './package.json' with { type: 'json' };
 
 export default defineConfig({
   plugins: [vue({
     features: {
       componentIdGenerator: (path, source, production, hash) => hash(path + (production ? source.replace(/\r\n/g, '\n') : '')),
     },
-  })],
+  }), {
+    name: 'parlor-versioned-entry',
+    // 分包与 vue-loader.js 要引用同一入口 URL，否则浏览器会执行两次 main.js。
+    renderChunk(code, chunk) {
+      if (!chunk.imports.includes('main.js')) return null;
+      const entryUrl = JSON.stringify('./main.js?v=' + encodeURIComponent(manifest.version));
+      return {
+        code: code.replace(/(\b(?:from|import)\s*)(["'])\.\/main\.js\2/g, (_, keyword: string) => keyword + entryUrl),
+        map: null,
+      };
+    },
+  }],
   base: '/play/assets/vue/',
   build: {
     outDir: 'src/web/vue',

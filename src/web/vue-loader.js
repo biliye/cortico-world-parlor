@@ -21,7 +21,7 @@ document.addEventListener('securitypolicyviolation', (event) => {
 // 版本串只改 play.html 里这一处：loader 自己带什么版本，Vue 包与样式就跟着带什么。
 // 静态资源有 5 分钟缓存，改了包却不换串，页面会继续跑旧文件。
 const version = new URL(import.meta.url).searchParams.get('v') || '';
-const withVersion = (path) => (version ? path + '?v=' + version : path);
+const withVersion = (path) => (version ? path + '?v=' + encodeURIComponent(version) : path);
 const style = document.createElement('link');
 style.rel = 'stylesheet';
 style.href = new URL(withVersion('./vue/vue-style.css'), import.meta.url).href;

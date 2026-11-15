@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GameHost from '../components/GameHost.vue';
 import TableDiscovery from '../components/TableDiscovery.vue';
 import Icon from '../components/Icon.vue';
+import { preloadTableArt } from '../lib/game-components.ts';
 import { STATUS_LABELS, canStartTable, gameLabel, gameOf, tableSeatLabel, tableStartBlockers } from '../lib/games.ts';
 import { initialOf } from '../lib/text.ts';
 import {
@@ -13,6 +14,7 @@ import {
 import { backToRoom } from '../stores/view.ts';
 
 const table = activeTable;
+watch(() => table.value?.game, preloadTableArt, { immediate: true });
 const notice = ref('');
 const busy = ref(false);
 const now = ref(serverNow());

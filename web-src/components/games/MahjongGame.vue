@@ -3,8 +3,10 @@ import { computed, ref, watch } from 'vue';
 import { SUITS, TILES, suitOf } from '../../../src/room/games/mahjong-rules.ts';
 import type { MahjongTable } from '../../../src/room/games/mahjong-table.ts';
 import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
-import boardUrl from '../../assets/table/mahjong-board.webp';
-import clothUrl from '../../assets/table/cloth.webp';
+import { mahjongArt, preloadMahjongArt } from '../../lib/mahjong-art.ts';
+import MahjongTileFace from './MahjongTileFace.vue';
+
+preloadMahjongArt(true);
 
 const props = defineProps<{ view: GameView; ctx: GameCtx }>();
 type PublicTable = ReturnType<MahjongTable['public']>;
@@ -24,21 +26,6 @@ const riverLabel = (entry: { tile: number; taken?: keyof typeof claimLabels; cla
       ?? table.value.seats.find(seat => seat.id === id)?.name ?? id).join('、') + ' ' + claimLabels[entry.taken]
     : '');
 
-const HONORS = ['东', '南', '西', '北', '中', '发', '白'];
-/**
- * 牌面美术：公共领域（CC0）矢量牌面，来源与改动见 assets/mahjong/NOTICE.md。
- * 只取「图案」这一层（透明底），牌身厚度、阴影、牌背仍由样式绘制。
- */
-const FACES = import.meta.glob<string>('../../assets/mahjong/*.svg', { eager: true, query: '?url', import: 'default' });
-const FACE_DIR = { 万: 'Man', 筒: 'Pin', 条: 'Sou' } as const;
-const FACE_HONOR = ['Ton', 'Nan', 'Shaa', 'Pei', 'Chun', 'Hatsu', 'Haku'];
-const faceUrl = (tile: number): string => FACES[tile < 27
-  ? `../../assets/mahjong/${FACE_DIR[SUITS[suitOf(tile)] as keyof typeof FACE_DIR]}${(tile % 9) + 1}.svg`
-  : `../../assets/mahjong/${FACE_HONOR[tile - 27]}.svg`] ?? '';
-/** 牌面拆成「点数 + 花色」两行，字牌单字。红中按传统牌面只写「中」。 */
-const faceOf = (tile: number) => tile < 27
-  ? { rank: String((tile % 9) + 1), suit: SUITS[suitOf(tile)] as string }
-  : { rank: HONORS[tile - 27] ?? '?', suit: '' };
 const meldSummary = (seat: Seat) => seat.melds
   .map(meld => (meld.kind === 'pung' ? '碰' : '杠') + (meld.tile === null ? '暗' : tileText(meld.tile)))
   .join(' · ');
@@ -126,7 +113,6 @@ const directions = ['', '顺换', '对换', '逆换'];
 const responses = [{ id: 'hu', label: '胡' }, { id: 'kong', label: '杠' },
   { id: 'pung', label: '碰' }, { id: 'pass', label: '跳过' }] as const;
 const isDealer = (seat: Seat) => table.value.dealer === seat.id;
-const dockVisible = computed(() => !ended.value && !!mine.value && actions.value.length > 0);
 const myScore = computed(() => ring.value.find(slot => slot.isMe)?.seat.score ?? null);
 
 watch(() => mine.value?.windowId, () => { selected.value = []; showTips.value = false; });
@@ -166,7 +152,11 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
 </script>
 
 <template>
-  <section class="mahjong" :class="{ ended }" :style="{ '--mj-cloth-img': `url(${clothUrl})` }" aria-label="麻将牌桌">
+  <section class="mahjong" :class="{ ended }" :style="{
+    '--mj-board-img': mahjongArt.board || 'none',
+    '--mj-faces-img': mahjongArt.faces,
+    '--mj-cloth-img': mahjongArt.cloth || 'none',
+  }" aria-label="麻将牌桌">
     <header class="hud">
       <div class="hud-line">
         <span class="dot" :class="{ live: !ended && table.turn === view.me.id }" aria-hidden="true"></span>
@@ -177,8 +167,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
       </div>
     </header>
 
-    <!-- 环形牌桌：四家牌河围住中央场况，动作按钮浮在牌面之上 -->
-    <div class="felt" :style="{ '--mj-board-img': `url(${boardUrl})` }">
+    <div class="felt">
       <template v-for="slot in ring" :key="slot.spot">
         <section class="seat" :class="['seat-' + slot.spot, { 'is-self': slot.isMe, current: table.turn === slot.seat.id, won: !!slot.seat.win }]"
           :aria-label="slot.seat.name">
@@ -204,9 +193,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
               :title="meld.tile === null ? '暗杠' : claimLabels[meld.kind] + tileText(meld.tile)">
               <span v-for="n in (meld.kind === 'pung' ? 3 : 4)" :key="n" class="tile sz-mini"
                 :class="{ back: meld.tile === null }">
-                <template v-if="meld.tile !== null">
-                  <img class="face" :src="faceUrl(meld.tile)" alt="" />
-                </template>
+                <MahjongTileFace v-if="meld.tile !== null" :tile="meld.tile" />
               </span>
             </span>
           </div>
@@ -215,7 +202,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
             <span class="showdown-tag">摊牌</span>
             <span v-for="(tile, index) in slot.show.tiles" :key="index" class="tile sz-show"
               :class="{ win: index === slot.show.winIndex }" :title="tileText(tile)">
-              <img class="face" :src="faceUrl(tile)" alt="" />
+              <MahjongTileFace :tile="tile" />
             </span>
           </div>
 
@@ -225,7 +212,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
               <li v-for="entry in slot.seat.river" :key="entry.order" class="tile sz-river"
                 :class="{ latest: entry.order === table.lastDiscard, taken: entry.taken }"
                 :title="riverLabel(entry)" :aria-label="riverLabel(entry)">
-                <img class="face" :src="faceUrl(entry.tile)" alt="" />
+                <MahjongTileFace :tile="entry.tile" />
                 <span v-if="entry.taken" class="claim-mark" aria-hidden="true">{{ claimLabels[entry.taken] }}</span>
               </li>
             </ol>
@@ -240,7 +227,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
       </div>
     </div>
 
-    <div v-if="dockVisible" class="dock" :aria-label="'可选动作：' + actions.join('、')">
+    <div v-if="mine && !ended" class="dock" :aria-label="actions.length ? '可选动作' : undefined">
         <template v-if="actions.includes('exchange')">
           <button class="act act-primary" type="button" :disabled="busy || selected.length !== 3"
             @click="submit('exchange', { tiles: selected.map(i => hand[i].tile) })"><span>确认换牌</span></button>
@@ -255,7 +242,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
           <button v-if="actions.includes('hu')" class="act act-gold" type="button" :disabled="busy"
             @click="submit('hu')"><span>自摸</span></button>
           <button v-for="tile in mine?.kongs ?? []" :key="tile" class="act" type="button" :disabled="busy"
-            @click="submit('kong', { tile })"><span>杠{{ faceOf(tile).rank }}{{ faceOf(tile).suit }}</span></button>
+            @click="submit('kong', { tile })"><span>杠{{ tileText(tile) }}</span></button>
         </template>
         <template v-else-if="actions.includes('pass')">
           <button v-for="response in responses.filter(option => actions.includes(option.id))" :key="response.id"
@@ -278,9 +265,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
           :title="meld.tile === null ? '暗杠' : claimLabels[meld.kind] + tileText(meld.tile)">
           <span v-for="n in (meld.kind === 'pung' ? 3 : 4)" :key="n" class="tile sz-mini"
             :class="{ back: meld.tile === null }">
-            <template v-if="meld.tile !== null">
-              <img class="face" :src="faceUrl(meld.tile)" alt="" />
-            </template>
+            <MahjongTileFace v-if="meld.tile !== null" :tile="meld.tile" />
           </span>
         </span>
       </div>
@@ -290,7 +275,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
           :class="{ selected: selected.includes(index), drawn }"
           :aria-pressed="selected.includes(index)" :aria-label="tileText(tile) + (drawn ? '，刚摸到' : '')"
           :disabled="busy || !canSelect(tile)" @click="select(index)">
-          <img class="face" :src="faceUrl(tile)" alt="" />
+          <MahjongTileFace :tile="tile" />
         </button>
       </div>
 
@@ -378,7 +363,7 @@ html[data-theme="light"] .mahjong {
     "left core right"
     "left dn   right";
   gap: 8px 12px;
-  padding: clamp(32px, 6.5cqw, 63px) clamp(18px, 4.2cqw, 41px) clamp(24px, 4.5cqw, 44px);
+  padding: clamp(32px, 6.5cqw, 63px) clamp(22px, 6cqw, 58px) clamp(24px, 4.5cqw, 44px);
   border-radius: 22px;
   background: var(--mj-cloth) var(--mj-board-img) center / 100% 100% no-repeat;
   box-shadow: 0 18px 38px rgba(0, 0, 0, .28);
@@ -474,7 +459,6 @@ html[data-theme="light"] .mahjong {
 .tile .face {
   position: absolute; left: 3px; top: 3px;
   width: calc(100% - 6px); height: calc(100% - var(--thick) - 5px);
-  object-fit: contain;
   pointer-events: none; user-select: none;
 }
 .tile.back {
@@ -602,13 +586,14 @@ html[data-theme="light"] .mahjong {
 .core-num { font-family: var(--num); font-size: clamp(28px, 3.8vw, 36px); line-height: 1.05; color: #ffe6b0; font-variant-numeric: tabular-nums; }
 .core-turn { margin-top: 3px; max-width: 100%; font-size: 10.5px; line-height: 1.25; color: var(--mj-sub); opacity: .9; }
 
-/* ── 浮层动作按钮（斜切，压在牌面之上） ── */
+/* ── 牌桌和手牌之间预留动作区 ── */
 .dock {
-  position: relative; z-index: 8; top: -26px;
-  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
-  margin-block: -34px -2px; padding-inline: 6px;
+  display: flex; align-items: center; justify-content: safe center; gap: 8px;
+  block-size: 56px; min-width: 0; padding-inline: 8px;
+  overflow-x: auto; scrollbar-width: thin;
 }
 .dock .act {
+  flex: none;
   appearance: none; cursor: pointer; font-family: inherit;
   min-width: 72px; padding: 12px 18px; border-radius: 3px;
   border: 1px solid rgba(255, 245, 220, .5); border-bottom: 3px solid rgba(0, 0, 0, .6);
@@ -707,13 +692,13 @@ html[data-theme="light"] .mahjong {
   .core { width: 112px; border-radius: 14px; }
   .core-num { font-size: 28px; }
   .seat-left .who, .seat-right .who { width: 68px; }
-  .dock { gap: 6px; margin-block: -28px -2px; }
+  .dock { gap: 6px; }
   .dock .act { min-width: 56px; padding: 9px 12px; font-size: 13.5px; }
 }
 
 @media (max-width: 560px) {
   .mahjong { --rv-w: 28px; --rv-h: 33px; }
-  .felt { padding: 28px 10px 24px; border-radius: 14px; gap: 5px 3px; }
+  .felt { padding: 28px 15px 24px; border-radius: 14px; gap: 5px 3px; }
   .hud-line strong { font-size: 16px; }
   .core { width: 82px; border-radius: 12px; padding: 6px; }
   .core-cap { font-size: 9px; letter-spacing: .12em; }
@@ -740,7 +725,7 @@ html[data-theme="light"] .mahjong {
   .melds-col .sz-mini { width: 15px; height: 18px; font-size: 8px; }
   .sz-show { width: 22px; height: 26px; font-size: 11.5px; }
   .sz-mini { width: 20px; height: 24px; font-size: 10px; }
-  .dock { margin-block: -22px -2px; padding-inline: 2px; }
+  .dock { block-size: 44px; }
   .dock .act { min-width: 50px; padding: 8px 11px; font-size: 13px; }
   .hand { flex-wrap: nowrap; justify-content: start; overflow-x: auto; padding: 10px 3px 4px; scrollbar-width: thin; }
   .sz-hand { width: 40px; height: 52px; font-size: 17px; }

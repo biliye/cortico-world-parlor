@@ -2,6 +2,9 @@
 import { defineAsyncComponent, defineComponent, h, type Component } from 'vue';
 import DdzGame from '../components/games/DdzGame.vue';
 import WerewolfGame from '../components/games/WerewolfGame.vue';
+import { MAHJONG_GAMES } from '../../src/room/games/mahjong-rules.ts';
+import { probeCardArt } from './cards.ts';
+import { preloadMahjongArt } from './mahjong-art.ts';
 
 /**
  * 分包加载失败时的兜底。
@@ -44,7 +47,17 @@ function lazyGame(loader: () => Promise<Component>): Component {
  * 冷进桌的额外传输量按这个 chunk 加美术算（预算 500 KB）。
  */
 const Monopoly2dGame = lazyGame(() => import('../components/games/Monopoly2dGame.vue'));
-const MahjongGame = lazyGame(() => import('../components/games/MahjongGame.vue'));
+const loadMahjong = () => import('../components/games/MahjongGame.vue');
+const MahjongGame = lazyGame(loadMahjong);
+
+/** 当前桌的素材在等待开局时就可以请求。 */
+export function preloadTableArt(game: string | undefined): void {
+  if (game === 'ddz') probeCardArt();
+  if (MAHJONG_GAMES.some(id => id === game)) {
+    preloadMahjongArt();
+    void loadMahjong().catch(() => {});
+  }
+}
 
 const COMPONENTS: Record<string, Component> = {
   ddz: DdzGame,
