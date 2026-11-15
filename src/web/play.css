@@ -1668,7 +1668,7 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
 .tag-farmer { color: var(--good); border: 1px solid rgba(79, 174, 141, .3); background: var(--good-soft); }
 .tag .icon { width: 10px; height: 10px; }
 
-/* 牌：默认是牌面雪碧图，图缺了退回只有点数 */
+/* 雪碧图尚未就绪时先显示点数。 */
 .pcard {
   --cw: 52px;
   position: relative;
@@ -1687,7 +1687,6 @@ input:focus, select:focus { outline: none; border-color: var(--accent-border); b
   transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
 }
 /* 牌：默认是点数；牌面雪碧图加载好了（html.card-art-ready）才切成真牌面。 */
-.pcard.has-art { color: inherit; }
 html.card-art-ready .pcard.has-art {
   background-image: url(assets/cards/cards.webp);
   background-size: 1300% 500%;
@@ -1716,7 +1715,7 @@ html.card-art-ready .pcard.has-art {
 }
 .pcard:disabled { cursor: default; opacity: 1; }
 html.no-card-art .pcard { border: 1px solid #e0cdb4; }
-html.no-card-art .pcard.has-art { background-image: none; color: inherit; }
+html.no-card-art .pcard.has-art { background-image: none; color: var(--paper-ink); }
 html.no-card-art .pcard.has-art.red { color: var(--paper-red); }
 html.no-card-art .pcard.has-art.joker { color: var(--violet); }
 html.no-card-art .pcard.back { border: 0; }

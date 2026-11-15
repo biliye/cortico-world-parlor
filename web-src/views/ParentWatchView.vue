@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import type { HallSeat, TableSummary } from '../api/types.ts';
-import { componentFor } from '../lib/game-components.ts';
+import { componentFor, preloadTableArt } from '../lib/game-components.ts';
 import { mountFor, type GameCtx, type GameInstance, type GameView } from '../lib/legacy-games.ts';
 
 const props = defineProps<{ tableId: string }>();
 const live = shallowRef<{ table: TableSummary; seats: HallSeat[]; online: string[]; now: number } | null>(null);
 const table = computed(() => live.value?.table ?? null);
+watch(() => table.value?.game, preloadTableArt, { immediate: true });
 const status = ref('正在连接牌桌…');
 const legacyRoot = ref<HTMLElement | null>(null);
 const component = computed(() => table.value ? componentFor(table.value.game) : null);
