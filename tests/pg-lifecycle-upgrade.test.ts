@@ -9,6 +9,7 @@ import { SupportDb } from '../src/room/support-db.ts';
 import { openStorage, parseStorageKind } from '../src/room/storage/open.ts';
 import { PG_SCHEMA_VERSION } from '../src/room/storage/pg-schema.ts';
 import { gameIds } from '../src/room/games/registry.ts';
+import { MAHJONG_GAMES } from '../src/room/games/mahjong-rules.ts';
 
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
@@ -99,6 +100,35 @@ it('PG v16 升级后只将失效的旧牌桌提醒标为已读', async () => {
     { id: 'settled', text: '保留正文', read: 1 },
     { id: 'unrelated', text: '保留正文', read: 0 },
   ]);
+});
+
+it('PG v17 到 v18 放行两种麻将并保留既有牌桌和结算', async () => {
+  db = await openTestDb();
+  const owner = 'coo-v18-upgrade';
+  const room = 'r-v18-upgrade';
+  await new CooAccountDb(db).registerCoo(owner, 'mahjong-upgrade-secret-012345', 'pet', '旧玩家');
+  await createRoom(db, { id: room, ownerCooId: owner, name: '旧客厅' }, 1);
+  await db.exec(`
+    ALTER TABLE tables DROP CONSTRAINT tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi','aeroplane'));
+    UPDATE meta SET value='17' WHERE key='schema_version';
+  `);
+  await insertTable(db, 'old-table', room, 'aeroplane');
+  await db.prepare("INSERT INTO table_finalizations(table_id, kind, at) VALUES (?, 'result', ?)").run('old-table', 1000);
+  for (const game of MAHJONG_GAMES) {
+    await expect(insertTable(db, 't-' + game, room, game)).rejects.toThrow(/tables_game_check/);
+  }
+
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  for (const game of MAHJONG_GAMES) await insertTable(db, 't-' + game, room, game);
+  await migrate(db);
+  await expect(insertTable(db, 'invalid-table', room, 'not-a-game')).rejects.toThrow(/tables_game_check/);
+  expect(await db.prepare('SELECT game FROM tables WHERE room_id=? ORDER BY game').all(room)).toEqual([
+    { game: 'aeroplane' }, { game: 'mahjong-guangdong' }, { game: 'mahjong-sichuan' },
+  ]);
+  expect(await db.prepare('SELECT table_id FROM table_finalizations').all()).toEqual([{ table_id: 'old-table' }]);
 });
 
 it('PG v13 升到 v14：没有说书表的旧库可升级并保留客厅和象棋桌', async () => {

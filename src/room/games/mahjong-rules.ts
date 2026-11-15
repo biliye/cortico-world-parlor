@@ -11,15 +11,19 @@ export const suitOf = (tile: number): number => tile < 27 ? Math.floor(tile / 9)
 export const isTile = (tile: unknown, kinds = TILES.length): tile is number =>
   typeof tile === 'number' && Number.isInteger(tile) && tile >= 0 && tile < kinds;
 
+const kongTiming = '碰后须先打牌；补杠和暗杠在自己的摸牌回合进行。';
+
 export const MAHJONG_RULES: Record<MahjongGame, string[]> = {
   'mahjong-sichuan': [
     '四人，万筒条 108 张。每人先换同一门的三张，本局随机顺换、对换或逆换；再各自定缺。有缺门牌时优先打完，缺门牌不能碰、杠或胡。',
     '可碰、杠、自摸、点炮和一炮多响。胡者退出摸打，三家胡牌或牌墙耗尽后结算。四面子一对或七对可胡。',
+    kongTiming,
     '自摸由其余仍在打的玩家各付 1 分；点炮由出牌者向每位胡家付 1 分。直杠由出牌者付 2 分；补杠、暗杠由其余仍在打的玩家各付 1 分、2 分。',
   ],
   'mahjong-guangdong': [
     '四人，万筒条、东南西北和中发白共 136 张。四张红中在组胡牌时可替任意牌，可打出，不能碰杠。',
     '可碰、杠，只自摸；四面子一对或七对可胡。首家胡牌或牌墙耗尽即结算。',
+    kongTiming,
     '自摸其余三家各付 1 分。直杠由出牌者付 2 分；补杠、暗杠由其余三家各付 1 分、2 分。',
   ],
 };

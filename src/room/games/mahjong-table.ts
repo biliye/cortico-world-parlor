@@ -509,7 +509,7 @@ export class MahjongTable implements TableEngine {
     return [this.publicText(), response && '当前弃牌 ' + TILES[response.tile] + '。',
       '手牌 ' + view.hand.map(tile => TILES[tile] + '(' + tile + ')').join(' ') + '。',
       '动作 ' + options + '（windowId ' + view.windowId + '）。', args, discard, suggestHu, kong, opening, hints,
-      unseen.length ? '未见张数 ' + unseen.join(' ') + '（其余牌各 4 张）。' : '',
+      unseen.length ? '未见张数 ' + unseen.join(' ') + '（其余牌各 4 张）。未见牌也可能在他家手牌或暗杠中。' : '',
     ].filter(Boolean).join(' ');
   }
 

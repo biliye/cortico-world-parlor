@@ -6,7 +6,8 @@ import { MAHJONG_ACTIONS, MahjongTable } from './mahjong-table.ts';
 function definition(game: MahjongGame): GameDefinition {
   const type = game + '_action';
   const kinds = tileKinds(game);
-  const actions = game === 'mahjong-sichuan' ? [...MAHJONG_ACTIONS] : MAHJONG_ACTIONS.slice(2);
+  const actions = MAHJONG_ACTIONS.filter(action => game === 'mahjong-sichuan'
+    || (action !== 'exchange' && action !== 'missing'));
   const tile = { type: 'integer', minimum: 0, maximum: kinds - 1 };
   const parse = (args: Record<string, unknown>) => {
     const { action, windowId, tile, tiles, suit } = args;
