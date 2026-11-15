@@ -60,7 +60,12 @@ describe('麻将胡牌', () => {
     expect(t.public().turn).toBe(ids[1]);
     expect(t.view(ids[2])?.actions).toEqual([]);
     expect(t.view(ids[1])?.actions).toContain('hu');
-    expect(play(t, 1, 'hu').ended).toBe(true);
+    const end = play(t, 1, 'hu');
+    expect(end.ended).toBe(true);
+    expect(end.seatResults).toEqual([
+      { seatId: 's0', rank: 2, score: -1 }, { seatId: 's1', rank: 1, score: 3 },
+      { seatId: 's2', rank: 2, score: -1 }, { seatId: 's3', rank: 2, score: -1 },
+    ]);
     expect(t.public().seats.map(p => p.score)).toEqual([-1, 3, -1, -1]);
   });
 
@@ -81,8 +86,30 @@ describe('麻将胡牌', () => {
     expect(copy.public().seats.map(p => p.score)).toEqual([-2, 1, 1, 0]);
     expect(copy.view('s1')?.actions).toEqual([]);
     expect(copy.public().turn).toBe('s3');
-    expect(play(copy, 3, 'hu').ended).toBe(true);
+    const end = play(copy, 3, 'hu');
+    expect(end.ended).toBe(true);
+    expect(end.seatResults?.map(result => result.rank)).toEqual([4, 1, 1, 1]);
     expect(copy.public().seats.map(p => p.score)).toEqual([-3, 1, 1, 1]);
+  });
+
+  it('四川流局仍按杠后净分排名，普通账本没有胡牌赢家', () => {
+    const t = arranged(sichuan, [[0, 0, 0, 0], [], [], []], 0);
+    const s = t.exportState();
+    const last = s.wall.pop()!;
+    s.players[1].river = s.wall.map(tile => ({ tile, order: ++s.discards }));
+    s.wall = [last];
+    t.restoreState(s);
+    play(t, 0, 'kong', { tile: 0 });
+    let end = play(t, 0, 'discard', { tile: t.view('s0')!.discardable[0] });
+    if (t.public().phase === 'claim') end = t.tick(t.nextWakeAt()!)!;
+    expect(end.ended).toBe(true);
+    expect(end.events.at(-1)).toMatchObject({
+      data: { winners: [], tie: true }, ratingWinners: ['s0'],
+    });
+    expect(end.seatResults).toEqual([
+      { seatId: 's0', rank: 1, score: 6 }, { seatId: 's1', rank: 2, score: -2 },
+      { seatId: 's2', rank: 2, score: -2 }, { seatId: 's3', rank: 2, score: -2 },
+    ]);
   });
 });
 

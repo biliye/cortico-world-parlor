@@ -1394,7 +1394,8 @@ export class TableHost {
       },
     });
     const eligibleForRating = gameById(table.game)?.rated === true && !event.ratingExcluded;
-    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true)
+    const ratingWinners = event.ratingWinners ?? winnerSeatIds;
+    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), ratingWinners, data.tie === true)
       ? seatResults : null;
     const ratingSkipped = eligibleForRating && !rankedSeats
       ? (seatResults?.length ? 'invalid_seat_results' : 'missing_seat_results') : undefined;

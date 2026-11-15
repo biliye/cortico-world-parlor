@@ -16,6 +16,8 @@ export interface TableEvent {
   data?: Record<string, unknown>;
   /** 仅在结算时写入终态，不进入公开事件。 */
   ratingExcluded?: true;
+  /** 当评级首名与账本赢家不同时，由引擎指定评级首名。仅用于结算校验。 */
+  ratingWinners?: readonly string[];
 }
 
 export interface TableSeatResult {

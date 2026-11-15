@@ -5,6 +5,7 @@ import { validSeatResults } from '../src/room/table-results.ts';
 
 const ratedFixtures: Record<string, number> = {
   dice: 2, ddz: 3, werewolf: 6, monopoly2d: 4, gomoku: 2, xiangqi: 2,
+  'mahjong-sichuan': 4, 'mahjong-guangdong': 4,
 };
 
 it.each(GAME_LIST.filter(game => game.rated))('$id 正常终局符合统一的逐席赛果契约', game => {
@@ -24,7 +25,8 @@ it.each(GAME_LIST.filter(game => game.rated))('$id 正常终局符合统一的�
   expect(step.ended).toBe(true);
   const end = step.events.find(event => event.type === 'parlor.table.end');
   expect(end).toBeDefined();
-  expect(validSeatResults(step.seatResults, engine.seatIds(), end!.data!.winners as string[], end!.data!.tie === true)).toBe(true);
+  const winners = end!.ratingWinners ?? end!.data!.winners as string[];
+  expect(validSeatResults(step.seatResults, engine.seatIds(), winners, end!.data!.tie === true)).toBe(true);
 });
 
 it('拒绝缺席、重复席、赢家矛盾的逐席赛果，接受全桌和局', () => {
