@@ -14,7 +14,7 @@ import AccountPanel from './AccountPanel.vue';
 import RatingsPanel from './RatingsPanel.vue';
 import GiftPanel from './GiftPanel.vue';
 import { initialOf } from '../lib/text.ts';
-import { chatExpanded, chooseTab, closeSheet, setWerewolfChatTable, sheetOpen, toggleChat } from '../stores/chat.ts';
+import { chatExpanded, chooseTab, closeSheet, setFloatingChatTable, sheetOpen, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { loadMail, setUnread, unread as mailUnread } from '../stores/mail.ts';
@@ -28,6 +28,7 @@ defineProps<{ showStory: boolean }>();
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
+const onWerewolf = computed(() => view.value === 'table' && !inHall.value && activeTable.value?.game === 'werewolf');
 const onMahjong = computed(() => view.value === 'table'
   && MAHJONG_GAMES.some(game => game === activeTable.value?.game));
 const boardChatInToolbar = computed(() => view.value === 'table'
@@ -56,14 +57,11 @@ watch([sheetOpen, view], ([open, selected]) => {
   document.body.classList.toggle('sheet-open', open && selected !== 'story');
 }, { immediate: true });
 
-const werewolfTableKey = computed(() => {
-  const table = activeTable.value;
-  return view.value === 'table' && !inHall.value && table?.game === 'werewolf'
-    ? JSON.stringify([snapshot.value?.id, tableIdOf(table)])
-    : '';
-});
-watch(werewolfTableKey, setWerewolfChatTable, { immediate: true });
-onBeforeUnmount(() => setWerewolfChatTable(''));
+const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value
+  ? JSON.stringify([snapshot.value?.id, tableIdOf(activeTable.value)])
+  : '');
+watch(floatingChatTable, setFloatingChatTable, { immediate: true });
+onBeforeUnmount(() => setFloatingChatTable(''));
 
 // 快照里的未读是服务器算的总数；信箱列表本身按需刷新，角标始终跟快照走。
 watch(() => snapshot.value?.mailUnread, (count) => {
@@ -89,7 +87,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="shell" :class="{ 'chat-open': view !== 'story' && chatExpanded(), 'in-hall': inHall, 'on-werewolf': werewolfTableKey, 'on-mahjong': onMahjong }">
+  <div class="shell" :class="{ 'chat-open': view !== 'story' && chatExpanded(), 'in-hall': inHall, 'on-werewolf': onWerewolf }">
     <aside class="rail" aria-label="会馆门牌">
       <a class="rail-mark" href="/play" aria-label="鲸语会馆">
         <Icon name="whale" />
@@ -184,9 +182,6 @@ onMounted(() => {
 
 <style scoped>
 .tool.board-chat-tool { display: inline-flex; }
-@media (min-width: 1101px) {
-  .shell.on-mahjong.chat-open .stage-body { padding-right: 350px; }
-}
 .shell.on-werewolf > .chat-fab {
   border: 1px solid var(--line-2);
   background: var(--panel-2);
