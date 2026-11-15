@@ -333,6 +333,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
   --mj-tile-ink: #23332b;
   --rv-w: clamp(30px, 5.6cqw, 54px);
   --rv-h: calc(var(--rv-w) * 1.15);
+  width: 100%;
   max-width: 960px;
   margin-inline: auto;
   display: grid;
@@ -689,7 +690,7 @@ html[data-theme="light"] .mahjong {
 .tips { margin: 8px 0 0; padding: 8px 10px 8px 26px; border-radius: 9px; background: rgba(0, 0, 0, .3); color: var(--mj-sub); font-size: 12.5px; }
 
 /* 桌面不够宽时退回「上下两行 + 左右两列」的紧凑环：侧家不再跨满三行，牌背恢复小尺寸 */
-@media (max-width: 860px) {
+@container (max-width: 760px) {
   .felt {
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     grid-template-areas: "up up up" "left core right" "dn dn dn";
