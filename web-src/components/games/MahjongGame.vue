@@ -113,7 +113,10 @@ const directions = ['', '顺换', '对换', '逆换'];
 const responses = [{ id: 'hu', label: '胡' }, { id: 'kong', label: '杠' },
   { id: 'pung', label: '碰' }, { id: 'pass', label: '跳过' }] as const;
 const isDealer = (seat: Seat) => table.value.dealer === seat.id;
-const myScore = computed(() => ring.value.find(slot => slot.isMe)?.seat.score ?? null);
+const mySlot = computed(() => ring.value.find(slot => slot.isMe));
+const myScore = computed(() => mySlot.value?.seat.score ?? null);
+// 血战续打时自己的摊牌放在手牌区，结算后才回到桌上的摊牌布局。
+const myShowdown = computed(() => mine.value && !ended.value && mySlot.value?.seat.win ? mySlot.value.show : null);
 
 watch(() => mine.value?.windowId, () => { selected.value = []; showTips.value = false; });
 
@@ -198,7 +201,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
             </span>
           </div>
 
-          <div v-if="slot.show" class="showdown" :class="{ 'is-win': !!slot.seat.win }" aria-label="摊开的手牌">
+          <div v-if="slot.show && !(slot.isMe && myShowdown)" class="showdown" :class="{ 'is-win': !!slot.seat.win }" aria-label="摊开的手牌">
             <span class="showdown-tag">摊牌</span>
             <span v-for="(tile, index) in slot.show.tiles" :key="index" class="tile sz-show"
               :class="{ win: index === slot.show.winIndex }" :title="tileText(tile)">
@@ -253,7 +256,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
 
     <section v-if="mine && !ended" class="hand-panel" aria-label="你的手牌和操作">
       <div class="hand-heading">
-        <span class="hand-label">你的手牌</span>
+        <span class="hand-label">{{ myShowdown ? '已胡牌 · 观战中' : '你的手牌' }}</span>
         <span v-if="actions.includes('exchange')">选三张同门 · <b>{{ selected.length }}/3</b></span>
         <span v-else-if="actions.includes('missing')">选一门优先打完</span>
         <span v-else-if="mine.missing != null" class="lack">缺 {{ SUITS[mine.missing] }}</span>
@@ -271,12 +274,21 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
       </div>
 
       <div class="hand">
-        <button v-for="({ tile, drawn }, index) in hand" :key="index" type="button" class="tile sz-hand"
-          :class="{ selected: selected.includes(index), drawn }"
-          :aria-pressed="selected.includes(index)" :aria-label="tileText(tile) + (drawn ? '，刚摸到' : '')"
-          :disabled="busy || !canSelect(tile)" @click="select(index)">
-          <MahjongTileFace :tile="tile" />
-        </button>
+        <template v-if="myShowdown">
+          <span v-for="(tile, index) in myShowdown.tiles" :key="index" class="tile sz-hand"
+            :class="{ win: index === myShowdown.winIndex }" role="img"
+            :aria-label="tileText(tile) + (index === myShowdown.winIndex ? '，胡牌张' : '')">
+            <MahjongTileFace :tile="tile" />
+          </span>
+        </template>
+        <template v-else>
+          <button v-for="({ tile, drawn }, index) in hand" :key="index" type="button" class="tile sz-hand"
+            :class="{ selected: selected.includes(index), drawn }"
+            :aria-pressed="selected.includes(index)" :aria-label="tileText(tile) + (drawn ? '，刚摸到' : '')"
+            :disabled="busy || !canSelect(tile)" @click="select(index)">
+            <MahjongTileFace :tile="tile" />
+          </button>
+        </template>
       </div>
 
       <div class="hand-foot">
@@ -373,9 +385,8 @@ html[data-theme="light"] .mahjong {
 .seat-up { grid-area: up; display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
 .seat-up > .who, .seat-up > .river-area, .seat-up > .melds { align-self: center; }
 .seat-me {
-  grid-area: dn; display: grid; align-items: center; padding-block: 2px 6px;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  column-gap: 10px;
+  grid-area: dn; display: flex; flex-direction: column; align-items: center;
+  gap: 5px; padding-block: 2px 6px;
 }
 .seat-left, .seat-right { display: flex; align-items: stretch; justify-content: center; gap: 7px; width: 100%; }
 .seat-left { grid-area: left; }
@@ -384,13 +395,11 @@ html[data-theme="light"] .mahjong {
 .seat-left > .river-area, .seat-right > .river-area,
 .seat-left > .melds, .seat-right > .melds,
 .seat-left > .showdown, .seat-right > .showdown { align-self: center; }
-.seat-left > .river-area, .seat-right > .river-area {
+.seat-left > .river-area, .seat-right > .river-area, .mahjong:not(.ended) .seat-me > .river-area {
   min-width: 0; overflow-x: auto; scrollbar-width: thin; padding: 2px 2px 4px;
 }
-.seat-me .who { grid-column: 1; justify-self: end; }
-.seat-me .river-area { grid-column: 2; }
-.seat-me .showdown { grid-column: 3; justify-self: start; }
-.seat-me:not(.is-self) { display: flex; flex-direction: column; gap: 5px; }
+.mahjong:not(.ended) .seat-me > .river-area { max-inline-size: 100%; }
+.mahjong:not(.ended) .seat-me .river-h { grid-template-columns: repeat(6, var(--rv-w)); justify-content: safe center; }
 
 .seat.current .seat-name { color: #ffe2ab; text-shadow: 0 0 14px rgba(240, 185, 94, .45); }
 .seat.current .position { border-color: transparent; background: var(--mj-gold); color: #2b1a06; font-weight: 700; }
@@ -489,7 +498,8 @@ html[data-theme="light"] .mahjong {
 .sz-river { width: var(--rv-w); height: var(--rv-h); font-size: calc(var(--rv-w) * .44); border-radius: 3px; --thick: 3px; }
 .sz-mini { width: 27px; height: 31px; font-size: 12px; border-radius: 3px; --thick: 2.5px; }
 .sz-show { width: 30px; height: 35px; font-size: 14px; border-radius: 3px; --thick: 2.5px; }
-.sz-hand { width: clamp(40px, 4.4vw, 54px); aspect-ratio: 1 / 1.32; font-size: 20px; cursor: pointer; border-radius: 5px; --thick: 4px; }
+.sz-hand { width: clamp(40px, 4.4vw, 54px); aspect-ratio: 1 / 1.32; font-size: 20px; border-radius: 5px; --thick: 4px; }
+button.sz-hand { cursor: pointer; }
 .sz-hand::before { border-radius: 5px 5px 1px 1px; }
 
 /* ── 副露 / 摊牌 / 牌河 ── */
@@ -717,7 +727,7 @@ html[data-theme="light"] .mahjong {
   .seat-left .who .lack, .seat-right .who .lack { display: none; }
   .seat-left .backs, .seat-right .backs { display: none; }
   .seat-left .melds-col .sz-mini, .seat-right .melds-col .sz-mini { width: 14px; height: 17px; font-size: 7.5px; }
-  .mahjong:not(.ended) .seat-me.is-self:not(.won) .who { display: none; }
+  .mahjong:not(.ended) .seat-me.is-self .who { display: none; }
   .mahjong.ended .felt .who {
     display: flex; width: auto; padding: 4px; text-align: start; writing-mode: horizontal-tb;
   }
