@@ -9,7 +9,7 @@
 import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { fillOrigin, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
+import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
 
 const web = new URL('../src/web/', import.meta.url);
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -93,6 +93,31 @@ describe('对外页的静态契约', () => {
     expect(server).toMatch(/pathname === '\/'\)\s*\{\s*this\.serveOriginFile\('welcome\.html'/);
     expect(server).toMatch(/pathname === '\/robots\.txt' \|\| pathname === '\/sitemap\.xml'/);
     expect(server).toContain("startsWith('/welcome/assets/')");
+  });
+
+  /**
+   * assets 路由过去只认路径不认类型，于是 `/welcome/assets/welcome.html` 会把模板原样发出去：
+   * 没有 CSP、`{{origin}}` 没替换、`/play/assets/welcome.html` 也能取到。
+   */
+  it('assets 只发资源，页面模板与对外页文本走各自的路由', () => {
+    for (const blocked of ['welcome.html', 'play.html', 'robots.txt', 'sitemap.xml', 'welcome-saira-OFL.txt']) {
+      expect(isPublicAsset(blocked), blocked).toBe(false);
+    }
+    for (const allowed of ['welcome.css', 'welcome.js', 'welcome-og.png', 'vue/main.js', 'welcome-saira.woff2']) {
+      expect(isPublicAsset(allowed), allowed).toBe(true);
+    }
+    const server = readFileSync(new URL('../src/room/world-server.ts', import.meta.url), 'utf8');
+    expect(server).toContain("if (!isPublicAsset(rel)) throw new HttpError(404");
+    // HEAD 跟 GET 同状态：`curl -I` 不该拿到 404。
+    expect(server).toMatch(/method === 'GET' \|\| method === 'HEAD'\)\s*&&\s*this\.serveWeb/);
+  });
+
+  it('入场文案只承诺带钥匙的链接，并说清邀请码的适用范围', () => {
+    expect(page).not.toContain('一条带钥匙的链接，或者一个邀请码');
+    expect(page).toContain('邀请码只在房主开了「访客加入」的会馆里顶用');
+    // 反馈与公告要 token，未入场点进去只会看到「请先回会馆加入席位」。
+    expect(page).toContain('要先入场才能打开');
+    expect(page).toContain('反馈与公告（需先入场）');
   });
 });
 

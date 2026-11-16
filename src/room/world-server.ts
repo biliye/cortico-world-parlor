@@ -39,7 +39,7 @@ import {
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
 import type { InboxView, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
-import { fillOrigin, sendWebAsset } from './web-assets.ts';
+import { fillOrigin, isPublicAsset, sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
@@ -848,7 +848,8 @@ export class WorldServer {
       await this.identityRoute(req, res, url.pathname, method); return;
     }
     if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
-    if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
+    // HEAD 与 GET 同状态、同响应头，只是不带正文（Node 对 HEAD 会自动丢掉 write 出去的内容）。
+    if ((method === 'GET' || method === 'HEAD') && this.serveWeb(url.pathname, req, res)) return;
 
     if (isStoryPath(url.pathname)) {
       return serveStoryRoute(req, res, url, {
@@ -2915,6 +2916,8 @@ export class WorldServer {
       || !/^[A-Za-z0-9._/-]+$/.test(rel)) {
       throw new HttpError(404, '没有这个文件');
     }
+    // assets 下只发资源：页面模板要走带 CSP 的分支，robots/sitemap 要走替换 {{origin}} 的分支。
+    if (!isPublicAsset(rel)) throw new HttpError(404, '没有这个文件');
     this.sendWeb(rel, req, res, false);
     return true;
   }

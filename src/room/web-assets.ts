@@ -39,6 +39,21 @@ export const PLAY_CSP = [
 const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json', '.map', '.txt', '.xml']);
 
 /**
+ * 能从 `/xxx/assets/**` 直接取的只有资源本身。
+ * 页面模板（.html）与对外页专属文本（robots.txt / sitemap.xml）必须走各自的路由：
+ * 前者要带 CSP 与 no-cache，后者要把 `{{origin}}` 换成实例地址 —— 挪到 assets 下这两件事都会掉，
+ * 还会把没替换过的模板当成静态文件发出去。
+ */
+const PUBLIC_ASSETS = new Set(['.js', '.css', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.woff2', '.ico']);
+
+/** 这个文件名能不能当静态资源发（不看文件在不在）。 */
+export function isPublicAsset(rel: string): boolean {
+  const dot = rel.lastIndexOf('.');
+  return dot >= 0 && PUBLIC_ASSETS.has(rel.slice(dot).toLowerCase());
+}
+
+
+/**
  * 对外页里的占位符：发出去之前换成实例的公开地址。
  * 分享卡片（og:image / og:url）、canonical、robots 与 sitemap 都要求绝对 URL，
  * 而自建客厅的域名各不相同，所以不能写死在文件里。
