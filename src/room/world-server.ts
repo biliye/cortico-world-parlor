@@ -39,7 +39,7 @@ import {
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
 import type { InboxView, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
-import { sendWebAsset } from './web-assets.ts';
+import { fillOrigin, isPublicAsset, sendWebAsset } from './web-assets.ts';
 import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
@@ -848,7 +848,8 @@ export class WorldServer {
       await this.identityRoute(req, res, url.pathname, method); return;
     }
     if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
-    if (method === 'GET' && this.serveWeb(url.pathname, req, res)) return;
+    // HEAD 与 GET 同状态、同响应头，只是不带正文（Node 对 HEAD 会自动丢掉 write 出去的内容）。
+    if ((method === 'GET' || method === 'HEAD') && this.serveWeb(url.pathname, req, res)) return;
 
     if (isStoryPath(url.pathname)) {
       return serveStoryRoute(req, res, url, {
@@ -2864,13 +2865,27 @@ export class WorldServer {
     this.inviteTimes.set(cooId, times);
   }
 
-  /** 网页客户端的静态文件：/play 与 /play/assets/**。 */
+  /**
+   * 网页客户端的静态文件：/（对外页）、/play、/parent 与它们的 assets。
+   * 没有钥匙的人（家长误点、朋友收到旧链接）落到对外页，而不是一串 404 JSON。
+   */
   private serveWeb(pathname: string, req: IncomingMessage, res: ServerResponse): boolean {
+    if (pathname === '/') {
+      this.serveOriginFile('welcome.html', req, res); return true;
+    }
+    if (pathname === '/welcome' || pathname === '/welcome/') {
+      res.writeHead(302, { location: '/', 'cache-control': 'no-store' });
+      res.end();
+      return true;
+    }
+    if (pathname === '/robots.txt' || pathname === '/sitemap.xml') {
+      this.serveOriginFile(pathname.slice(1), req, res); return true;
+    }
     if (pathname === '/support' || pathname === '/support/') {
-      this.sendWeb('support.html', req, res, true); return true;
+      this.sendWeb('support.html', req, res, true, true); return true;
     }
     if (pathname === '/identity' && this.identityAuthority === 'self') {
-      this.sendWeb('identity.html', req, res, true); return true;
+      this.sendWeb('identity.html', req, res, true, true); return true;
     }
     if (pathname === '/play' || pathname === '/play/') {
       // 旧页已下线：带 ?legacy=1 的书签 / 外链 302 回默认页，其余参数（room 等）原样保留。
@@ -2885,26 +2900,40 @@ export class WorldServer {
         res.end();
         return true;
       }
-      this.sendWeb('play.html', req, res, true);
+      this.sendWeb('play.html', req, res, true, true);
       return true;
     }
     if (pathname === '/parent' || pathname === '/parent/') {
-      this.sendWeb('parent.html', req, res, true);
+      this.sendWeb('parent.html', req, res, true, true);
       return true;
     }
-    const prefix = pathname.startsWith('/parent/assets/') ? '/parent/assets/' : '/play/assets/';
+    const prefix = pathname.startsWith('/parent/assets/') ? '/parent/assets/'
+      : pathname.startsWith('/welcome/assets/') ? '/welcome/assets/'
+        : '/play/assets/';
     if (!pathname.startsWith(prefix)) return false;
     const rel = pathname.slice(prefix.length);
     if (!rel || rel.startsWith('/') || rel.includes('..') || rel.includes('\\')
       || !/^[A-Za-z0-9._/-]+$/.test(rel)) {
       throw new HttpError(404, '没有这个文件');
     }
+    // assets 下只发资源：页面模板要走带 CSP 的分支，robots/sitemap 要走替换 {{origin}} 的分支。
+    if (!isPublicAsset(rel)) throw new HttpError(404, '没有这个文件');
     this.sendWeb(rel, req, res, false);
     return true;
   }
 
-  private sendWeb(rel: string, req: IncomingMessage, res: ServerResponse, page: boolean): void {
-    if (!sendWebAsset(rel, req, res, page)) throw new HttpError(404, '没有这个文件');
+  /**
+   * 对外页、robots.txt 与 sitemap.xml：文件里留着 `{{origin}}`，发之前换成实例的公开地址。
+   * 地址来自 `--public-url`（没配就用监听地址），不是请求头，所以不能借它注入内容。
+   */
+  private serveOriginFile(rel: string, req: IncomingMessage, res: ServerResponse): void {
+    const origin = this.audienceUrl();
+    const ok = sendWebAsset(rel, req, res, rel.endsWith('.html'), (body) => fillOrigin(body, origin));
+    if (!ok) throw new HttpError(404, '没有这个文件');
+  }
+
+  private sendWeb(rel: string, req: IncomingMessage, res: ServerResponse, page: boolean, noindex = false): void {
+    if (!sendWebAsset(rel, req, res, page, undefined, noindex)) throw new HttpError(404, '没有这个文件');
   }
 
   /**

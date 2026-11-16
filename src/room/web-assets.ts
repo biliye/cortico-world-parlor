@@ -17,6 +17,8 @@ export const WEB_TYPES: Readonly<Record<string, string>> = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
   '.ico': 'image/x-icon',
 };
 
@@ -34,7 +36,34 @@ export const PLAY_CSP = [
 ].join('; ');
 
 /** 这些类型压了有意义；webp/png 已经压过，再 gzip 只白花 CPU。 */
-const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json', '.map']);
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json', '.map', '.txt', '.xml']);
+
+/**
+ * 能从 `/xxx/assets/**` 直接取的只有资源本身。
+ * 页面模板（.html）与对外页专属文本（robots.txt / sitemap.xml）必须走各自的路由：
+ * 前者要带 CSP 与 no-cache，后者要把 `{{origin}}` 换成实例地址 —— 挪到 assets 下这两件事都会掉，
+ * 还会把没替换过的模板当成静态文件发出去。
+ */
+const PUBLIC_ASSETS = new Set(['.js', '.css', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.woff2', '.ico']);
+
+/** 这个文件名能不能当静态资源发（不看文件在不在）。 */
+export function isPublicAsset(rel: string): boolean {
+  const dot = rel.lastIndexOf('.');
+  return dot >= 0 && PUBLIC_ASSETS.has(rel.slice(dot).toLowerCase());
+}
+
+
+/**
+ * 对外页里的占位符：发出去之前换成实例的公开地址。
+ * 分享卡片（og:image / og:url）、canonical、robots 与 sitemap 都要求绝对 URL，
+ * 而自建客厅的域名各不相同，所以不能写死在文件里。
+ */
+export const ORIGIN_TOKEN = '{{origin}}';
+
+/** 把 `{{origin}}` 换成实例地址（去掉末尾斜杠）；其余内容原样保留。 */
+export function fillOrigin(body: Buffer, origin: string): Buffer {
+  return Buffer.from(body.toString('utf8').replaceAll(ORIGIN_TOKEN, origin.replace(/\/+$/, '')), 'utf8');
+}
 
 interface Asset {
   /** 缓存判据：大小 / mtime / inode 任一变了就重读。npm 包里 mtime 是固定的 1985，inode 是唯一可靠的信号。 */
@@ -47,6 +76,11 @@ interface Asset {
 /** 一个进程里每个文件只读一次盘、只压一次；文件换了就重来。 */
 const assets = new Map<string, Asset>();
 
+/** 内容指纹。npm 打包会把 mtime 抹平，同长度的改动只能靠内容认出来。 */
+function digest(body: Buffer): string {
+  return `"${createHash('sha1').update(body).digest('base64url').slice(0, 18)}"`;
+}
+
 function loadAsset(rel: string): Asset {
   const file = new URL(`../web/${rel}`, import.meta.url);
   const info = statSync(file);
@@ -54,8 +88,7 @@ function loadAsset(rel: string): Asset {
   const cached = assets.get(rel);
   if (cached && cached.stamp === stamp) return cached;
   const body = readFileSync(file);
-  // ETag 用内容算：npm 打包会把 mtime 抹平，同长度的改动靠 mtime 认不出来。
-  const etag = `"${createHash('sha1').update(body).digest('base64url').slice(0, 18)}"`;
+  const etag = digest(body);
   // 字体这类已经压过的二进制不再 gzip：省下的那份内存和首次请求的 CPU 都是白花的。
   const dot = rel.lastIndexOf('.');
   const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : '';
@@ -89,14 +122,24 @@ function etagMatches(header: string, etag: string): boolean {
 }
 
 /**
- * 发一个 /play/assets/** 下的文件。找不到返回 false，由调用方决定怎么报 404。
- * 页面（play.html / parent.html）不缓存，资源缓存 5 分钟；两者都带 ETag，重开一次只是 304。
+ * 发一个 /play/assets/**、/parent/assets/**、/welcome/assets/** 下的文件。
+ * 找不到返回 false，由调用方决定怎么报 404。
+ * 页面（play.html / parent.html / welcome.html）不缓存，资源缓存 5 分钟；两者都带 ETag，重开一次只是 304。
+ *
+ * `transform` 给对外页用：它要把页面里的 `{{origin}}` 换成实例的公开地址（分享卡片要绝对 URL）。
+ * 传了 transform 就按改写后的内容重算 ETag 和 gzip，避免把「原文的指纹」发给改写后的正文。
+ *
+ * `noindex` 给牌桌/家长页这类私人页面用：用响应头告诉搜索引擎别收录。
+ * 不能只靠 robots.txt 的 Disallow —— 那样爬虫根本抓不到页面，也就读不到这个头，
+ * 而首页又直接链到 /play，结果可能只剩一个没描述的网址被收进去。
  */
 export function sendWebAsset(
   rel: string,
   req: IncomingMessage,
   res: ServerResponse,
   page: boolean,
+  transform?: (body: Buffer) => Buffer,
+  noindex = false,
 ): boolean {
   let asset: Asset;
   try {
@@ -107,8 +150,11 @@ export function sendWebAsset(
   const dot = rel.lastIndexOf('.');
   const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : '';
   const type = WEB_TYPES[ext];
-  const gzip = COMPRESSIBLE.has(ext) && acceptsGzip(req.headers['accept-encoding']);
-  const etag = gzip ? asset.etag.replace(/"$/, '-gz"') : asset.etag;
+  const compressible = COMPRESSIBLE.has(ext);
+  const source = transform ? transform(asset.body) : asset.body;
+  const baseEtag = transform ? digest(source) : asset.etag;
+  const gzip = compressible && acceptsGzip(req.headers['accept-encoding']);
+  const etag = gzip ? baseEtag.replace(/"$/, '-gz"') : baseEtag;
   const cacheControl = page ? 'no-cache' : 'public, max-age=300';
   const headers: Record<string, string> = {
     etag,
@@ -117,6 +163,7 @@ export function sendWebAsset(
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
     ...(page ? { 'content-security-policy': PLAY_CSP } : {}),
+    ...(noindex ? { 'x-robots-tag': 'noindex' } : {}),
   };
 
   const inm = req.headers['if-none-match'];
@@ -126,7 +173,7 @@ export function sendWebAsset(
     return true;
   }
 
-  const body = gzip ? asset.gzipped : asset.body;
+  const body = gzip ? (transform ? gzipSync(source) : asset.gzipped) : source;
   res.writeHead(200, {
     ...headers,
     'content-type': type ?? 'application/octet-stream',
