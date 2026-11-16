@@ -230,7 +230,7 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
       </div>
     </div>
 
-    <div v-if="mine && !ended" class="dock" :aria-label="actions.length ? '可选动作' : undefined">
+    <div v-if="mine && !ended && !myShowdown" class="dock" :aria-label="actions.length ? '可选动作' : undefined">
         <template v-if="actions.includes('exchange')">
           <button class="act act-primary" type="button" :disabled="busy || selected.length !== 3"
             @click="submit('exchange', { tiles: selected.map(i => hand[i].tile) })"><span>确认换牌</span></button>
@@ -256,7 +256,8 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
 
     <section v-if="mine && !ended" class="hand-panel" aria-label="你的手牌和操作">
       <div class="hand-heading">
-        <span class="hand-label">{{ myShowdown ? '已胡牌 · 观战中' : '你的手牌' }}</span>
+        <span v-if="myShowdown" class="hand-label">{{ mySlot?.seat.win?.from === null ? '自摸' : '点炮胡牌' }} · 观战中</span>
+        <span v-else class="hand-label">你的手牌</span>
         <span v-if="actions.includes('exchange')">选三张同门 · <b>{{ selected.length }}/3</b></span>
         <span v-else-if="actions.includes('missing')">选一门优先打完</span>
         <span v-else-if="mine.missing != null" class="lack">缺 {{ SUITS[mine.missing] }}</span>
