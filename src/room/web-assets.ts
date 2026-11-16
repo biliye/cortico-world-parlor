@@ -128,6 +128,10 @@ function etagMatches(header: string, etag: string): boolean {
  *
  * `transform` 给对外页用：它要把页面里的 `{{origin}}` 换成实例的公开地址（分享卡片要绝对 URL）。
  * 传了 transform 就按改写后的内容重算 ETag 和 gzip，避免把「原文的指纹」发给改写后的正文。
+ *
+ * `noindex` 给牌桌/家长页这类私人页面用：用响应头告诉搜索引擎别收录。
+ * 不能只靠 robots.txt 的 Disallow —— 那样爬虫根本抓不到页面，也就读不到这个头，
+ * 而首页又直接链到 /play，结果可能只剩一个没描述的网址被收进去。
  */
 export function sendWebAsset(
   rel: string,
@@ -135,6 +139,7 @@ export function sendWebAsset(
   res: ServerResponse,
   page: boolean,
   transform?: (body: Buffer) => Buffer,
+  noindex = false,
 ): boolean {
   let asset: Asset;
   try {
@@ -158,6 +163,7 @@ export function sendWebAsset(
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
     ...(page ? { 'content-security-policy': PLAY_CSP } : {}),
+    ...(noindex ? { 'x-robots-tag': 'noindex' } : {}),
   };
 
   const inm = req.headers['if-none-match'];

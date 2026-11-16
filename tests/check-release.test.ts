@@ -54,7 +54,8 @@ it.each([
     }
     // 对外页只随网关发布：World 包里出现 welcome* 会被 check-release 拦下。
     if (kind === 'gateway') {
-      for (const file of ['welcome-kit.css', 'welcome.css', 'welcome.js']) {
+      for (const file of ['welcome-kit.css', 'welcome.css', 'welcome.js', 'welcome-og.png',
+        'welcome-saira.woff2', 'welcome-saira-OFL.txt', 'robots.txt', 'sitemap.xml']) {
         writeFileSync(join(root, 'src/web', file), '');
       }
     }
@@ -88,6 +89,17 @@ it.each([
       expect(missingAsset.status, missingAsset.stderr).toBe(1);
       expect(missingAsset.stderr).toContain('引用的资源未打包');
       writeFileSync(join(root, 'src/web/new-style.css'), '');
+      // 分享图、字体、robots/sitemap 不在页面的 src/href 里，靠单独一条存在性检查兜住。
+      unlinkSync(join(root, 'src/web/welcome-og.png'));
+      const missingOg = check(`${asset}?v=${version}`);
+      expect(missingOg.status, missingOg.stderr).toBe(1);
+      expect(missingOg.stderr).toContain('网关发布缺少对外页文件：src/web/welcome-og.png');
+      writeFileSync(join(root, 'src/web/welcome-og.png'), '');
+      unlinkSync(join(root, 'src/web/sitemap.xml'));
+      const missingSitemap = check(`${asset}?v=${version}`);
+      expect(missingSitemap.status, missingSitemap.stderr).toBe(1);
+      expect(missingSitemap.stderr).toContain('网关发布缺少对外页文件：src/web/sitemap.xml');
+      writeFileSync(join(root, 'src/web/sitemap.xml'), '');
       writeFileSync(join(root, 'scripts/parlor-migrate-json.js'), "#!/usr/bin/env node\nimport './missing.js';\n");
       const missingImport = check(`${asset}?v=${version}`);
       expect(missingImport.status, missingImport.stderr).toBe(1);

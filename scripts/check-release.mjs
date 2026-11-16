@@ -147,6 +147,14 @@ function checkRelease(packageDir) {
   } else if (name === 'cortico-parlor-gateway') {
     if (!manifest.dependencies?.pg || manifest.cortico) throw new Error('网关包清单缺少 pg 或包含 World 注册');
     checkAssetVersions(root, version, ['play', 'parent', 'welcome']);
+    // 下面这几个不是页面里 src/href 引到的（分享图在 meta、字体在 CSS、抓取端点根本不在页面里），
+    // checkAssetVersions 看不到它们，所以另列一遍：漏了就是首页分享卡片裂图、字体回落、robots/sitemap 404。
+    for (const path of [
+      'src/web/welcome-og.png', 'src/web/welcome-saira.woff2', 'src/web/welcome-saira-OFL.txt',
+      'src/web/robots.txt', 'src/web/sitemap.xml',
+    ]) {
+      if (!existsSync(join(root, path))) throw new Error('网关发布缺少对外页文件：' + path);
+    }
     checkModules(root, 'src/room/world-server.js');
     checkGatewayCommands(root, manifest.bin);
   } else {

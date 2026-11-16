@@ -74,10 +74,12 @@ describe('对外页的静态契约', () => {
     expect(read('welcome-saira-OFL.txt')).toContain('SIL Open Font License');
   });
 
-  it('robots.txt 挡住私人入口，并把抓取指向 sitemap', () => {
+  it('robots.txt 只挡接口，页面靠响应头 noindex 让人别收录', () => {
     const robots = read('robots.txt');
-    for (const path of ['/play', '/parent', '/identity', '/v1/']) {
-      expect(robots).toMatch(new RegExp(`^Disallow: ${path}$`, 'm'));
+    expect(robots).toMatch(/^Disallow: \/v1\/$/m);
+    // 挡抓取就读不到 X-Robots-Tag，反而可能只收一个光秃秃的网址；所以这几个页面不能在这儿 Disallow。
+    for (const path of ['/play', '/parent', '/identity']) {
+      expect(robots).not.toMatch(new RegExp(`^Disallow: ${path}$`, 'm'));
     }
     expect(robots).toMatch(/^Sitemap: \{\{origin\}\}\/sitemap\.xml$/m);
   });
@@ -115,9 +117,9 @@ describe('对外页的静态契约', () => {
   it('入场文案只承诺带钥匙的链接，并说清邀请码的适用范围', () => {
     expect(page).not.toContain('一条带钥匙的链接，或者一个邀请码');
     expect(page).toContain('邀请码只在房主开了「访客加入」的会馆里顶用');
-    // 反馈与公告要 token，未入场点进去只会看到「请先回会馆加入席位」。
-    expect(page).toContain('要先入场才能打开');
-    expect(page).toContain('反馈与公告（需先入场）');
+    // 反馈与公告用的是「当前浏览器」里的客厅席位令牌，加入客厅就发了，不需要上桌。
+    expect(page).toContain('要先用当前浏览器加入客厅才能打开');
+    expect(page).toContain('反馈与公告（需先加入客厅）');
   });
 });
 
@@ -166,6 +168,28 @@ describe('对外页的发法', () => {
     } finally {
       await one.close();
       await two.close();
+    }
+  });
+
+  it('牌桌与家长页带 noindex，对外页不带', async () => {
+    const server = createServer((req, res) => {
+      const page = (req.url ?? '').startsWith('/play');
+      if (page) sendWebAsset('play.html', req, res, true, undefined, true);
+      else sendWebAsset('welcome.html', req, res, true, (body) => fillOrigin(body, 'https://parlor.example'));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('测试服务器没有端口');
+    try {
+      const play = await fetch(`http://127.0.0.1:${address.port}/play`);
+      expect(play.status).toBe(200);
+      expect(play.headers.get('x-robots-tag')).toBe('noindex');
+      expect(play.headers.get('content-security-policy')).toContain("default-src 'none'");
+      const home = await fetch(`http://127.0.0.1:${address.port}/`);
+      expect(home.status).toBe(200);
+      expect(home.headers.get('x-robots-tag')).toBeNull();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 

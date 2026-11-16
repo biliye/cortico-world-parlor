@@ -322,6 +322,11 @@
   line-height: 1.8;
 }
 
+/* 提示框与下面的按钮都是 margin:0，贴在一起会把按钮的切角压掉一截 */
+.block .ef-notice + .ef-actions {
+  margin-top: 1.25rem;
+}
+
 @media (max-width: 899px) {
   .steps {
     grid-template-columns: minmax(0, 1fr);

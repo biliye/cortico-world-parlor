@@ -2882,10 +2882,10 @@ export class WorldServer {
       this.serveOriginFile(pathname.slice(1), req, res); return true;
     }
     if (pathname === '/support' || pathname === '/support/') {
-      this.sendWeb('support.html', req, res, true); return true;
+      this.sendWeb('support.html', req, res, true, true); return true;
     }
     if (pathname === '/identity' && this.identityAuthority === 'self') {
-      this.sendWeb('identity.html', req, res, true); return true;
+      this.sendWeb('identity.html', req, res, true, true); return true;
     }
     if (pathname === '/play' || pathname === '/play/') {
       // 旧页已下线：带 ?legacy=1 的书签 / 外链 302 回默认页，其余参数（room 等）原样保留。
@@ -2900,11 +2900,11 @@ export class WorldServer {
         res.end();
         return true;
       }
-      this.sendWeb('play.html', req, res, true);
+      this.sendWeb('play.html', req, res, true, true);
       return true;
     }
     if (pathname === '/parent' || pathname === '/parent/') {
-      this.sendWeb('parent.html', req, res, true);
+      this.sendWeb('parent.html', req, res, true, true);
       return true;
     }
     const prefix = pathname.startsWith('/parent/assets/') ? '/parent/assets/'
@@ -2932,8 +2932,8 @@ export class WorldServer {
     if (!ok) throw new HttpError(404, '没有这个文件');
   }
 
-  private sendWeb(rel: string, req: IncomingMessage, res: ServerResponse, page: boolean): void {
-    if (!sendWebAsset(rel, req, res, page)) throw new HttpError(404, '没有这个文件');
+  private sendWeb(rel: string, req: IncomingMessage, res: ServerResponse, page: boolean, noindex = false): void {
+    if (!sendWebAsset(rel, req, res, page, undefined, noindex)) throw new HttpError(404, '没有这个文件');
   }
 
   /**
