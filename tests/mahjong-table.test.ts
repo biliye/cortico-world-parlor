@@ -104,7 +104,7 @@ describe('麻将胡牌', () => {
     if (t.public().phase === 'claim') end = t.tick(t.nextWakeAt()!)!;
     expect(end.ended).toBe(true);
     expect(end.events.at(-1)).toMatchObject({
-      data: { winners: [], tie: true }, ratingWinners: ['s0'],
+      data: { winners: [], tie: true }, text: expect.stringContaining('等级分按含杠分的结算净分排名'),
     });
     expect(end.seatResults).toEqual([
       { seatId: 's0', rank: 1, score: 6 }, { seatId: 's1', rank: 2, score: -2 },

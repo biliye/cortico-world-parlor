@@ -22,10 +22,10 @@ interface ResultSeat {
   is_bot: number;
 }
 
-/** 持久化前验证参赛名单、竞赛名次和公开赢家。 */
+/** 持久化前验证参赛名单和竞赛名次，再核对玩法的排名依据。 */
 export function validSeatResults(
   results: readonly TableSeatResult[] | null | undefined,
-  seatIds: readonly string[], winners: readonly string[], tie: boolean,
+  seatIds: readonly string[], winners: readonly string[], tie: boolean, order?: 'score',
 ): results is readonly TableSeatResult[] {
   if (!results?.length || results.length !== seatIds.length) return false;
   const unmatched = new Set(seatIds);
@@ -35,6 +35,10 @@ export function validSeatResults(
   }
   const ranks = results.map(result => result.rank).sort((a, b) => a - b);
   if (ranks.some((rank, index) => rank !== index + 1 && rank !== ranks[index - 1])) return false;
+  if (order === 'score') {
+    return results.every(({ rank, score }) => score !== undefined
+      && rank === 1 + results.filter(other => other.score !== undefined && other.score > score).length);
+  }
   const first = results.filter(result => result.rank === 1);
   // 并列第一可同时带 winners 和 tie。无赢家的全桌和局才要求所有席位都排第一。
   return winners.length

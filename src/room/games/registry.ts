@@ -57,6 +57,8 @@ export interface GameDefinition {
   id: string;
   /** 开榜玩法必须在正常终局给出逐席赛果。 */
   rated: boolean;
+  /** 默认校验首名与公开赢家一致。按净分评级的玩法单独校验分数与名次。 */
+  ratingOrder?: 'score';
   /** 给人看的游戏名，账本也用它。 */
   label: string;
   /** 网页图标名（见 `src/web/common.js` 的 icon 集合）。 */

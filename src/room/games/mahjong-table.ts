@@ -367,10 +367,9 @@ export class MahjongTable implements TableEngine {
       seatId: p.seat.id, score: p.score,
       rank: 1 + this.players.filter(other => other.score > p.score).length,
     }));
-    events.push({
-      ...this.event('end', this.label + '结束。' + summary + '。', { winners, tie: !winners.length }),
-      ratingWinners: seatResults.filter(result => result.rank === 1).map(result => result.seatId),
-    });
+    events.push(this.event('end', this.label + '结束。' + summary + '。等级分按含杠分的结算净分排名。', {
+      winners, tie: !winners.length,
+    }));
     return { events, views: [], ended: true, seatResults };
   }
 
