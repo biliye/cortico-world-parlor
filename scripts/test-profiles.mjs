@@ -9,7 +9,7 @@ export const unitTests = [
   'parent-entry-retry', 'parent-web', 'parlor-patch', 'play-seat-expiry', 'play',
   'promise-room', 'ratings', 'reconnect', 'replay', 'room-carousel', 'room', 'rooms',
   'seat-switch', 'social', 'table-art', 'table-chat', 'table', 'theme-toggle', 'theme',
-  'visibility-interval', 'wake-budget', 'werewolf-e2e-flow',
+  'visibility-interval', 'wake-budget', 'welcome', 'werewolf-e2e-flow',
   'werewolf-rules', 'werewolf-sim', 'werewolf-start-web', 'werewolf-table',
   'werewolf-web', 'world-room-transition', 'world-support', 'world-table-revision', 'world-wake', 'world',
   'test-runner', 'tool-contract', 'xiangqi-table',

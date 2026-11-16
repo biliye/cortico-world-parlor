@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /play
+Disallow: /parent
+Disallow: /identity
+Disallow: /v1/
+Sitemap: {{origin}}/sitemap.xml

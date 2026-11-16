@@ -1,13 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 
 const requiredAssets = {
   play: ['theme.js', 'club.css', 'appearance.css', 'night.css', 'vue-loader.js'],
   parent: ['parent.css', 'parent.js'],
+  welcome: ['welcome-kit.css', 'welcome.css', 'welcome.js'],
 };
-const assetPrefixes = ['/play/assets/', '/parent/assets/'];
+const assetPrefixes = ['/play/assets/', '/parent/assets/', '/welcome/assets/'];
 const unversionedAssets = new Set(['/play/assets/play.css']);
 const localServerScript = 'node --experimental-strip-types scripts/serve.ts';
 const cliProbes = [
@@ -35,7 +36,7 @@ function checkAssetVersions(root, version, pages) {
       }
     }
     for (const url of urls) {
-      const file = url.pathname.replace(/^\/(?:play|parent)\/assets\//, '');
+      const file = url.pathname.replace(/^\/(?:play|parent|welcome)\/assets\//, '');
       if (!statSync(join(root, 'src/web', file), { throwIfNoEntry: false })?.isFile()) {
         throw new Error(`${htmlPath} 引用的资源未打包：${url.pathname}`);
       }
@@ -132,13 +133,20 @@ function checkRelease(packageDir) {
     ]) {
       if (existsSync(join(root, path))) throw new Error('World 发布包含网关文件：' + path);
     }
+    // 对外页（/、robots.txt、sitemap.xml）只归网关：Coo 装的是 World 包，本机单厅不提供这些地址。
+    const webDir = join(root, 'src/web');
+    for (const entry of existsSync(webDir) ? readdirSync(webDir) : []) {
+      if (entry.startsWith('welcome') || entry === 'robots.txt' || entry === 'sitemap.xml') {
+        throw new Error('World 发布包含对外页文件：src/web/' + entry);
+      }
+    }
     if (typeof manifest.main !== 'string') throw new Error('World 缺少入口 main');
     checkWorldModules(root, manifest.main);
     checkAssetVersions(root, version, ['play']);
     checkModules(root, 'src/room/client.ts', version);
   } else if (name === 'cortico-parlor-gateway') {
     if (!manifest.dependencies?.pg || manifest.cortico) throw new Error('网关包清单缺少 pg 或包含 World 注册');
-    checkAssetVersions(root, version, ['play', 'parent']);
+    checkAssetVersions(root, version, ['play', 'parent', 'welcome']);
     checkModules(root, 'src/room/world-server.js');
     checkGatewayCommands(root, manifest.bin);
   } else {

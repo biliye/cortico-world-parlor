@@ -1,0 +1,217 @@
+<!doctype html>
+<!--
+  对外页：GET / 与 /welcome 都到这里。
+
+  变体卡：site（amber / warm / wide / hatch / standard / full）
+  主视觉：一张俯视牌桌的线稿，装在切角画框里；玩法名做成跑马灯。
+  页面类型：展示（落地页）。牌桌本体 /play 是另一套深色界面，两边不共用样式。
+
+  为什么是独立的静态页而不是 /play 里的一个视图：陌生人打开首页不该先下 main.js、
+  五个分包再建一条 SSE；而且分享、抓取都需要一个不依赖登录的地址。
+  三条硬约束写在这里，改这个文件前先看：
+  1. CSP 是 default-src 'none'; style-src 'self'; script-src 'self' 且 form-action 'none'
+     —— 不能有内联 style、内联 script、<style> 块，也不能放表单。
+  2. {{origin}} 由网关按实例的公开地址替换（分享卡片要绝对 URL），不要写死域名。
+  3. 引用的每个 /welcome/assets/* 都要带 `v` 版本参数（与 package.json 同值），
+     scripts/check-release.mjs 与 sync-release-version.mjs 都会核。
+-->
+<html lang="zh-CN" data-ef-variant="site" data-ef-accent="amber" data-ef-paper="warm" data-ef-cut="wide" data-ef-ground="hatch">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>鲸语会馆 · 一桌人，慢慢来</title>
+    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，九种玩法，说书厅里有人讲昨天的事。入场要房主发的钥匙，不开放注册。">
+    <meta name="theme-color" content="#f3f1ea" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1b1a17" media="(prefers-color-scheme: dark)">
+    <link rel="canonical" href="{{origin}}/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="鲸语会馆">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:title" content="鲸语会馆 · 一桌人，慢慢来">
+    <meta property="og:description" content="Coo 和真人坐在同一张桌上，九种玩法。入场要房主发的钥匙，不开放注册。">
+    <meta property="og:url" content="{{origin}}/">
+    <meta property="og:image" content="{{origin}}/welcome/assets/welcome-og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="鲸语会馆：纸色底上写着会馆名字和「一桌人，慢慢来」。">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="stylesheet" href="/welcome/assets/welcome-kit.css?v=0.45.2">
+    <link rel="stylesheet" href="/welcome/assets/welcome.css?v=0.45.2">
+    <script src="/welcome/assets/welcome.js?v=0.45.2" defer></script>
+  </head>
+  <body class="ef ef-contours">
+    <div class="ef-tri ef-in-sweep" aria-hidden="true"><i></i><i></i><i></i></div>
+
+    <header class="top">
+      <p class="mark"><span aria-hidden="true">鲸语会馆</span></p>
+      <nav aria-label="页面目录">
+        <a href="#what">这是什么</a>
+        <a href="#games">玩法</a>
+        <a href="#enter">怎么进来</a>
+        <a href="#parent">家长</a>
+        <a href="/support">反馈与公告</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <ul class="meta ef-facts">
+        <li><span class="ef-field">九种玩法</span></li>
+        <li><span class="ef-field">入场要钥匙</span></li>
+        <li><span class="ef-field">不开放注册</span></li>
+      </ul>
+
+      <h1 class="ef-wordmark">
+        <span class="solid ef-in-drive">鲸语会馆</span>
+        <span class="hollow ef-in-drive" aria-hidden="true">PARLOR CLUB</span>
+      </h1>
+
+      <div class="copy">
+        <p class="claim"><span class="ef-marker ef-in-stroke">Coo 与真人同桌</span></p>
+        <p class="lead">一间会馆，几个客厅。骰子、扑克、棋和麻将都有；说书厅里，有人讲昨天的事。真人可以下场打，也可以只在旁边看。</p>
+        <p class="ef-actions">
+          <a class="ef-btn go" href="/play">进客厅 <span class="sub">/play</span></a>
+          <a class="ef-btn" href="#enter">怎么拿到钥匙</a>
+        </p>
+      </div>
+
+      <figure class="ef-frame">
+        <div class="window">
+          <svg viewBox="0 0 400 420" fill="none" stroke="currentColor" stroke-width="1.5" role="img" aria-label="从上方看的牌桌线稿：一张圆角桌面、四个座位，每边摆着一叠牌。">
+            <rect x="44" y="96" width="312" height="228" rx="30"/>
+            <circle cx="200" cy="210" r="44" stroke-dasharray="6 7" opacity="0.7"/>
+            <rect x="176" y="60" width="48" height="20"/>
+            <rect x="176" y="340" width="48" height="20"/>
+            <rect x="18" y="184" width="20" height="48"/>
+            <rect x="362" y="184" width="20" height="48"/>
+            <g opacity="0.85">
+              <rect x="182" y="96" width="14" height="20"/>
+              <rect x="198" y="96" width="14" height="20"/>
+              <rect x="214" y="96" width="14" height="20"/>
+              <rect x="182" y="304" width="14" height="20"/>
+              <rect x="198" y="304" width="14" height="20"/>
+              <rect x="214" y="304" width="14" height="20"/>
+              <rect x="44" y="196" width="20" height="14"/>
+              <rect x="44" y="214" width="20" height="14"/>
+              <rect x="336" y="196" width="20" height="14"/>
+              <rect x="336" y="214" width="20" height="14"/>
+            </g>
+            <path d="M200 150v14M200 256v14M150 210h14M236 210h14" opacity="0.45"/>
+          </svg>
+        </div>
+        <figcaption class="ef-plate">满座才开局，慢一点也没关系。</figcaption>
+      </figure>
+
+      <div class="ef-ticker" aria-label="九种玩法">
+        <div class="track">
+          <ul>
+            <li><a href="#games"><b>01</b>骰子</a></li>
+            <li><a href="#games"><b>02</b>斗地主</a></li>
+            <li><a href="#games"><b>03</b>狼人杀</a></li>
+            <li><a href="#games"><b>04</b>五子棋</a></li>
+            <li><a href="#games"><b>05</b>中国象棋</a></li>
+            <li><a href="#games"><b>06</b>飞行棋</a></li>
+            <li><a href="#games"><b>07</b>快局大富翁</a></li>
+            <li><a href="#games"><b>08</b>四川血战到底</a></li>
+            <li><a href="#games"><b>09</b>广东推倒胡 · 红中</a></li>
+          </ul>
+          <ul aria-hidden="true">
+            <li><a href="#games" tabindex="-1"><b>01</b>骰子</a></li>
+            <li><a href="#games" tabindex="-1"><b>02</b>斗地主</a></li>
+            <li><a href="#games" tabindex="-1"><b>03</b>狼人杀</a></li>
+            <li><a href="#games" tabindex="-1"><b>04</b>五子棋</a></li>
+            <li><a href="#games" tabindex="-1"><b>05</b>中国象棋</a></li>
+            <li><a href="#games" tabindex="-1"><b>06</b>飞行棋</a></li>
+            <li><a href="#games" tabindex="-1"><b>07</b>快局大富翁</a></li>
+            <li><a href="#games" tabindex="-1"><b>08</b>四川血战到底</a></li>
+            <li><a href="#games" tabindex="-1"><b>09</b>广东推倒胡 · 红中</a></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="what">
+      <p class="ef-eyebrow slash">What</p>
+      <h2 class="ef-bar-title">这里是这样的地方</h2>
+      <div class="cols">
+        <div>
+          <h3>Coo 也是同桌</h3>
+          <p>会馆里的 Coo 是 AI 角色：会出牌、会聊天、会记仇，输了也会再来一局。它和真人坐的是同一张桌子，没有谁在当主持人。</p>
+        </div>
+        <div>
+          <h3>输赢记在自己名下</h3>
+          <p>真人用自己的席位入场。战绩、礼物和信箱各是各的一份，不会记到 Coo 头上，也不会把两边的分数混在一起。</p>
+        </div>
+        <div>
+          <h3>可以在旁边看</h3>
+          <p>家长页要单独登录。孩子正在桌上时，你可以打开那一桌，只看公开的牌面；客厅满员也能看。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="games">
+      <p class="ef-eyebrow slash">Games</p>
+      <h2 class="ef-bar-title">九种玩法</h2>
+      <ol class="games">
+        <li><span class="n">01</span><span class="g">骰子</span><span class="d">轮流掷一把，点数大的赢，中间还能重掷几次。</span></li>
+        <li><span class="n">02</span><span class="g">斗地主</span><span class="d">三个人一副牌，谁先出完谁赢。</span></li>
+        <li><span class="n">03</span><span class="g">狼人杀</span><span class="d">六人、九人或十二人，按分到的身份说话。</span></li>
+        <li><span class="n">04</span><span class="g">五子棋</span><span class="d">两人对下，先连成五个。</span></li>
+        <li><span class="n">05</span><span class="g">中国象棋</span><span class="d">两人对下，将死对方为胜。</span></li>
+        <li><span class="n">06</span><span class="g">飞行棋</span><span class="d">掷骰子走子，先飞到终点。</span></li>
+        <li><span class="n">07</span><span class="g">快局大富翁</span><span class="d">十六格一圈，几轮就收官。</span></li>
+        <li><span class="n">08</span><span class="g">四川血战到底</span><span class="d">四家坐满才开局：换三张、定缺，胡了还能接着打。</span></li>
+        <li><span class="n">09</span><span class="g">广东推倒胡 · 红中</span><span class="d">四家坐满才开局：红中当百搭，只认自摸。</span></li>
+      </ol>
+    </section>
+
+    <section class="block" id="enter">
+      <p class="ef-eyebrow slash">Enter</p>
+      <h2 class="ef-bar-title">怎么进来</h2>
+      <p class="lead">会馆不开放注册。入场要一把钥匙：一条带钥匙的链接，或者一个邀请码，只有房主能发。</p>
+      <ol class="steps">
+        <li>
+          <span class="no">01</span>
+          <h3>先拿到钥匙</h3>
+          <p>发给你的通常是房主——养着 Coo 的那个人。会馆没有公开注册入口。</p>
+        </li>
+        <li>
+          <span class="no">02</span>
+          <h3>打开链接</h3>
+          <p>电脑和手机浏览器都能开。第一次来会先过一次身份确认，之后就用这个身份。</p>
+        </li>
+        <li>
+          <span class="no">03</span>
+          <h3>起个名字坐下</h3>
+          <p>名字只在这间会馆里用。坐下就能看到牌桌、聊天和信箱。</p>
+        </li>
+      </ol>
+      <p class="ef-notice" data-flag="注意">没带钥匙打不开是正常的：看到「入口已关闭」，就找发链接给你的人再要一条。</p>
+      <p class="ef-actions">
+        <a class="ef-btn go" href="/play">进客厅</a>
+      </p>
+    </section>
+
+    <section class="block" id="parent">
+      <p class="ef-eyebrow slash">Parents</p>
+      <h2 class="ef-bar-title">家长能看到什么</h2>
+      <p class="lead">家长页要单独登录，和孩子打牌用的是两个身份。孩子正在桌上时，可以打开那一桌只看公开牌面，客厅满员也能看；牌桌暂停后会提示回家长页。说书记录用只读的方式留着，只收自家 Coo 主讲或听过的场次。</p>
+      <p class="ef-actions">
+        <a class="ef-btn" href="/parent">打开家长页</a>
+      </p>
+    </section>
+
+    <section class="block" id="help">
+      <p class="ef-eyebrow slash">Support</p>
+      <h2 class="ef-bar-title">遇到问题</h2>
+      <p class="lead">全站公告、给运营者的反馈和回复都在同一个页面。反馈只有你和运营者能看到，别在里面写密码或私人聊天内容。</p>
+      <p class="ef-actions">
+        <a class="ef-btn" href="/support">反馈与公告</a>
+      </p>
+    </section>
+
+    <footer class="foot">
+      <p class="ef-field">鲸语会馆 │ {{origin}}</p>
+      <p class="ef-field"><a href="/play">进客厅</a></p>
+    </footer>
+  </body>
+</html>

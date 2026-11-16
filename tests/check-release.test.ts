@@ -44,13 +44,19 @@ it.each([
       writeFileSync(join(root, 'src/room/ratings/worker.js'), '');
       writeFileSync(join(root, 'src/room/world-server.js'), 'export const WorldServer = { create() {} };');
     }
-    for (const name of kind === 'world' ? ['play'] : ['play', 'parent']) {
+    for (const name of kind === 'world' ? ['play'] : ['play', 'parent', 'welcome']) {
       const html = readFileSync(new URL(`../src/web/${name}.html`, import.meta.url), 'utf8');
       writeFileSync(join(root, `src/web/${name}.html`), html);
     }
     for (const file of ['theme.js', 'play.css', 'club.css', 'appearance.css', 'night.css', 'vue-loader.js',
       'parent.css', 'parent.js', 'brand-new.js', 'new-style.css']) {
       writeFileSync(join(root, 'src/web', file), '');
+    }
+    // 对外页只随网关发布：World 包里出现 welcome* 会被 check-release 拦下。
+    if (kind === 'gateway') {
+      for (const file of ['welcome-kit.css', 'welcome.css', 'welcome.js']) {
+        writeFileSync(join(root, 'src/web', file), '');
+      }
     }
 
     const target = join(root, `src/web/${page}.html`);

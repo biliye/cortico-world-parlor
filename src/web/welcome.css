@@ -1,0 +1,363 @@
+/*
+ * 对外页（/）的版式。
+ *
+ * 颜色、字号、部件全部来自 welcome-kit.css（--ef-* 变量与 ef- 类），
+ * 这里只写这一个页面的排布。变体卡写在 welcome.html 的 <html> 上：
+ *   site（amber / warm / wide / hatch / standard / full）
+ *   页面类型：展示（落地页）；牌桌本体仍是另一套深色界面，两边不共用样式。
+ */
+
+@font-face {
+  font-family: 'Saira Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 50% 125%;
+  font-display: swap;
+  src: url('./welcome-saira.woff2') format('woff2-variations');
+}
+
+/*
+ * 拉丁字用自托管的 Saira（宽度轴到 125%），中文回落到系统黑体：
+ * 会馆的香港机房里塞一份中文字库是几 MB，为了这一页不值得。
+ */
+:root {
+  --ef-font-ui: 'Saira Variable', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --ef-font-text: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Saira Variable', sans-serif;
+  --ef-wordmark: clamp(2.75rem, 7.6vw, 8.25rem);
+}
+
+/* ---------- 顶栏 ---------- */
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding: 0.85rem var(--ef-pad);
+  background: var(--ef-paper);
+  border-bottom: 1px solid var(--ef-rule);
+}
+
+.top .mark {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  margin: 0;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.top nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem clamp(0.75rem, 2.5vw, 1.75rem);
+}
+
+.top nav a {
+  padding: 0.15rem 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.top nav a:is(:hover, :focus-visible) {
+  background: var(--ef-signal);
+  color: var(--ef-on-signal);
+}
+
+/* ---------- 首屏 ---------- */
+
+.hero {
+  --mx: 0;
+  --my: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 38%);
+  grid-template-rows: auto 1fr auto auto;
+  column-gap: clamp(1.25rem, 4vw, 3.5rem);
+  padding-top: 1.25rem;
+  border-bottom: 1px solid var(--ef-rule);
+  overflow: hidden;
+}
+
+.hero .meta {
+  grid-column: 1;
+  padding-inline: var(--ef-pad);
+}
+
+/* 第一格不要那条分隔竖线：它贴在纸边上像一道杂线 */
+.hero .meta > li:first-child {
+  border-left: 0;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+.hero .ef-wordmark {
+  grid-column: 1;
+  align-self: end;
+  margin: 2.25rem 0 0;
+  padding-left: var(--ef-pad);
+}
+
+.hero .copy {
+  grid-column: 1;
+  padding: 1.5rem var(--ef-pad) 2rem;
+}
+
+.hero .claim {
+  margin: 0;
+  font-size: clamp(1.1rem, 2.1vw, 1.5rem);
+  font-weight: 700;
+}
+
+.hero .lead {
+  max-width: 32rem;
+  margin: 0.9rem 0 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  line-height: 1.85;
+}
+
+.hero .ef-actions {
+  margin-top: 1.5rem;
+}
+
+.hero .ef-frame {
+  grid-column: 2;
+  grid-row: 1 / 4;
+  margin: 0 var(--ef-pad) 2.25rem 0;
+}
+
+/* 指针视差：画框和它的斜线影子朝相反方向错开，总量不超过 12px */
+.hero .ef-frame::before {
+  transform: translate(calc(var(--mx) * 12px), calc(var(--my) * 10px));
+}
+
+.hero .ef-frame svg {
+  width: 100%;
+  height: 100%;
+  transform: translate(calc(var(--mx) * -14px), calc(var(--my) * -8px));
+  transition: transform 0.4s var(--ef-ease);
+}
+
+.hero .ef-ticker {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 899px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+  .hero .ef-frame {
+    grid-column: 1;
+    grid-row: auto;
+    height: 17rem;
+    margin: 0 calc(var(--ef-pad) + 1rem) 2.25rem var(--ef-pad);
+  }
+  /* 窄屏上画框左边就是纸边，牌条不能再往左探 */
+  .hero .ef-plate {
+    left: 0;
+  }
+}
+
+/* ---------- 分区 ---------- */
+
+.block {
+  padding: clamp(2.5rem, 6vw, 4rem) var(--ef-pad);
+  border-bottom: 1px solid var(--ef-rule);
+}
+
+.block > .ef-eyebrow {
+  margin: 0 0 0.4rem;
+}
+
+.block .ef-bar-title {
+  margin-bottom: 1.75rem;
+}
+
+.block .lead {
+  max-width: 38rem;
+  margin: 0 0 1.75rem;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  line-height: 1.85;
+}
+
+/* 三栏：细线分区，不做卡片 */
+.cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--ef-rule);
+}
+
+.cols > div {
+  padding: 1.35rem 1.5rem 0.25rem 0;
+  border-left: 1px solid var(--ef-rule);
+  padding-left: 1.35rem;
+}
+
+.cols > div:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.cols h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.cols p {
+  margin: 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  line-height: 1.8;
+}
+
+@media (max-width: 899px) {
+  .cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cols > div {
+    padding: 1.1rem 0;
+    border-left: 0;
+    border-top: 1px solid var(--ef-rule);
+  }
+  .cols > div:first-child {
+    border-top: 0;
+  }
+}
+
+/* ---------- 玩法清单 ---------- */
+
+.games {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--ef-rule);
+}
+
+.games > li {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 10rem) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.25rem 1.25rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--ef-rule);
+}
+
+.games .n {
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-ui);
+  font-stretch: var(--ef-wider);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
+}
+
+.games .g {
+  font-weight: 700;
+}
+
+.games .d {
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+}
+
+@media (max-width: 719px) {
+  .games > li {
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+  }
+  .games .d {
+    grid-column: 2;
+    font-size: 0.9rem;
+  }
+}
+
+/* ---------- 三步 ---------- */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 1.75rem;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--ef-rule);
+}
+
+.steps > li {
+  padding: 1.35rem 1.5rem 0.5rem 1.35rem;
+  border-left: 1px solid var(--ef-rule);
+}
+
+.steps > li:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.steps .no {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-ui);
+  font-stretch: var(--ef-wider);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.steps h3 {
+  margin: 0 0 0.45rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.steps p {
+  margin: 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  line-height: 1.8;
+}
+
+@media (max-width: 899px) {
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .steps > li {
+    padding: 1.1rem 0;
+    border-left: 0;
+    border-top: 1px solid var(--ef-rule);
+  }
+  .steps > li:first-child {
+    border-top: 0;
+  }
+}
+
+/* ---------- 页脚 ---------- */
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 2rem;
+  padding: 1.5rem var(--ef-pad) 2.75rem;
+}
+
+/* 逐行亮起：用 nth-child 给 --i，避免写内联样式（页面 CSP 不允许） */
+.games > li:nth-child(1) { --i: 0; }
+.games > li:nth-child(2) { --i: 1; }
+.games > li:nth-child(3) { --i: 2; }
+.games > li:nth-child(4) { --i: 3; }
+.games > li:nth-child(5) { --i: 4; }
+.games > li:nth-child(6) { --i: 5; }
+.games > li:nth-child(7) { --i: 6; }
+.games > li:nth-child(8) { --i: 7; }
+.games > li:nth-child(9) { --i: 8; }
+
+.hero .ef-wordmark .hollow {
+  animation-delay: 140ms;
+}
