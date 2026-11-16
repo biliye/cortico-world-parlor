@@ -116,10 +116,47 @@ describe('对外页的静态契约', () => {
 
   it('入场文案只承诺带钥匙的链接，并说清邀请码的适用范围', () => {
     expect(page).not.toContain('一条带钥匙的链接，或者一个邀请码');
-    expect(page).toContain('邀请码只在房主开了「访客加入」的会馆里顶用');
+    expect(page).toContain('邀请码只在开了「访客加入」的会馆里顶用');
     // 反馈与公告用的是「当前浏览器」里的客厅席位令牌，加入客厅就发了，不需要上桌。
     expect(page).toContain('要先用当前浏览器加入客厅才能打开');
     expect(page).toContain('反馈与公告（需先加入客厅）');
+  });
+
+  it('顶栏只剩三个控件，正文改成一屏一屏的分页', () => {
+    const top = markup.slice(markup.indexOf('<header class="top"'), markup.indexOf('</header>'));
+    expect(top).toContain('href="/support"');
+    expect(top).toContain('data-act="account"');
+    expect(top).toContain('data-act="theme"');
+    // 分区导航撤了：看哪一屏靠滚动，不靠顶栏（只剩左上角回第一屏的那个）
+    for (const anchor of ['#what', '#games', '#enter', '#parent']) {
+      expect(top).not.toContain(`href="${anchor}"`);
+    }
+
+    // 屏序就是阅读顺序，改版式时这条会先炸
+    const ids = [...markup.matchAll(/<section class="screen[^"]*" id="([^"]+)"/g)].map(([, id]) => id);
+    expect(ids).toEqual(['top', 'games', 'enter', 'parent']);
+
+    const css = read('welcome.css');
+    expect(css).toMatch(/scroll-snap-type:\s*y proximity/);
+    expect(css).toMatch(/scroll-snap-align:\s*start/);
+    expect(css).toMatch(/min-height:\s*calc\(100svh - var\(--top-h\)/);
+  });
+
+  it('入场与家长两屏写清 Coo 客厅页里的两条入口', () => {
+    expect(page).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
+    expect(page).toContain('客厅 · 家长页（只读，带钥匙）');
+    expect(page).toContain('「客厅」页');
+  });
+
+  it('登录/注册只是占位：点了给一句说明，不提交任何东西', () => {
+    expect(markup).toMatch(/<button[^>]*data-act="account"[^>]*>登录 \/ 注册<\/button>/);
+    expect(markup).toMatch(/<p class="toast"[^>]*role="status"[^>]*hidden>/);
+    const js = read('welcome.js');
+    expect(js).toContain('[data-act="account"]');
+    expect(js).toContain('toast.hidden = false');
+    // 明暗记在 localStorage，重开还是上次选的那个
+    expect(js).toContain('parlor-welcome-theme');
+    expect(js).toContain('dataset.theme');
   });
 });
 

@@ -5,6 +5,10 @@
  * 这里只写这一个页面的排布。变体卡写在 welcome.html 的 <html> 上：
  *   site（amber / warm / wide / hatch / standard / full）
  *   页面类型：展示（落地页）；牌桌本体仍是另一套深色界面，两边不共用样式。
+ *
+ * 版式是竖向滚动翻页：每屏一个 .screen，高度正好是一屏减去顶栏，
+ * 由 html 上的 scroll-snap 吸附。屏里内容多的（玩法九条）自己会长高，
+ * 这时 snap 用 proximity 而不是 mandatory，免得卡在中间滚不动。
  */
 
 @font-face {
@@ -24,6 +28,51 @@
   --ef-font-ui: 'Saira Variable', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --ef-font-text: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Saira Variable', sans-serif;
   --ef-wordmark: clamp(2.75rem, 7.6vw, 8.25rem);
+  /* 顶栏高度：每屏的高度、锚点的落点都从它推。改了要一起看 .top。 */
+  --top-h: 3.5rem;
+  --tri-h: 3px;
+}
+
+/* ---------- 滚动容器 ---------- */
+
+html {
+  scroll-snap-type: y proximity;
+  scroll-padding-top: var(--top-h);
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100svh - var(--top-h) - var(--tri-h));
+  padding: clamp(1.5rem, 3.6vh, 2.75rem) var(--ef-pad);
+  border-bottom: 1px solid var(--ef-rule);
+  scroll-snap-align: start;
+  /* 一次滚动最多走一屏；不然滚快一点会连跳两屏 */
+  scroll-snap-stop: always;
+}
+
+/* 每屏的眉标与标题 */
+.screen > .ef-eyebrow {
+  margin: 0 0 0.4rem;
+}
+
+.screen .ef-bar-title {
+  margin-bottom: clamp(1rem, 2.4vh, 1.75rem);
+}
+
+.screen .lead {
+  max-width: 38rem;
+  margin: 0 0 clamp(1rem, 2.6vh, 1.75rem);
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  line-height: 1.85;
 }
 
 /* ---------- 顶栏 ---------- */
@@ -31,13 +80,14 @@
 .top {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem 1.5rem;
-  padding: 0.85rem var(--ef-pad);
+  gap: 0.75rem;
+  min-height: var(--top-h);
+  padding: 0 var(--ef-pad);
   background: var(--ef-paper);
   border-bottom: 1px solid var(--ef-rule);
 }
@@ -49,23 +99,36 @@
   margin: 0;
   font-weight: 800;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
-.top nav {
+.top .mark a {
+  padding: 0.3rem 0;
+}
+
+.top .mark a:is(:hover, :focus-visible) {
+  color: var(--ef-signal);
+}
+
+.top-acts {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem clamp(0.75rem, 2.5vw, 1.75rem);
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
-.top nav a {
-  padding: 0.15rem 0.35rem;
-  font-size: 0.875rem;
-  font-weight: 600;
+/* 自绘按钮：不写 appearance 的话，Windows 上那圈原生外观会透出来 */
+.top .ef-btn {
+  appearance: none;
+  -webkit-appearance: none;
 }
 
-.top nav a:is(:hover, :focus-visible) {
-  background: var(--ef-signal);
-  color: var(--ef-on-signal);
+.top .ef-btn.square {
+  padding: 0.34rem 0.5rem 0.3rem;
+}
+
+.top .ef-btn.square svg {
+  display: block;
 }
 
 /* ---------- 首屏 ---------- */
@@ -77,7 +140,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 38%);
   grid-template-rows: auto 1fr auto auto;
   column-gap: clamp(1.25rem, 4vw, 3.5rem);
-  padding-top: 1.25rem;
+  padding: 1.25rem 0 0;
   border-bottom: 1px solid var(--ef-rule);
   overflow: hidden;
 }
@@ -149,91 +212,36 @@
 @media (max-width: 899px) {
   .hero {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
+    grid-template-rows: auto auto auto auto;
+    align-content: space-between;
   }
   .hero .ef-frame {
     grid-column: 1;
     grid-row: auto;
-    height: 17rem;
-    margin: 0 calc(var(--ef-pad) + 1rem) 2.25rem var(--ef-pad);
+    height: auto;
+    margin: 0 calc(var(--ef-pad) + 1rem) 2rem var(--ef-pad);
   }
-  /* 窄屏上画框左边就是纸边，牌条不能再往左探 */
+  /* 窄屏画框只有十几厘米高，牌条再叠在上面就压住牌了：挪到画框下面当一行标签 */
+  .hero .ef-frame .window {
+    position: relative;
+    inset: auto;
+    height: clamp(11rem, 24vh, 14rem);
+  }
   .hero .ef-plate {
-    left: 0;
+    position: static;
+    display: inline-block;
+    max-width: 100%;
+    margin: 0.7rem 0 0;
   }
 }
 
-/* ---------- 分区 ---------- */
+/* ---------- 第 2 屏：玩法 ---------- */
 
-.block {
-  padding: clamp(2.5rem, 6vw, 4rem) var(--ef-pad);
-  border-bottom: 1px solid var(--ef-rule);
-}
-
-.block > .ef-eyebrow {
-  margin: 0 0 0.4rem;
-}
-
-.block .ef-bar-title {
-  margin-bottom: 1.75rem;
-}
-
-.block .lead {
-  max-width: 38rem;
-  margin: 0 0 1.75rem;
-  color: var(--ef-ink-2);
-  font-family: var(--ef-font-text);
-  line-height: 1.85;
-}
-
-/* 三栏：细线分区，不做卡片 */
-.cols {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-top: 1px solid var(--ef-rule);
-}
-
-.cols > div {
-  padding: 1.35rem 1.5rem 0.25rem 0;
-  border-left: 1px solid var(--ef-rule);
-  padding-left: 1.35rem;
-}
-
-.cols > div:first-child {
-  border-left: 0;
-  padding-left: 0;
-}
-
-.cols h3 {
-  margin: 0 0 0.5rem;
-  font-size: 1.05rem;
-  font-weight: 800;
-}
-
-.cols p {
-  margin: 0;
-  color: var(--ef-ink-2);
-  font-family: var(--ef-font-text);
-  line-height: 1.8;
-}
-
-@media (max-width: 899px) {
-  .cols {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .cols > div {
-    padding: 1.1rem 0;
-    border-left: 0;
-    border-top: 1px solid var(--ef-rule);
-  }
-  .cols > div:first-child {
-    border-top: 0;
-  }
-}
-
-/* ---------- 玩法清单 ---------- */
-
+/* 九条平分一屏：行高由剩余空间决定，不够时按 2.75rem 兜底 */
 .games {
+  display: grid;
+  flex: 1;
+  align-content: space-between;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -270,26 +278,37 @@
 @media (max-width: 719px) {
   .games > li {
     grid-template-columns: 2.5rem minmax(0, 1fr);
+    padding: 0.45rem 0;
   }
   .games .d {
     grid-column: 2;
-    font-size: 0.9rem;
+    font-size: 0.86rem;
+    line-height: 1.55;
   }
 }
 
-/* ---------- 三步 ---------- */
+/* ---------- 第 3 屏：怎么进来 ---------- */
+
+/* 内容比一屏少的屏，靠上下 auto margin 居中；内容超高时 auto 变 0，不会从顶上被裁掉。 */
+.enter > .ef-eyebrow {
+  margin-top: auto;
+}
+
+.enter > .ef-actions {
+  margin-bottom: auto;
+}
 
 .steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0 0 1.75rem;
+  margin: 0 0 clamp(1rem, 2.4vh, 1.5rem);
   padding: 0;
   list-style: none;
   border-top: 1px solid var(--ef-rule);
 }
 
 .steps > li {
-  padding: 1.35rem 1.5rem 0.5rem 1.35rem;
+  padding: 1.1rem 1.5rem 0.4rem 1.35rem;
   border-left: 1px solid var(--ef-rule);
 }
 
@@ -300,7 +319,7 @@
 
 .steps .no {
   display: block;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.55rem;
   color: var(--ef-ink-2);
   font-family: var(--ef-font-ui);
   font-stretch: var(--ef-wider);
@@ -322,26 +341,95 @@
   line-height: 1.8;
 }
 
-/* 提示框与下面的按钮都是 margin:0，贴在一起会把按钮的切角压掉一截 */
-.block .ef-notice + .ef-actions {
-  margin-top: 1.25rem;
-}
-
 @media (max-width: 899px) {
   .steps {
     grid-template-columns: minmax(0, 1fr);
   }
   .steps > li {
-    padding: 1.1rem 0;
+    display: grid;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    align-items: baseline;
+    padding: 0.7rem 0;
     border-left: 0;
     border-top: 1px solid var(--ef-rule);
   }
   .steps > li:first-child {
     border-top: 0;
   }
+  .steps .no {
+    margin: 0;
+  }
+  .steps h3 {
+    grid-column: 2;
+    margin-bottom: 0.2rem;
+    font-size: 1rem;
+  }
+  .steps p {
+    grid-column: 2;
+    font-size: 0.92rem;
+    line-height: 1.7;
+  }
 }
 
-/* ---------- 页脚 ---------- */
+/* 入口提示：把 Coo 客厅页里那一条的名字原样写出来，好照着找 */
+.gate {
+  margin: 0 0 clamp(0.9rem, 2vh, 1.25rem);
+  padding: 0.9rem 1.1rem 1rem;
+  border-left: 3px solid var(--ef-signal);
+  background: var(--ef-chip);
+}
+
+.gate .ef-field {
+  margin: 0 0 0.35rem;
+}
+
+.gate .path {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.gate .path b {
+  padding: 0.05em 0.35em;
+  background: var(--ef-signal);
+  color: var(--ef-on-signal);
+  font-weight: 700;
+}
+
+.gate .note {
+  margin: 0.4rem 0 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+/* 提示框与下面的按钮都是 margin:0，贴在一起会把按钮的切角压掉一截 */
+.parents .gate + .ef-actions {
+  margin-top: 1.25rem;
+}
+
+.enter .ef-notice + .ef-actions {
+  margin-top: clamp(0.9rem, 2vh, 1.25rem);
+  padding-top: 0;
+}
+
+/* ---------- 第 4 屏：家长 ---------- */
+
+/* 上半屏讲家长能看什么，下半屏是反馈与页脚：剩余空间全留给上面的分隔 */
+.parents .also {
+  margin-top: auto;
+  padding-top: clamp(1rem, 2.4vh, 1.5rem);
+  border-top: 1px solid var(--ef-rule);
+}
+
+.parents .also .lead {
+  margin-bottom: 1rem;
+}
+
+.parents .also strong {
+  color: var(--ef-ink);
+}
 
 .foot {
   display: flex;
@@ -349,10 +437,66 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem 2rem;
-  padding: 1.5rem var(--ef-pad) 2.75rem;
+  margin-top: auto;
+  padding-top: clamp(1rem, 2.4vh, 1.5rem);
+  border-top: 1px solid var(--ef-rule);
 }
 
-/* 逐行亮起：用 nth-child 给 --i，避免写内联样式（页面 CSP 不允许） */
+/* ---------- 登录/注册的占位提示 ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  /* 首屏底部是跑马灯，提示条要抬到它上面 */
+  bottom: 4.5rem;
+  z-index: 30;
+  max-width: min(92vw, 34rem);
+  margin: 0;
+  padding: 0.85rem 1.15rem 0.9rem;
+  transform: translateX(-50%);
+  background: var(--ef-ink);
+  color: var(--ef-panel);
+  font-family: var(--ef-font-text);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  -webkit-mask: linear-gradient(-45deg, transparent calc(0.55rem * var(--ef-cut-k)), #000 calc(0.55rem * var(--ef-cut-k) + 0.5px));
+  mask: linear-gradient(-45deg, transparent calc(0.55rem * var(--ef-cut-k)), #000 calc(0.55rem * var(--ef-cut-k) + 0.5px));
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+/* ---------- 窄屏顶栏：三个控件要挤在一行里 ---------- */
+
+@media (max-width: 599px) {
+  :root {
+    --top-h: 3.25rem;
+  }
+  /* 手机上每屏的上下边距收一点，入场那屏才装得下 */
+  .screen {
+    padding-block: 1.15rem;
+  }
+  .top .mark {
+    font-size: 0.92rem;
+  }
+  .top .ef-btn.small {
+    padding: 0.28rem 0.7rem 0.28rem 0.55rem;
+    font-size: 0.75rem;
+  }
+  .top .ef-btn.square {
+    padding-inline: 0.42rem;
+  }
+}
+
+@media (max-width: 379px) {
+  .top .mark {
+    display: none;
+  }
+}
+
+/* ---------- 入场与逐行亮起用的序号 ---------- */
+
 .games > li:nth-child(1) { --i: 0; }
 .games > li:nth-child(2) { --i: 1; }
 .games > li:nth-child(3) { --i: 2; }
