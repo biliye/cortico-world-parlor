@@ -5,6 +5,7 @@ import { validSeatResults } from '../src/room/table-results.ts';
 
 const ratedFixtures: Record<string, number> = {
   dice: 2, ddz: 3, werewolf: 6, monopoly2d: 4, gomoku: 2, xiangqi: 2,
+  'mahjong-sichuan': 4, 'mahjong-guangdong': 4,
 };
 
 it.each(GAME_LIST.filter(game => game.rated))('$id 正常终局符合统一的逐席赛果契约', game => {
@@ -24,7 +25,8 @@ it.each(GAME_LIST.filter(game => game.rated))('$id 正常终局符合统一的�
   expect(step.ended).toBe(true);
   const end = step.events.find(event => event.type === 'parlor.table.end');
   expect(end).toBeDefined();
-  expect(validSeatResults(step.seatResults, engine.seatIds(), end!.data!.winners as string[], end!.data!.tie === true)).toBe(true);
+  const winners = end!.data!.winners as string[];
+  expect(validSeatResults(step.seatResults, engine.seatIds(), winners, end!.data!.tie === true, game.ratingOrder)).toBe(true);
 });
 
 it('拒绝缺席、重复席、赢家矛盾的逐席赛果，接受全桌和局', () => {
@@ -47,6 +49,28 @@ it('并列后按占用的席位数跳名次，首位并列和全桌和局分别�
 });
 
 const player = (cooId: string | null, rank: number, team: string | null = null) => ({ cooId, rank, team });
+
+it('按净分评级时要求每席有分数，同分必须并列，胡牌名单可以不同', () => {
+  const ids = ['a', 'b', 'c', 'd'];
+  const seats = [
+    { seatId: 'a', rank: 2, score: 3 }, { seatId: 'b', rank: 1, score: 5 },
+    { seatId: 'c', rank: 3, score: -4 }, { seatId: 'd', rank: 3, score: -4 },
+  ];
+  expect(validSeatResults(seats, ids, ['a'], false, 'score')).toBe(true);
+  expect(validSeatResults(seats, ids, ['a'], false)).toBe(false);
+  expect(validSeatResults([{ ...seats[0], rank: 1 }, { ...seats[1], rank: 2 }, ...seats.slice(2)], ids, ['a'], false, 'score')).toBe(false);
+  expect(validSeatResults([...seats.slice(0, 3), { ...seats[3], rank: 4 }], ids, ['a'], false, 'score')).toBe(false);
+  expect(validSeatResults([...seats.slice(0, 3), { ...seats[3], score: undefined }], ids, ['a'], false, 'score')).toBe(false);
+});
+
+it('四家零分的完整流局按平局计一场', () => {
+  const ids = ['a', 'b', 'c', 'd'];
+  const draw = ids.map(seatId => ({ seatId, rank: 1, score: 0 }));
+  expect(validSeatResults(draw, ids, [], true, 'score')).toBe(true);
+  expect(fitRatings([draw.map(seat => player(seat.seatId, seat.rank))])).toEqual([
+    ids.map(cooId => ({ cooId, games: 1, rating: 0 })),
+  ]);
+});
 
 it('十胜零负仍收敛，每对一场虚拟平局，按每组几何平均强度定零分', () => {
   const win = [player('a', 1), player('b', 2)];

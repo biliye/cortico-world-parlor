@@ -363,8 +363,14 @@ export class MahjongTable implements TableEngine {
     this.state.draw = null;
     const winners = this.players.filter(p => p.win).map(p => p.seat.id);
     const summary = this.players.map(p => p.seat.name + ' ' + (p.score > 0 ? '+' : '') + p.score + ' 分').join('，');
-    events.push(this.event('end', this.label + '结束。' + summary + '。', { winners, tie: !winners.length }));
-    return { events, views: [], ended: true, seatResults: null };
+    const seatResults = this.players.map(p => ({
+      seatId: p.seat.id, score: p.score,
+      rank: 1 + this.players.filter(other => other.score > p.score).length,
+    }));
+    events.push(this.event('end', this.label + '结束。' + summary + '。等级分按含杠分的结算净分排名。', {
+      winners, tie: !winners.length,
+    }));
+    return { events, views: [], ended: true, seatResults };
   }
 
   autoPlay(id: string, now: number): TableStep | null {

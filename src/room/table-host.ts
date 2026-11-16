@@ -1393,8 +1393,9 @@ export class TableHost {
           : {}),
       },
     });
-    const eligibleForRating = gameById(table.game)?.rated === true && !event.ratingExcluded;
-    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true)
+    const game = gameById(table.game);
+    const eligibleForRating = game?.rated === true && !event.ratingExcluded;
+    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true, game.ratingOrder)
       ? seatResults : null;
     const ratingSkipped = eligibleForRating && !rankedSeats
       ? (seatResults?.length ? 'invalid_seat_results' : 'missing_seat_results') : undefined;

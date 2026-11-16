@@ -28,7 +28,7 @@ function definition(game: MahjongGame): GameDefinition {
     return { action, windowId, ...(tile !== undefined ? { tile } : {}) };
   };
   return {
-    id: game, rated: false, ...GAME_PRESENTATION[game],
+    id: game, rated: true, ratingOrder: 'score', ...GAME_PRESENTATION[game],
     openHint: '四席坐满开局。牌河公开，手牌、可用动作和提示见本人桌面。',
     rules: MAHJONG_RULES[game],
     create: ({ host, turnMs, firstSeat }) => new MahjongTable(game, host, turnMs, firstSeat),
