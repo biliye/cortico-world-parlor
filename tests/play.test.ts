@@ -430,14 +430,15 @@ describe('网页玩家', () => {
     expect(access).toContain('删除后从目录移除');
   });
 
-  it('访客入口关闭时不再显示加入表单', () => {
+  it('旧访客开关只控制共享码，网页一次性邀请码独立显示', () => {
     expect(guestJoinEnabled(null)).toBe(true);
     expect(guestJoinEnabled({ guestJoin: true })).toBe(true);
     expect(guestJoinEnabled({ guestJoin: false })).toBe(false);
     expect(GUEST_CLOSED_MESSAGE).toContain('这个入口已经关闭');
     const join = readFileSync(new URL('../web-src/views/JoinView.vue', import.meta.url), 'utf8');
     expect(join).toContain('guestJoinEnabled');
-    expect(join).toContain('GUEST_CLOSED_MESSAGE');
+    expect(join).toContain('<details v-if="guestJoin">');
+    expect(join).toContain("@submit.prevent=\"redeem\"");
   });
 
   it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {

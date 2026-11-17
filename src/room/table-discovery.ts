@@ -80,7 +80,8 @@ export class TableDiscovery {
     return result;
   }
 
-  async enter(token: string, input: TableEntryInput, clientVersion?: string): Promise<TableEntryResponse> {
+  async enter(token: string, input: TableEntryInput, clientVersion?: string,
+    access: { room?: string; preserveToken?: boolean } = {}): Promise<TableEntryResponse> {
     const requestId = input.requestId?.trim();
     if (!requestId || requestId.length > 100) throw new HostError('invalid', '需要 1–100 字的 requestId；重试请使用同一个编号');
     if (!token) throw new HostError('forbidden', '缺少席位令牌，请先加入大厅');
@@ -104,7 +105,7 @@ export class TableDiscovery {
         throw new HostError('already_seated', '你已经在牌桌上，请先回到当前桌；未开局可以先退桌');
       }
       const sourceHost = await this.host(source.roomId);
-      const candidates = await this.candidates(input, source.roomId);
+      const candidates = await this.candidates(input, source.roomId, access.room);
       if (direct && candidates.length === 0) throw new HostError('not_found', '这张牌桌不存在、已经开始、关闭或过期了');
       for (const candidate of candidates) {
         if (candidate.game === 'werewolf' && source.kind === 'pet' && !versionAtLeast(clientVersion, WEREWOLF_MIN_CLIENT)) {
@@ -112,7 +113,7 @@ export class TableDiscovery {
         }
         const targetHost = await this.host(candidate.room_id);
         let result!: TableEntryResult;
-        const nextToken = candidate.room_id === source.roomId ? token : this.entryToken(token, requestId);
+        const nextToken = candidate.room_id === source.roomId || access.preserveToken ? token : this.entryToken(token, requestId);
         let enteredSeat: SeatRow = source;
         let joinSeq = 0;
         try {
@@ -134,7 +135,7 @@ export class TableDiscovery {
                 if (!eligible) throw new HostError('conflict', '这张桌子已经停止匹配');
               }
               if (source.roomId !== candidate.room_id) {
-                const moved = await sourceHost.switchTo(cooId, candidate.room_id, { token: nextToken });
+                const moved = await sourceHost.switchTo(cooId, candidate.room_id, { token: nextToken, preserveToken: access.preserveToken });
                 enteredSeat = moved.seat;
                 joinSeq = moved.joinEvent.seq;
               }
@@ -161,7 +162,7 @@ export class TableDiscovery {
     });
   }
 
-  private async candidates(input: TableEntryInput, sourceRoom: string): Promise<Candidate[]> {
+  private async candidates(input: TableEntryInput, sourceRoom: string, restrictedRoom?: string): Promise<Candidate[]> {
     const capacity = input.game === 'werewolf'
       ? "CASE CAST(t.state_json->>'seatCount' AS TEXT) WHEN '6' THEN 6 WHEN '12' THEN 12 ELSE 9 END"
       : '?';
@@ -170,11 +171,12 @@ export class TableDiscovery {
               (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL) AS n
          FROM tables t JOIN rooms r ON r.id=t.room_id LEFT JOIN table_discovery d ON d.table_id=t.id
         WHERE t.status='open' AND t.frozen_at IS NULL AND t.deadline_at>? AND r.archived_at IS NULL
+          ${restrictedRoom ? 'AND t.room_id=?' : ''}
           AND ${input.table ? 't.id=? AND t.room_id=?' : `d.match_open=1 AND t.game=? AND r.visibility='public'
             AND (SELECT COUNT(*) FROM table_seats s WHERE s.table_id=t.id AND s.left_at IS NULL)<${capacity}
             AND (r.id=? OR (SELECT COUNT(*) FROM room_seats rs WHERE rs.room_id=r.id AND rs.released_at IS NULL AND rs.kind<>'observer')<r.capacity)`}
         ORDER BY n DESC, t.created_at, t.id LIMIT 30`,
-    ).all(this.now(), ...(input.table ? [input.table, input.room!] : [input.game!,
+    ).all(this.now(), ...(restrictedRoom ? [restrictedRoom] : []), ...(input.table ? [input.table, input.room!] : [input.game!,
       ...(input.game === 'werewolf' ? [] : [tableCapacity(input.game!)]), sourceRoom])) as Candidate[];
   }
 

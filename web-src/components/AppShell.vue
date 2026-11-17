@@ -94,7 +94,7 @@ onMounted(() => {
       </a>
       <nav class="rail-nav" aria-label="会馆导航">
         <button
-          v-for="item in sections"
+          v-for="item in seat?.guest ? [] : sections"
           :key="item.id"
           class="rail-btn"
           type="button"
@@ -105,7 +105,7 @@ onMounted(() => {
           <Icon :name="item.icon" />
           <span>{{ item.label }}</span>
         </button>
-        <button v-if="showStory" class="rail-btn" type="button" :class="{ 'is-on': view === 'story' }" @click="enterStory">
+        <button v-if="showStory && !seat?.guest" class="rail-btn" type="button" :class="{ 'is-on': view === 'story' }" @click="enterStory">
           <Icon name="lamp" /><span>说书人</span>
         </button>
         <a class="rail-btn rail-support" href="/support" target="_blank" rel="noopener" title="反馈与公告" aria-label="反馈与公告">
@@ -115,7 +115,7 @@ onMounted(() => {
       </nav>
       <span class="rail-sep" />
       <span class="rail-spacer" />
-      <a class="rail-parent" href="/parent" target="_blank" rel="noopener" title="家长页">
+      <a v-if="!seat?.guest" class="rail-parent" href="/parent" target="_blank" rel="noopener" title="家长页">
         <Icon name="lock" />
         <span>家长</span>
       </a>
@@ -125,7 +125,8 @@ onMounted(() => {
     <main class="stage" aria-label="大厅、客厅与牌桌">
       <header class="topbar">
         <a class="brand" href="/play"><b>鲸语</b><span>PARLOR CLUB</span></a>
-        <button class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
+        <span v-if="seat?.guest" class="room-pill"><span class="room-pill-name">{{ roomLabel }}</span></span>
+        <button v-else class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
           <i class="live-dot" :class="{ off: !connected }" />
           <span class="room-pill-name">{{ roomLabel }}</span>
           <span class="room-pill-arrow">▾</span>

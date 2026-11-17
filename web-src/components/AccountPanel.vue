@@ -2,6 +2,8 @@
 import { ref, watch, nextTick } from 'vue';
 import { api } from '../api/client.ts';
 import { seat } from '../stores/session.ts';
+import WebInvites from './WebInvites.vue';
+import { logoutWebPlayer } from '../api/web-player.ts';
 
 const props = defineProps<{ open:boolean }>();
 const emit = defineEmits<{ 'update:open':[boolean] }>();
@@ -22,6 +24,14 @@ const when = (ts:number) => new Date(ts).toLocaleString('zh-CN', { timeZone:'Asi
 const resultLabel = (value?:string) => ({ win:'胜', loss:'负', draw:'平' }[value || ''] || '');
 const giftLabel = (value?:string) => ({ in:'收到', out:'送出', used:'喝掉/吃掉' }[value || ''] || '礼物');
 function close():void { emit('update:open', false); }
+async function logout() {
+  try {
+    await logoutWebPlayer();
+    close();
+  } catch (cause) {
+    error.value = (cause as Error).message;
+  }
+}
 async function load(more = false):Promise<void> {
   if (more && busy.value) return;
   const current = ++epoch;
@@ -60,6 +70,8 @@ watch(() => seat.value?.cooId, () => { ++epoch; items.value = []; summary.value 
     <div class="rooms-box">
       <div class="rooms-head"><h2>我的账户</h2><button class="btn ghost small" type="button" @click="close">关闭</button></div>
       <div class="access-body">
+        <WebInvites v-if="open && seat" :key="seat.token" :seat-token="seat.token" />
+        <button v-if="seat?.token.startsWith('web_')" class="btn ghost small" type="button" @click="logout">{{ seat.guest ? '结束试玩' : '退出网页登录' }}</button>
         <p v-if="summary">{{ summary.games }} 局 · {{ summary.wins }} 胜 {{ summary.losses }} 负 {{ summary.draws }} 平</p>
         <p class="muted">包含你在所有客厅的记录；已归档客厅的对局仍可查看。时间按北京时间显示。</p>
         <form class="account-filters" @submit.prevent="load()">

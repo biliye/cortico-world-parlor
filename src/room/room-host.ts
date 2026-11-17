@@ -238,15 +238,17 @@ export class RoomHost {
   }
 
   /** 同一个席位换一枚新令牌（家长再次下场）：席位、可见区间、账本都不动。 */
-  async reissueSeatToken(cooId: string): Promise<{ seat: SeatRow; token: string }> {
-    const seat = await this.seatOf(cooId);
-    if (!seat) throw new HostError('not_found', '你不在这个客厅里');
-    const token = this.makeToken();
-    await updateSeatToken(this.db, this.roomId, seat.id, hashSeatToken(token));
-    return { seat, token };
+  async reissueSeatToken(cooId: string, token = this.makeToken()): Promise<{ seat: SeatRow; token: string }> {
+    return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId]);
+      const seat = await this.seatOf(cooId);
+      if (!seat) throw new HostError('not_found', '你不在这个客厅里');
+      await updateSeatToken(this.db, this.roomId, seat.id, hashSeatToken(token));
+      return { seat, token };
+    });
   }
 
-  async join(cooId: string, input: { name?: string; kind?: SeatKind; tier?: WakeTier } = {}): Promise<JoinResult> {
+  async join(cooId: string, input: { name?: string; kind?: SeatKind; tier?: WakeTier; token?: string } = {}): Promise<JoinResult> {
     const room = await this.requireRoom();
     if (room.archivedAt !== null) throw new HostError('conflict', '这个客厅已经归档');
     const active = await activeSeatForCoo(this.db, cooId);
@@ -256,7 +258,7 @@ export class RoomHost {
         : '你已经在另一个客厅里；先离开或换房');
     }
     const name = cleanName(input.name ?? '');
-    const token = this.makeToken();
+    const token = input.token ?? this.makeToken();
     const visibleFromSeq = await this.events.latest(this.roomId);
     const now = this.now();
 
@@ -359,7 +361,7 @@ export class RoomHost {
    * 房主移除成员：立刻停止这一房的访问并释放席位；牌桌锁不拦（牌局由服务器托管到结算）。
    * 调用方先 `markTableAuto`，这里只管席位与事件。
    */
-  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' = 'removed'): Promise<LeaveResult | null> {
+  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' | 'guest_expired' = 'removed'): Promise<LeaveResult | null> {
     const seat = await this.seatOf(cooId);
     if (!seat) return null;
     return withTransaction(this.db, async () => {
@@ -368,7 +370,9 @@ export class RoomHost {
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: reason === 'room_deleted' ? '房主删除了客厅，席位已释放，请回大厅。' : `${seat.name} 被房主移出了${await this.placeOf(this.roomId)}。`,
+        text: reason === 'guest_expired' ? `${seat.name} 的试玩资格已结束。`
+          : reason === 'room_deleted' ? '房主删除了客厅，席位已释放，请回大厅。'
+            : `${seat.name} 被房主移出了${await this.placeOf(this.roomId)}。`,
         data: { seatId: seat.id, name: seat.name, reason },
       });
       const released = await releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
@@ -396,6 +400,10 @@ export class RoomHost {
       for (const roomId of [this.roomId, targetRoomId].sort()) await lockRoomRow(this.db, roomId);
       const current = await this.seatOf(cooId);
       if (!current || current.id !== seat.id) throw new HostError('conflict', '席位已经变化，请刷新后重试');
+      if (input.preserveToken && (current.tokenHash !== seat.tokenHash
+        || (input.token && hashSeatToken(input.token) !== current.tokenHash))) {
+        throw new HostError('forbidden', '席位令牌已经变化，请刷新后重试');
+      }
       if (input.idleBefore !== undefined) {
         if (input.allowIdleMove && !input.allowIdleMove()) throw new HostError('conflict', '还有旧客户端连接，暂缓闲置迁厅');
         const fresh = await this.db.prepare('SELECT business_active_at FROM room_seats WHERE room_id=? AND id=?').get(this.roomId, current.id) as { business_active_at: number };
@@ -434,6 +442,7 @@ export class RoomHost {
           tier: seat.tier,
           now,
         });
+        if (input.preserveToken && input.token) await touchActivity(this.db, targetRoomId, cooId, now);
       } catch (error) {
         return wrapSeatError(error);
       }

@@ -12,6 +12,10 @@
 <form id="operator-login"><label for="operator-key">运营钥匙</label><input id="operator-key" type="password" autocomplete="off" required>
 <button type="submit">打开工作台</button></form>
 <div id="operator-panel" hidden><button id="operator-logout" type="button">退出运营工作台</button>
+<h3>游客邀请</h3>
+<form id="operator-invite-search"><label for="operator-invite-query">游客昵称或短号</label>
+<input id="operator-invite-query" maxlength="100">
+<button type="submit">查询</button></form><div id="operator-invites"></div>
 <h3>发布全站公告</h3><form id="announcement-form"><label for="announcement-text">公告内容（所有 Coo 和真人可见）</label>
 <textarea id="announcement-text" maxlength="2000" rows="4" required></textarea><button type="submit">预览发布</button></form>
 <h3>公告管理</h3><p>改完不会重新弹横幅——已经点过「知道了」的人不会再看到一次。删掉的公告会从横幅和列表里消失。</p>

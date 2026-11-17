@@ -113,7 +113,7 @@ async function invite(): Promise<void> {
   <div class="view view-lobby">
     <AnnouncementBanner />
     <div class="club-page-nav">
-      <button class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
+      <button v-if="!seat?.guest" class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
       <button class="btn ghost small" type="button" @click="invite">邀请来客厅</button>
       <button class="btn ghost small" type="button" @click="accessOpen = true">成员管理</button>
     </div>

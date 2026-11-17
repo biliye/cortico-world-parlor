@@ -84,6 +84,7 @@ const api = async (path, init = {}) => {
 const KIND = { pet: 'Coo', human: '人', observer: '观看' };
 
 function showGate(message = '') {
+  document.getElementById('web-credentials')?.remove();
   clearTimeout(timer);
   viewGeneration += 1;
   viewRequest = undefined;
@@ -123,6 +124,10 @@ function showView(account) {
   rename.type = 'button';
   rename.addEventListener('click', () => openRename(account, who));
   ui.account.append(rename);
+  const credentials = el('button', 'board-btn ghost small', '多端登录');
+  credentials.type = 'button';
+  credentials.addEventListener('click', () => { void openCredentials(credentials); });
+  ui.account.append(credentials);
   const logout = el('button', 'board-btn ghost small', '退出');
   logout.type = 'button';
   logout.addEventListener('click', async () => {
@@ -130,6 +135,65 @@ function showView(account) {
     showGate('已经退出。');
   });
   ui.account.append(logout);
+}
+
+async function openCredentials(button) {
+  const current = document.getElementById('web-credentials');
+  if (current) {
+    current.remove();
+    return;
+  }
+  button.disabled = true;
+  try {
+    const info = await api('/v1/web/credentials');
+    if (!button.isConnected) return;
+    const form = el('form', 'rename');
+    form.id = 'web-credentials';
+    const name = el('input');
+    name.value = info.loginName || info.suggestedName;
+    name.autocomplete = 'username';
+    name.maxLength = 48;
+    name.required = true;
+    const nameLabel = el('label', '', '登录名 ');
+    nameLabel.append(name);
+    const password = el('input');
+    password.type = 'password';
+    password.autocomplete = 'new-password';
+    password.required = true;
+    const passwordLabel = el('label', '', info.loginName ? '新密码 ' : '密码 ');
+    passwordLabel.append(password);
+    const save = el('button', 'board-btn primary small', info.loginName ? '更新登录名和密码' : '开通多端登录');
+    save.type = 'submit';
+    const hint = el('p', '', '密码至少 12 个字符。更新后，其他设备需要重新网页登录。');
+    const message = el('p');
+    message.setAttribute('role', 'alert');
+    form.append(nameLabel, passwordLabel, save, hint, message);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      message.textContent = '';
+      try {
+        await api('/v1/web/credentials', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ loginName: name.value, password: password.value }),
+        });
+        form.remove();
+        toast('已保存，可以从会馆门面登录。');
+        button.focus();
+      } catch (error) {
+        message.textContent = error.message || '现在无法设置多端登录';
+      } finally {
+        save.disabled = false;
+      }
+    });
+    ui.account.parentElement.after(form);
+    name.focus();
+  } catch (error) {
+    toast(error.message || '现在无法设置多端登录');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /** 改名字：账户显示名、玩家身份名、当前席位名一起改（服务器一个接口）。 */
