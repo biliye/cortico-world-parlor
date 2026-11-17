@@ -649,9 +649,12 @@ export interface OfflineSeatCandidate {
 
 export const seatsForOfflineRelease = async (db: Db, kind: 'human' | 'pet'): Promise<OfflineSeatCandidate[]> => {
   const rows = await db.prepare(
-    `SELECT room_id, id, coo_id, name, COALESCE(last_seen_at, joined_at) AS last_seen_at
-       FROM room_seats
-      WHERE released_at IS NULL AND kind = ?`,
+    `SELECT s.room_id, s.id, s.coo_id, s.name, COALESCE(s.last_seen_at, s.joined_at) AS last_seen_at
+       FROM room_seats s
+      WHERE s.released_at IS NULL AND s.kind = ?
+        AND (s.kind <> 'pet' OR NOT EXISTS (
+          SELECT 1 FROM rooms r WHERE r.id = s.room_id AND r.owner_coo_id = s.coo_id
+        ))`,
   ).all(kind) as unknown as {
     room_id: string; id: string; coo_id: string; name: string; last_seen_at: number;
   }[];

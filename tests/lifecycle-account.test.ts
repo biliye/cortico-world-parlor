@@ -25,7 +25,7 @@ beforeEach(async () => {
   app = await WorldServer.create({ ...storage, inviteCode:'life-test', now:() => now });
   const coos = new CooAccountDb(app.dbHandle, { now:() => now });
   for (const id of [A, B]) expect(await coos.registerCoo(id, `test-secret-${id}-0123456789`, 'pet', id)).toBe('ok');
-  await createRoom(app.dbHandle, { id:'r-life', name:'测试客厅', ownerCooId:A, visibility:'public' }, now);
+  await createRoom(app.dbHandle, { id:'r-life', name:'测试客厅', ownerCooId:B, visibility:'public' }, now);
   room = await RoomHost.create(app.dbHandle, 'r-life', { now:() => now });
   token = (await room.join(A, { name:'小满', kind:'pet' })).token;
   await app.dbHandle.prepare('UPDATE room_seats SET location_capable=1 WHERE coo_id=?').run(A);
@@ -33,6 +33,58 @@ beforeEach(async () => {
 afterEach(async () => { await app?.close(); });
 
 describe('300 分钟闲置、48 小时归档与全局账户', () => {
+  it('房主在自家客厅跳过闲置迁厅和离线释放，仍可主动换房', async () => {
+    const owner = await room.join(B, { name:'房主', kind:'pet' });
+    await app.dbHandle.prepare('UPDATE room_seats SET location_capable=1 WHERE coo_id=?').run(B);
+
+    now += 5 * HOUR;
+    expect((await app.runLifecycle()).moved).toBe(1);
+    expect((await activeSeatForCoo(app.dbHandle, A))?.roomId).toBe('hall');
+
+    now += 6 * HOUR;
+    expect(await app.releaseOfflineSeats(now)).toBe(1);
+    expect(await activeSeatForCoo(app.dbHandle, A)).toBeNull();
+    expect((await room.seatByToken(owner.token)).id).toBe(owner.seat.id);
+
+    const moved = await room.switchTo(B, 'lobby');
+    expect(moved.released?.id).toBe(owner.seat.id);
+    expect(await activeSeatForCoo(app.dbHandle, B)).toMatchObject({ roomId:'lobby', id:moved.seat.id });
+    expect((await getRoom(app.dbHandle, 'r-life'))?.ownerCooId).toBe(B);
+
+    now += 6 * HOUR;
+    expect(await app.releaseOfflineSeats(now)).toBe(1);
+    expect(await activeSeatForCoo(app.dbHandle, B)).toBeNull();
+  });
+  it.each([false, true])('房主仍在座的客厅满 48 小时后归档（大厅已满：%s）', async hallFull => {
+    const owner = await room.join(B, { name:'房主', kind:'pet' });
+    await room.switchTo(A, 'hall');
+    if (hallFull) {
+      await app.dbHandle.prepare("UPDATE rooms SET capacity=2 WHERE id='hall'").run();
+      const coos = new CooAccountDb(app.dbHandle);
+      const third = 'coo-lifecycle-c';
+      expect(await coos.registerCoo(third, 'test-secret-coo-c-0123456789', 'pet', '第三位')).toBe('ok');
+      const hall = await RoomHost.create(app.dbHandle, 'hall', { now:() => now });
+      await hall.join(third, { name:'第三位', kind:'pet' });
+    }
+
+    now += 48 * HOUR - 1;
+    expect((await app.runLifecycle()).archived).toBe(0);
+    expect((await room.seatByToken(owner.token)).id).toBe(owner.seat.id);
+
+    now += 1;
+    expect(await app.runLifecycle()).toEqual({ moved:0, archived:1 });
+    expect((await getRoom(app.dbHandle, 'r-life'))?.archivedAt).toBe(now);
+    expect(await room.seatOf(B)).toBeNull();
+    const ownerSeat = await activeSeatForCoo(app.dbHandle, B);
+    if (hallFull) {
+      expect(ownerSeat).toBeNull();
+      const session = await app.dbHandle.prepare('SELECT current_room_id, return_room_id FROM coo_sessions WHERE coo_id=?').get(B);
+      expect(session).toMatchObject({ current_room_id:null, return_room_id:'hall' });
+    } else {
+      expect(ownerSeat).toMatchObject({ roomId:'hall', tokenHash:hashSeatToken(owner.token) });
+    }
+    expect(await app.runLifecycle()).toEqual({ moved:0, archived:0 });
+  });
   it('迁厅后再释放席位，旧地址重新入座只读一次请求体并保留入场码/名字/类型/挡位', async () => {
     const {url} = await app.listen();
     now += 5 * HOUR;

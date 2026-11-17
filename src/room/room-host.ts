@@ -336,7 +336,7 @@ export class RoomHost {
   }
 
   /**
-   * 长时间没有 SSE 的真人席位：写一条带原因的离开事件再释放。
+   * 长时间没有 SSE 的席位：写一条带原因的离开事件再释放。
    * 牌桌锁着就不动（等这局结束，下一轮清理再看）。
    */
   async releaseOffline(cooId: string, now = this.now()): Promise<LeaveResult | null> {
@@ -358,15 +358,15 @@ export class RoomHost {
   }
 
   /**
-   * 房主移除成员：立刻停止这一房的访问并释放席位；牌桌锁不拦（牌局由服务器托管到结算）。
-   * 调用方先 `markTableAuto`，这里只管席位与事件。
+   * 强制释放席位并写离开事件；调用方处理房间权限和牌桌状态。
    */
-  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' | 'guest_expired' | 'web_session_ended' = 'removed'): Promise<LeaveResult | null> {
+  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' | 'room_archived' | 'guest_expired' | 'web_session_ended' = 'removed'): Promise<LeaveResult | null> {
     const seat = await this.seatOf(cooId);
     if (!seat) return null;
     const messages = {
       removed: () => this.placeOf(this.roomId).then(place => `${seat.name} 被房主移出了${place}。`),
       room_deleted: () => '房主删除了客厅，席位已释放，请回大厅。',
+      room_archived: () => '客厅因长时间无活动已归档，席位已释放，请回大厅。',
       guest_expired: () => `${seat.name} 的试玩资格已结束。`,
       web_session_ended: () => `${seat.name} 的网页登录已结束，席位已释放。`,
     };
