@@ -52,6 +52,25 @@ describe('房主管理识别有效席位令牌', () => {
     expect(again.body.room.visibility).toBe('unlisted');
   });
 
+  it('真人房主在自家客厅保席，主动换厅后按真人离线阈值回收', async () => {
+    const { room, player } = await setup(false);
+    const app = server!;
+    const client = new ParlorClient(app.url);
+    const home = await client.switchTo(player.token, 'hall', room);
+    expect(home.seat.kind).toBe('human');
+
+    const now = Date.now();
+    const markOffline = app.dbHandle.prepare('UPDATE room_seats SET last_seen_at=? WHERE room_id=? AND id=?');
+    await markOffline.run(now - 7 * 3_600_000, room, home.seat.id);
+    expect(await app.releaseOfflineSeats(now)).toBe(0);
+    expect((await request(`/v1/rooms/${room}/room`, undefined, bearer(home.token))).status).toBe(200);
+
+    const away = await client.switchTo(home.token, room, 'lobby');
+    await markOffline.run(now - 7 * 3_600_000, 'lobby', away.seat.id);
+    expect(await app.releaseOfflineSeats(now)).toBe(1);
+    expect((await request('/v1/rooms/lobby/room', undefined, bearer(away.token))).status).toBe(401);
+  });
+
   it('陌生成员、伪造身份及无效/已释放令牌不能管理；房主换厅的新令牌仍可管理', async () => {
     const { room, player } = await setup(true);
     const visitor = await request('/v1/rooms/hall/join', { name: '来客' }, {

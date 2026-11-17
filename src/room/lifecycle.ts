@@ -1,4 +1,5 @@
 import { withTransaction, type Db } from './db.ts';
+import { HostError } from './host-error.ts';
 import { lockCooRows, lockRoomRow } from './storage/locks.ts';
 import { activeSeats, archive } from './room-seat-db.ts';
 import { revokeInvitationsFor } from './room-access-db.ts';
@@ -29,6 +30,7 @@ export class RoomLifecycle {
       if (this.idleMs > 0) {
         const candidates = await this.db.prepare(`SELECT room_id,coo_id FROM room_seats s
           WHERE released_at IS NULL AND kind='pet' AND location_capable=1 AND room_id<>? AND business_active_at<=?
+          AND NOT EXISTS(SELECT 1 FROM rooms r WHERE r.id=s.room_id AND r.owner_coo_id=s.coo_id)
           AND NOT EXISTS(SELECT 1 FROM active_table_players a WHERE a.coo_id=s.coo_id)
           ORDER BY business_active_at LIMIT 50`).all(this.hall(), now - this.idleMs) as { room_id: string; coo_id: string }[];
         for (const item of candidates) {
@@ -65,7 +67,17 @@ export class RoomLifecycle {
               if (fresh.some(s => !seats.some(old => old.id === s.id))) return false;
               if (fresh.length) {
                 const host = await this.hostFor(room.id);
-                for (const seat of fresh) await host.switchTo(seat.cooId, this.hall(), { preserveToken: true });
+                const hall = this.hall();
+                for (const seat of fresh) {
+                  try {
+                    await host.switchTo(seat.cooId, hall, { preserveToken: true });
+                  } catch (error) {
+                    if (!(error instanceof HostError) || error.code !== 'full') throw error;
+                    // The failed move rolls back to its savepoint. Release the old seat and let the next join choose a room.
+                    await host.remove(seat.cooId, now, 'room_archived');
+                    await this.db.prepare('UPDATE coo_sessions SET return_room_id=NULL WHERE coo_id=?').run(seat.cooId);
+                  }
+                }
               }
               await revokeInvitationsFor(this.db, room.id, null, now);
               await archive(this.db, room.id, now);
