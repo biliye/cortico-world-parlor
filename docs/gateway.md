@@ -15,6 +15,8 @@ pnpm exec parlor-gateway --host 127.0.0.1 --port 8790
 
 如果之前从 World 包解包部署，先在独立目录装好对应版本的网关，再将服务启动命令改为 `pnpm exec parlor-gateway`，或直接执行 `node node_modules/cortico-parlor-gateway/scripts/serve-world.js`。继续使用原来的 PostgreSQL 数据库。拆包本身无需搬数据；版本包含 schema 升级时，仍按该版本的升级说明停止旧网关并备份。
 
+同机反向代理应把客户端地址追加到 `X-Forwarded-For` 的末尾。网页登录和兑码只在代理从回环地址连接网关时读取这个末尾地址，其他连接使用 TCP 对端地址。网页登录的 `--public-url` 应与浏览器访问的源一致。
+
 ## 迁移与维护
 
 - `pnpm exec parlor-migrate-json` 把旧单厅 JSON 转为历史多厅 SQLite 数据库。

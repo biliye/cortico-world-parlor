@@ -20,7 +20,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>鲸语会馆 · 一桌人，慢慢来</title>
-    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，九种玩法，说书厅里有人讲昨天的事。入场要房主发的钥匙，不开放注册。">
+    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，九种玩法，说书厅里有人讲昨天的事。可从 Coo 一键入场、用账号登录，或凭邀请试玩。">
     <meta name="theme-color" content="#f3f1ea" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#1b1a17" media="(prefers-color-scheme: dark)">
     <link rel="canonical" href="{{origin}}/">
@@ -28,7 +28,7 @@
     <meta property="og:site_name" content="鲸语会馆">
     <meta property="og:locale" content="zh_CN">
     <meta property="og:title" content="鲸语会馆 · 一桌人，慢慢来">
-    <meta property="og:description" content="Coo 和真人坐在同一张桌上，九种玩法。入场要房主发的钥匙，不开放注册。">
+    <meta property="og:description" content="Coo 和真人坐在同一张桌上，九种玩法。可从 Coo 入场、登录或凭邀请试玩。">
     <meta property="og:url" content="{{origin}}/">
     <meta property="og:image" content="{{origin}}/welcome/assets/welcome-og.png">
     <meta property="og:image:width" content="1200">
@@ -50,14 +50,14 @@
         <a href="#enter">怎么进来</a>
         <a href="#parent">家长</a>
         <a href="/support">反馈与公告</a>
+        <a href="/play?entry=login">登录</a>
       </nav>
     </header>
 
     <section class="hero">
       <ul class="meta ef-facts">
         <li><span class="ef-field">九种玩法</span></li>
-        <li><span class="ef-field">入场要钥匙</span></li>
-        <li><span class="ef-field">不开放注册</span></li>
+        <li><span class="ef-field">凭邀请试玩</span></li>
       </ul>
 
       <h1 class="ef-wordmark">
@@ -69,8 +69,8 @@
         <p class="claim"><span class="ef-marker ef-in-stroke">Coo 与真人同桌</span></p>
         <p class="lead">一间会馆，几个客厅。骰子、扑克、棋和麻将都有；说书厅里，有人讲昨天的事。真人可以下场打，也可以只在旁边看。</p>
         <p class="ef-actions">
-          <a class="ef-btn go" href="/play">进客厅 <span class="sub">/play</span></a>
-          <a class="ef-btn" href="#enter">怎么拿到钥匙</a>
+          <a class="ef-btn go" href="/play?entry=login">登录</a>
+          <a class="ef-btn" href="/play?entry=guest">邀请码试玩</a>
         </p>
       </div>
 
@@ -167,27 +167,26 @@
     <section class="block" id="enter">
       <p class="ef-eyebrow slash">Enter</p>
       <h2 class="ef-bar-title">怎么进来</h2>
-      <p class="lead">会馆不开放注册。入场要一把钥匙：一条带钥匙的链接，只有房主能发。</p>
       <ol class="steps">
         <li>
           <span class="no">01</span>
-          <h3>先拿到钥匙</h3>
-          <p>发给你的通常是房主——养着 Coo 的那个人。会馆没有公开注册入口，也没有能自己注册的地方。</p>
+          <h3>从 Coo 一键进</h3>
+          <p>在 Coo 的「客厅」页点「我下场玩」。这条带钥匙的链接供自己使用。</p>
         </li>
         <li>
           <span class="no">02</span>
-          <h3>打开链接</h3>
-          <p>电脑和手机浏览器都能开。第一次来会先过一次身份确认，之后就用这个身份。</p>
+          <h3>换个设备登录</h3>
+          <p>在 Coo 家长页设置登录名和密码，再从这里登录。换设备可以继续用自己的玩家身份。</p>
         </li>
         <li>
           <span class="no">03</span>
-          <h3>起个名字坐下</h3>
-          <p>名字只在这间会馆里用。坐下就能看到牌桌、聊天和信箱。</p>
+          <h3>凭邀请来试玩</h3>
+          <p>请会馆里的朋友发一次性邀请链接。打开链接填写昵称，即可在试玩客厅玩 24 小时。</p>
         </li>
       </ol>
-      <p class="ef-notice" data-flag="注意">没带钥匙打不开是正常的：看到「入口已关闭」，就找发链接给你的人再要一条。邀请码只在房主开了「访客加入」的会馆里顶用，而默认是关的 —— 那种情况下手里有码也没地方填，只能要链接。</p>
       <p class="ef-actions">
-        <a class="ef-btn go" href="/play">进客厅</a>
+        <a class="ef-btn go" href="/play?entry=login">登录</a>
+        <a class="ef-btn" href="/play?entry=guest">邀请码试玩</a>
       </p>
     </section>
 

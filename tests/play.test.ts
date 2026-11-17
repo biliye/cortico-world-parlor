@@ -13,11 +13,11 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { ParlorServer } from '../src/room/server.ts';
 import type { PlayerJoinResponse, RoomSnapshot } from '../src/room/protocol.ts';
-import { parentPlayBody, parseEntryKey } from '../web-src/lib/entry.ts';
+import { parentPlayBody, parseEntryKey, parseGuestInvite, wantsWebEntry } from '../web-src/lib/entry.ts';
 import { chatChannelAccepts, chatLineMatchesTable, chatLineVisible } from '../web-src/lib/chat-lines.ts';
 import { TABLE_ROOM_HINT, TABLE_TALK_PREFIX, TABLE_TALK_SCOPE, tableScopeText } from '../web-src/lib/chat-copy.ts';
 import { ENABLED_GAMES, GAMES } from '../web-src/lib/games.ts';
-import { GUEST_CLOSED_MESSAGE, SEAT_EXPIRED_MESSAGE, guestJoinEnabled } from '../web-src/lib/join.ts';
+import { SEAT_EXPIRED_MESSAGE, guestJoinEnabled } from '../web-src/lib/join.ts';
 import { ROOM_CAPACITY, createRoomBody } from '../web-src/lib/rooms.ts';
 import { decideExpiredSeat } from '../web-src/lib/seat-errors.ts';
 import { readable } from '../web-src/lib/text.ts';
@@ -430,14 +430,31 @@ describe('网页玩家', () => {
     expect(access).toContain('删除后从目录移除');
   });
 
-  it('访客入口关闭时不再显示加入表单', () => {
+  it('旧访客开关只控制共享码，网页一次性邀请码独立显示', () => {
     expect(guestJoinEnabled(null)).toBe(true);
     expect(guestJoinEnabled({ guestJoin: true })).toBe(true);
     expect(guestJoinEnabled({ guestJoin: false })).toBe(false);
-    expect(GUEST_CLOSED_MESSAGE).toContain('这个入口已经关闭');
     const join = readFileSync(new URL('../web-src/views/JoinView.vue', import.meta.url), 'utf8');
     expect(join).toContain('guestJoinEnabled');
-    expect(join).toContain('GUEST_CLOSED_MESSAGE');
+    expect(join).toContain('<details v-if="guestJoin">');
+    expect(join).toContain("@submit.prevent=\"redeem\"");
+  });
+
+  it('显式打开网页登录时先显示入口，Coo 钥匙与身份票据仍优先入场', () => {
+    expect(wantsWebEntry('?entry=login', '')).toBe(true);
+    expect(wantsWebEntry('?entry=guest', '')).toBe(true);
+    expect(wantsWebEntry('?entry=login', '#key=fixture')).toBe(false);
+    expect(wantsWebEntry('?entry=guest', '#identity=fixture')).toBe(false);
+    expect(wantsWebEntry('?room=hall', '')).toBe(false);
+  });
+
+  it('邀请链接仅预填游客邀请码，并保持钥匙和身份回跳优先', () => {
+    const code = 'uT5TRKN3omF2_8Z0Xa-W8g';
+    expect(parseGuestInvite('?entry=guest', '#invite=' + code)).toBe(code);
+    expect(parseGuestInvite('?entry=login', '#invite=' + code)).toBe('');
+    expect(parseGuestInvite('?entry=guest', '#invite=short')).toBe('');
+    expect(parseGuestInvite('?entry=guest', '#invite=' + code + '&key=fixture')).toBe('');
+    expect(parseGuestInvite('?entry=guest', '#invite=' + code + '&identity=fixture')).toBe('');
   });
 
   it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {

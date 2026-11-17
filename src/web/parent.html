@@ -72,6 +72,20 @@
     </section>
 
     <div id="view" hidden>
+      <div id="guest-invites"></div>
+      <template id="guest-invite-template">
+        <details class="panel guest-invites">
+          <summary>邀请朋友试玩</summary>
+          <p>链接 7 天内可用一次，朋友填写昵称后可在试玩客厅玩 24 小时。</p>
+          <button class="board-btn primary small" type="button" data-invite-create>生成邀请链接</button>
+          <div class="guest-invite-link" hidden>
+            <label>邀请链接 <input readonly spellcheck="false"></label>
+            <button class="board-btn small" type="button" data-invite-copy>复制链接</button>
+          </div>
+          <p role="status" data-invite-status></p>
+          <ul data-invite-list></ul>
+        </details>
+      </template>
       <section class="console" aria-labelledby="room-name">
         <div class="console-bar">
           <span id="live-dot" class="live-dot" aria-hidden="true"></span>

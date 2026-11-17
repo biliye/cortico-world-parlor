@@ -32,6 +32,7 @@ import {
   listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash, seatsForOfflineRelease,
   touchSeatSeen, type RoomRow,
 } from './room-seat-db.ts';
+import { lockCooRows } from './storage/locks.ts';
 import {
   acceptInvitationTx, canManageRoom, createRoomInvitationTx, declineInvitationTx,
   expireInvitations, findInvitation, grantRoomAccessTx, hasRoomAccess, isRoomOwner,
@@ -45,6 +46,7 @@ import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
 import { StoryDb, StoryError } from './story-db.ts';
 import { isStoryPath, serveStoryRoute, StoryPresence } from './story-routes.ts';
+import { WebPlayerDb, isWebSeatToken } from './web-player-db.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -88,6 +90,8 @@ interface SseClient {
   source: 'web' | 'coo' | 'other';
   cooId: string;
   seatId: string;
+  tokenHash: string;
+  webSeat: boolean;
   seatName: string;
   since: number;
   lastPing: number;
@@ -100,6 +104,7 @@ interface SseClient {
 }
 
 const SSE_TRAFFIC_INTERVAL_MS = 60_000;
+const GUEST_WRITE_PATHS = new Set(['/v1/table-entry', '/v1/support/feedback', '/v1/mail/read-all']);
 
 function sseSourceCounts() {
   return { web: 0, coo: 0, other: 0 };
@@ -190,7 +195,9 @@ const cookieOf = (req: IncomingMessage, name: string): string => {
   const raw = req.headers.cookie ?? '';
   for (const part of raw.split(';')) {
     const [key, ...rest] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(rest.join('='));
+    if (key === name) {
+      try { return decodeURIComponent(rest.join('=')); } catch { return ''; }
+    }
   }
   return '';
 };
@@ -264,6 +271,9 @@ export class WorldServer {
   private readonly verifiedPeople = new WeakMap<IncomingMessage, GlobalPerson>();
   private readonly identityRates = new Map<string, { until: number; count: number }>();
   private readonly coo: CooAccountDb;
+  private readonly webPlayers: WebPlayerDb;
+  private readonly webRates = new Map<string, { until: number; count: number }>();
+  private nextWebRateSweep = 0;
   private readonly tableDiscovery: TableDiscovery;
   private readonly ratingBoards: RatingBoards;
   /** 招募快照按网关共享 30 秒：132 个 Coo 每分钟要的是同一份，不必各查一次。 */
@@ -324,6 +334,7 @@ export class WorldServer {
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.ratingBoards = new RatingBoards(db, this.now);
     this.recruitSnapshot = new RecruitSnapshot(db, this.now);
+    this.webPlayers = new WebPlayerDb(this.db, this.now);
     this.coo = new CooAccountDb(this.db, {
       now: this.now,
       ...(options.accountLimit !== undefined ? { limit: options.accountLimit } : {}),
@@ -522,6 +533,21 @@ export class WorldServer {
     return row;
   }
 
+  private async guestRoom(): Promise<RoomRow> {
+    const id = 'guest-play';
+    const existing = await getRoom(this.db, id);
+    const room = existing ?? await withTransaction(this.db, async () => {
+      await lockCooRows(this.db, ['system-owner']);
+      return await getRoom(this.db, id) ?? await createRoom(this.db, {
+        id, name: '试玩客厅', ownerCooId: 'system-owner', visibility: 'public',
+      }, this.now());
+    });
+    if (room.visibility !== 'public' || room.ownerCooId !== 'system-owner' || room.archivedAt !== null) {
+      throw new HttpError(503, '试玩客厅暂不可用');
+    }
+    return room;
+  }
+
   /** 大厅 id：init() 里一定建过，之后同步读（老调用方把它当属性用）。 */
   get hallId(): string {
     return this.hallIdValue;
@@ -647,6 +673,7 @@ export class WorldServer {
     let hasTables = false;
     try {
       const storyNext = await this.story.tick();
+      await this.releaseEndedWebSeats(now);
       if (storyNext !== undefined) next = Math.min(storyNext, now + CLOCK_IDLE_MS);
       const occupied = await this.db.prepare(
         'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
@@ -672,6 +699,7 @@ export class WorldServer {
       }
       if (now - this.lastPrune >= 3_600_000) {
         this.lastPrune = now;
+        await this.webPlayers.pruneSessions(now);
         await this.pruneEvents(now);
       }
     } catch (error) {
@@ -695,6 +723,27 @@ export class WorldServer {
    * 返回这次释放了几个，方便测试和运维日志。
    */
   async runLifecycle(now = this.now()) { return this.lifecycle.sweep(now); }
+
+  async releaseEndedWebSeats(now = this.now(), player?: string): Promise<void> {
+    for (const seat of await this.webPlayers.endedSeats(now, player)) {
+      const host = await this.host(seat.room_id);
+      await withTransaction(this.db, async () => {
+        await lockCooRows(this.db, [seat.coo_id]);
+        const current = await host.seatOf(seat.coo_id);
+        if (!current || current.tokenHash !== seat.token_hash) return;
+        if (seat.guest) await host.markTableAuto(seat.coo_id);
+        else if (await host.tableLock(seat.coo_id)) return;
+        await host.remove(seat.coo_id, now, seat.guest ? 'guest_expired' : 'web_session_ended');
+      });
+    }
+  }
+
+  private async logoutWebPlayer(cookie: string): Promise<void> {
+    const player = await this.webPlayers.logout(cookie);
+    if (!player) return;
+    this.pokeClock();
+    await this.releaseEndedWebSeats(this.now(), player);
+  }
 
   async releaseOfflineSeats(now = this.now()): Promise<number> {
     const sweeps = [
@@ -840,6 +889,196 @@ export class WorldServer {
     if (invite !== this.inviteCode) throw new HttpError(403, '邀请码不对');
   }
 
+  private checkOperator(req: IncomingMessage): void {
+    if (!this.operatorHash) throw new HttpError(503, '运营入口尚未配置');
+    const hash = createHash('sha256').update(bearer(req)).digest();
+    if (!timingSafeEqual(hash, this.operatorHash)) throw new HttpError(403, '运营钥匙不对');
+  }
+
+  private checkWebRate(key: string, limit: number): void {
+    const now = this.now();
+    if (now >= this.nextWebRateSweep) {
+      for (const [id, rate] of this.webRates) if (rate.until <= now) this.webRates.delete(id);
+      this.nextWebRateSweep = now + 1_000;
+    }
+    const current = this.webRates.get(key);
+    const rate = current && current.until > now ? current : { until: now + 60_000, count: 0 };
+    if (rate.count >= limit || (!this.webRates.has(key) && this.webRates.size >= 4000)) {
+      throw new HttpError(429, '请求太频繁，请稍后再试');
+    }
+    rate.count++;
+    this.webRates.set(key, rate);
+  }
+
+  private webCookie(req: IncomingMessage, token: string, expiresAt = 0): string {
+    const secure = this.audienceUrl().startsWith('https:') || headerValue(req, 'x-forwarded-proto') === 'https' ? '; Secure' : '';
+    const maxAge = Math.max(0, Math.ceil((expiresAt - this.now()) / 1000));
+    return `parlor_web=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
+  }
+
+  private async webPlayerRoute(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
+    const path = url.pathname.slice('/v1/web/'.length);
+    res.setHeader('cache-control', 'no-store');
+    if (method === 'POST') {
+      const origin = headerValue(req, 'origin');
+      if ((origin && origin !== this.audienceUrl()) || headerValue(req, 'sec-fetch-site') === 'cross-site'
+        || !/^application\/json(?:\s*;|$)/i.test(headerValue(req, 'content-type'))) {
+        throw new HttpError(403, '请从会馆页面提交');
+      }
+    }
+    const cookie = cookieOf(req, 'parlor_web');
+    if (path === 'credentials' && (method === 'GET' || method === 'POST')) {
+      const { account } = await this.parentSession(req);
+      if (method === 'GET') {
+        const loginName = await this.webPlayers.credentialName(account.id);
+        const player = await this.coo.playerCooOf(account.id);
+        json(res, 200, { loginName, suggestedName: (player && await this.coo.cooDisplayName(player)) || account.displayName });
+        return;
+      }
+      this.checkWebRate('credentials:' + account.id, 5);
+      const body = await readJson(req);
+      const loginName = await this.webPlayers.setCredentials(account.id, body, async () => {
+        await this.db.prepare('SELECT id FROM accounts WHERE id=? FOR UPDATE').get(account.id);
+        const parent = (await this.parentSession(req)).account;
+        const existing = await this.coo.playerCooOf(parent.id);
+        if (existing) return existing;
+        if (this.identityAuthority && this.identityAuthority !== 'self') {
+          throw new HttpError(409, '请先从 Coo 面板下场一次，再设置登录名和密码');
+        }
+        const player = await this.ensurePlayerCoo(parent);
+        if (this.identityAuthority === 'self') await this.registry.enroll(player.cooId, player.secret, player.name, 'human');
+        return player.cooId;
+      });
+      this.pokeClock();
+      json(res, 200, { loginName });
+      return;
+    }
+
+    if (method === 'POST' && (path === 'login' || path === 'redeem')) {
+      const address = req.socket.remoteAddress ?? '';
+      const forwarded = headerValue(req, 'x-forwarded-for').split(',').at(-1)?.trim();
+      const ip = /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(address) && forwarded ? forwarded : address;
+      this.checkWebRate(path + ':' + ip, 20);
+      const body = await readJson(req);
+      if (path === 'login') {
+        const name = typeof body.loginName === 'string' ? body.loginName.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 48) : '';
+        this.checkWebRate('login-name:' + name, 10);
+      } else if (await this.webPlayers.session(cookie)) {
+        throw new HttpError(409, '请先退出当前会馆登录');
+      }
+      const session = path === 'login' ? await this.webPlayers.login(body) : await this.webPlayers.redeem(body, async (id, name) => {
+        const secret = randomBytes(32).toString('base64url');
+        if (this.identityAuthority === 'self') await this.registry.enroll(id, secret, name, 'human');
+        else if (await this.coo.registerCoo(id, secret, 'human', name) !== 'ok') throw new HttpError(500, '无法建立游客身份');
+      });
+      await this.logoutWebPlayer(cookie);
+      res.setHeader('set-cookie', this.webCookie(req, session.token, session.expiresAt));
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (path === 'logout' && method === 'POST') {
+      await this.logoutWebPlayer(cookie);
+      res.setHeader('set-cookie', this.webCookie(req, ''));
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (path.startsWith('operator/invites')) {
+      this.checkOperator(req);
+      if (path === 'operator/invites' && method === 'GET') {
+        json(res, 200, { invites: await this.webPlayers.invitations(undefined, (url.searchParams.get('q') ?? '').trim().slice(0, 100)) });
+        return;
+      }
+      const id = /^operator\/invites\/([a-f0-9-]{36})\/revoke$/.exec(path)?.[1];
+      if (id && method === 'POST') {
+        await this.webPlayers.revoke(id);
+        this.pokeClock();
+        json(res, 200, { ok: true });
+        return;
+      }
+    }
+    const invites = /^(parent\/)?invites(?:\/([a-f0-9-]{36})\/revoke)?$/.exec(path);
+    if (invites && (method === 'POST' || (method === 'GET' && !invites[2]))) {
+      const issuer = invites[1] ? (await this.parentSession(req)).account.id : await this.webInviteIssuer(req, cookie);
+      if (method === 'GET') {
+        json(res, 200, { invites: await this.webPlayers.invitations(issuer) });
+      } else if (invites[2]) {
+        await this.webPlayers.revoke(invites[2], issuer);
+        this.pokeClock();
+        json(res, 200, { ok: true });
+      } else {
+        const issued = await this.webPlayers.issue(issuer, (await this.guestRoom()).id);
+        const link = new URL('/play?entry=guest', this.audienceUrl());
+        link.hash = new URLSearchParams({ invite: issued.code }).toString();
+        json(res, 200, { ...issued, link: link.href });
+      }
+      return;
+    }
+
+    if (path === 'me' && method === 'GET') {
+      const session = await this.webPlayers.session(cookie);
+      if (!session) throw new HttpError(401, '请登录会馆');
+      json(res, 200, {
+        name: await this.coo.cooDisplayName(session.coo_id),
+        guest: !session.account_id,
+        expiresAt: Number(session.expires_at),
+        seated: !!await activeSeatForCoo(this.db, session.coo_id),
+      });
+      return;
+    }
+    if (path === 'play' && method === 'POST') {
+      const body = await readJson(req);
+      const hall = await this.ensureHall();
+      const result = await withTransaction(this.db, async () => {
+        const session = await this.webPlayers.session(cookie, true);
+        if (!session) throw new HttpError(401, '网页会话已失效，请重新登录或领取邀请');
+        const player = session.coo_id;
+        await lockCooRows(this.db, [player]);
+        const current = await activeSeatForCoo(this.db, player);
+        if (current && body.takeover !== true) throw new HttpError(409, '已有席位，请点「接管席位」继续');
+        const roomId = current?.roomId ?? session.guest_room_id ?? hall.id;
+        if (session.guest_room_id && roomId !== session.guest_room_id) throw new HttpError(403, '游客仅可进入获邀客厅');
+        await this.assertRoomEntry(roomId, player);
+        const host = await this.host(roomId);
+        const token = 'web_' + randomBytes(32).toString('base64url');
+        let name = await this.coo.cooDisplayName(player);
+        if (!current && !session.account_id && body.name !== undefined) {
+          name = this.webPlayers.guestName(body.name);
+          await this.coo.renameCooDisplay(player, name);
+        }
+        const joined = current ? await host.reissueSeatToken(player, token)
+          : await host.join(player, { token, name, kind: 'human', tier: 'off' });
+        await this.webPlayers.bindSeat(session, token);
+        return { room: roomId, token, guest: !session.account_id, tableId: (await host.tableLock(player))?.tableId,
+          seat: await seatOfRow(this.db, roomId, joined.seat),
+          identity: { cooId: player, cooSecret: 'seat-only' } };
+      });
+      this.markDirty(result.room);
+      json(res, 200, result);
+      return;
+    }
+    throw new HttpError(404, '没有这个会馆登录接口');
+  }
+
+  private async webInviteIssuer(req: IncomingMessage, cookie: string): Promise<string> {
+    const session = await this.webPlayers.session(cookie);
+    const parentCookie = cookieOf(req, 'parlor_parent');
+    const parent = parentCookie ? await this.coo.verifySession(parentCookie) : null;
+    const token = bearer(req);
+    if (!token) {
+      const issuer = session ? session.account_id : parent?.account.id;
+      if (issuer) return issuer;
+    } else {
+      const played = await seatByTokenHash(this.db, hashSeatToken(token));
+      if (played && isWebSeatToken(token) && session?.account_id && session.coo_id === played.cooId) {
+        if ((await this.webPlayers.seatSession(played.tokenHash))?.token_hash === session.token_hash) return session.account_id;
+      } else if (played && !isWebSeatToken(token) && parent && played.cooId === await this.coo.playerCooOf(parent.account.id)) {
+        return parent.account.id;
+      }
+    }
+    throw new HttpError(403, '请用正式会馆账号或家长钥匙登录后发码');
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
@@ -850,6 +1089,26 @@ export class WorldServer {
     if (headerValue(req, GLOBAL_HEADER)) await this.prepareIdentity(req);
     // HEAD 与 GET 同状态、同响应头，只是不带正文（Node 对 HEAD 会自动丢掉 write 出去的内容）。
     if ((method === 'GET' || method === 'HEAD') && this.serveWeb(url.pathname, req, res)) return;
+    if (url.pathname.startsWith('/v1/web/')) {
+      await this.webPlayerRoute(req, res, url, method);
+      return;
+    }
+    const token = bearer(req);
+    const webSeat = isWebSeatToken(token);
+    const webSession = webSeat ? await this.webPlayers.seatSession(hashSeatToken(token)) : undefined;
+    if (webSeat) {
+      if (!webSession) throw new HttpError(401, '网页会话已失效，请重新进入会馆');
+      if (method === 'POST' && (url.pathname === '/v1/join' || /^\/v1\/rooms\/[^/]+\/join$/.test(url.pathname))) {
+        throw new HttpError(403, '请从网页入口入场');
+      }
+      if (webSession.guest_room_id && method !== 'GET' && method !== 'HEAD') {
+        const room = '/v1/rooms/' + webSession.guest_room_id;
+        if (method !== 'POST' || (!GUEST_WRITE_PATHS.has(url.pathname)
+          && url.pathname !== room + '/action' && url.pathname !== room + '/leave')) {
+          throw new HttpError(403, '游客只能在获邀客厅试玩，暂不能使用此操作');
+        }
+      }
+    }
 
     if (isStoryPath(url.pathname)) {
       return serveStoryRoute(req, res, url, {
@@ -918,9 +1177,7 @@ export class WorldServer {
         json(res, 200, { feedback: await support.submit(cooId, person.name, body.text, body.requestId) }); return;
       }
       if (path.startsWith('operator/')) {
-        if (!this.operatorHash) throw new HttpError(503, '运营入口尚未配置');
-        const hash = createHash('sha256').update(bearer(req)).digest();
-        if (!timingSafeEqual(hash, this.operatorHash)) throw new HttpError(403, '运营钥匙不对');
+        this.checkOperator(req);
         if (path === 'operator/feedback' && method === 'GET') {
           json(res, 200, { feedback: await support.feedback() }); return;
         }
@@ -1163,6 +1420,8 @@ export class WorldServer {
       const key = await this.coo.rotateOwnerKey(cooId);
       if (!key) throw new HttpError(409, '轮换失败；稍后再试');
       await this.coo.revokeAllSessions(account.id);
+      await this.webPlayers.expireAccountSessions(account.id, true);
+      this.pokeClock();
       json(res, 200, { ownerKey: key });
       return;
     }
@@ -1285,7 +1544,10 @@ export class WorldServer {
         ...(typeof body.game === 'string' ? { game: body.game } : {}),
         ...(typeof body.room === 'string' ? { room: body.room } : {}),
         ...(typeof body.table === 'string' ? { table: body.table } : {}),
-      }, headerValue(req, 'x-parlor-client').trim() || undefined);
+      }, headerValue(req, 'x-parlor-client').trim() || undefined, {
+        preserveToken: webSeat,
+        ...(webSession?.guest_room_id ? { room: webSession.guest_room_id } : {}),
+      });
       this.pokeClock();
       json(res, 200, result);
       return;
@@ -1751,6 +2013,7 @@ export class WorldServer {
     if (url.pathname === '/v1/global/player/join' && method === 'POST') {
       const person = this.verifiedPeople.get(req);
       if (!person || person.kind !== 'human') throw new HttpError(401, '需要玩家的统一身份');
+      if (await this.webPlayers.isGuest(person.cooId)) throw new HttpError(403, '游客请从会馆试玩入口进入');
       const body = await readJson(req);
       const parent = body.parent === true ? (await this.parentSession(req)).account : null;
       if (!this.allowGuestJoin && !parent) throw new HttpError(403, '请用家长的下场玩链接');
@@ -1935,6 +2198,7 @@ export class WorldServer {
 
   /** 私聊：对方离线也照常投信箱；在线时顺手往他所在的客厅推一条事件。 */
   private async sendDm(cooId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (await this.webPlayers.isGuest(cooId)) throw new HttpError(403, '试玩期间暂不能发送私聊');
     const seat = await activeSeatForCoo(this.db, cooId);
     if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再发私聊');
     const peer = await this.dmPeer(typeof body.to === 'string' ? body.to : '', cooId);
@@ -2047,6 +2311,7 @@ export class WorldServer {
       // 全局登记只证明身份，入场仍需目标服务器的邀请码；换厅使用已入场的席位令牌。
       if (this.identityAuthority || await this.identify(req) === null) this.checkInvite(req, body);
       const cooId = await this.cooAuth(req, name);
+      if (await this.webPlayers.isGuest(cooId)) throw new HttpError(403, '游客请从会馆试玩入口进入');
       const relocation = await this.db.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(cooId) as { return_room_id:string|null } | undefined;
       // Resolve the canonical target using the body already parsed above.
       // IncomingMessage is one-shot: recursively re-entering join would await a
@@ -2084,7 +2349,12 @@ export class WorldServer {
       const target = (await getRoom(this.db, value)) ?? (await resolveRoom(this.db, value));
       if (!target) throw new HttpError(404, `目标客厅不存在：${value}`);
       await this.assertRoomEntry(target.id, seat.cooId);
+      const token = bearer(req);
+      const webSession = isWebSeatToken(token) ? await this.webPlayers.seatSession(hashSeatToken(token)) : null;
+      if (isWebSeatToken(token) && !webSession) throw new HttpError(401, '网页会话已失效');
+      if (webSession?.guest_room_id && target.id !== webSession.guest_room_id) throw new HttpError(403, '游客可在获邀客厅试玩');
       const moved = await (await this.host(roomId)).switchTo(seat.cooId, target.id, {
+        ...(isWebSeatToken(token) ? { token, preserveToken: true } : {}),
         ...(typeof body.name === 'string' ? { name: body.name } : {}),
       });
       // 网页可在同一次往返取得目的地首屏；继续复用 /room 的本人权限投影。
@@ -2530,6 +2800,8 @@ export class WorldServer {
       source,
       cooId: seat.cooId,
       seatId: seat.id,
+      tokenHash: seat.tokenHash,
+      webSeat: isWebSeatToken(token),
       seatName: seat.name,
       since,
       lastPing: now,
@@ -2744,19 +3016,22 @@ export class WorldServer {
 
   /** 家长玩家的固定 human 身份；每次下场换一枚新 secret（库里只存哈希）。 */
   private async ensurePlayerCoo(account: ParentAccount, requested = ''): Promise<{ cooId: string; secret: string; name: string }> {
-    const secret = randomBytes(32).toString('base64url');
-    const existing = await this.coo.playerCooOf(account.id);
-    if (existing) {
-      const name = await this.coo.cooDisplayName(existing) || await this.defaultPlayerName(account);
-      await this.coo.rotateSecret(existing, secret);
-      return { cooId: existing, secret, name: name.slice(0, 24) };
-    }
-    const name = (requested.trim() || await this.defaultPlayerName(account)).slice(0, 24);
-    const cooId = randomUUID();
-    const created = await this.coo.registerCoo(cooId, secret, 'human', name);
-    if (created !== 'ok') throw new HttpError(500, '建不了家长的游戏身份');
-    await this.coo.bindPlayerCoo(account.id, cooId);
-    return { cooId, secret, name };
+    return withTransaction(this.db, async () => {
+      await this.db.prepare('SELECT id FROM accounts WHERE id=? FOR UPDATE').get(account.id);
+      const secret = randomBytes(32).toString('base64url');
+      const existing = await this.coo.playerCooOf(account.id);
+      if (existing) {
+        const name = await this.coo.cooDisplayName(existing) || await this.defaultPlayerName(account);
+        await this.coo.rotateSecret(existing, secret);
+        return { cooId: existing, secret, name: name.slice(0, 24) };
+      }
+      const name = (requested.trim() || await this.defaultPlayerName(account)).slice(0, 24);
+      const cooId = randomUUID();
+      const created = await this.coo.registerCoo(cooId, secret, 'human', name);
+      if (created !== 'ok') throw new HttpError(500, '建不了家长的游戏身份');
+      await this.coo.bindPlayerCoo(account.id, cooId);
+      return { cooId, secret, name };
+    });
   }
 
   /** 家长玩家的默认名「<孩子名>家的家长」；孩子不在座就退回孩子的显示名，最后退回「家长」。 */
@@ -3016,7 +3291,8 @@ export class WorldServer {
             }
             if (client.blockedAt !== undefined) continue;
             const seat = seats.get(client.cooId);
-            if (!seat || seat.id !== client.seatId) {
+            if (!seat || seat.id !== client.seatId || seat.tokenHash !== client.tokenHash
+              || (client.webSeat && !await this.webPlayers.seatSession(client.tokenHash))) {
               clients.delete(client);
               client.closeReason = '席位已经不在这个客厅';
               client.res.end();

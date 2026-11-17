@@ -127,7 +127,7 @@ async function readAll(): Promise<void> {
 }
 
 function onMail(item: { kind?: string; fromCooId?: string; fromName?: string; fromHandle?: string }): void {
-  if (item.kind !== 'whisper' || !item.fromCooId) return;
+  if (seat.value?.guest || item.kind !== 'whisper' || !item.fromCooId) return;
   openDmWindow();
   void openDmThread(item.fromCooId, item.fromName, item.fromHandle);
 }

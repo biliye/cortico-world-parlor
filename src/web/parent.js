@@ -37,6 +37,7 @@ const ui = {
   mail: document.getElementById('mail'),
   refresh: document.getElementById('refresh'),
   stories: document.getElementById('parent-stories'),
+  invites: document.getElementById('guest-invites'),
   toast: document.getElementById('toast'),
 };
 
@@ -84,6 +85,7 @@ const api = async (path, init = {}) => {
 const KIND = { pet: 'Coo', human: '人', observer: '观看' };
 
 function showGate(message = '') {
+  document.getElementById('web-credentials')?.remove();
   clearTimeout(timer);
   viewGeneration += 1;
   viewRequest = undefined;
@@ -93,6 +95,7 @@ function showGate(message = '') {
   ui.gate.hidden = false;
   ui.view.hidden = true;
   ui.stories.replaceChildren();
+  ui.invites.replaceChildren();
   ui.account.replaceChildren();
   ui.gateError.textContent = message;
   ui.gateKey.focus();
@@ -101,6 +104,7 @@ function showGate(message = '') {
 function showView(account) {
   ui.gate.hidden = true;
   ui.view.hidden = false;
+  mountGuestInvites();
   ui.stories.replaceChildren();
   const stories = el('div');
   ui.stories.append(stories);
@@ -123,6 +127,10 @@ function showView(account) {
   rename.type = 'button';
   rename.addEventListener('click', () => openRename(account, who));
   ui.account.append(rename);
+  const credentials = el('button', 'board-btn ghost small', '多端登录');
+  credentials.type = 'button';
+  credentials.addEventListener('click', () => { void openCredentials(credentials); });
+  ui.account.append(credentials);
   const logout = el('button', 'board-btn ghost small', '退出');
   logout.type = 'button';
   logout.addEventListener('click', async () => {
@@ -130,6 +138,135 @@ function showView(account) {
     showGate('已经退出。');
   });
   ui.account.append(logout);
+}
+
+function mountGuestInvites() {
+  const panel = document.getElementById('guest-invite-template').content.firstElementChild.cloneNode(true);
+  ui.invites.replaceChildren(panel);
+  const create = panel.querySelector('[data-invite-create]');
+  const copy = panel.querySelector('[data-invite-copy]');
+  const linkBox = panel.querySelector('.guest-invite-link');
+  const link = linkBox.querySelector('input');
+  const status = panel.querySelector('[data-invite-status]');
+  const list = panel.querySelector('[data-invite-list]');
+  const base = '/v1/web/parent/invites';
+  const post = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
+  const format = time => new Date(time).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  let latestId = '';
+  let busy = false;
+
+  async function refresh() {
+    const { invites } = await api(base);
+    list.replaceChildren(...invites.map(invite => {
+      const deadline = invite.accessUntil ?? invite.redeemBy;
+      const ended = deadline <= Date.now();
+      const state = invite.revokedAt ? '已撤销' : ended ? '已到期' : (invite.guestId ? '试玩至 ' : '待使用，有效至 ') + format(deadline);
+      const who = invite.guestHandle ? `${invite.guestName} #${invite.guestHandle} · ` : '';
+      const row = el('li', '', who + state);
+      if (!invite.revokedAt && !ended) {
+        const revoke = el('button', 'board-btn ghost small', '撤销');
+        revoke.type = 'button';
+        revoke.addEventListener('click', () => void run(async () => {
+          await api(`${base}/${invite.id}/revoke`, post);
+          if (latestId === invite.id) {
+            link.value = '';
+            linkBox.hidden = true;
+          }
+          await refresh();
+        }));
+        row.append(revoke);
+      }
+      return row;
+    }));
+  }
+
+  async function run(action) {
+    if (busy) return;
+    busy = true;
+    create.disabled = true;
+    status.textContent = '';
+    try { await action(); }
+    catch (error) { status.textContent = error.message || '邀请操作失败'; }
+    finally { busy = false; create.disabled = false; }
+  }
+
+  panel.addEventListener('toggle', () => { if (panel.open) void run(refresh); });
+  create.addEventListener('click', () => void run(async () => {
+    const result = await api(base, post);
+    latestId = result.id;
+    link.value = result.link;
+    linkBox.hidden = false;
+    await refresh();
+  }));
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(link.value);
+      status.textContent = '邀请链接已复制，可以发给朋友。';
+    } catch {
+      link.focus();
+      link.select();
+      status.textContent = '已选中邀请链接，请手动复制。';
+    }
+  });
+}
+
+async function openCredentials(button) {
+  const current = document.getElementById('web-credentials');
+  if (current) {
+    current.remove();
+    return;
+  }
+  button.disabled = true;
+  try {
+    const info = await api('/v1/web/credentials');
+    if (!button.isConnected) return;
+    const form = el('form', 'rename');
+    form.id = 'web-credentials';
+    const name = el('input');
+    name.value = info.loginName || info.suggestedName;
+    name.autocomplete = 'username';
+    name.maxLength = 48;
+    name.required = true;
+    const nameLabel = el('label', '', '登录名 ');
+    nameLabel.append(name);
+    const password = el('input');
+    password.type = 'password';
+    password.autocomplete = 'new-password';
+    password.required = true;
+    const passwordLabel = el('label', '', info.loginName ? '新密码 ' : '密码 ');
+    passwordLabel.append(password);
+    const save = el('button', 'board-btn primary small', info.loginName ? '更新登录名和密码' : '开通多端登录');
+    save.type = 'submit';
+    const hint = el('p', '', '密码至少 12 个字符。更新后，其他设备需要重新网页登录。');
+    const message = el('p');
+    message.setAttribute('role', 'alert');
+    form.append(nameLabel, passwordLabel, save, hint, message);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      message.textContent = '';
+      try {
+        await api('/v1/web/credentials', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ loginName: name.value, password: password.value }),
+        });
+        form.remove();
+        toast('已保存，可以从会馆门面登录。');
+        button.focus();
+      } catch (error) {
+        message.textContent = error.message || '现在无法设置多端登录';
+      } finally {
+        save.disabled = false;
+      }
+    });
+    ui.account.parentElement.after(form);
+    name.focus();
+  } catch (error) {
+    toast(error.message || '现在无法设置多端登录');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /** 改名字：账户显示名、玩家身份名、当前席位名一起改（服务器一个接口）。 */

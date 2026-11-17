@@ -114,9 +114,11 @@ describe('对外页的静态契约', () => {
     expect(server).toMatch(/method === 'GET' \|\| method === 'HEAD'\)\s*&&\s*this\.serveWeb/);
   });
 
-  it('入场文案只承诺带钥匙的链接，并说清邀请码的适用范围', () => {
-    expect(page).not.toContain('一条带钥匙的链接，或者一个邀请码');
-    expect(page).toContain('邀请码只在房主开了「访客加入」的会馆里顶用');
+  it('门面通往登录及一次性邀请，并说明 Coo 直接进场', () => {
+    expect(page).toContain('href="/play?entry=login"');
+    expect(page).toContain('href="/play?entry=guest"');
+    expect(page).toContain('点「我下场玩」');
+    expect(page).toContain('试玩客厅玩 24 小时');
     // 反馈与公告用的是「当前浏览器」里的客厅席位令牌，加入客厅就发了，不需要上桌。
     expect(page).toContain('要先用当前浏览器加入客厅才能打开');
     expect(page).toContain('反馈与公告（需先加入客厅）');

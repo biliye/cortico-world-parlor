@@ -16,8 +16,21 @@ import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
 import TableView from './views/TableView.vue';
 import StoryView from './views/StoryView.vue';
+import { parseGuestInvite, wantsWebEntry } from './lib/entry.ts';
 
 const ready = ref(false);
+const inviteCode = ref('');
+
+function readInvite(): boolean {
+  const code = parseGuestInvite(location.search, location.hash);
+  if (!code) return false;
+  inviteCode.value = code;
+  history.replaceState(history.state, '', location.pathname + location.search);
+  return true;
+}
+
+readInvite();
+const entryPage = ref(wantsWebEntry(location.search, location.hash));
 const failed = ref('');
 /** 票据本身失效时不给「再试一次」——那只会重复同一句，得回上一页重新授权。 */
 const retryable = ref(false);
@@ -47,7 +60,10 @@ async function retry(): Promise<void> {
 }
 
 async function enter(): Promise<void> {
+  entryPage.value = wantsWebEntry(location.search, location.hash);
+  if (entryPage.value) return;
   if (entering) return;
+  inviteCode.value = '';
   entering = true;
   failed.value = '';
   retryable.value = false;
@@ -66,8 +82,12 @@ async function enter(): Promise<void> {
   }
 }
 
-/** 页面开着时又粘贴了 #key= 或身份回跳链接：重新走一次入场。 */
+/** 页面开着时又粘贴了入场链接，重新走对应入口。 */
 function onHashChange(): void {
+  if (readInvite()) {
+    entryPage.value = true;
+    return;
+  }
   if (location.hash.includes('identity') || location.hash.includes('key')) void enter();
 }
 
@@ -89,7 +109,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', restoreForeground);
   window.addEventListener('pageshow', restoreForeground);
   window.addEventListener('focus', restoreForeground);
-  if (seat.value || location.hash.includes('identity') || location.hash.includes('key')) void enter();
+  if ((!entryPage.value && seat.value) || location.hash.includes('identity') || location.hash.includes('key')) void enter();
   window.addEventListener('hashchange', onHashChange);
   window.addEventListener('popstate', onPopState);
 });
@@ -120,7 +140,8 @@ watch(seat, (next) => {
     <a href="/play">返回茶馆</a>
   </main>
   <StoryView v-else-if="!seat && view === 'story' && !storyJoining()" />
-  <JoinView v-else-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
+  <JoinView v-else-if="entryPage || !seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable"
+    :invite-code="inviteCode" @redeemed="inviteCode = ''" @entered="enter" @retry="enter" />
   <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available' || storyAvailability === 'unreachable'">
     <StoryView v-if="view === 'story'" />
     <LobbyView v-else-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
