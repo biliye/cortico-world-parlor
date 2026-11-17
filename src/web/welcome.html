@@ -4,8 +4,10 @@
 
   变体卡：site（amber / warm / wide / hatch / standard / full）
   版式：竖向滚动翻页。每屏一个 .screen，高度 = 100svh - 顶栏，靠 CSS scroll-snap 吸附。
-        01 首屏 / 02 玩法 / 03 怎么进来 / 04 家长。
-  主视觉：一张俯视牌桌的线稿，装在切角画框里；玩法名做成跑马灯。
+        01 首屏（会名 + 大厅实景 + 玩法跑马灯 + 「这里是这样的地方」）/ 02 玩法 / 03 怎么进来 / 04 家长。
+  主视觉：一张大厅（茶室）实景图，装在切角画框里；玩法名做成跑马灯。
+        「这里是这样的地方」是首屏里的三栏，不单独占屏、顶栏也不给锚点。
+  动效：明暗从顶栏那颗按钮向外扩散；滚动到下一屏时该屏内容依次抬起；每屏都装得下时吸附收紧成强制。
   页面类型：展示（落地页）。牌桌本体 /play 是另一套深色界面，两边不共用样式。
 
   为什么是独立的静态页而不是 /play 里的一个视图：陌生人打开首页不该先下 main.js、
@@ -79,29 +81,11 @@
           </p>
         </div>
 
+        <!-- 大厅实景（不是截图）：用 web-src/lobby/scene.js 在 1152×648 下渲的茶室内景，
+             只取画面，不带「找一桌 / 五子棋小摊」那些面板。换画面就重渲这张图。 -->
         <figure class="ef-frame">
           <div class="window">
-            <svg viewBox="0 0 400 420" fill="none" stroke="currentColor" stroke-width="1.5" role="img" aria-label="从上方看的牌桌线稿：一张圆角桌面、四个座位，每边摆着一叠牌。">
-              <rect x="44" y="96" width="312" height="228" rx="30"/>
-              <circle cx="200" cy="210" r="44" stroke-dasharray="6 7" opacity="0.7"/>
-              <rect x="176" y="60" width="48" height="20"/>
-              <rect x="176" y="340" width="48" height="20"/>
-              <rect x="18" y="184" width="20" height="48"/>
-              <rect x="362" y="184" width="20" height="48"/>
-              <g opacity="0.85">
-                <rect x="182" y="96" width="14" height="20"/>
-                <rect x="198" y="96" width="14" height="20"/>
-                <rect x="214" y="96" width="14" height="20"/>
-                <rect x="182" y="304" width="14" height="20"/>
-                <rect x="198" y="304" width="14" height="20"/>
-                <rect x="214" y="304" width="14" height="20"/>
-                <rect x="44" y="196" width="20" height="14"/>
-                <rect x="44" y="214" width="20" height="14"/>
-                <rect x="336" y="196" width="20" height="14"/>
-                <rect x="336" y="214" width="20" height="14"/>
-              </g>
-              <path d="M200 150v14M200 256v14M150 210h14M236 210h14" opacity="0.45"/>
-            </svg>
+            <img src="/welcome/assets/welcome-lobby.webp?v=0.46.1" width="1152" height="648" alt="一间客厅的内景：木格窗外是夜，两盏灯笼亮着，茶架上摆满茶罐，鲸鱼娘坐在长桌后面，桌上和桌边围着一圈小小的 Coo。" />
           </div>
           <figcaption class="ef-plate">满座才开局，慢一点也没关系。</figcaption>
         </figure>
@@ -132,12 +116,32 @@
             </ul>
           </div>
         </div>
+
+        <!-- 首屏下半：三句话讲清「这是什么地方」。不单独占一屏，也不在顶栏给锚点。 -->
+        <div class="what">
+          <p class="ef-eyebrow slash">What</p>
+          <h2 class="ef-bar-title">这里是这样的地方</h2>
+          <div class="what-cols">
+            <div>
+              <h3>Coo 也是同桌</h3>
+              <p>会馆里的 Coo 是 AI 角色：会出牌、会聊天、会记仇，输了也会再来一局。它和真人坐的是同一张桌子，没有谁在当主持人。</p>
+            </div>
+            <div>
+              <h3>输赢记在自己名下</h3>
+              <p>真人用自己的席位入场。战绩、礼物和信箱各是各的一份，不会记到 Coo 头上，也不会把两边的分数混在一起。</p>
+            </div>
+            <div>
+              <h3>可以在旁边看</h3>
+              <p>家长页要单独登录。孩子正在桌上时，你可以打开那一桌，只看公开的牌面；客厅满员也能看。</p>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="screen games-screen" id="games">
         <p class="ef-eyebrow slash">Games</p>
         <h2 class="ef-bar-title">九种玩法</h2>
-        <p class="lead">会馆里的 Coo 是 AI 角色：会出牌、会聊天、会记仇，输了也会再来一局。它和真人坐的是同一张桌子，没有谁在当主持人。</p>
+        <p class="lead">九种玩法各占一张桌子：骰子、扑克、棋、麻将。坐满就开局；缺人时先坐着聊，Coo 不催。</p>
         <ol class="games">
           <li><span class="n">01</span><span class="g">骰子</span><span class="d">轮流掷一把，点数大的赢，中间还能重掷几次。</span></li>
           <li><span class="n">02</span><span class="g">斗地主</span><span class="d">三个人一副牌，谁先出完谁赢。</span></li>

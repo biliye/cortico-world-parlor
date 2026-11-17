@@ -41,6 +41,12 @@ html {
   scroll-behavior: smooth;
 }
 
+/* 脚本量过：每屏都装得下时收紧成强制吸附，一个滚轮动作就是一屏；
+   有一屏比视口高（窄屏的首屏、玩法九条）就退回接近吸附，免得卡在中间滚不动。 */
+html[data-snap='strict'] {
+  scroll-snap-type: y mandatory;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -133,20 +139,25 @@ html {
 
 /* ---------- 首屏 ---------- */
 
+/* 五格：meta / 会名 / 正文 / 跑马灯 / 「这里是这样的地方」。
+   多出来的高度给正文那格（正文贴顶，空白落在按钮和跑马灯之间），
+   这样会名不会被顶到半空，跑马灯和三栏仍旧压在下边。 */
 .hero {
   --mx: 0;
   --my: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 38%);
-  grid-template-rows: auto 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 40%);
+  grid-template-rows: auto auto auto auto auto;
+  align-content: space-between;
   column-gap: clamp(1.25rem, 4vw, 3.5rem);
-  padding: 1.25rem 0 0;
+  padding: 1.1rem 0 0;
   border-bottom: 1px solid var(--ef-rule);
   overflow: hidden;
 }
 
 .hero .meta {
   grid-column: 1;
+  grid-row: 1;
   padding-inline: var(--ef-pad);
 }
 
@@ -159,14 +170,16 @@ html {
 
 .hero .ef-wordmark {
   grid-column: 1;
+  grid-row: 2;
   align-self: end;
-  margin: 2.25rem 0 0;
+  margin: 1.75rem 0 0;
   padding-left: var(--ef-pad);
 }
 
 .hero .copy {
   grid-column: 1;
-  padding: 1.5rem var(--ef-pad) 2rem;
+  grid-row: 3;
+  padding: 1.35rem var(--ef-pad) 1.6rem;
 }
 
 .hero .claim {
@@ -187,10 +200,22 @@ html {
   margin-top: 1.5rem;
 }
 
+/* 画框从「竖着的牌桌线稿」换成 4:3 的大厅实景：图铺满画框，视差只挪里面那张图。 */
 .hero .ef-frame {
   grid-column: 2;
   grid-row: 1 / 4;
-  margin: 0 var(--ef-pad) 2.25rem 0;
+  align-self: stretch;
+  aspect-ratio: auto;
+  min-height: 0;
+  margin: 0 var(--ef-pad) 1.25rem 0;
+}
+
+.hero .ef-frame .window > img {
+  object-fit: cover;
+  object-position: 50% 58%;
+  /* 放大一点点，视差挪动时不会露出画框底色 */
+  transform: translate(calc(var(--mx) * -9px), calc(var(--my) * -6px)) scale(1.04);
+  transition: transform 0.4s var(--ef-ease);
 }
 
 /* 指针视差：画框和它的斜线影子朝相反方向错开，总量不超过 12px */
@@ -198,40 +223,140 @@ html {
   transform: translate(calc(var(--mx) * 12px), calc(var(--my) * 10px));
 }
 
-.hero .ef-frame svg {
-  width: 100%;
-  height: 100%;
-  transform: translate(calc(var(--mx) * -14px), calc(var(--my) * -8px));
-  transition: transform 0.4s var(--ef-ease);
-}
-
 .hero .ef-ticker {
   grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.hero .what {
+  grid-column: 1 / -1;
+  grid-row: 5;
 }
 
 @media (max-width: 899px) {
   .hero {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto auto;
-    align-content: space-between;
+    grid-template-rows: repeat(5, auto);
+    align-content: start;
   }
-  .hero .ef-frame {
+  .hero .meta,
+  .hero .ef-wordmark,
+  .hero .copy,
+  .hero .ef-frame,
+  .hero .ef-ticker,
+  .hero .what {
     grid-column: 1;
     grid-row: auto;
-    height: auto;
-    margin: 0 calc(var(--ef-pad) + 1rem) 2rem var(--ef-pad);
   }
-  /* 窄屏画框只有十几厘米高，牌条再叠在上面就压住牌了：挪到画框下面当一行标签 */
+  .hero .ef-wordmark {
+    align-self: start;
+    margin-top: 1.5rem;
+  }
+  .hero .ef-frame {
+    aspect-ratio: auto;
+    height: auto;
+    margin: 0 calc(var(--ef-pad) + 1rem) 1.75rem var(--ef-pad);
+  }
+  /* 窄屏画框按 16:10 立起来，牌条不再叠在图上，挪到画框下面当一行标签 */
   .hero .ef-frame .window {
     position: relative;
     inset: auto;
-    height: clamp(11rem, 24vh, 14rem);
+    aspect-ratio: 16 / 10;
   }
   .hero .ef-plate {
     position: static;
     display: inline-block;
     max-width: 100%;
     margin: 0.7rem 0 0;
+  }
+}
+
+/* 矮窗口（1366×768 的笔记本、1080×675 的截图档）：首屏要塞下五块，
+   会名与内边距各收一点，免得「这里是这样的地方」被挤到下一屏去。 */
+@media (max-height: 780px) {
+  .hero {
+    --ef-wordmark: clamp(2.5rem, 6.4vw, 6.5rem);
+    padding-top: 0.85rem;
+  }
+  .hero .ef-wordmark {
+    margin-top: 1.1rem;
+  }
+  .hero .copy {
+    padding-bottom: 1.05rem;
+  }
+  .what {
+    padding-top: 0.65rem;
+    padding-bottom: 0.85rem;
+  }
+  .what .ef-bar-title {
+    margin-bottom: 0.5rem;
+  }
+  .what-cols > div {
+    padding-top: 0.7rem;
+  }
+  .what-cols p {
+    font-size: 0.86rem;
+    line-height: 1.65;
+  }
+}
+
+/* ---------- 首屏下半：「这里是这样的地方」 ---------- */
+
+/* 三句话讲清这地方是什么。不单独占一屏，顶栏也不给锚点——看就一路滚下去。 */
+.what {
+  padding: 0.85rem var(--ef-pad) 1.15rem;
+  border-top: 1px solid var(--ef-rule);
+}
+
+.what .ef-eyebrow {
+  margin: 0 0 0.35rem;
+}
+
+.what .ef-bar-title {
+  margin-bottom: 0.7rem;
+}
+
+.what-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--ef-rule);
+}
+
+.what-cols > div {
+  padding: 0.85rem 1.4rem 0.2rem 1.25rem;
+  border-left: 1px solid var(--ef-rule);
+}
+
+.what-cols > div:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.what-cols h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.98rem;
+  font-weight: 800;
+}
+
+.what-cols p {
+  margin: 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  font-size: 0.9rem;
+  line-height: 1.75;
+}
+
+@media (max-width: 719px) {
+  .what-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .what-cols > div {
+    padding: 0.7rem 0;
+    border-left: 0;
+    border-top: 1px solid var(--ef-rule);
+  }
+  .what-cols > div:first-child {
+    border-top: 0;
   }
 }
 
@@ -273,6 +398,13 @@ html {
 .games .d {
   color: var(--ef-ink-2);
   font-family: var(--ef-font-text);
+}
+
+/* 矮窗口（1080×675 这类）：九条也要挤进一屏，否则整页退回接近吸附 */
+@media (max-height: 780px) {
+  .games > li {
+    padding-block: 0.5rem;
+  }
 }
 
 @media (max-width: 719px) {
@@ -451,18 +583,81 @@ html {
   }
 }
 
-/* ---------- 入场与逐行亮起用的序号 ---------- */
-
-.games > li:nth-child(1) { --i: 0; }
-.games > li:nth-child(2) { --i: 1; }
-.games > li:nth-child(3) { --i: 2; }
-.games > li:nth-child(4) { --i: 3; }
-.games > li:nth-child(5) { --i: 4; }
-.games > li:nth-child(6) { --i: 5; }
-.games > li:nth-child(7) { --i: 6; }
-.games > li:nth-child(8) { --i: 7; }
-.games > li:nth-child(9) { --i: 8; }
-
+/* 会名两行前后脚推出来：实心那行先走，空心的 PARLOR CLUB 慢 140ms */
 .hero .ef-wordmark .hollow {
   animation-delay: 140ms;
 }
+
+/* ---------- 换屏进场：滚到哪一屏，哪一屏的内容依次抬起来 ---------- */
+
+/* 脚本只在浏览器支持 IntersectionObserver 时才给 <html> 加 ef-js；
+   脚本没跑或跑不动时内容照常显示，不会留一屏空白。 */
+@media (prefers-reduced-motion: no-preference) {
+  html.ef-js .screen[data-reveal]:not(.is-in) > * {
+    opacity: 0;
+  }
+
+  html.ef-js .screen[data-reveal].is-in > * {
+    animation: ef-rise 460ms var(--ef-snap) both;
+    animation-delay: calc(var(--i, 0) * 70ms);
+  }
+}
+
+@keyframes ef-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 屏内子元素的先后：一组 70ms 的梯子，超过 8 个就不再往后错 */
+.screen > *:nth-child(1) { --i: 0; }
+.screen > *:nth-child(2) { --i: 1; }
+.screen > *:nth-child(3) { --i: 2; }
+.screen > *:nth-child(4) { --i: 3; }
+.screen > *:nth-child(5) { --i: 4; }
+.screen > *:nth-child(6) { --i: 5; }
+.screen > *:nth-child(7) { --i: 5; }
+.screen > *:nth-child(8) { --i: 5; }
+
+/* ---------- 明暗切换：从顶栏那颗按钮向外扩散 ---------- */
+
+/* 只换配色时脚本挂 data-vt="theme"，用圆形裁切把新配色从按钮位置铺开；
+   换页（welcome-kit.css 里那道斜切闸门）走的是另一条路，互不干扰。 */
+@media (prefers-reduced-motion: no-preference) {
+  html[data-vt='theme']::view-transition-old(root) {
+    animation: none;
+  }
+
+  html[data-vt='theme']::view-transition-new(root) {
+    animation: ef-theme-dial 600ms var(--ef-ease) both;
+  }
+}
+
+@keyframes ef-theme-dial {
+  from {
+    clip-path: circle(0 at var(--vt-x, 50vw) var(--vt-y, 2rem));
+  }
+  to {
+    clip-path: circle(var(--vt-r, 150vmax) at var(--vt-x, 50vw) var(--vt-y, 2rem));
+  }
+}
+
+/* 没有 View Transitions 的浏览器（Safari / Firefox）：整页颜色淡过去，别硬切。
+   transition 挂在临时类上，只在换色那 340ms 里生效，平时不拖累滚动。 */
+html.ef-theme-fade,
+html.ef-theme-fade *,
+html.ef-theme-fade *::before,
+html.ef-theme-fade *::after {
+  transition:
+    background-color 0.34s var(--ef-ease),
+    color 0.34s var(--ef-ease),
+    border-color 0.34s var(--ef-ease),
+    fill 0.34s var(--ef-ease),
+    stroke 0.34s var(--ef-ease) !important;
+}
+

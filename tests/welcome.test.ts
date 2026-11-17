@@ -153,6 +153,74 @@ describe('对外页的静态契约', () => {
     expect(page).toContain('「客厅」页');
   });
 
+  /**
+   * 首屏主视觉从「俯视牌桌线稿」换成大厅实景图；「这里是这样的地方」并回首屏下半，
+   * 但不单独占屏、顶栏也不给它锚点（用户 2026-11-17 的口径）。
+   */
+  it('首屏主视觉是大厅实景图，不是内联线稿', () => {
+    const hero = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="games"'));
+    expect(hero).not.toContain('<svg');
+    const img = hero.match(/<img[^>]*welcome-lobby\.webp[^>]*>/);
+    expect(img, '首屏要引用大厅实景图').toBeTruthy();
+    expect(img![0]).toMatch(/\salt="[^"]{10,}"/);
+    expect(img![0]).toMatch(/\swidth="\d+"\s+height="\d+"/);
+    // 图真的在包里，而且是 WebP（RIFF....WEBP）
+    const bytes = readFileSync(new URL('welcome-lobby.webp', web));
+    expect(bytes.subarray(0, 4).toString('latin1')).toBe('RIFF');
+    expect(bytes.subarray(8, 12).toString('latin1')).toBe('WEBP');
+    expect(bytes.length).toBeLessThan(200_000);
+    expect(isPublicAsset('welcome-lobby.webp')).toBe(true);
+  });
+
+  it('「这里是这样的地方」在首屏里，三栏都在，且不占独立一屏', () => {
+    const hero = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="games"'));
+    expect(hero).toContain('这里是这样的地方');
+    expect(hero).toContain('Coo 也是同桌');
+    expect(hero).toContain('输赢记在自己名下');
+    expect(hero).toContain('可以在旁边看');
+    // 内容留着，但不新开一屏、也不给锚点
+    expect(markup).not.toContain('id="what"');
+    expect(markup).not.toContain('href="#what"');
+    // 三栏是首屏里的一个块，和跑马灯同级
+    expect(hero.indexOf('class="what"')).toBeGreaterThan(hero.indexOf('class="ef-ticker"'));
+  });
+
+  /**
+   * 三条动效口径：吸附按「每屏装不装得下」在两档之间切；换屏内容依次抬起；
+   * 明暗从按钮向外扩散，且都留了「减少动态效果」的退路。
+   */
+  it('吸附、换屏进场与明暗扩散都有脚本配合，并且都能关掉', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    // 吸附：默认接近吸附，脚本量完才收紧成强制
+    expect(css).toMatch(/html\[data-snap='strict'\]\s*\{[^}]*scroll-snap-type:\s*y mandatory/);
+    expect(js).toContain("root.dataset.snap");
+    expect(js).toContain('measureSnap');
+    // 每屏高度都量，不是只看第一屏
+    expect(js).toMatch(/querySelectorAll\('\.screen'\)/);
+
+    // 换屏进场：脚本挂 data-reveal + is-in，CSS 按 --i 错开
+    expect(js).toContain("screen.dataset.reveal");
+    expect(js).toContain("classList.add('is-in')");
+    expect(js).toContain('IntersectionObserver');
+    expect(css).toMatch(/\.screen\[data-reveal\]\.is-in\s*>\s*\*/);
+    expect(css).toMatch(/animation-delay:\s*calc\(var\(--i, 0\) \* 70ms\)/);
+
+    // 明暗：View Transitions 的圆形裁切 + 不支持时整页淡过去
+    expect(js).toContain('startViewTransition');
+    expect(js).toContain("root.dataset.vt = 'theme'");
+    expect(css).toMatch(/html\[data-vt='theme'\]::view-transition-new\(root\)/);
+    expect(css).toMatch(/clip-path:\s*circle\(/);
+    expect(js).toContain('ef-theme-fade');
+    expect(css).toContain('html.ef-theme-fade');
+
+    // 三处都要能被「减少动态效果」关掉
+    expect(js).toContain('prefers-reduced-motion: reduce');
+    expect(css).toContain('prefers-reduced-motion: no-preference');
+  });
+
+
   it('明暗偏好可以保存，登录与试玩通过普通链接导航', () => {
     expect(markup).not.toContain('data-act="account"');
     const js = read('welcome.js');
