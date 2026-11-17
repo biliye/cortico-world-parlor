@@ -144,6 +144,12 @@ async function submit(): Promise<void> {
   }
 }
 
+/** 入场失败后重试：顺带重探服务器形态，healthz 恢复后回首页的入口要自己回来。 */
+function retryEntry(): void {
+  void detectGateway();
+  emit('retry');
+}
+
 async function parentPlay(): Promise<void> {
   error.value = '';
   busy.value = true;
@@ -225,7 +231,7 @@ async function parentPlay(): Promise<void> {
         <button class="btn primary" type="button" :disabled="busy" @click="submit">加入客厅</button>
       </details>
       <!-- 入场失败（多半是钥匙没换成席位）时给一条原地重试；入口关闭时也保留，别让人只能重开链接。 -->
-      <button v-if="props.canRetry" class="btn" type="button" :disabled="busy" @click="emit('retry')">再试一次</button>
+      <button v-if="props.canRetry" class="btn" type="button" :disabled="busy" @click="retryEntry">再试一次</button>
       <div v-if="parentName" class="parent-play">
         <p class="sub">这台浏览器登录了「{{ parentName }}」，可以直接以这个身份下场。</p>
         <button class="btn primary" type="button" :disabled="busy" @click="parentPlay">以家长身份下场</button>

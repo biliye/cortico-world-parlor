@@ -60,7 +60,8 @@ async function load(more = false):Promise<void> {
 watch(() => props.open, async open => {
   ++epoch;
   await nextTick();
-  if (open) { dialog.value?.showModal(); void load(); }
+  // 打开时重探一次：首屏 healthz 失败过的话，这里能把「回首页」补回来。
+  if (open) { dialog.value?.showModal(); void load(); void detectGateway(); }
   else if (dialog.value?.open) dialog.value.close();
 });
 watch(() => seat.value?.cooId, () => { ++epoch; items.value = []; summary.value = null; if (props.open) void load(); });

@@ -10,7 +10,7 @@ import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
-import { isGatewayServer } from '../web-src/lib/gateway.ts';
+import { GATEWAY_RETRY_DELAYS, gatewayOf, gatewaySettlement, isGatewayServer } from '../web-src/lib/gateway.ts';
 
 const web = new URL('../src/web/', import.meta.url);
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -208,13 +208,16 @@ describe('子页都能回首页', () => {
  * 所以入口必须按 healthz 的服务器形态收起来——只有网关那几页可以无条件写 `href="/"`。
  */
 describe('回首页的入口只在多客厅网关出现', () => {
-  it('用 healthz 有没有 rooms 认网关，拿不到就当单厅', () => {
+  it('用 healthz 有没有 rooms 认网关，拿不到就留作未确认', () => {
     // 网关 healthz（src/room/world-server.ts）与单厅 healthz（src/room/server.ts）的真实形状。
     expect(isGatewayServer({ ok: true, room: 'hall', version, protocol: 2, rooms: 3 })).toBe(true);
     expect(isGatewayServer({ ok: true, room: 'lobby', version, seats: 2, maxSeats: 8, latest: 0, replay: 0 })).toBe(false);
-    expect(isGatewayServer(null)).toBe(false);
-    expect(isGatewayServer(undefined)).toBe(false);
     expect(isGatewayServer({})).toBe(false);
+    // 拿不到 healthz（503 / 断网 / 响应不是 JSON）不是「单厅」，是未确认。
+    expect(gatewayOf(null)).toBeNull();
+    expect(gatewayOf(undefined)).toBeNull();
+    expect(gatewayOf({ ok: true, room: 'hall', rooms: 3 })).toBe(true);
+    expect(gatewayOf({ ok: true, room: 'lobby', version })).toBe(false);
   });
 
   it('入场页的品牌行与底部链接都挂在判断上，单厅退回纯品牌文字', () => {
@@ -239,6 +242,32 @@ describe('回首页的入口只在多客厅网关出现', () => {
     const serveWeb = room.slice(room.indexOf('private serveWeb'), room.indexOf('private sendWeb'));
     expect(serveWeb).not.toContain('parent.html');
     expect(serveWeb).not.toContain('support.html');
+  });
+});
+
+/**
+ * 首屏 healthz 可能正好撞上网关重启（503）或断网。把「拿不到」当成「不是网关」
+ * 缓存下来，服务恢复后要刷新页面入口才回来；这里锁住「失败不落结论」。
+ */
+describe('healthz 探测失败不算结论', () => {
+  it('没拿到 healthz 留未确认，并给出退避重试的间隔', () => {
+    expect(gatewaySettlement(null)).toEqual({ value: null, retryIn: GATEWAY_RETRY_DELAYS[0] });
+    expect(gatewaySettlement(undefined, 3)).toEqual({ value: null, retryIn: GATEWAY_RETRY_DELAYS[3] });
+    // 退避用完就不再自动重试，留给打开账户弹窗 / 点「再试一次」去救。
+    expect(gatewaySettlement(null, GATEWAY_RETRY_DELAYS.length)).toEqual({ value: null, retryIn: null });
+  });
+
+  it('拿到 healthz 才是定论：网关一次定 true，单厅一次定 false', () => {
+    expect(gatewaySettlement({ ok: true, room: 'hall', rooms: 3 })).toEqual({ value: true, retryIn: null });
+    expect(gatewaySettlement({ ok: true, room: 'lobby', version })).toEqual({ value: false, retryIn: null });
+  });
+
+  it('store 按这条落账：未确认不写进 gateway', () => {
+    const store = source('../web-src/stores/server.ts');
+    expect(store).toContain('gatewaySettlement');
+    // 上一版的写法：一失败就 isGatewayServer(null) => false，把首屏抖动钉成单厅。
+    expect(store).not.toMatch(/gateway\.value\s*=\s*isGatewayServer/);
+    expect(store).toMatch(/if \(value === null\)/);
   });
 });
 
