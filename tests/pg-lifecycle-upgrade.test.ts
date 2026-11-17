@@ -14,6 +14,29 @@ import { MAHJONG_GAMES } from '../src/room/games/mahjong-rules.ts';
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
 
+it('PG v18 升到 v19 为原有家长增加网页登录和邀请码表，保留账户绑定', async () => {
+  db = await openTestDb();
+  await db.exec(`
+    DROP TABLE web_player_sessions, web_guest_invites, web_player_credentials;
+    UPDATE meta SET value='18' WHERE key='schema_version';
+  `);
+  const accounts = new CooAccountDb(db);
+  const child = 'coo-web-upgrade-child';
+  const player = 'coo-web-upgrade-player';
+  await accounts.registerCoo(child, 'web-upgrade-child-secret', 'pet', '孩子');
+  await accounts.registerCoo(player, 'web-upgrade-player-secret', 'human', '真人');
+  const { account } = await accounts.ensureAccount(child);
+  await accounts.bindPlayerCoo(account.id, player);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(19);
+  expect(await accounts.playerCooOf(account.id)).toBe(player);
+  await db.prepare('INSERT INTO web_player_credentials(account_id, login_name, login_key, password_hash) VALUES (?,?,?,?)')
+    .run(account.id, '真人', '真人', 'test-placeholder');
+  await migrate(db);
+  expect(await db.prepare('SELECT login_name FROM web_player_credentials WHERE account_id=?').get(account.id))
+    .toMatchObject({ login_name: '真人' });
+});
+
 it('当前 PG 约束允许所有注册玩法及旧长局，拒绝未知玩法', async () => {
   db = await openTestDb();
   const owner = 'coo-game-catalog';

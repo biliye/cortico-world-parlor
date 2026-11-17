@@ -1,8 +1,7 @@
 /**
- * 对外页唯一的一段脚本，做三件事：
+ * 对外页的脚本负责两件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
- * 2. 顶栏那两个按钮：色调切换、登录/注册的占位提示；
- * 3. 首屏画框的指针视差。
+ * 2. 首屏画框的指针视差。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
  * 所以只有这一段外链脚本。滚动翻页本身是纯 CSS（html 上的 scroll-snap），不在这里做。
@@ -57,20 +56,6 @@
       });
     }
     syncTheme();
-
-    // ---------- 登录 / 注册：占位 ----------
-    const toast = document.querySelector('.toast');
-    const accountBtn = document.querySelector('[data-act="account"]');
-    if (toast && accountBtn) {
-      let timer = 0;
-      accountBtn.addEventListener('click', () => {
-        toast.hidden = false;
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          toast.hidden = true;
-        }, 6000);
-      });
-    }
 
     // ---------- 首屏画框的指针视差 ----------
     // 只有这一个动效需要脚本；入场、悬停、跑马灯都是 welcome-kit.css 里的纯 CSS。

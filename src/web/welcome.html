@@ -22,7 +22,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>鲸语会馆 · 一桌人，慢慢来</title>
-    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，九种玩法，说书厅里有人讲昨天的事。入场要房主发的钥匙，不开放注册。">
+    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，九种玩法，说书厅里有人讲昨天的事。可从 Coo 一键入场、用账号登录，或凭邀请试玩。">
     <meta name="theme-color" content="#f3f1ea" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#1b1a17" media="(prefers-color-scheme: dark)">
     <link rel="canonical" href="{{origin}}/">
@@ -30,7 +30,7 @@
     <meta property="og:site_name" content="鲸语会馆">
     <meta property="og:locale" content="zh_CN">
     <meta property="og:title" content="鲸语会馆 · 一桌人，慢慢来">
-    <meta property="og:description" content="Coo 和真人坐在同一张桌上，九种玩法。入场要房主发的钥匙，不开放注册。">
+    <meta property="og:description" content="Coo 和真人坐在同一张桌上，九种玩法。可从 Coo 入场、登录或凭邀请试玩。">
     <meta property="og:url" content="{{origin}}/">
     <meta property="og:image" content="{{origin}}/welcome/assets/welcome-og.png">
     <meta property="og:image:width" content="1200">
@@ -46,10 +46,10 @@
     <div class="ef-tri ef-in-sweep" aria-hidden="true"><i></i><i></i><i></i></div>
 
     <header class="top">
-      <p class="mark"><a href="#top"><span aria-hidden="true">鲸语会馆</span></a></p>
+      <p class="mark"><a href="#top">鲸语会馆</a></p>
       <div class="top-acts">
-        <a class="ef-btn small" href="/support">反馈与公告</a>
-        <button class="ef-btn small" type="button" data-act="account">登录 / 注册</button>
+        <a class="ef-btn small" href="/support" aria-label="反馈与公告（需先加入客厅）">反馈与公告</a>
+        <a class="ef-btn small" href="/play?entry=login">登录</a>
         <button class="ef-btn small square" type="button" data-act="theme" aria-label="切换明暗" title="切换明暗">
           <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
             <circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.4"/>
@@ -63,8 +63,6 @@
       <section class="screen hero" id="top">
         <ul class="meta ef-facts">
           <li><span class="ef-field">九种玩法</span></li>
-          <li><span class="ef-field">入场要钥匙</span></li>
-          <li><span class="ef-field">不开放注册</span></li>
         </ul>
 
         <h1 class="ef-wordmark">
@@ -76,8 +74,8 @@
           <p class="claim"><span class="ef-marker ef-in-stroke">Coo 与真人同桌</span></p>
           <p class="lead">一间会馆，几个客厅。骰子、扑克、棋和麻将都有；说书厅里，有人讲昨天的事。真人可以下场打，也可以只在旁边看。</p>
           <p class="ef-actions">
-            <a class="ef-btn go" href="/play">进客厅 <span class="sub">/play</span></a>
-            <a class="ef-btn" href="#enter">怎么拿到钥匙</a>
+            <a class="ef-btn go" href="/play">进客厅</a>
+            <a class="ef-btn" href="#enter">怎么进来</a>
           </p>
         </div>
 
@@ -156,41 +154,31 @@
       <section class="screen enter" id="enter">
         <p class="ef-eyebrow slash">Enter</p>
         <h2 class="ef-bar-title">怎么进来</h2>
-        <p class="lead">会馆不开放注册，入场要一把钥匙。房主在 Coo 的「客厅」页点「我下场玩」就进场了；别人要一条带钥匙的链接。</p>
-        <ol class="steps">
+        <ul class="steps">
           <li>
-            <span class="no">01</span>
-            <h3>先拿到钥匙</h3>
-            <p>房主发给你——通常是养着 Coo 的那个人。</p>
+            <h3>从 Coo 一键下场</h3>
+            <p>在 Coo 的「客厅」页点 <b>客厅 · 我下场玩（带钥匙，勿转发）</b>。</p>
           </li>
           <li>
-            <span class="no">02</span>
-            <h3>打开链接</h3>
-            <p>电脑手机都能开，第一次来先过一次身份确认。</p>
+            <h3>换个设备登录</h3>
+            <p>先在家长页开通多端登录，再用登录名和密码进会馆。</p>
           </li>
           <li>
-            <span class="no">03</span>
-            <h3>起个名字坐下</h3>
-            <p>名字只在这间会馆里用，席位和战绩各归各。</p>
+            <h3>凭邀请码试玩</h3>
+            <p>请会馆里的朋友发一张一次性邀请码，兑换后可在试玩客厅玩 24 小时。</p>
           </li>
-        </ol>
+        </ul>
 
-        <div class="gate">
-          <p class="ef-field">房主在这里找到入口</p>
-          <p class="path">Coo →「客厅」页 → <b>客厅 · 我下场玩（带钥匙，勿转发）</b></p>
-          <p class="note">点开就是牌桌。这条带着房主自己的钥匙，别转发。</p>
-        </div>
-
-        <p class="ef-notice" data-flag="注意">没带钥匙打不开是正常的：看到「入口已关闭」就找发链接给你的人再要一条。邀请码只在开了「访客加入」的会馆里顶用，默认关着。</p>
         <p class="ef-actions">
-          <a class="ef-btn go" href="/play">进客厅</a>
+          <a class="ef-btn go" href="/play?entry=login">账号登录</a>
+          <a class="ef-btn" href="/play?entry=guest">邀请码试玩</a>
         </p>
       </section>
 
       <section class="screen parents" id="parent">
         <p class="ef-eyebrow slash">Parents</p>
         <h2 class="ef-bar-title">家长能看到什么</h2>
-        <p class="lead">家长页要单独登录，和孩子打牌用的是两个身份。孩子正在桌上时，可以打开那一桌只看公开牌面，客厅满员也能看；牌桌暂停后会提示回家长页。说书记录用只读的方式留着，只收自家 Coo 主讲或听过的场次。</p>
+        <p class="lead">家长页用 Coo 的家长钥匙进入。可以开通多端登录、看孩子当前牌桌的公开牌面，也能读到自家 Coo 主讲或听过的说书记录。客厅满员时仍可观战，牌桌暂停后会提示回家长页。</p>
 
         <div class="gate">
           <p class="ef-field">同一个「客厅」页，下面那条是给家长的</p>
@@ -203,7 +191,7 @@
         </p>
 
         <div class="also">
-          <p class="lead">遇到问题？全站公告、给运营者的反馈和回复都在同一个页面，<strong>要先用当前浏览器加入客厅才能打开</strong>（还没加入过就找发链接给你的人）。反馈只有你和运营者能看到，别在里面写密码或私人聊天内容。</p>
+          <p class="lead">全站公告、反馈和运营回复都在「反馈与公告」，<strong>要先用当前浏览器加入客厅才能打开</strong>。反馈仅你和运营者可见。</p>
           <p class="ef-actions">
             <a class="ef-btn" href="/support">反馈与公告（需先加入客厅）</a>
           </p>
@@ -216,6 +204,5 @@
       </section>
     </main>
 
-    <p class="toast" role="status" hidden>登录与注册还没开放：会馆不开放注册，入场要一条房主发的带钥匙链接。</p>
   </body>
 </html>

@@ -16,8 +16,10 @@ import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
 import TableView from './views/TableView.vue';
 import StoryView from './views/StoryView.vue';
+import { wantsWebEntry } from './lib/entry.ts';
 
 const ready = ref(false);
+const entryPage = ref(wantsWebEntry(location.search, location.hash));
 const failed = ref('');
 /** 票据本身失效时不给「再试一次」——那只会重复同一句，得回上一页重新授权。 */
 const retryable = ref(false);
@@ -47,6 +49,8 @@ async function retry(): Promise<void> {
 }
 
 async function enter(): Promise<void> {
+  entryPage.value = wantsWebEntry(location.search, location.hash);
+  if (entryPage.value) return;
   if (entering) return;
   entering = true;
   failed.value = '';
@@ -89,7 +93,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', restoreForeground);
   window.addEventListener('pageshow', restoreForeground);
   window.addEventListener('focus', restoreForeground);
-  if (seat.value || location.hash.includes('identity') || location.hash.includes('key')) void enter();
+  if ((!entryPage.value && seat.value) || location.hash.includes('identity') || location.hash.includes('key')) void enter();
   window.addEventListener('hashchange', onHashChange);
   window.addEventListener('popstate', onPopState);
 });
@@ -120,7 +124,7 @@ watch(seat, (next) => {
     <a href="/play">返回茶馆</a>
   </main>
   <StoryView v-else-if="!seat && view === 'story' && !storyJoining()" />
-  <JoinView v-else-if="!seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
+  <JoinView v-else-if="entryPage || !seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable" @entered="enter" @retry="enter" />
   <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available' || storyAvailability === 'unreachable'">
     <StoryView v-if="view === 'story'" />
     <LobbyView v-else-if="snapshot && (snapshot.id === 'hall' || wantHall())" />

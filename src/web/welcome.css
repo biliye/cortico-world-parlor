@@ -317,17 +317,6 @@ html {
   padding-left: 0;
 }
 
-.steps .no {
-  display: block;
-  margin-bottom: 0.55rem;
-  color: var(--ef-ink-2);
-  font-family: var(--ef-font-ui);
-  font-stretch: var(--ef-wider);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-}
-
 .steps h3 {
   margin: 0 0 0.45rem;
   font-size: 1.05rem;
@@ -346,9 +335,6 @@ html {
     grid-template-columns: minmax(0, 1fr);
   }
   .steps > li {
-    display: grid;
-    grid-template-columns: 2.25rem minmax(0, 1fr);
-    align-items: baseline;
     padding: 0.7rem 0;
     border-left: 0;
     border-top: 1px solid var(--ef-rule);
@@ -356,22 +342,17 @@ html {
   .steps > li:first-child {
     border-top: 0;
   }
-  .steps .no {
-    margin: 0;
-  }
   .steps h3 {
-    grid-column: 2;
     margin-bottom: 0.2rem;
     font-size: 1rem;
   }
   .steps p {
-    grid-column: 2;
     font-size: 0.92rem;
     line-height: 1.7;
   }
 }
 
-/* 入口提示：把 Coo 客厅页里那一条的名字原样写出来，好照着找 */
+/* 家长页入口提示 */
 .gate {
   margin: 0 0 clamp(0.9rem, 2vh, 1.25rem);
   padding: 0.9rem 1.1rem 1rem;
@@ -440,31 +421,6 @@ html {
   margin-top: auto;
   padding-top: clamp(1rem, 2.4vh, 1.5rem);
   border-top: 1px solid var(--ef-rule);
-}
-
-/* ---------- 登录/注册的占位提示 ---------- */
-
-.toast {
-  position: fixed;
-  left: 50%;
-  /* 首屏底部是跑马灯，提示条要抬到它上面 */
-  bottom: 4.5rem;
-  z-index: 30;
-  max-width: min(92vw, 34rem);
-  margin: 0;
-  padding: 0.85rem 1.15rem 0.9rem;
-  transform: translateX(-50%);
-  background: var(--ef-ink);
-  color: var(--ef-panel);
-  font-family: var(--ef-font-text);
-  font-size: 0.9rem;
-  line-height: 1.7;
-  -webkit-mask: linear-gradient(-45deg, transparent calc(0.55rem * var(--ef-cut-k)), #000 calc(0.55rem * var(--ef-cut-k) + 0.5px));
-  mask: linear-gradient(-45deg, transparent calc(0.55rem * var(--ef-cut-k)), #000 calc(0.55rem * var(--ef-cut-k) + 0.5px));
-}
-
-.toast[hidden] {
-  display: none;
 }
 
 /* ---------- 窄屏顶栏：三个控件要挤在一行里 ---------- */

@@ -7,6 +7,7 @@ export interface SeatConfig {
   token: string;
   cooId: string;
   cooSecret: string;
+  guest?: boolean;
 }
 
 export interface Health {

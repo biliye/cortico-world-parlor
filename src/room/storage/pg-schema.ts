@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 18;
+export const PG_SCHEMA_VERSION = 19;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -542,5 +542,36 @@ export const PG_MIGRATIONS: PgMigration[] = [
     ALTER TABLE tables ADD CONSTRAINT tables_game_check
       CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi','aeroplane',
         'mahjong-sichuan','mahjong-guangdong'));
+  ` },
+  { version: 19, name: 'web-player-login-and-guest-invites', sql: `
+    CREATE TABLE IF NOT EXISTS web_player_credentials (
+      account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+      login_name TEXT NOT NULL,
+      login_key TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS web_guest_invites (
+      id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL UNIQUE,
+      issuer_account_id TEXT NOT NULL REFERENCES accounts(id),
+      room_id TEXT NOT NULL REFERENCES rooms(id),
+      created_at BIGINT NOT NULL,
+      redeem_by BIGINT NOT NULL,
+      guest_coo_id TEXT UNIQUE REFERENCES coos(id),
+      redeemed_at BIGINT,
+      access_until BIGINT,
+      revoked_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS ix_web_guest_invites_issuer ON web_guest_invites(issuer_account_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS web_player_sessions (
+      token_hash TEXT PRIMARY KEY,
+      coo_id TEXT NOT NULL REFERENCES coos(id),
+      account_id TEXT REFERENCES accounts(id),
+      account_version INTEGER,
+      expires_at BIGINT NOT NULL,
+      seat_token_hash TEXT UNIQUE
+    );
+    CREATE INDEX IF NOT EXISTS ix_web_player_sessions_account ON web_player_sessions(account_id);
+    CREATE INDEX IF NOT EXISTS ix_web_player_sessions_expiry ON web_player_sessions(expires_at);
   ` },
 ];

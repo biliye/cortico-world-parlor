@@ -17,7 +17,8 @@ async function api(path, body, operator = false, method) {
   const token = operator ? operatorKey : cfg?.token;
   if (!token) throw new Error('请先回会馆加入席位，再打开反馈与公告。');
   const verb = method || (body ? 'POST' : 'GET');
-  const res = await fetch(`/v1/support/${path}`, { method: verb,
+  const url = path.startsWith('/v1/web/operator/') ? path : `/v1/support/${path}`;
+  const res = await fetch(url, { method: verb,
     headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(25000) });
   const data = await res.json();
@@ -75,7 +76,40 @@ async function refresh() {
 async function inbox() {
   const data = await api('operator/feedback', undefined, true);
   feedbackList($('operator-feedback'), data.feedback, true);
-  await Promise.all([loadAnnouncementList(), loadNewsList()]);
+  await Promise.all([loadAnnouncementList(), loadNewsList(), loadGuestInvites()]);
+}
+async function loadGuestInvites() {
+  const target = $('operator-invites');
+  if (!target) return;
+  const query = $('operator-invite-query').value.trim().replace(/^#/, '');
+  try {
+    const { invites } = await api('/v1/web/operator/invites?' + new URLSearchParams({ q: query }), undefined, true);
+    target.replaceChildren();
+    if (!invites.length) target.append(node('p', '没有匹配的游客邀请。'));
+    for (const invite of invites) {
+      const box = document.createElement('article');
+      const deadline = invite.accessUntil ?? invite.redeemBy;
+      const state = invite.revokedAt ? '已撤销' : deadline <= Date.now() ? '已到期' : invite.guestId ? '试玩中' : '待兑换';
+      box.append(node('p', `${invite.issuerName} 邀请 · ${invite.roomName} · ${state}`),
+        node('small', `发码人 ${invite.issuerId} · 邀请 ${invite.id}`));
+      if (invite.guestId) box.append(node('p', `${invite.guestName} #${invite.guestHandle} · ${invite.guestId}`));
+      if (!invite.revokedAt && deadline > Date.now()) {
+        const revoke = node('button', '撤销邀请');
+        revoke.type = 'button';
+        revoke.addEventListener('click', () => {
+          void perform(revoke, async () => {
+            await api(`/v1/web/operator/invites/${invite.id}/revoke`, {}, true);
+            await loadGuestInvites();
+            status('游客邀请已撤销。');
+          });
+        });
+        box.append(revoke);
+      }
+      target.append(box);
+    }
+  } catch (error) {
+    target.replaceChildren(node('p', error.message || '读不到游客邀请。'));
+  }
 }
 async function loadAnnouncementList() {
   const target = $('operator-announcement-list');
@@ -193,7 +227,12 @@ $('operator-logout').addEventListener('click', () => {
   operatorKey = ''; $('operator-panel').hidden = true; $('operator-login').hidden = false;
   $('operator-feedback').replaceChildren(); $('operator-news-list').replaceChildren();
   $('operator-announcement-list').replaceChildren();
+  $('operator-invites')?.replaceChildren();
   $('announcement-text').value = ''; announcementRequest = null; cancelNewsEdit(); status('已退出运营工作台。');
+});
+$('operator-invite-search')?.addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(event.submitter, loadGuestInvites);
 });
 $('announcement-form').addEventListener('submit', event => {
   event.preventDefault();

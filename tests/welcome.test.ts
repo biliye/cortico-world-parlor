@@ -114,9 +114,12 @@ describe('对外页的静态契约', () => {
     expect(server).toMatch(/method === 'GET' \|\| method === 'HEAD'\)\s*&&\s*this\.serveWeb/);
   });
 
-  it('入场文案只承诺带钥匙的链接，并说清邀请码的适用范围', () => {
-    expect(page).not.toContain('一条带钥匙的链接，或者一个邀请码');
-    expect(page).toContain('邀请码只在开了「访客加入」的会馆里顶用');
+  it('入场页给出账号登录和邀请码试玩的真实入口', () => {
+    const enter = markup.slice(markup.indexOf('id="enter"'), markup.indexOf('id="parent"'));
+    expect(enter).toContain('href="/play?entry=login"');
+    expect(enter).toContain('href="/play?entry=guest"');
+    expect(enter).toContain('试玩客厅玩 24 小时');
+    expect(markup).not.toMatch(/不开放注册|入口已关闭|房主发.*带钥匙/);
     // 反馈与公告用的是「当前浏览器」里的客厅席位令牌，加入客厅就发了，不需要上桌。
     expect(page).toContain('要先用当前浏览器加入客厅才能打开');
     expect(page).toContain('反馈与公告（需先加入客厅）');
@@ -125,8 +128,9 @@ describe('对外页的静态契约', () => {
   it('顶栏只剩三个控件，正文改成一屏一屏的分页', () => {
     const top = markup.slice(markup.indexOf('<header class="top"'), markup.indexOf('</header>'));
     expect(top).toContain('href="/support"');
-    expect(top).toContain('data-act="account"');
+    expect(top).toMatch(/<a[^>]*href="\/play\?entry=login"[^>]*>登录<\/a>/);
     expect(top).toContain('data-act="theme"');
+    expect(top).toContain('<a href="#top">鲸语会馆</a>');
     // 分区导航撤了：看哪一屏靠滚动，不靠顶栏（只剩左上角回第一屏的那个）
     for (const anchor of ['#what', '#games', '#enter', '#parent']) {
       expect(top).not.toContain(`href="${anchor}"`);
@@ -148,12 +152,10 @@ describe('对外页的静态契约', () => {
     expect(page).toContain('「客厅」页');
   });
 
-  it('登录/注册只是占位：点了给一句说明，不提交任何东西', () => {
-    expect(markup).toMatch(/<button[^>]*data-act="account"[^>]*>登录 \/ 注册<\/button>/);
-    expect(markup).toMatch(/<p class="toast"[^>]*role="status"[^>]*hidden>/);
+  it('明暗偏好可以保存，登录与试玩通过普通链接导航', () => {
+    expect(markup).not.toContain('data-act="account"');
     const js = read('welcome.js');
-    expect(js).toContain('[data-act="account"]');
-    expect(js).toContain('toast.hidden = false');
+    expect(js).not.toContain('[data-act="account"]');
     // 明暗记在 localStorage，重开还是上次选的那个
     expect(js).toContain('parlor-welcome-theme');
     expect(js).toContain('dataset.theme');
