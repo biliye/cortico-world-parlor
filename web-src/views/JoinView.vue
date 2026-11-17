@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay } from '../api/client.ts';
 import { guestJoinEnabled } from '../lib/join.ts';
 import ThemePicker from '../components/ThemePicker.vue';
@@ -9,8 +9,8 @@ import { logoutWebPlayer, takeWebSeat, webPlayerRequest, type WebPlayer } from '
 import { seat } from '../stores/session.ts';
 
 /** `retry` 只在入场失败时出现（`initialError`），由根组件重新走一次 boot。 */
-const emit = defineEmits<{ entered: []; retry: [] }>();
-const props = defineProps<{ initialError?: string; canRetry?: boolean }>();
+const emit = defineEmits<{ entered: []; retry: []; redeemed: [] }>();
+const props = defineProps<{ initialError?: string; canRetry?: boolean; inviteCode?: string }>();
 
 const name = ref('');
 const invite = ref('');
@@ -25,6 +25,13 @@ const password = ref('');
 const code = ref('');
 const guestName = ref('');
 const player = ref<WebPlayer | null>(null);
+
+watch(() => props.inviteCode, inviteCode => {
+  if (!inviteCode) return;
+  entry.value = 'guest';
+  code.value = inviteCode;
+  error.value = '';
+}, { immediate: true });
 
 async function loadWebPlayer(): Promise<void> {
   player.value = await webPlayerRequest<WebPlayer>('me').catch(() => null);
@@ -75,6 +82,7 @@ async function redeem() {
   await webAction(async () => {
     await webPlayerRequest('redeem', { code: code.value, name: guestName.value });
     code.value = '';
+    emit('redeemed');
     await loadWebPlayer();
     await takeWebSeat(false);
     emit('entered');
@@ -174,6 +182,7 @@ async function parentPlay(): Promise<void> {
       <p v-if="error || props.initialError" class="warn error" role="alert">{{ error || props.initialError }}</p>
       <template v-if="player">
         <p class="sub">{{ player.name }}<template v-if="player.guest"> · 游客资格至 {{ new Date(player.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</template></p>
+        <p v-if="props.inviteCode" class="note">要使用这张新邀请，请先退出当前会馆登录。</p>
         <div v-if="player.guest && !player.seated" class="field"><label for="resume-guest-name">游客昵称</label><input id="resume-guest-name" v-model="guestName" maxlength="24" autocomplete="nickname"></div>
         <button class="btn primary" type="button" :disabled="busy" @click="play">{{ player.seated ? (player.guest ? '继续试玩' : '接管席位') : (player.guest ? '进入试玩客厅' : '进入大厅') }}</button>
         <button class="btn ghost" type="button" :disabled="busy" @click="logout">{{ player.guest ? '结束试玩' : '退出登录' }}</button>
