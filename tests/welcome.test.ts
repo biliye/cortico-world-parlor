@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
+import { isGatewayServer } from '../web-src/lib/gateway.ts';
 
 const web = new URL('../src/web/', import.meta.url);
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -162,15 +163,16 @@ describe('对外页的静态契约', () => {
   });
 });
 
-describe('子页都能回首页', () => {
-  const source = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
-  const pages = {
-    parent: read('parent.html'),
-    support: read('support.html'),
-    join: source('../web-src/views/JoinView.vue'),
-    account: source('../web-src/components/AccountPanel.vue'),
-  };
+/** 这些页面的源码文本：模板断言比渲染更快，也够挡住「忘了加判断」这类回退。 */
+const source = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+const pages = {
+  parent: read('parent.html'),
+  support: read('support.html'),
+  join: source('../web-src/views/JoinView.vue'),
+  account: source('../web-src/components/AccountPanel.vue'),
+};
 
+describe('子页都能回首页', () => {
   it('家长页顶栏与没钥匙的 gate 都有回首页的入口', () => {
     const hud = pages.parent.slice(pages.parent.indexOf('<header class="hud"'), pages.parent.indexOf('</header>'));
     expect(hud).toMatch(/<a class="brand" href="\/"/);
@@ -189,11 +191,6 @@ describe('子页都能回首页', () => {
     expect(header).toContain('href="/play"');
   });
 
-  it('入场页品牌行可点，底部另有一条文字链接', () => {
-    expect(pages.join).toMatch(/<a class="brand" href="\/"/);
-    expect(pages.join).toMatch(/<p class="note home-note"><a href="\/">/);
-  });
-
   it('「我的账户」弹窗里也能回首页', () => {
     expect(pages.account).toContain('href="/"');
     expect(pages.account).toContain('会馆首页');
@@ -203,6 +200,45 @@ describe('子页都能回首页', () => {
     for (const [name, text] of Object.entries(pages)) {
       expect(text, name).not.toContain('parlor.com.cn');
     }
+  });
+});
+
+/**
+ * 单厅（serve.ts）与网关共用同一份 /play 与 Vue 产物，但不发 `/`、`/parent`、`/support`。
+ * 所以入口必须按 healthz 的服务器形态收起来——只有网关那几页可以无条件写 `href="/"`。
+ */
+describe('回首页的入口只在多客厅网关出现', () => {
+  it('用 healthz 有没有 rooms 认网关，拿不到就当单厅', () => {
+    // 网关 healthz（src/room/world-server.ts）与单厅 healthz（src/room/server.ts）的真实形状。
+    expect(isGatewayServer({ ok: true, room: 'hall', version, protocol: 2, rooms: 3 })).toBe(true);
+    expect(isGatewayServer({ ok: true, room: 'lobby', version, seats: 2, maxSeats: 8, latest: 0, replay: 0 })).toBe(false);
+    expect(isGatewayServer(null)).toBe(false);
+    expect(isGatewayServer(undefined)).toBe(false);
+    expect(isGatewayServer({})).toBe(false);
+  });
+
+  it('入场页的品牌行与底部链接都挂在判断上，单厅退回纯品牌文字', () => {
+    expect(pages.join).toMatch(/<a v-if="gateway" class="brand" href="\/"/);
+    expect(pages.join).toMatch(/<p v-else class="brand">鲸语/);
+    expect(pages.join).toMatch(/<p v-if="gateway" class="note home-note"><a href="\/">/);
+    // 判断来自 healthz，不是写死 true
+    expect(pages.join).toContain('detectGateway');
+  });
+
+  it('账户弹窗的回首页同样收在判断里', () => {
+    expect(pages.account).toMatch(/<a v-if="gateway" class="btn ghost small" href="\/"/);
+    expect(pages.account).toContain('detectGateway');
+  });
+
+  it('家长页与反馈页只有网关会发，所以那两页不用加判断', () => {
+    const world = readFileSync(new URL('../src/room/world-server.ts', import.meta.url), 'utf8');
+    expect(world).toContain("this.sendWeb('parent.html'");
+    expect(world).toContain("this.sendWeb('support.html'");
+    // 单厅只发 /play 与 /play/assets/**；哪天它开始发这两页，上面两段就得跟着加判断。
+    const room = readFileSync(new URL('../src/room/server.ts', import.meta.url), 'utf8');
+    const serveWeb = room.slice(room.indexOf('private serveWeb'), room.indexOf('private sendWeb'));
+    expect(serveWeb).not.toContain('parent.html');
+    expect(serveWeb).not.toContain('support.html');
   });
 });
 

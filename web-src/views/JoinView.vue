@@ -7,6 +7,7 @@ import WebInvites from '../components/WebInvites.vue';
 import type { Health } from '../api/types.ts';
 import { logoutWebPlayer, takeWebSeat, webPlayerRequest, type WebPlayer } from '../api/web-player.ts';
 import { seat } from '../stores/session.ts';
+import { detectGateway, gateway } from '../stores/server.ts';
 
 /** `retry` 只在入场失败时出现（`initialError`），由根组件重新走一次 boot。 */
 const emit = defineEmits<{ entered: []; retry: []; redeemed: [] }>();
@@ -40,6 +41,8 @@ async function loadWebPlayer(): Promise<void> {
 
 onMounted(async () => {
   void loadWebPlayer();
+  // 与 fetchHealth 同一拍发起，共用同一个 /healthz；单厅据此不显示回首页的入口。
+  void detectGateway();
   const health = await fetchHealth();
   if (health) {
     guestJoin.value = guestJoinEnabled(health);
@@ -177,7 +180,9 @@ async function parentPlay(): Promise<void> {
     </div>
     <ThemePicker />
     <section class="panel">
-      <a class="brand" href="/" title="回鲸语会馆首页" aria-label="鲸语会馆 · 回首页">鲸语 <small>PARLOR CLUB</small></a>
+      <!-- 单厅（serve.ts）没有对外首页，那边只留品牌文字，不给一条 404 的链接。 -->
+      <a v-if="gateway" class="brand" href="/" title="回鲸语会馆首页" aria-label="鲸语会馆 · 回首页">鲸语 <small>PARLOR CLUB</small></a>
+      <p v-else class="brand">鲸语 <small>PARLOR CLUB</small></p>
       <h1>进入会馆</h1>
       <p v-if="error || props.initialError" class="warn error" role="alert">{{ error || props.initialError }}</p>
       <template v-if="player">
@@ -226,7 +231,7 @@ async function parentPlay(): Promise<void> {
         <button class="btn primary" type="button" :disabled="busy" @click="parentPlay">以家长身份下场</button>
       </div>
       <!-- 从聊天软件点错的链接多半落在这一页；给一条明确的退路，不指望人记得域名。 -->
-      <p class="note home-note"><a href="/">← 回会馆首页</a></p>
+      <p v-if="gateway" class="note home-note"><a href="/">← 回会馆首页</a></p>
     </section>
   </div>
 </template>

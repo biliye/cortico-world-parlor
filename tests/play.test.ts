@@ -18,6 +18,7 @@ import { chatChannelAccepts, chatLineMatchesTable, chatLineVisible } from '../we
 import { TABLE_ROOM_HINT, TABLE_TALK_PREFIX, TABLE_TALK_SCOPE, tableScopeText } from '../web-src/lib/chat-copy.ts';
 import { ENABLED_GAMES, GAMES } from '../web-src/lib/games.ts';
 import { SEAT_EXPIRED_MESSAGE, guestJoinEnabled } from '../web-src/lib/join.ts';
+import { isGatewayServer } from '../web-src/lib/gateway.ts';
 import { ROOM_CAPACITY, createRoomBody } from '../web-src/lib/rooms.ts';
 import { decideExpiredSeat } from '../web-src/lib/seat-errors.ts';
 import { readable } from '../web-src/lib/text.ts';
@@ -150,6 +151,22 @@ describe('网页玩家', () => {
     const health = await call('/healthz');
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
     expect(health.body.version).toBe(pkg.version);
+  });
+
+  /**
+   * 单厅复用同一份 Vue 产物，但它不提供对外首页。入场页与账户弹窗里的
+   * 「回首页」必须靠这条判断收起来，否则本机/局域网单厅会多出两条 404。
+   */
+  it('单厅没有对外首页：/ 是 404，healthz 不带 rooms', async () => {
+    const home = await call('/');
+    expect(home.status).toBe(404);
+    const health = await call('/healthz');
+    expect(health.status).toBe(200);
+    expect((health.body as Json).rooms).toBeUndefined();
+    expect(isGatewayServer(health.body)).toBe(false);
+    // 名册照旧：入口页只发 /play 与 /play/assets/**
+    expect((await call('/parent')).status).toBe(404);
+    expect((await call('/support')).status).toBe(404);
   });
 
   it('文本资源走 gzip 并带 ETag，重开一次只回 304', async () => {

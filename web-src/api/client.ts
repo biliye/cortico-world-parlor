@@ -1,6 +1,7 @@
 /** 网络层：与旧 play.js 同一套请求形状、同一套令牌与错误字段。 */
 import { currentRoom, saveSeat, seat } from '../stores/session.ts';
 import { seatTokenFrom } from '../lib/seat-errors.ts';
+import { isGatewayServer } from '../lib/gateway.ts';
 import { parentPlayBody, parseEntryKey } from '../lib/entry.ts';
 import type { ParentPlayBody } from '../lib/entry.ts';
 import type { Health, JoinResult } from './types.ts';
@@ -65,8 +66,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 /**
  * 单客厅服务器（serve.ts）只认 /v1/... 别名，没有 /v1/rooms/:id/... 这组路径。
- * 用 healthz 有没有 rooms 字段判断能力，不靠 404 猜——否则房间真被删掉时
- * 会悄悄拿到默认客厅的数据。
+ * 用 healthz 有没有 rooms 字段判断服务器形态，不靠 404 猜——否则房间真被删掉时
+ * 会悄悄拿到默认客厅的数据。同一条判据也给「回首页」的入口用（lib/gateway.ts）。
  */
 let scopedPaths: boolean | null = null;
 let scopedTask: Promise<boolean> | undefined;
@@ -88,7 +89,7 @@ async function supportsScopedPaths(): Promise<boolean> {
   scopedTask = (async () => {
     const health = await fetchHealth();
     if (!health) return !!currentRoom();
-    scopedPaths = typeof health.rooms === 'number';
+    scopedPaths = isGatewayServer(health);
     return scopedPaths;
   })().finally(() => { scopedTask = undefined; });
   return scopedTask;

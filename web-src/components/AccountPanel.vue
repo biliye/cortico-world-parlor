@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { ref, watch, nextTick, onMounted } from 'vue';
 import { api } from '../api/client.ts';
 import { seat } from '../stores/session.ts';
+import { detectGateway, gateway } from '../stores/server.ts';
 import WebInvites from './WebInvites.vue';
 import { logoutWebPlayer } from '../api/web-player.ts';
 
@@ -63,12 +64,14 @@ watch(() => props.open, async open => {
   else if (dialog.value?.open) dialog.value.close();
 });
 watch(() => seat.value?.cooId, () => { ++epoch; items.value = []; summary.value = null; if (props.open) void load(); });
+// 单厅没有对外首页：入口只在网关出现（与入场页共用同一次 healthz 探测）。
+onMounted(() => { void detectGateway(); });
 </script>
 
 <template>
   <dialog ref="dialog" class="rooms-dialog" aria-label="我的账户与记录" @close="close" @cancel="close">
     <div class="rooms-box">
-      <div class="rooms-head"><h2>我的账户</h2><a class="btn ghost small" href="/" title="回鲸语会馆首页">← 会馆首页</a><button class="btn ghost small" type="button" @click="close">关闭</button></div>
+      <div class="rooms-head"><h2>我的账户</h2><a v-if="gateway" class="btn ghost small" href="/" title="回鲸语会馆首页">← 会馆首页</a><button class="btn ghost small" type="button" @click="close">关闭</button></div>
       <div class="access-body">
         <WebInvites v-if="open && seat && !seat.guest" :key="seat.token" :seat-token="seat.token" />
         <button v-if="seat?.token.startsWith('web_')" class="btn ghost small" type="button" @click="logout">{{ seat.guest ? '结束试玩' : '退出网页登录' }}</button>
