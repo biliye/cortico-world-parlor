@@ -3,6 +3,7 @@ import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 import { activeSeatForCoo } from '../src/room/room-seat-db.ts';
 import { CooAccountDb } from '../src/room/coo-account-db.ts';
+import { parseGuestInvite } from '../web-src/lib/entry.ts';
 
 const PASSWORD = 'a local fixture password';
 let server: WorldServer;
@@ -177,6 +178,39 @@ it('结束试玩立刻释放席位，原码保持已兑换状态', async () => {
   expect(await activeSeatForCoo(server.dbHandle, played.body.identity.cooId)).toBeNull();
   expect((await call('/v1/web/play', {}, auth)).status).toBe(401);
   expect((await redeem()).status).toBe(403);
+});
+
+it('家长凭钥匙直接发可分享的游客链接，领取后仍然只兑一次', async () => {
+  await start();
+  const db = new CooAccountDb(server.dbHandle);
+  const child = 'coo-invite-link-fixture';
+  await db.registerCoo(child, 'invite-link-fixture-secret', 'pet', '发链接的 Coo');
+  const { account, ownerKey } = await db.ensureAccount(child);
+  const parent = await call('/v1/parent/session', { key: ownerKey });
+  expect(parent.status).toBe(200);
+  expect(await db.playerCooOf(account.id)).toBeNull();
+  const issuer = { cookie: parent.cookie };
+  const endpoint = '/v1/web/parent/invites';
+  expect((await call(endpoint, {})).status).toBe(401);
+  const issued = await call(endpoint, {}, issuer);
+  expect(issued.status).toBe(200);
+  const url = new URL(issued.body.link);
+  expect(url.origin).toBe(server.url);
+  expect(url.pathname + url.search).toBe('/play?entry=guest');
+  const code = parseGuestInvite(url.search, url.hash);
+  expect(code).toBe(issued.body.code);
+  expect(await db.playerCooOf(account.id)).toBeNull();
+  expect((await fetch(url)).status).toBe(200);
+  const redeem = () => call('/v1/web/redeem', { code, name: '点击链接的朋友' });
+  const guest = await redeem();
+  expect(guest.status).toBe(200);
+  expect((await redeem()).status).toBe(403);
+  expect((await call(endpoint, {}, { cookie: guest.cookie })).status).toBe(401);
+  const listed = (await call(endpoint, undefined, { cookie: [issuer.cookie, guest.cookie].join('; ') })).body.invites;
+  expect(listed).toMatchObject([{ id: issued.body.id, issuerId: account.id, guestName: '点击链接的朋友' }]);
+  expect(listed[0].link).toBeUndefined();
+  expect((await call(endpoint + '/' + issued.body.id + '/revoke', {}, issuer)).status).toBe(200);
+  expect((await call('/v1/web/play', {}, { cookie: guest.cookie })).status).toBe(401);
 });
 
 it('空闲席位按令牌回收，旧设备退出不影响已接管的设备，改密和到期也回收', async () => {

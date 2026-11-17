@@ -997,31 +997,20 @@ export class WorldServer {
         return;
       }
     }
-    if ((path === 'invites' && (method === 'GET' || method === 'POST'))
-      || (method === 'POST' && /^invites\/[a-f0-9-]{36}\/revoke$/.test(path))) {
-      const session = await this.webPlayers.session(cookie);
-      const parentCookie = cookieOf(req, 'parlor_parent');
-      const parent = parentCookie ? await this.coo.verifySession(parentCookie) : null;
-      const token = bearer(req);
-      const played = token ? await seatByTokenHash(this.db, hashSeatToken(token)) : null;
-      let issuer = session ? session.account_id : parent?.account.id;
-      if (token) {
-        issuer = null;
-        if (played && isWebSeatToken(token) && session?.account_id && session.coo_id === played.cooId) {
-          if ((await this.webPlayers.seatSession(played.tokenHash))?.token_hash === session.token_hash) issuer = session.account_id;
-        } else if (played && !isWebSeatToken(token) && parent && played.cooId === await this.coo.playerCooOf(parent.account.id)) {
-          issuer = parent.account.id;
-        }
-      }
-      if (!issuer) throw new HttpError(403, '请用正式会馆账号或家长钥匙登录后发码');
-      if (path === 'invites' && method === 'GET') {
+    const invites = /^(parent\/)?invites(?:\/([a-f0-9-]{36})\/revoke)?$/.exec(path);
+    if (invites && (method === 'POST' || (method === 'GET' && !invites[2]))) {
+      const issuer = invites[1] ? (await this.parentSession(req)).account.id : await this.webInviteIssuer(req, cookie);
+      if (method === 'GET') {
         json(res, 200, { invites: await this.webPlayers.invitations(issuer) });
-      } else if (path === 'invites') {
-        json(res, 200, await this.webPlayers.issue(issuer, (await this.guestRoom()).id));
-      } else {
-        await this.webPlayers.revoke(path.split('/')[1]!, issuer);
+      } else if (invites[2]) {
+        await this.webPlayers.revoke(invites[2], issuer);
         this.pokeClock();
         json(res, 200, { ok: true });
+      } else {
+        const issued = await this.webPlayers.issue(issuer, (await this.guestRoom()).id);
+        const link = new URL('/play?entry=guest', this.audienceUrl());
+        link.hash = new URLSearchParams({ invite: issued.code }).toString();
+        json(res, 200, { ...issued, link: link.href });
       }
       return;
     }
@@ -1069,6 +1058,25 @@ export class WorldServer {
       return;
     }
     throw new HttpError(404, '没有这个会馆登录接口');
+  }
+
+  private async webInviteIssuer(req: IncomingMessage, cookie: string): Promise<string> {
+    const session = await this.webPlayers.session(cookie);
+    const parentCookie = cookieOf(req, 'parlor_parent');
+    const parent = parentCookie ? await this.coo.verifySession(parentCookie) : null;
+    const token = bearer(req);
+    if (!token) {
+      const issuer = session ? session.account_id : parent?.account.id;
+      if (issuer) return issuer;
+    } else {
+      const played = await seatByTokenHash(this.db, hashSeatToken(token));
+      if (played && isWebSeatToken(token) && session?.account_id && session.coo_id === played.cooId) {
+        if ((await this.webPlayers.seatSession(played.tokenHash))?.token_hash === session.token_hash) return session.account_id;
+      } else if (played && !isWebSeatToken(token) && parent && played.cooId === await this.coo.playerCooOf(parent.account.id)) {
+        return parent.account.id;
+      }
+    }
+    throw new HttpError(403, '请用正式会馆账号或家长钥匙登录后发码');
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

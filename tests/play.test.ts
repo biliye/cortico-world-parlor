@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { ParlorServer } from '../src/room/server.ts';
 import type { PlayerJoinResponse, RoomSnapshot } from '../src/room/protocol.ts';
-import { parentPlayBody, parseEntryKey, wantsWebEntry } from '../web-src/lib/entry.ts';
+import { parentPlayBody, parseEntryKey, parseGuestInvite, wantsWebEntry } from '../web-src/lib/entry.ts';
 import { chatChannelAccepts, chatLineMatchesTable, chatLineVisible } from '../web-src/lib/chat-lines.ts';
 import { TABLE_ROOM_HINT, TABLE_TALK_PREFIX, TABLE_TALK_SCOPE, tableScopeText } from '../web-src/lib/chat-copy.ts';
 import { ENABLED_GAMES, GAMES } from '../web-src/lib/games.ts';
@@ -446,6 +446,15 @@ describe('网页玩家', () => {
     expect(wantsWebEntry('?entry=login', '#key=fixture')).toBe(false);
     expect(wantsWebEntry('?entry=guest', '#identity=fixture')).toBe(false);
     expect(wantsWebEntry('?room=hall', '')).toBe(false);
+  });
+
+  it('邀请链接仅预填游客邀请码，并保持钥匙和身份回跳优先', () => {
+    const code = 'uT5TRKN3omF2_8Z0Xa-W8g';
+    expect(parseGuestInvite('?entry=guest', '#invite=' + code)).toBe(code);
+    expect(parseGuestInvite('?entry=login', '#invite=' + code)).toBe('');
+    expect(parseGuestInvite('?entry=guest', '#invite=short')).toBe('');
+    expect(parseGuestInvite('?entry=guest', '#invite=' + code + '&key=fixture')).toBe('');
+    expect(parseGuestInvite('?entry=guest', '#invite=' + code + '&identity=fixture')).toBe('');
   });
 
   it('私聊浮窗：入口在信箱旁、可拖拽、点窗外关闭、离线也投递', () => {
