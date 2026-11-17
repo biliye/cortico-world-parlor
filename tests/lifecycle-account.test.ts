@@ -25,6 +25,7 @@ beforeEach(async () => {
   app = await WorldServer.create({ ...storage, inviteCode:'life-test', now:() => now });
   const coos = new CooAccountDb(app.dbHandle, { now:() => now });
   for (const id of [A, B]) expect(await coos.registerCoo(id, `test-secret-${id}-0123456789`, 'pet', id)).toBe('ok');
+  // The default seat A exercises guest behavior. Owner tests explicitly seat B.
   await createRoom(app.dbHandle, { id:'r-life', name:'测试客厅', ownerCooId:B, visibility:'public' }, now);
   room = await RoomHost.create(app.dbHandle, 'r-life', { now:() => now });
   token = (await room.join(A, { name:'小满', kind:'pet' })).token;
@@ -59,6 +60,8 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     const owner = await room.join(B, { name:'房主', kind:'pet' });
     await room.switchTo(A, 'hall');
     if (hallFull) {
+      // A token-preserving move into this room could have set this return target.
+      await app.dbHandle.prepare('UPDATE coo_sessions SET return_room_id=? WHERE coo_id=?').run('r-life', B);
       await app.dbHandle.prepare("UPDATE rooms SET capacity=2 WHERE id='hall'").run();
       const coos = new CooAccountDb(app.dbHandle);
       const third = 'coo-lifecycle-c';
@@ -79,7 +82,19 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     if (hallFull) {
       expect(ownerSeat).toBeNull();
       const session = await app.dbHandle.prepare('SELECT current_room_id, return_room_id FROM coo_sessions WHERE coo_id=?').get(B);
-      expect(session).toMatchObject({ current_room_id:null, return_room_id:'hall' });
+      expect(session).toMatchObject({ current_room_id:null, return_room_id:null });
+
+      const { url } = await app.listen();
+      const join = (roomId: string) => fetch(`${url}/v1/rooms/${roomId}/join`, {
+        method:'POST', signal:AbortSignal.timeout(3000),
+        headers:{'content-type':'application/json','x-parlor-coo':B,'x-parlor-coo-secret':`test-secret-${B}-0123456789`},
+        body:JSON.stringify({invite:'life-test',name:'房主',kind:'pet'}),
+      });
+      const hallJoin = await join('hall');
+      expect(hallJoin.status).toBe(409);
+      const otherJoin = await join('lobby');
+      expect(otherJoin.status).toBe(200);
+      expect(await otherJoin.json()).toMatchObject({room:'lobby'});
     } else {
       expect(ownerSeat).toMatchObject({ roomId:'hall', tokenHash:hashSeatToken(owner.token) });
     }

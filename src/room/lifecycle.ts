@@ -73,9 +73,9 @@ export class RoomLifecycle {
                     await host.switchTo(seat.cooId, hall, { preserveToken: true });
                   } catch (error) {
                     if (!(error instanceof HostError) || error.code !== 'full') throw error;
-                    // The failed move rolls back to its savepoint. Free the old seat and send the next join to the hall.
+                    // The failed move rolls back to its savepoint. Release the old seat and let the next join choose a room.
                     await host.remove(seat.cooId, now, 'room_archived');
-                    await this.db.prepare('UPDATE coo_sessions SET return_room_id=? WHERE coo_id=?').run(hall, seat.cooId);
+                    await this.db.prepare('UPDATE coo_sessions SET return_room_id=NULL WHERE coo_id=?').run(seat.cooId);
                   }
                 }
               }

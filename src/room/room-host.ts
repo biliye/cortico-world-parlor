@@ -359,6 +359,7 @@ export class RoomHost {
 
   /**
    * 强制释放席位并写离开事件；调用方处理房间权限和牌桌状态。
+   * 自动归档只在确认客厅没有未结束的牌桌后调用。
    */
   async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' | 'room_archived' | 'guest_expired' | 'web_session_ended' = 'removed'): Promise<LeaveResult | null> {
     const seat = await this.seatOf(cooId);
