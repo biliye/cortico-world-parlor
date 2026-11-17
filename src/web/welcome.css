@@ -42,9 +42,13 @@ html {
 }
 
 /* 脚本量过：每屏都装得下时收紧成强制吸附，一个滚轮动作就是一屏；
-   有一屏比视口高（窄屏的首屏、玩法九条）就退回接近吸附，免得卡在中间滚不动。 */
-html[data-snap='strict'] {
-  scroll-snap-type: y mandatory;
+   有一屏比视口高（窄屏的首屏、玩法九条）就退回接近吸附，免得卡在中间滚不动。
+   开着「减少动态效果」的人不给强制吸附：整屏瞬跳比连续滚动更晃，门槛放在媒体查询里，
+   系统偏好一改就立刻生效，不用等脚本重新量。 */
+@media (prefers-reduced-motion: no-preference) {
+  html[data-snap='strict'] {
+    scroll-snap-type: y mandatory;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -272,7 +276,8 @@ html[data-snap='strict'] {
 }
 
 /* 矮窗口（1366×768 的笔记本、1080×675 的截图档）：首屏要塞下五块，
-   会名与内边距各收一点，免得「这里是这样的地方」被挤到下一屏去。 */
+   会名与内边距各收一点，免得「这里是这样的地方」被挤到下一屏去。
+   三栏那半截放在三栏默认规则之后（媒体查询不加权，写前面会被盖回去）。 */
 @media (max-height: 780px) {
   .hero {
     --ef-wordmark: clamp(2.5rem, 6.4vw, 6.5rem);
@@ -283,20 +288,6 @@ html[data-snap='strict'] {
   }
   .hero .copy {
     padding-bottom: 1.05rem;
-  }
-  .what {
-    padding-top: 0.65rem;
-    padding-bottom: 0.85rem;
-  }
-  .what .ef-bar-title {
-    margin-bottom: 0.5rem;
-  }
-  .what-cols > div {
-    padding-top: 0.7rem;
-  }
-  .what-cols p {
-    font-size: 0.86rem;
-    line-height: 1.65;
   }
 }
 
@@ -344,6 +335,25 @@ html[data-snap='strict'] {
   font-family: var(--ef-font-text);
   font-size: 0.9rem;
   line-height: 1.75;
+}
+
+/* 矮窗口里的三栏：字号、行高、上下边距一起收，首屏才塞得进 640–780 这一档。
+   必须写在上面几条默认规则之后 —— 媒体查询不加权，顺序反了就等于没写。 */
+@media (max-height: 780px) {
+  .what {
+    padding-top: 0.65rem;
+    padding-bottom: 0.85rem;
+  }
+  .what .ef-bar-title {
+    margin-bottom: 0.5rem;
+  }
+  .what-cols > div {
+    padding-top: 0.7rem;
+  }
+  .what-cols p {
+    font-size: 0.86rem;
+    line-height: 1.65;
+  }
 }
 
 @media (max-width: 719px) {

@@ -195,6 +195,8 @@ describe('对外页的静态契约', () => {
 
     // 吸附：默认接近吸附，脚本量完才收紧成强制
     expect(css).toMatch(/html\[data-snap='strict'\]\s*\{[^}]*scroll-snap-type:\s*y mandatory/);
+    // 强制吸附只给「不介意动效」的人；开了减少动态效果就留在接近吸附
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*no-preference\)\s*\{\s*html\[data-snap='strict'\]/);
     expect(js).toContain("root.dataset.snap");
     expect(js).toContain('measureSnap');
     // 每屏高度都量，不是只看第一屏
@@ -218,6 +220,19 @@ describe('对外页的静态契约', () => {
     // 三处都要能被「减少动态效果」关掉
     expect(js).toContain('prefers-reduced-motion: reduce');
     expect(css).toContain('prefers-reduced-motion: no-preference');
+  });
+
+  /**
+   * 媒体查询不加权：矮窗口那档要写在三栏默认规则之后，否则同级的默认值会盖回去，
+   * 首屏底部就会比视口高一截、整页退回接近吸附（1000×640 实测过）。
+   */
+  it('矮窗口的三栏压缩排在默认规则之后，不会被同级默认值盖掉', () => {
+    const css = read('welcome.css');
+    const defaults = css.indexOf('.what-cols p {');
+    expect(defaults).toBeGreaterThan(-1);
+    const tight = css.indexOf('@media (max-height: 780px)', defaults);
+    expect(tight).toBeGreaterThan(defaults);
+    expect(css.slice(tight, tight + 700)).toMatch(/\.what-cols p\s*\{[^}]*font-size:\s*0\.86rem/);
   });
 
 
