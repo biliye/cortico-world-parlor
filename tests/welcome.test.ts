@@ -114,14 +114,51 @@ describe('对外页的静态契约', () => {
     expect(server).toMatch(/method === 'GET' \|\| method === 'HEAD'\)\s*&&\s*this\.serveWeb/);
   });
 
-  it('门面通往登录及一次性邀请，并说明 Coo 直接进场', () => {
-    expect(page).toContain('href="/play?entry=login"');
-    expect(page).toContain('href="/play?entry=guest"');
-    expect(page).toContain('点「我下场玩」');
-    expect(page).toContain('试玩客厅玩 24 小时');
+  it('入场页给出账号登录和邀请码试玩的真实入口', () => {
+    const enter = markup.slice(markup.indexOf('id="enter"'), markup.indexOf('id="parent"'));
+    expect(enter).toContain('href="/play?entry=login"');
+    expect(enter).toContain('href="/play?entry=guest"');
+    expect(enter).toContain('试玩客厅玩 24 小时');
+    expect(markup).not.toMatch(/不开放注册|入口已关闭|房主发.*带钥匙/);
     // 反馈与公告用的是「当前浏览器」里的客厅席位令牌，加入客厅就发了，不需要上桌。
     expect(page).toContain('要先用当前浏览器加入客厅才能打开');
     expect(page).toContain('反馈与公告（需先加入客厅）');
+  });
+
+  it('顶栏只剩三个控件，正文改成一屏一屏的分页', () => {
+    const top = markup.slice(markup.indexOf('<header class="top"'), markup.indexOf('</header>'));
+    expect(top).toContain('href="/support"');
+    expect(top).toMatch(/<a[^>]*href="\/play\?entry=login"[^>]*>登录<\/a>/);
+    expect(top).toContain('data-act="theme"');
+    expect(top).toContain('<a href="#top">鲸语会馆</a>');
+    // 分区导航撤了：看哪一屏靠滚动，不靠顶栏（只剩左上角回第一屏的那个）
+    for (const anchor of ['#what', '#games', '#enter', '#parent']) {
+      expect(top).not.toContain(`href="${anchor}"`);
+    }
+
+    // 屏序就是阅读顺序，改版式时这条会先炸
+    const ids = [...markup.matchAll(/<section class="screen[^"]*" id="([^"]+)"/g)].map(([, id]) => id);
+    expect(ids).toEqual(['top', 'games', 'enter', 'parent']);
+
+    const css = read('welcome.css');
+    expect(css).toMatch(/scroll-snap-type:\s*y proximity/);
+    expect(css).toMatch(/scroll-snap-align:\s*start/);
+    expect(css).toMatch(/min-height:\s*calc\(100svh - var\(--top-h\)/);
+  });
+
+  it('入场与家长两屏写清 Coo 客厅页里的两条入口', () => {
+    expect(page).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
+    expect(page).toContain('客厅 · 家长页（只读，带钥匙）');
+    expect(page).toContain('「客厅」页');
+  });
+
+  it('明暗偏好可以保存，登录与试玩通过普通链接导航', () => {
+    expect(markup).not.toContain('data-act="account"');
+    const js = read('welcome.js');
+    expect(js).not.toContain('[data-act="account"]');
+    // 明暗记在 localStorage，重开还是上次选的那个
+    expect(js).toContain('parlor-welcome-theme');
+    expect(js).toContain('dataset.theme');
   });
 });
 
