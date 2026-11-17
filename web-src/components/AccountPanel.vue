@@ -68,7 +68,7 @@ watch(() => seat.value?.cooId, () => { ++epoch; items.value = []; summary.value 
 <template>
   <dialog ref="dialog" class="rooms-dialog" aria-label="我的账户与记录" @close="close" @cancel="close">
     <div class="rooms-box">
-      <div class="rooms-head"><h2>我的账户</h2><button class="btn ghost small" type="button" @click="close">关闭</button></div>
+      <div class="rooms-head"><h2>我的账户</h2><a class="btn ghost small" href="/" title="回鲸语会馆首页">← 会馆首页</a><button class="btn ghost small" type="button" @click="close">关闭</button></div>
       <div class="access-body">
         <WebInvites v-if="open && seat && !seat.guest" :key="seat.token" :seat-token="seat.token" />
         <button v-if="seat?.token.startsWith('web_')" class="btn ghost small" type="button" @click="logout">{{ seat.guest ? '结束试玩' : '退出网页登录' }}</button>

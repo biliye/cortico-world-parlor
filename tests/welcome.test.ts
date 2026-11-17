@@ -162,6 +162,50 @@ describe('对外页的静态契约', () => {
   });
 });
 
+describe('子页都能回首页', () => {
+  const source = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+  const pages = {
+    parent: read('parent.html'),
+    support: read('support.html'),
+    join: source('../web-src/views/JoinView.vue'),
+    account: source('../web-src/components/AccountPanel.vue'),
+  };
+
+  it('家长页顶栏与没钥匙的 gate 都有回首页的入口', () => {
+    const hud = pages.parent.slice(pages.parent.indexOf('<header class="hud"'), pages.parent.indexOf('</header>'));
+    expect(hud).toMatch(/<a class="brand" href="\/"/);
+    expect(hud).toMatch(/class="hud-home" href="\/"/);
+    const gate = pages.parent.slice(pages.parent.indexOf('id="gate"'), pages.parent.indexOf('id="view"'));
+    expect(gate).toContain('href="/"');
+    expect(gate).toContain('回会馆首页');
+    // 跳过导航还在，品牌区加了链接不等于把无障碍入口挤掉
+    expect(pages.parent).toContain('<a class="skip-link" href="#main">跳到主要内容</a>');
+  });
+
+  it('反馈页的「回会馆」改回首页，去客厅另留一条', () => {
+    const header = pages.support.slice(pages.support.indexOf('<header>'), pages.support.indexOf('</header>'));
+    expect(header).toContain('href="/"');
+    expect(header).toContain('回会馆首页');
+    expect(header).toContain('href="/play"');
+  });
+
+  it('入场页品牌行可点，底部另有一条文字链接', () => {
+    expect(pages.join).toMatch(/<a class="brand" href="\/"/);
+    expect(pages.join).toMatch(/<p class="note home-note"><a href="\/">/);
+  });
+
+  it('「我的账户」弹窗里也能回首页', () => {
+    expect(pages.account).toContain('href="/"');
+    expect(pages.account).toContain('会馆首页');
+  });
+
+  it('一律用相对根路径，不写死实例域名', () => {
+    for (const [name, text] of Object.entries(pages)) {
+      expect(text, name).not.toContain('parlor.com.cn');
+    }
+  });
+});
+
 describe('对外页的发法', () => {
   const serve = async (origin: string) => {
     const server = createServer((req, res) => {
