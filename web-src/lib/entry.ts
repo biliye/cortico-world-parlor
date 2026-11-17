@@ -1,5 +1,9 @@
 /** 入场链接的纯解析：不碰 DOM，服务端测试与网页共用。 */
 
+export function wantsWebEntry(search: string, hash: string): boolean {
+  return new URLSearchParams(search).has('entry') && !hash;
+}
+
 /** 从 #key=… 取一次性钥匙。 */
 export function parseEntryKey(hash: string): string {
   const raw = String(hash || '').replace(/^#/, '');

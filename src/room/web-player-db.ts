@@ -7,6 +7,9 @@ export const WEB_LOGIN_TTL = 30 * DAY;
 const REDEEM_TTL = 7 * DAY;
 const GUEST_TTL = DAY;
 const DEFAULT_SALT = Buffer.alloc(16);
+const PASSWORD_WORKERS = 3;
+const PASSWORD_QUEUE_LIMIT = 12;
+const PASSWORD_WAIT_MS = 2_000;
 export const webHash = (value: string) => createHash('sha256').update(value).digest('hex');
 export const isWebSeatToken = (token: string) => /^web_[A-Za-z0-9_-]{43}$/.test(token);
 
@@ -44,15 +47,35 @@ export class WebPlayerDb {
   private readonly db: Db;
   private readonly now: () => number;
   private passwordChecks = 0;
+  private readonly passwordQueue: Array<() => void> = [];
 
   constructor(db: Db, now: () => number) {
     this.db = db;
     this.now = now;
   }
 
+  private async waitForPasswordWorker(): Promise<void> {
+    if (this.passwordChecks < PASSWORD_WORKERS) {
+      this.passwordChecks++;
+      return;
+    }
+    const busy = () => new HttpError(429, '密码验证繁忙，请稍后重试');
+    if (this.passwordQueue.length >= PASSWORD_QUEUE_LIMIT) throw busy();
+    await new Promise<void>((resolve, reject) => {
+      const start = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.passwordQueue.splice(this.passwordQueue.indexOf(start), 1);
+        reject(busy());
+      }, PASSWORD_WAIT_MS);
+      this.passwordQueue.push(start);
+    });
+  }
+
   private async derive(password: string, salt: Buffer): Promise<Buffer> {
-    if (this.passwordChecks >= 3) throw new HttpError(429, '登录请求太多，请稍后再试');
-    this.passwordChecks++;
+    await this.waitForPasswordWorker();
     try {
       // OWASP scrypt profile for runtimes without Argon2id.
       return await new Promise<Buffer>((resolve, reject) => {
@@ -60,7 +83,9 @@ export class WebPlayerDb {
           (error, key) => error ? reject(error) : resolve(key));
       });
     } finally {
-      this.passwordChecks--;
+      const next = this.passwordQueue.shift();
+      if (next) next();
+      else this.passwordChecks--;
     }
   }
 
@@ -90,7 +115,7 @@ export class WebPlayerDb {
         if ((error as { code?: string }).code === '23505') throw new HttpError(409, '登录名已被使用，请换一个');
         throw error;
       }
-      await this.db.prepare('DELETE FROM web_player_sessions WHERE account_id=?').run(accountId);
+      await this.expireAccountSessions(accountId);
     });
     return name;
   }
@@ -100,9 +125,9 @@ export class WebPlayerDb {
     const password = typeof input.password === 'string' ? input.password : '';
     if (!password || Buffer.byteLength(password) > 512) throw new HttpError(401, '登录名或密码不对');
     const candidate = await this.db.prepare(credentialSelect + ' WHERE w.login_key=?').get(name) as Credentials | undefined;
-    const [, salt, expected] = candidate?.password_hash.split(':') ?? [];
-    const derived = await this.derive(password, salt ? Buffer.from(salt, 'hex') : DEFAULT_SALT);
-    if (!expected || !timingSafeEqual(derived, Buffer.from(expected, 'hex'))) {
+    const stored = /^scrypt:([0-9a-f]{32}):([0-9a-f]{64})$/.exec(candidate?.password_hash ?? '');
+    const derived = await this.derive(password, stored ? Buffer.from(stored[1]!, 'hex') : DEFAULT_SALT);
+    if (!stored || !timingSafeEqual(derived, Buffer.from(stored[2]!, 'hex'))) {
       throw new HttpError(401, '登录名或密码不对');
     }
     return withTransaction(this.db, async () => {
@@ -144,8 +169,27 @@ export class WebPlayerDb {
       .run(webHash(token), session.token_hash);
   }
 
-  async logout(token: string) {
-    if (token) await this.db.prepare('DELETE FROM web_player_sessions WHERE token_hash=?').run(webHash(token));
+  async expireAccountSessions(accountId: string, staleOnly = false) {
+    const now = this.now();
+    const stale = staleOnly ? ' AND account_version<>(SELECT session_version FROM accounts WHERE id=account_id)' : '';
+    await this.db.prepare('UPDATE web_player_sessions SET expires_at=? WHERE account_id=? AND expires_at>?' + stale)
+      .run(now, accountId, now);
+  }
+
+  async logout(token: string): Promise<string | undefined> {
+    if (!/^[\w-]{43}$/.test(token)) return undefined;
+    const now = this.now();
+    const row = await this.db.prepare(`
+      WITH ended AS (
+        UPDATE web_player_sessions SET expires_at=LEAST(expires_at,?) WHERE token_hash=?
+        RETURNING coo_id, account_id
+      ), finished_trial AS (
+        UPDATE web_guest_invites i SET access_until=LEAST(i.access_until,?)
+        FROM ended e WHERE e.account_id IS NULL AND i.guest_coo_id=e.coo_id
+      )
+      SELECT coo_id FROM ended
+    `).get(now, webHash(token), now) as { coo_id: string } | undefined;
+    return row?.coo_id;
   }
 
   async invitations(issuer?: string, target = '') {
@@ -218,14 +262,28 @@ export class WebPlayerDb {
     if (!result.changes) throw new HttpError(404, '没有这张邀请');
   }
 
-  async expiredGuestSeats(now: number) {
+  async isGuest(cooId: string): Promise<boolean> {
+    return !!await this.db.prepare('SELECT 1 FROM web_guest_invites WHERE guest_coo_id=?').get(cooId);
+  }
+
+  async endedSeats(now: number, player?: string) {
     return await this.db.prepare(`
-      SELECT s.room_id, s.coo_id FROM room_seats s JOIN web_guest_invites i ON i.guest_coo_id=s.coo_id
-      WHERE s.released_at IS NULL AND (i.revoked_at IS NOT NULL OR i.access_until<=?) LIMIT 50
-    `).all(now) as { room_id: string; coo_id: string }[];
+      SELECT r.room_id, r.coo_id, r.token_hash, (i.guest_coo_id IS NOT NULL) AS guest
+      FROM room_seats r
+      LEFT JOIN web_guest_invites i ON i.guest_coo_id=r.coo_id
+      LEFT JOIN web_player_sessions s ON s.seat_token_hash=r.token_hash AND s.coo_id=r.coo_id AND s.account_id IS NOT NULL
+      WHERE r.released_at IS NULL
+        AND (LEAST(i.revoked_at,i.access_until)<=?
+          OR (s.expires_at<=? AND NOT EXISTS (SELECT 1 FROM active_table_players t WHERE t.coo_id=r.coo_id)))
+        ${player ? 'AND r.coo_id=?' : ''}
+      ORDER BY LEAST(i.revoked_at,i.access_until,s.expires_at), r.coo_id LIMIT 50
+    `).all(now, now, ...(player ? [player] : [])) as { room_id: string; coo_id: string; token_hash: string; guest: boolean }[];
   }
 
   async pruneSessions(now: number) {
-    await this.db.prepare('DELETE FROM web_player_sessions WHERE expires_at<=?').run(now);
+    await this.db.prepare(`
+      DELETE FROM web_player_sessions s WHERE s.expires_at<=?
+        AND NOT EXISTS (SELECT 1 FROM room_seats r WHERE r.token_hash=s.seat_token_hash AND r.released_at IS NULL)
+    `).run(now);
   }
 }

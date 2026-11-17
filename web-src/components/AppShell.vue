@@ -82,7 +82,7 @@ async function goSection(id: 'all' | 'mine' | 'favorites'): Promise<void> {
 }
 
 onMounted(() => {
-  void loadThreads();
+  if (!seat.value?.guest) void loadThreads();
 });
 </script>
 
@@ -150,7 +150,7 @@ onMounted(() => {
             <Icon name="mail" /><span class="tool-label">信箱</span>
             <span v-if="mailUnread" class="tool-badge">{{ mailUnread }}</span>
           </button>
-          <button class="tool" type="button" @click="toggleDm">
+          <button v-if="!seat?.guest" class="tool" type="button" @click="toggleDm">
             <Icon name="chat" /><span class="tool-label">私聊</span>
             <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
           </button>
@@ -168,7 +168,7 @@ onMounted(() => {
     </main>
 
     <ChatPanel v-if="view !== 'story'" />
-    <DmWindow />
+    <DmWindow v-if="!seat?.guest" />
     <RoomSwitcher v-model:open="switcherOpen" />
     <AccountPanel v-model:open="accountOpen" />
     <RatingsPanel v-model:open="ratingsOpen" />

@@ -16,9 +16,10 @@ import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
 import TableView from './views/TableView.vue';
 import StoryView from './views/StoryView.vue';
+import { wantsWebEntry } from './lib/entry.ts';
 
 const ready = ref(false);
-const entryPage = ref(new URLSearchParams(location.search).has('entry') && !location.hash);
+const entryPage = ref(wantsWebEntry(location.search, location.hash));
 const failed = ref('');
 /** 票据本身失效时不给「再试一次」——那只会重复同一句，得回上一页重新授权。 */
 const retryable = ref(false);
@@ -48,7 +49,7 @@ async function retry(): Promise<void> {
 }
 
 async function enter(): Promise<void> {
-  entryPage.value = new URLSearchParams(location.search).has('entry') && !location.hash;
+  entryPage.value = wantsWebEntry(location.search, location.hash);
   if (entryPage.value) return;
   if (entering) return;
   entering = true;

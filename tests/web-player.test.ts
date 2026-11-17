@@ -1,6 +1,8 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
+import { activeSeatForCoo } from '../src/room/room-seat-db.ts';
+import { CooAccountDb } from '../src/room/coo-account-db.ts';
 
 const PASSWORD = 'a local fixture password';
 let server: WorldServer;
@@ -20,11 +22,11 @@ async function call(path: string, body?: Record<string, unknown>, headers: Recor
     cookie: (response.headers.get('set-cookie') ?? '').split(';')[0]! };
 }
 
-async function start() {
+async function start(identityAuthority = 'self') {
   now = Date.now();
   server = await WorldServer.create({
     ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'extension-fixture',
-    identityAuthority: 'self', operatorKey: 'operator-fixture', now: () => now,
+    identityAuthority, operatorKey: 'operator-fixture', now: () => now,
   });
   await server.listen();
 }
@@ -53,10 +55,9 @@ it('Coo 直进并保存原身份，网页两次登录只有明确接管才换令
   expect((await call('/v1/web/credentials', login, parent)).status).toBe(200);
   const secondParent = await family('second');
   expect((await call('/v1/web/credentials', login, { cookie: secondParent.cookie })).status).toBe(409);
-  const desktop = await call('/v1/web/login', login);
-  const phone = await call('/v1/web/login', login);
-  expect(desktop.status).toBe(200);
-  expect(phone.status).toBe(200);
+  const logins = await Promise.all(Array.from({ length: 4 }, () => call('/v1/web/login', login)));
+  expect(logins.map(result => result.status)).toEqual([200, 200, 200, 200]);
+  const [desktop, phone] = [logins[0]!, logins[1]!];
   expect(phone.cookie).not.toBe(desktop.cookie);
   expect((await call('/v1/rooms/hall/room', undefined, legacySeat)).status).toBe(200);
   expect((await call('/v1/parent/me', undefined, { cookie: phone.cookie })).status).toBe(401);
@@ -109,6 +110,9 @@ it('用户发码可追溯，竞态下只兑一次，游客不能换厅或发码�
   expect((await call('/v1/rooms/guest-play/switch', { to: 'lobby' }, seat)).status).toBe(403);
   expect((await call('/v1/rooms/hall/join', {}, { ...seat, 'x-parlor-invite': 'extension-fixture' })).status).toBe(403);
   expect((await call('/v1/rooms', { name: '绕过大厅' }, seat)).status).toBe(403);
+  expect((await call('/v1/dm', { to: 'inviter', text: '打扰了' }, seat)).status).toBe(403);
+  expect((await call('/v1/rooms/guest-play/action', { type: 'whisper', to: 'inviter', text: '打扰了' }, seat)).status).toBe(403);
+  expect((await call('/v1/me/rename', { name: 'inviter' }, seat)).status).toBe(403);
   const outsideHost = { authorization: 'Bearer ' + inviter.body.token };
   const outside = await call('/v1/rooms', { name: '游客范围外', visibility: 'public' }, outsideHost);
   const outsideRoom = outside.body.room.id as string;
@@ -138,6 +142,7 @@ it('用户发码可追溯，竞态下只兑一次，游客不能换厅或发码�
   expect((await call('/v1/rooms/guest-play/room', undefined, seat)).status).toBe(401);
   expect((await call('/v1/web/play', { takeover: true }, guest)).status).toBe(401);
   await expect(readToEnd).resolves.toContain('retry:');
+  await vi.waitFor(async () => expect(await activeSeatForCoo(server.dbHandle, played.body.identity.cooId)).toBeNull());
 });
 
 it('未兑换邀请码与已兑换游客资格分别到期', async () => {
@@ -152,6 +157,80 @@ it('未兑换邀请码与已兑换游客资格分别到期', async () => {
   now += 86_400_000;
   expect((await call('/v1/web/me', undefined, { cookie: guest.cookie })).status).toBe(401);
   expect((await call('/v1/rooms/guest-play/room', undefined, { authorization: 'Bearer ' + played.body.token })).status).toBe(401);
+  await server.releaseEndedWebSeats(now);
+  expect(await activeSeatForCoo(server.dbHandle, played.body.identity.cooId)).toBeNull();
   now += 6 * 86_400_000;
   expect((await call('/v1/web/redeem', { code: expired.code, name: '已过期' })).status).toBe(403);
+});
+
+it('结束试玩立刻释放席位，原码保持已兑换状态', async () => {
+  await start();
+  const { cookie } = await family('guest-logout');
+  const invite = (await call('/v1/web/invites', {}, { cookie })).body;
+  const redeem = () => call('/v1/web/redeem', { code: invite.code, name: '主动离场' });
+  const guest = await redeem();
+  const auth = { cookie: guest.cookie };
+  const played = await call('/v1/web/play', {}, auth);
+  expect(played.status).toBe(200);
+  expect(await activeSeatForCoo(server.dbHandle, played.body.identity.cooId)).not.toBeNull();
+  expect((await call('/v1/web/logout', {}, auth)).status).toBe(200);
+  expect(await activeSeatForCoo(server.dbHandle, played.body.identity.cooId)).toBeNull();
+  expect((await call('/v1/web/play', {}, auth)).status).toBe(401);
+  expect((await redeem()).status).toBe(403);
+});
+
+it('空闲席位按令牌回收，旧设备退出不影响已接管的设备，改密和到期也回收', async () => {
+  await start();
+  const parent = await family('idle-member');
+  const owner = { cookie: parent.cookie };
+  const cooId = parent.body.identity.cooId;
+  const login = { loginName: '空闲玩家', password: PASSWORD };
+  const credentials = (input: typeof login) => call('/v1/web/credentials', input, owner);
+  expect((await credentials(login)).status).toBe(200);
+  const first = { cookie: (await call('/v1/web/login', login)).cookie };
+  const second = { cookie: (await call('/v1/web/login', login)).cookie };
+  const play = (auth: { cookie: string }) => call('/v1/web/play', { takeover: true }, auth);
+  expect((await play(first)).status).toBe(200);
+  const picked = await play(second);
+  expect(picked.status).toBe(200);
+  expect((await call('/v1/web/logout', {}, first)).status).toBe(200);
+  expect((await call('/v1/rooms/hall/room', undefined, { authorization: 'Bearer ' + picked.body.token })).status).toBe(200);
+  expect((await call('/v1/web/logout', {}, second)).status).toBe(200);
+  expect(await activeSeatForCoo(server.dbHandle, cooId)).toBeNull();
+
+  const third = { cookie: (await call('/v1/web/login', login)).cookie };
+  expect((await play(third)).status).toBe(200);
+  const changed = { ...login, password: PASSWORD + ' changed' };
+  expect((await credentials(changed)).status).toBe(200);
+  expect((await call('/v1/web/me', undefined, third)).status).toBe(401);
+  await vi.waitFor(async () => expect(await activeSeatForCoo(server.dbHandle, cooId)).toBeNull());
+  const fourth = { cookie: (await call('/v1/web/login', changed)).cookie };
+  expect((await play(fourth)).status).toBe(200);
+  now += 30 * 86_400_000;
+  await server.releaseEndedWebSeats(now);
+  expect(await activeSeatForCoo(server.dbHandle, cooId)).toBeNull();
+});
+
+it('代理身份服上未下场的家长收到 409，频繁设置登录凭据会限流', async () => {
+  await start('https://identity.example');
+  const db = new CooAccountDb(server.dbHandle);
+  const child = 'coo-remote-parent-fixture';
+  await db.registerCoo(child, 'remote-parent-fixture-secret', 'pet', '代理身份服');
+  const { ownerKey } = await db.ensureAccount(child);
+  const parent = await call('/v1/parent/session', { key: ownerKey });
+  expect(parent.status).toBe(200);
+  const set = (password: string) => call('/v1/web/credentials', { loginName: '代理家长', password }, { cookie: parent.cookie });
+  expect((await set(PASSWORD)).status).toBe(409);
+  for (let i = 0; i < 4; i++) expect((await set('too short')).status).toBe(400);
+  expect((await set(PASSWORD)).status).toBe(429);
+});
+
+it('凭据哈希格式损坏时返回普通登录失败', async () => {
+  await start();
+  const { cookie } = await family('malformed-hash');
+  const login = { loginName: '哈希检查', password: PASSWORD };
+  expect((await call('/v1/web/credentials', login, { cookie })).status).toBe(200);
+  await server.dbHandle.prepare('UPDATE web_player_credentials SET password_hash=? WHERE login_name=?')
+    .run('scrypt:00112233445566778899aabbccddeeff:ff', login.loginName);
+  expect(await call('/v1/web/login', login)).toMatchObject({ status: 401, body: { error: '登录名或密码不对' } });
 });

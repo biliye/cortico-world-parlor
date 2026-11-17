@@ -361,18 +361,22 @@ export class RoomHost {
    * 房主移除成员：立刻停止这一房的访问并释放席位；牌桌锁不拦（牌局由服务器托管到结算）。
    * 调用方先 `markTableAuto`，这里只管席位与事件。
    */
-  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' | 'guest_expired' = 'removed'): Promise<LeaveResult | null> {
+  async remove(cooId: string, now = this.now(), reason: 'removed' | 'room_deleted' | 'guest_expired' | 'web_session_ended' = 'removed'): Promise<LeaveResult | null> {
     const seat = await this.seatOf(cooId);
     if (!seat) return null;
+    const messages = {
+      removed: () => this.placeOf(this.roomId).then(place => `${seat.name} 被房主移出了${place}。`),
+      room_deleted: () => '房主删除了客厅，席位已释放，请回大厅。',
+      guest_expired: () => `${seat.name} 的试玩资格已结束。`,
+      web_session_ended: () => `${seat.name} 的网页登录已结束，席位已释放。`,
+    };
     return withTransaction(this.db, async () => {
       const event = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
         from: seat.id,
         scope: { kind: 'room' },
-        text: reason === 'guest_expired' ? `${seat.name} 的试玩资格已结束。`
-          : reason === 'room_deleted' ? '房主删除了客厅，席位已释放，请回大厅。'
-            : `${seat.name} 被房主移出了${await this.placeOf(this.roomId)}。`,
+        text: await messages[reason](),
         data: { seatId: seat.id, name: seat.name, reason },
       });
       const released = await releaseSeat(this.db, this.roomId, seat.id, event.seq, now);
