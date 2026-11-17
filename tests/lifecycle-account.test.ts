@@ -56,6 +56,28 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     expect(await app.releaseOfflineSeats(now)).toBe(1);
     expect(await activeSeatForCoo(app.dbHandle, B)).toBeNull();
   });
+  it('真人房主（human 席位）在自家客厅保席，主动换厅后照常离线回收', async () => {
+    const H = 'coo-life-human';
+    const coos = new CooAccountDb(app.dbHandle, { now:() => now });
+    expect(await coos.registerCoo(H, 'test-secret-coo-life-human-0123456789', 'human', '家长')).toBe('ok');
+    await createRoom(app.dbHandle, { id:'r-human', name:'家长客厅', ownerCooId:H, visibility:'public' }, now);
+    const home = await RoomHost.create(app.dbHandle, 'r-human', { now:() => now });
+    const seated = await home.join(H, { name:'家长', kind:'human' });
+    expect(seated.seat.kind).toBe('human');
+    // 只留真人房主一个席位，释放计数才只反映他。
+    await room.remove(A, now);
+
+    now += 6 * HOUR;
+    expect(await app.releaseOfflineSeats(now)).toBe(0);
+    expect((await home.seatByToken(seated.token)).id).toBe(seated.seat.id);
+
+    const away = await home.switchTo(H, 'lobby');
+    expect(away.released?.id).toBe(seated.seat.id);
+    expect(away.seat.kind).toBe('human');
+    now += 6 * HOUR;
+    expect(await app.releaseOfflineSeats(now)).toBe(1);
+    expect(await activeSeatForCoo(app.dbHandle, H)).toBeNull();
+  });
   it.each([false, true])('房主仍在座的客厅满 48 小时后归档（大厅已满：%s）', async hallFull => {
     const owner = await room.join(B, { name:'房主', kind:'pet' });
     await room.switchTo(A, 'hall');
