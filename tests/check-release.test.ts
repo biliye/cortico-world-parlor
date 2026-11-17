@@ -55,7 +55,7 @@ it.each([
     // 对外页只随网关发布：World 包里出现 welcome* 会被 check-release 拦下。
     if (kind === 'gateway') {
       for (const file of ['welcome-kit.css', 'welcome.css', 'welcome.js', 'welcome-og.png',
-        'welcome-saira.woff2', 'welcome-saira-OFL.txt', 'robots.txt', 'sitemap.xml']) {
+        'welcome-lobby.webp', 'welcome-saira.woff2', 'welcome-saira-OFL.txt', 'robots.txt', 'sitemap.xml']) {
         writeFileSync(join(root, 'src/web', file), '');
       }
     }
