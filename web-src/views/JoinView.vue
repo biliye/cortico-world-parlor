@@ -7,6 +7,7 @@ import WebInvites from '../components/WebInvites.vue';
 import type { Health } from '../api/types.ts';
 import { logoutWebPlayer, takeWebSeat, webPlayerRequest, type WebPlayer } from '../api/web-player.ts';
 import { seat } from '../stores/session.ts';
+import { detectGateway, gateway } from '../stores/server.ts';
 
 /** `retry` 只在入场失败时出现（`initialError`），由根组件重新走一次 boot。 */
 const emit = defineEmits<{ entered: []; retry: []; redeemed: [] }>();
@@ -40,6 +41,8 @@ async function loadWebPlayer(): Promise<void> {
 
 onMounted(async () => {
   void loadWebPlayer();
+  // 与 fetchHealth 同一拍发起，共用同一个 /healthz；单厅据此不显示回首页的入口。
+  void detectGateway();
   const health = await fetchHealth();
   if (health) {
     guestJoin.value = guestJoinEnabled(health);
@@ -141,6 +144,12 @@ async function submit(): Promise<void> {
   }
 }
 
+/** 入场失败后重试：顺带重探服务器形态，healthz 恢复后回首页的入口要自己回来。 */
+function retryEntry(): void {
+  void detectGateway();
+  emit('retry');
+}
+
 async function parentPlay(): Promise<void> {
   error.value = '';
   busy.value = true;
@@ -177,7 +186,9 @@ async function parentPlay(): Promise<void> {
     </div>
     <ThemePicker />
     <section class="panel">
-      <p class="brand">鲸语 <small>PARLOR CLUB</small></p>
+      <!-- 单厅（serve.ts）没有对外首页，那边只留品牌文字，不给一条 404 的链接。 -->
+      <a v-if="gateway" class="brand" href="/" title="回鲸语会馆首页" aria-label="鲸语会馆 · 回首页">鲸语 <small>PARLOR CLUB</small></a>
+      <p v-else class="brand">鲸语 <small>PARLOR CLUB</small></p>
       <h1>进入会馆</h1>
       <p v-if="error || props.initialError" class="warn error" role="alert">{{ error || props.initialError }}</p>
       <template v-if="player">
@@ -220,11 +231,13 @@ async function parentPlay(): Promise<void> {
         <button class="btn primary" type="button" :disabled="busy" @click="submit">加入客厅</button>
       </details>
       <!-- 入场失败（多半是钥匙没换成席位）时给一条原地重试；入口关闭时也保留，别让人只能重开链接。 -->
-      <button v-if="props.canRetry" class="btn" type="button" :disabled="busy" @click="emit('retry')">再试一次</button>
+      <button v-if="props.canRetry" class="btn" type="button" :disabled="busy" @click="retryEntry">再试一次</button>
       <div v-if="parentName" class="parent-play">
         <p class="sub">这台浏览器登录了「{{ parentName }}」，可以直接以这个身份下场。</p>
         <button class="btn primary" type="button" :disabled="busy" @click="parentPlay">以家长身份下场</button>
       </div>
+      <!-- 从聊天软件点错的链接多半落在这一页；给一条明确的退路，不指望人记得域名。 -->
+      <p v-if="gateway" class="note home-note"><a href="/">← 回会馆首页</a></p>
     </section>
   </div>
 </template>
@@ -233,4 +246,17 @@ async function parentPlay(): Promise<void> {
 .entry-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .entry-options [aria-pressed="true"] { border-color: currentColor; font-weight: 700; }
 details { margin-block: 12px; }
+/* 品牌行现在是回首页的链接；触屏没有 hover，所以底部另留一条带下划线的文字链接。 */
+.brand:hover, .brand:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+.join .home-note { margin-top: 20px; }
+/* 字号写在 a 上：父级 .note 的 11px 来自 night.css，改 p 会被它按优先级压回去。 */
+.join .home-note a {
+  display: inline-block;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.join .home-note a:hover, .join .home-note a:focus-visible { color: var(--text); }
 </style>
