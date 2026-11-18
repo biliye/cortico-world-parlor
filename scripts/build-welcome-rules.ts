@@ -1,29 +1,42 @@
 /**
- * 把 `src/room/game-rules-doc.ts` 的规则渲染进 `src/web/welcome.html` 的 rules 标记之间。
+ * 把 `src/room/game-rules-doc.ts` 的两块内容写进 `src/web/welcome.html`：
+ *
+ *   rules:begin / rules:end                 玩法屏上的八格按钮
+ *   rules-dialog:begin / rules-dialog:end   规则弹层（放在所有屏之后）
  *
  *   pnpm build:welcome           写入（生成物入库，和 src/web/vue/* 一样）
  *   pnpm build:welcome --check   只核，不一致时退出 1
  *
- * 规则只有这一份来源：改文案去 game-rules-doc.ts，别直接改 welcome.html 里那一段。
+ * 规则只有这一份来源：改文案去 game-rules-doc.ts，别直接改 welcome.html 里那两段。
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { renderRulesMarkup } from '../src/room/game-rules-doc.ts';
+import { renderRuleDialog, renderRulesMarkup } from '../src/room/game-rules-doc.ts';
 
 export const RULES_BEGIN = '<!-- rules:begin -->';
 export const RULES_END = '<!-- rules:end -->';
+export const DIALOG_BEGIN = '<!-- rules-dialog:begin -->';
+export const DIALOG_END = '<!-- rules-dialog:end -->';
 
 const PAGE = new URL('../src/web/welcome.html', import.meta.url);
-/** 标记前的缩进：end 标记前面也要补回同样的空格。 */
-const INDENT = '      ';
 
-/** 把标记之间的内容换成新的渲染结果；标记本身留着。 */
-export function spliceRules(page: string, markup: string = renderRulesMarkup()): string {
-  const begin = page.indexOf(RULES_BEGIN);
-  const end = page.indexOf(RULES_END);
-  if (begin < 0 || end < begin) throw new Error('welcome.html 里找不到 rules:begin / rules:end 标记');
-  return `${page.slice(0, begin + RULES_BEGIN.length)}\n${markup}\n${INDENT}${page.slice(end)}`;
+/** 把一对标记之间的内容换成新的渲染结果；标记本身留着，end 标记前的缩进也补回去。 */
+const splice = (page: string, beginMark: string, endMark: string, markup: string, indent: string): string => {
+  const begin = page.indexOf(beginMark);
+  const end = page.indexOf(endMark);
+  if (begin < 0 || end < begin) throw new Error(`welcome.html 里找不到 ${beginMark} / ${endMark} 标记`);
+  return `${page.slice(0, begin + beginMark.length)}\n${markup}\n${indent}${page.slice(end)}`;
+};
+
+export function spliceRules(
+  page: string,
+  cards: string = renderRulesMarkup(),
+  dialog: string = renderRuleDialog(),
+): string {
+  // 先换弹层再换按钮：两处标记各管各的，顺序不影响结果。
+  const withDialog = splice(page, DIALOG_BEGIN, DIALOG_END, dialog, '      ');
+  return splice(withDialog, RULES_BEGIN, RULES_END, cards, '        ');
 }
 
 function main(): void {

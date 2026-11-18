@@ -7,8 +7,8 @@
  *   页面类型：展示（落地页）；牌桌本体仍是另一套深色界面，两边不共用样式。
  *
  * 版式是竖向滚动翻页：每屏一个 .screen，高度正好是一屏减去顶栏，
- * 由 html 上的 scroll-snap 吸附。屏里内容多的（玩法九条）自己会长高，
- * 这时 snap 用 proximity 而不是 mandatory，免得卡在中间滚不动。
+ * 由 html 上的 scroll-snap 吸附（只到 proximity 一档，滚快一点可以连着走）。
+ * 第 2 屏的规则不占版面：点一格从弹层里长出来，弹层正文自己滚。
  */
 
 @font-face {
@@ -35,20 +35,12 @@
 
 /* ---------- 滚动容器 ---------- */
 
+/* 只留接近吸附这一档：滚到一屏附近才吸过去，中途停下就停在原地；
+   不再用 mandatory —— 强制吸附在触控板上一格一格地拽人，太硬。 */
 html {
   scroll-snap-type: y proximity;
   scroll-padding-top: var(--top-h);
   scroll-behavior: smooth;
-}
-
-/* 脚本量过：每屏都装得下时收紧成强制吸附，一个滚轮动作就是一屏；
-   有一屏比视口高（窄屏的首屏、玩法九条）就退回接近吸附，免得卡在中间滚不动。
-   开着「减少动态效果」的人不给强制吸附：整屏瞬跳比连续滚动更晃，门槛放在媒体查询里，
-   系统偏好一改就立刻生效，不用等脚本重新量。 */
-@media (prefers-reduced-motion: no-preference) {
-  html[data-snap='strict'] {
-    scroll-snap-type: y mandatory;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -64,8 +56,6 @@ html {
   padding: clamp(1.5rem, 3.6vh, 2.75rem) var(--ef-pad);
   border-bottom: 1px solid var(--ef-rule);
   scroll-snap-align: start;
-  /* 一次滚动最多走一屏；不然滚快一点会连跳两屏 */
-  scroll-snap-stop: always;
 }
 
 /* 每屏的眉标与标题 */
@@ -370,10 +360,10 @@ html {
   }
 }
 
-/* ---------- 第 2 屏：玩法与规则 ---------- */
+/* ---------- 第 2 屏：八种玩法 ---------- */
 
-/* 一屏装下：左列选玩法，右列读规则。右列自己滚，滚到边界不会再顺手把整页翻走，
-   所以这一屏仍是一滚一屏里的一屏；矮到连标题区都放不下时，才由 min-height 撑高。 */
+/* 八格玩法平分一屏，规则不在这一屏里占地：点一格才从弹层长出来。
+   整屏因此都能滚，滚轮不会被规则面板吃掉。 */
 .games-screen {
   height: calc(100svh - var(--top-h) - var(--tri-h));
   min-height: 32rem;
@@ -381,102 +371,299 @@ html {
 }
 
 .games-screen > .lead {
-  margin-bottom: clamp(0.7rem, 1.8vh, 1.2rem);
+  margin-bottom: clamp(0.8rem, 2vh, 1.4rem);
 }
 
-.rules {
+/* 网格线画在格子的外圈阴影上，不靠底色透缝：
+   入场时每格自己淡入，底色一透就会整块闪一下灰。 */
+.rule-grid {
   display: grid;
-  grid-template-columns: minmax(0, 13rem) minmax(0, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
-  border-top: 1px solid var(--ef-rule);
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-/* 左列：八个编号平分这一列的高度，和原来那条玩法列表的节奏一样。 */
-.rules-tabs {
+.rule-grid > li {
   display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--ef-rule);
+  min-width: 0;
+  box-shadow: 0 0 0 1px var(--ef-rule);
 }
 
-.rule-tab {
+.rule-card {
   appearance: none;
   -webkit-appearance: none;
+  position: relative;
   display: grid;
-  grid-template-columns: 2.2rem minmax(0, 1fr);
-  align-items: center;
-  gap: 0 0.45rem;
-  flex: 1;
-  min-height: 0;
-  padding: 0.35rem 0.9rem 0.35rem 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  gap: 0 0.6rem;
+  width: 100%;
+  padding: clamp(0.75rem, 1.8vh, 1.15rem) clamp(0.75rem, 1.3vw, 1.15rem);
   border: 0;
-  border-bottom: 1px solid var(--ef-rule);
   background: none;
   color: var(--ef-ink);
-  font-family: var(--ef-font-ui);
+  font-family: var(--ef-font-text);
   text-align: left;
   cursor: pointer;
 }
 
-.rule-tab:last-child {
-  border-bottom: 0;
+/* 每格很高，中间那段空白放一个编号水印：不抢字，也不让版面看着像漏了东西 */
+.rule-card::before {
+  content: attr(data-no);
+  position: absolute;
+  top: 50%;
+  right: clamp(0.7rem, 1.2vw, 1.1rem);
+  transform: translateY(-50%);
+  color: color-mix(in srgb, var(--ef-ink) 14%, transparent);
+  font-family: var(--ef-font-ui);
+  font-size: clamp(2.2rem, 3.4vw, 3.4rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
 }
 
-.rule-tab .n {
+.rule-card:is(:hover, :focus-visible)::before {
+  color: color-mix(in srgb, var(--ef-ink) 26%, transparent);
+}
+
+/* 底下那条黄线只在悬停/聚焦时长出来：八格都安静，指到哪一格哪一格亮 */
+.rule-card::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--ef-signal);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 260ms var(--ef-ease);
+}
+
+.rule-card:is(:hover, :focus-visible) {
+  background: var(--ef-chip);
+}
+
+.rule-card:is(:hover, :focus-visible)::after {
+  transform: scaleX(1);
+}
+
+.rule-card:focus-visible {
+  outline: 2px solid var(--ef-signal);
+  outline-offset: -2px;
+}
+
+.rule-card .n {
   color: var(--ef-ink-2);
+  font-family: var(--ef-font-ui);
   font-size: 0.7rem;
   font-stretch: var(--ef-wider);
   letter-spacing: 0.1em;
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  line-height: 1.8;
 }
 
-.rule-tab .g {
+.rule-card .g {
   font-family: var(--ef-font-text);
-  font-size: 0.95rem;
+  font-size: clamp(0.95rem, 1.15vw, 1.1rem);
   font-weight: 700;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
-/* 当前这一格整块黄底、墨字：浅色下黄块上只写墨色，深色下也一样。
-   非当前项悬停给一层浅灰，和 kit 里的 chip 一致。 */
-.rule-tab[aria-selected='true'] {
+.rule-card .d {
+  grid-column: 1 / -1;
+  align-self: end;
+  margin-top: 0.55rem;
+  color: var(--ef-ink-2);
+  font-size: 0.84rem;
+  line-height: 1.62;
+}
+
+/* ---------- 规则弹层 ---------- */
+
+/* 点一格，规则从那一格展开成一层：正文在层里滚，滚到底也不会带动身后的页。
+   没脚本（<html> 上没挂 ef-rules）时退回页面里的一段平铺，八块仍然读得到。 */
+.rule-dialog {
+  width: min(52rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: min(86svh, 48rem);
+  padding: 0;
+  border: 1px solid var(--ef-ink);
+  background: var(--ef-paper);
+  color: var(--ef-ink);
+  overflow: hidden;
+}
+
+.rule-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 弹层开着时锁住身后的滚动：iOS 上 showModal 不一定挡得住 */
+html.ef-rule-open {
+  overflow: hidden;
+}
+
+.rule-dialog-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.6rem 0.5rem clamp(0.9rem, 2vw, 1.35rem);
+  border-bottom: 1px solid var(--ef-rule);
+}
+
+.rule-dialog-bar .ef-eyebrow {
+  margin: 0;
+}
+
+.rule-dialog-count {
+  margin: 0 0 0 auto;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-ui);
+  font-size: 0.72rem;
+  font-stretch: var(--ef-wider);
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rule-dialog-no {
+  color: var(--ef-ink);
+  font-weight: 700;
+}
+
+.rule-close {
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 1px solid var(--ef-rule);
+  background: none;
+  color: var(--ef-ink);
+  font-family: var(--ef-font-ui);
+  font-size: 0.82rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rule-close:is(:hover, :focus-visible) {
   background: var(--ef-signal);
-}
-
-.rule-tab[aria-selected='true'] :is(.n, .g) {
+  border-color: var(--ef-signal);
   color: var(--ef-on-signal);
 }
 
-.rule-tab:is(:hover, :focus-visible):not([aria-selected='true']) {
-  background: var(--ef-chip);
-}
-
-/* 右列：只有面板滚动。overscroll-behavior 挡住滚动链接，滚到底不会突然翻屏。 */
-.rules-panels {
+/* 层里唯一会滚的地方 */
+.rule-pages {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: clamp(0.6rem, 1.6vh, 1rem) 0 0 clamp(1rem, 2.4vw, 1.75rem);
+  padding: clamp(0.9rem, 2.4vh, 1.4rem) clamp(1rem, 2.6vw, 1.8rem) clamp(1.2rem, 3vh, 1.8rem);
   scrollbar-width: thin;
   scrollbar-color: var(--ef-ink-2) transparent;
 }
 
-.rules-panels::-webkit-scrollbar {
+.rule-pages::-webkit-scrollbar {
   width: 6px;
 }
 
-.rules-panels::-webkit-scrollbar-thumb {
+.rule-pages::-webkit-scrollbar-thumb {
   background: var(--ef-rule);
 }
 
-.rules-panels::-webkit-scrollbar-track {
+.rule-pages::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .rule[hidden] {
   display: none;
+}
+
+.rule-dialog::backdrop {
+  background: rgb(0 0 0 / 0.54);
+}
+
+/* 没脚本（不支持 showModal 就不挂 ef-rules）：弹层退回页面里的一段，八块全展开。
+   放在所有屏之后，所以只会让页面变长，不会把某一屏的固定高度撑破。 */
+html:not(.ef-rules) .rule-dialog {
+  display: block;
+  position: static;
+  width: auto;
+  max-height: none;
+  margin: 0 var(--ef-pad) 4rem;
+  border: 0;
+  border-top: 1px solid var(--ef-rule);
+  overflow: visible;
+}
+
+html:not(.ef-rules) .rule-dialog-bar {
+  display: none;
+}
+
+html:not(.ef-rules) .rule-pages {
+  padding: 1.5rem 0 0;
+  overflow: visible;
+}
+
+html:not(.ef-rules) .rule + .rule {
+  margin-top: 1.75rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--ef-rule);
+}
+
+/* 进来时自上而下擦出来，和 kit 里「一条线扫过去」的路数一致；退场短一半 */
+@media (prefers-reduced-motion: no-preference) {
+  .rule-dialog[open] {
+    animation: ef-dialog-in 300ms var(--ef-snap) both;
+  }
+
+  .rule-dialog[open]::backdrop {
+    animation: ef-scrim-in 240ms var(--ef-ease) both;
+  }
+
+  .rule-dialog[open].is-out {
+    animation: ef-dialog-out 170ms var(--ef-ease) both;
+  }
+
+  .rule-dialog[open].is-out::backdrop {
+    animation: ef-scrim-out 170ms var(--ef-ease) both;
+  }
+}
+
+@keyframes ef-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+    clip-path: inset(0 0 26% 0);
+  }
+}
+
+@keyframes ef-dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+    clip-path: inset(0 0 34% 0);
+  }
+}
+
+@keyframes ef-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ef-scrim-out {
+  to {
+    opacity: 0;
+  }
 }
 
 /* 换一个玩法时短促地淡入一次：回应「我点了另一格」这一下操作，不弹跳 */
@@ -581,47 +768,31 @@ html {
   line-height: 1.75;
 }
 
-/* 窄屏：左列改成一条横向的编号条，面板接在下面，其余不变。 */
+/* 平板往下：八格改两列四行，仍是一屏 */
+@media (max-width: 1023px) {
+  .rule-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 719px) {
-  .rules {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+  .rule-card {
+    padding: 0.7rem 0.75rem;
   }
 
-  .rules-tabs {
-    flex-direction: row;
-    border-right: 0;
-    border-bottom: 1px solid var(--ef-rule);
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-  }
-
-  .rules-tabs::-webkit-scrollbar {
+  /* 手机上格子窄、字号也小，水印会顶到说明文字上，直接不画 */
+  .rule-card::before {
     display: none;
   }
 
-  .rule-tab {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: baseline;
-    gap: 0.35rem;
-    padding: 0.55rem 0.85rem;
-    border-right: 1px solid var(--ef-rule);
-    border-bottom: 0;
-    white-space: nowrap;
+  .rule-card .d {
+    font-size: 0.8rem;
+    line-height: 1.55;
   }
 
-  .rule-tab .n {
-    font-size: 0.66rem;
-  }
-
-  .rule-tab .g {
-    font-size: 0.9rem;
-  }
-
-  .rules-panels {
-    padding: 0.9rem 0 0;
+  .rule-dialog {
+    width: calc(100vw - 1.25rem);
+    max-height: 88svh;
   }
 
   .rule-roles {
@@ -634,15 +805,11 @@ html {
   }
 }
 
-/* 矮窗口（1080×675 这类）：标题区收一点，把高度让给规则面板 */
+/* 矮窗口（1080×675 这类）：标题区收一点，把高度让给八格 */
 @media (max-height: 780px) {
   .games-screen > .lead {
     margin-bottom: 0.6rem;
     line-height: 1.65;
-  }
-
-  .rule-tab {
-    padding-block: 0.2rem;
   }
 }
 

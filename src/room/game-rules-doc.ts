@@ -1,9 +1,9 @@
 /**
- * 对外页「八种玩法」右侧规则面板的内容源。
+ * 对外页「八种玩法」的内容源：玩法屏上的八格按钮，加上点开后那层规则弹层。
  *
  * 这是给玩家读的规则，不是给 Coo 的动作说明（后者在 `registry.ts` 的 `rules` 里）。
  * 能引用实现的地方一律引用：秒数、人数、天数、牌张数、发牌配置都从 `src/room/games/*` 取，
- * 改规则时不会只改一边。生成物写在 `src/web/welcome.html` 的 rules 标记之间，
+ * 改规则时不会只改一边。生成物写在 `src/web/welcome.html` 的两对标记之间，
  * 由 `scripts/build-welcome-rules.ts` 写入，`tests/welcome.test.ts` 盯住漂移。
  *
  * 为什么先生成再入库、而不是请求时渲染：首页是静态文件，走的是带 CSP 的直发路径，
@@ -362,20 +362,31 @@ const renderEntries = (items: readonly RuleEntry[]): string => {
 };
 
 /**
- * 生成 `welcome.html` 里 rules 标记之间的整块 HTML。
+ * 生成玩法屏上的八格按钮（`welcome.html` 的 rules 标记之间）。
+ * 按钮只放编号、名字和一句话；规则本体在弹层里，见 `renderRuleDialog`。
  * 只用 class，不写内联 style —— 页面 CSP 是 `style-src 'self'`。
  */
 export function renderRulesMarkup(pages: readonly RulePage[] = RULE_PAGES): string {
-  const tabs = pages.map((page, index) => [
-    `          <button class="rule-tab" type="button" role="tab" id="rule-tab-${page.id}"`,
-    ` aria-controls="rule-${page.id}" aria-selected="${index === 0 ? 'true' : 'false'}"`,
-    ` tabindex="${index === 0 ? '0' : '-1'}">`,
-    `<span class="n">${page.no}</span><span class="g">${esc(page.label)}</span>`,
-    '</button>',
-  ].join('')).join('\n');
+  const items = pages.map((page) => [
+    '          <li>',
+    `            <button class="rule-card" type="button" data-rule="${page.id}" data-no="${page.no}" aria-haspopup="dialog">`,
+    `              <span class="n">${page.no}</span>`,
+    `              <span class="g">${esc(page.label)}</span>`,
+    `              <span class="d">${esc(page.kicker)}</span>`,
+    '            </button>',
+    '          </li>',
+  ].join('\n')).join('\n');
 
-  const panels = pages.map((page) => [
-    `          <article class="rule" id="rule-${page.id}" role="tabpanel" aria-labelledby="rule-tab-${page.id}" tabindex="0">`,
+  return ['        <ol class="rule-grid" aria-label="选一种玩法看规则">', items, '        </ol>'].join('\n');
+}
+
+/**
+ * 生成规则弹层（`welcome.html` 的 rules-dialog 标记之间，放在所有屏之后）。
+ * 八块规则都在层里，脚本只显示点中的那一块；没脚本时连同弹层一起退回页面里的平铺段落。
+ */
+export function renderRuleDialog(pages: readonly RulePage[] = RULE_PAGES): string {
+  const articles = pages.map((page) => [
+    `          <article class="rule" id="rule-${page.id}" data-rule="${page.id}" data-no="${page.no}" tabindex="0">`,
     '            <header class="rule-head">',
     `              <p class="ef-field rule-facts">${page.facts.map((fact) => `<span>${esc(fact)}</span>`).join('')}</p>`,
     `              <h3 class="rule-name">${esc(page.label)}</h3>`,
@@ -393,13 +404,15 @@ export function renderRulesMarkup(pages: readonly RulePage[] = RULE_PAGES): stri
   ].join('\n')).join('\n');
 
   return [
-    '      <div class="rules">',
-    '        <div class="rules-tabs" role="tablist" aria-label="选一种玩法看规则" aria-orientation="vertical">',
-    tabs,
+    '      <dialog class="rule-dialog" id="rule-dialog" aria-label="玩法规则">',
+    '        <div class="rule-dialog-bar">',
+    '          <p class="ef-eyebrow slash">Rules</p>',
+    `          <p class="rule-dialog-count"><span class="rule-dialog-no">${pages[0]?.no ?? '01'}</span> / ${String(pages.length).padStart(2, '0')}</p>`,
+    '          <button class="rule-close" type="button" data-act="rule-close" aria-label="关掉规则"><span aria-hidden="true">✕</span></button>',
     '        </div>',
-    '        <div class="rules-panels">',
-    panels,
+    '        <div class="rule-pages">',
+    articles,
     '        </div>',
-    '      </div>',
+    '      </dialog>',
   ].join('\n');
 }

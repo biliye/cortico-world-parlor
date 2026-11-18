@@ -7,10 +7,11 @@
         01 首屏（会名 + 大厅实景 + 玩法跑马灯 + 「这里是这样的地方」）/ 02 玩法与规则 / 03 怎么进来 / 04 家长。
   主视觉：一张大厅（茶室）实景图，装在切角画框里；玩法名做成跑马灯。
         「这里是这样的地方」是首屏里的三栏，不单独占屏、顶栏也不给锚点。
-  玩法屏：左列八格是页签，右列是这一玩法的完整规则；右列自己滚，整屏仍是一屏。
-        规则内容由 src/room/game-rules-doc.ts 生成，别手改 rules 标记之间那段。
+  玩法屏：八格玩法按钮平分一屏，点一格从弹层里出来这一玩法的完整规则；
+        规则不占版面，所以整屏都能滚，弹层里的正文自己滚。
+        内容由 src/room/game-rules-doc.ts 生成，别手改 rules / rules-dialog 标记之间那两段。
   动效：明暗从顶栏那颗按钮向外扩散；滚到下一屏时该屏内容依次抬起；
-        屏里的编号与条目按 45ms 一个排队浮现；每屏都装得下时吸附收紧成强制。
+        屏里的编号与条目按 45ms 一个排队浮现；规则层自上而下擦出来，退场短一半。
   页面类型：展示（落地页）。牌桌本体 /play 是另一套深色界面，两边不共用样式。
 
   为什么是独立的静态页而不是 /play 里的一个视图：陌生人打开首页不该先下 main.js、
@@ -142,24 +143,134 @@
       <section class="screen games-screen" id="games">
         <p class="ef-eyebrow slash">Games</p>
         <h2 class="ef-bar-title">八种玩法</h2>
-        <p class="lead">点左边的一种玩法，右边就是它的规则：几席、几张牌、怎么算赢、超时怎么办。八种都能在网页开桌；坐满就开局，缺人时先坐着聊，Coo 不催。</p>
+        <p class="lead">点一种玩法，规则就弹出来：几席、几张牌、怎么算赢、超时怎么办。八种都能在网页开桌；坐满就开局，缺人时先坐着聊，Coo 不催。</p>
         <!-- 玩法列表与规则面板由 scripts/build-welcome-rules.ts 从
              src/room/game-rules-doc.ts 生成，别直接改这两个标记之间的内容。
              无脚本时八块规则全部展开，脚本跑起来才收成一块一块的页签。 -->
         <!-- rules:begin -->
-      <div class="rules">
-        <div class="rules-tabs" role="tablist" aria-label="选一种玩法看规则" aria-orientation="vertical">
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-ddz" aria-controls="rule-ddz" aria-selected="true" tabindex="0"><span class="n">01</span><span class="g">斗地主</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-werewolf" aria-controls="rule-werewolf" aria-selected="false" tabindex="-1"><span class="n">02</span><span class="g">狼人杀</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-gomoku" aria-controls="rule-gomoku" aria-selected="false" tabindex="-1"><span class="n">03</span><span class="g">五子棋</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-xiangqi" aria-controls="rule-xiangqi" aria-selected="false" tabindex="-1"><span class="n">04</span><span class="g">中国象棋</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-aeroplane" aria-controls="rule-aeroplane" aria-selected="false" tabindex="-1"><span class="n">05</span><span class="g">飞行棋</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-monopoly2d" aria-controls="rule-monopoly2d" aria-selected="false" tabindex="-1"><span class="n">06</span><span class="g">快局大富翁</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-mahjong-sichuan" aria-controls="rule-mahjong-sichuan" aria-selected="false" tabindex="-1"><span class="n">07</span><span class="g">四川血战到底</span></button>
-          <button class="rule-tab" type="button" role="tab" id="rule-tab-mahjong-guangdong" aria-controls="rule-mahjong-guangdong" aria-selected="false" tabindex="-1"><span class="n">08</span><span class="g">广东推倒胡·红中</span></button>
+        <ol class="rule-grid" aria-label="选一种玩法看规则">
+          <li>
+            <button class="rule-card" type="button" data-rule="ddz" data-no="01" aria-haspopup="dialog">
+              <span class="n">01</span>
+              <span class="g">斗地主</span>
+              <span class="d">三个人一副牌，谁先出完谁赢。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="werewolf" data-no="02" aria-haspopup="dialog">
+              <span class="n">02</span>
+              <span class="g">狼人杀</span>
+              <span class="d">按分到的身份说话：夜里动手，白天发言，投票放逐。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="gomoku" data-no="03" aria-haspopup="dialog">
+              <span class="n">03</span>
+              <span class="g">五子棋</span>
+              <span class="d">两人对下，先连成五个。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="xiangqi" data-no="04" aria-haspopup="dialog">
+              <span class="n">04</span>
+              <span class="g">中国象棋</span>
+              <span class="d">两人对下，红先黑后，将死对方为胜。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="aeroplane" data-no="05" aria-haspopup="dialog">
+              <span class="n">05</span>
+              <span class="g">飞行棋</span>
+              <span class="d">掷六起飞，穿过四色航线，先把四架飞机送到终点。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="monopoly2d" data-no="06" aria-haspopup="dialog">
+              <span class="n">06</span>
+              <span class="g">快局大富翁</span>
+              <span class="d">掷骰、买地、收租，十二轮定输赢。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="mahjong-sichuan" data-no="07" aria-haspopup="dialog">
+              <span class="n">07</span>
+              <span class="g">四川血战到底</span>
+              <span class="d">换三张、定缺，一家胡牌后其余人接着打。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="mahjong-guangdong" data-no="08" aria-haspopup="dialog">
+              <span class="n">08</span>
+              <span class="g">广东推倒胡·红中</span>
+              <span class="d">红中当百搭，只认自摸。</span>
+            </button>
+          </li>
+        </ol>
+        <!-- rules:end -->
+      </section>
+
+      <section class="screen enter" id="enter">
+        <p class="ef-eyebrow slash">Enter</p>
+        <h2 class="ef-bar-title">怎么进来</h2>
+        <ul class="steps">
+          <li>
+            <h3>从 Coo 一键下场</h3>
+            <p>在 Coo 的「客厅」页点 <b>客厅 · 我下场玩（带钥匙，勿转发）</b>。</p>
+          </li>
+          <li>
+            <h3>换个设备登录</h3>
+            <p>先在家长页开通多端登录，再用登录名和密码进会馆。</p>
+          </li>
+          <li>
+            <h3>凭邀请码试玩</h3>
+            <p>请会馆里的朋友发一次性邀请链接。打开链接填写昵称，即可在试玩客厅玩 24 小时。</p>
+          </li>
+        </ul>
+
+        <p class="ef-actions">
+          <a class="ef-btn go" href="/play?entry=login">账号登录</a>
+          <a class="ef-btn" href="/play?entry=guest">邀请码试玩</a>
+        </p>
+      </section>
+
+      <section class="screen parents" id="parent">
+        <p class="ef-eyebrow slash">Parents</p>
+        <h2 class="ef-bar-title">家长能看到什么</h2>
+        <p class="lead">家长页用 Coo 的家长钥匙进入。可以开通多端登录、看孩子当前牌桌的公开牌面，也能读到自家 Coo 主讲或听过的说书记录。客厅满员时仍可观战，牌桌暂停后会提示回家长页。</p>
+
+        <div class="gate">
+          <p class="ef-field">同一个「客厅」页，下面那条是给家长的</p>
+          <p class="path">Coo →「客厅」页 → <b>客厅 · 家长页（只读，带钥匙）</b></p>
+          <p class="note">它和孩子的席位是两套身份：能看公开牌面，不能替孩子出牌。</p>
         </div>
-        <div class="rules-panels">
-          <article class="rule" id="rule-ddz" role="tabpanel" aria-labelledby="rule-tab-ddz" tabindex="0">
+
+        <p class="ef-actions">
+          <a class="ef-btn" href="/parent">打开家长页</a>
+        </p>
+
+        <div class="also">
+          <p class="lead">全站公告、反馈和运营回复都在「反馈与公告」，<strong>要先用当前浏览器加入客厅才能打开</strong>。反馈仅你和运营者可见。</p>
+          <p class="ef-actions">
+            <a class="ef-btn" href="/support">反馈与公告（需先加入客厅）</a>
+          </p>
+        </div>
+
+        <footer class="foot">
+          <p class="ef-field">鲸语会馆 │ {{origin}}</p>
+          <p class="ef-field"><a href="/play">进客厅</a></p>
+        </footer>
+      </section>
+      <!-- 规则弹层：点一格从那一格长出来，正文在层里滚，滚到底不带动身后的页。
+           内容同样由 build-welcome-rules.ts 生成。 -->
+      <!-- rules-dialog:begin -->
+      <dialog class="rule-dialog" id="rule-dialog" aria-label="玩法规则">
+        <div class="rule-dialog-bar">
+          <p class="ef-eyebrow slash">Rules</p>
+          <p class="rule-dialog-count"><span class="rule-dialog-no">01</span> / 08</p>
+          <button class="rule-close" type="button" data-act="rule-close" aria-label="关掉规则"><span aria-hidden="true">✕</span></button>
+        </div>
+        <div class="rule-pages">
+          <article class="rule" id="rule-ddz" data-rule="ddz" data-no="01" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>3 席</span><span>54 张</span><span>叫地主 30 秒 / 出牌 60 秒</span></p>
               <h3 class="rule-name">斗地主</h3>
@@ -193,7 +304,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-werewolf" role="tabpanel" aria-labelledby="rule-tab-werewolf" tabindex="0">
+          <article class="rule" id="rule-werewolf" data-rule="werewolf" data-no="02" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>6 / 9 / 12 席</span><span>真人发言 3 分钟</span><span>最多 12 个白天</span></p>
               <h3 class="rule-name">狼人杀</h3>
@@ -263,7 +374,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-gomoku" role="tabpanel" aria-labelledby="rule-tab-gomoku" tabindex="0">
+          <article class="rule" id="rule-gomoku" data-rule="gomoku" data-no="03" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>2 席</span><span>15 × 15 棋盘</span><span>每手 60 秒</span></p>
               <h3 class="rule-name">五子棋</h3>
@@ -294,7 +405,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-xiangqi" role="tabpanel" aria-labelledby="rule-tab-xiangqi" tabindex="0">
+          <article class="rule" id="rule-xiangqi" data-rule="xiangqi" data-no="04" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>2 席</span><span>9 列 × 10 行</span><span>真人 3 分钟 / Coo 60 秒</span></p>
               <h3 class="rule-name">中国象棋</h3>
@@ -325,7 +436,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-aeroplane" role="tabpanel" aria-labelledby="rule-tab-aeroplane" tabindex="0">
+          <article class="rule" id="rule-aeroplane" data-rule="aeroplane" data-no="05" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>2–4 人</span><span>每人 4 架</span><span>每手 60 秒</span></p>
               <h3 class="rule-name">飞行棋</h3>
@@ -357,7 +468,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-monopoly2d" role="tabpanel" aria-labelledby="rule-tab-monopoly2d" tabindex="0">
+          <article class="rule" id="rule-monopoly2d" data-rule="monopoly2d" data-no="06" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>4 席</span><span>24 格 × 12 轮</span><span>掷骰 60 秒 / 买地 20 秒</span></p>
               <h3 class="rule-name">快局大富翁</h3>
@@ -389,7 +500,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-mahjong-sichuan" role="tabpanel" aria-labelledby="rule-tab-mahjong-sichuan" tabindex="0">
+          <article class="rule" id="rule-mahjong-sichuan" data-rule="mahjong-sichuan" data-no="07" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>4 席</span><span>108 张</span><span>出牌 60 秒 / 响应 20 秒</span></p>
               <h3 class="rule-name">四川血战到底</h3>
@@ -425,7 +536,7 @@
               </section>
             </div>
           </article>
-          <article class="rule" id="rule-mahjong-guangdong" role="tabpanel" aria-labelledby="rule-tab-mahjong-guangdong" tabindex="0">
+          <article class="rule" id="rule-mahjong-guangdong" data-rule="mahjong-guangdong" data-no="08" tabindex="0">
             <header class="rule-head">
               <p class="ef-field rule-facts"><span>4 席</span><span>136 张</span><span>出牌 60 秒 / 响应 20 秒</span></p>
               <h3 class="rule-name">广东推倒胡·红中</h3>
@@ -461,61 +572,8 @@
             </div>
           </article>
         </div>
-      </div>
-      <!-- rules:end -->
-      </section>
-
-      <section class="screen enter" id="enter">
-        <p class="ef-eyebrow slash">Enter</p>
-        <h2 class="ef-bar-title">怎么进来</h2>
-        <ul class="steps">
-          <li>
-            <h3>从 Coo 一键下场</h3>
-            <p>在 Coo 的「客厅」页点 <b>客厅 · 我下场玩（带钥匙，勿转发）</b>。</p>
-          </li>
-          <li>
-            <h3>换个设备登录</h3>
-            <p>先在家长页开通多端登录，再用登录名和密码进会馆。</p>
-          </li>
-          <li>
-            <h3>凭邀请码试玩</h3>
-            <p>请会馆里的朋友发一次性邀请链接。打开链接填写昵称，即可在试玩客厅玩 24 小时。</p>
-          </li>
-        </ul>
-
-        <p class="ef-actions">
-          <a class="ef-btn go" href="/play?entry=login">账号登录</a>
-          <a class="ef-btn" href="/play?entry=guest">邀请码试玩</a>
-        </p>
-      </section>
-
-      <section class="screen parents" id="parent">
-        <p class="ef-eyebrow slash">Parents</p>
-        <h2 class="ef-bar-title">家长能看到什么</h2>
-        <p class="lead">家长页用 Coo 的家长钥匙进入。可以开通多端登录、看孩子当前牌桌的公开牌面，也能读到自家 Coo 主讲或听过的说书记录。客厅满员时仍可观战，牌桌暂停后会提示回家长页。</p>
-
-        <div class="gate">
-          <p class="ef-field">同一个「客厅」页，下面那条是给家长的</p>
-          <p class="path">Coo →「客厅」页 → <b>客厅 · 家长页（只读，带钥匙）</b></p>
-          <p class="note">它和孩子的席位是两套身份：能看公开牌面，不能替孩子出牌。</p>
-        </div>
-
-        <p class="ef-actions">
-          <a class="ef-btn" href="/parent">打开家长页</a>
-        </p>
-
-        <div class="also">
-          <p class="lead">全站公告、反馈和运营回复都在「反馈与公告」，<strong>要先用当前浏览器加入客厅才能打开</strong>。反馈仅你和运营者可见。</p>
-          <p class="ef-actions">
-            <a class="ef-btn" href="/support">反馈与公告（需先加入客厅）</a>
-          </p>
-        </div>
-
-        <footer class="foot">
-          <p class="ef-field">鲸语会馆 │ {{origin}}</p>
-          <p class="ef-field"><a href="/play">进客厅</a></p>
-        </footer>
-      </section>
+      </dialog>
+      <!-- rules-dialog:end -->
     </main>
 
   </body>

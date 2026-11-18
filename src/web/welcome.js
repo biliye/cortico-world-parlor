@@ -1,11 +1,11 @@
 /**
- * 对外页的脚本负责五件事：
+ * 对外页的脚本负责四件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
  * 3. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
  *    屏里的列表再挂一层 data-stagger，编号与条目按 45ms 一个地排队浮现；
- * 4. 玩法规则：左列八格是页签，点一格右列换一块；没脚本时八块全展开，仍可读；
- * 5. 吸附强度：量一遍每屏是否都装得下，装得下就把 scroll-snap 收紧成 mandatory。
+ * 4. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
+ *    没脚本时不挂 ef-rules，八块规则平铺在页尾，仍然读得到。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
  * 所以只有这一段外链脚本。滚动翻页本身仍是纯 CSS（html 上的 scroll-snap）。
@@ -13,8 +13,8 @@
 (() => {
   const root = document.documentElement;
   const KEY = 'parlor-welcome-theme';
-  /** 需要「一条一条排队浮现」的列表：玩法编号、入场三步、首屏三栏。 */
-  const STAGGER_GROUPS = '.hero .what-cols, .enter .steps, .rule-tabs';
+  /** 需要「一条一条排队浮现」的列表：玩法八格、入场三步、首屏三栏。 */
+  const STAGGER_GROUPS = '.hero .what-cols, .enter .steps, .rule-grid';
 
   /** 系统开了「减少动态效果」就一律走静止分支：不扩散、不淡入、不收紧吸附。 */
   const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -187,94 +187,87 @@
     }
   };
 
-  // ---------- 玩法规则：左列选、右列读 ----------
+  // ---------- 玩法规则：点一格，规则从弹层里出来 ----------
 
   /**
-   * 没脚本时八块规则全部展开（面板上没有 hidden），有脚本才收成一块一块的页签。
-   * 键盘按 ARIA tablist 的约定：上下左右换格、Home / End 跳首尾。
+   * 八格是按钮，规则都装在页尾那个 <dialog> 里：点一格开一层，只显这一块。
+   * 关上走一段 170ms 的退场动画再 close()，不然会「啪」地消失。
+   * 不支持 showModal 的浏览器直接 return：页面上没有 ef-rules，CSS 就退回平铺。
    */
   const bindRules = () => {
-    const list = document.querySelector('.rules-tabs');
-    const tabs = [...document.querySelectorAll('.rule-tab')];
-    if (!list || tabs.length === 0) return;
+    const dialog = document.getElementById('rule-dialog');
+    const cards = [...document.querySelectorAll('.rule-card')];
+    const pages = [...document.querySelectorAll('.rule-pages .rule')];
+    if (!dialog || !cards.length || !pages.length || typeof dialog.showModal !== 'function') return;
 
-    const show = (id, { animate = false, revealTab = false } = {}) => {
-      for (const tab of tabs) {
-        const on = tab.getAttribute('aria-controls') === id;
-        tab.setAttribute('aria-selected', on ? 'true' : 'false');
-        tab.tabIndex = on ? 0 : -1;
-      }
-      for (const panel of document.querySelectorAll('.rule')) {
-        const on = panel.id === id;
-        panel.hidden = !on;
-        if (!on) continue;
-        // 先摘再挂，连点同一格也能重播一次；换人时不弹跳，只淡入。
-        panel.classList.remove('is-fresh');
-        if (animate && !still()) {
-          void panel.offsetWidth;
-          panel.classList.add('is-fresh');
-        }
-      }
-      // 窄屏那条横向编号条：选中的一格滚进可视范围，别让它藏在边上。
-      if (!revealTab || list.scrollWidth <= list.clientWidth) return;
-      const tab = tabs.find((item) => item.getAttribute('aria-controls') === id);
-      if (!tab) return;
-      const box = tab.getBoundingClientRect();
-      const frame = list.getBoundingClientRect();
-      list.scrollTo({ left: list.scrollLeft + (box.left - frame.left) - 10, behavior: still() ? 'auto' : 'smooth' });
+    const body = dialog.querySelector('.rule-pages');
+    const count = dialog.querySelector('.rule-dialog-no');
+    const closeBtn = dialog.querySelector('[data-act="rule-close"]');
+    let opener = null;
+    let closing = 0;
+
+    /** 只留一块：其余 hidden，编号条跟着换，正文回到顶部。 */
+    const fill = (id) => {
+      const page = pages.find((item) => item.dataset.rule === id) ?? pages[0];
+      for (const item of pages) item.hidden = item !== page;
+      if (count) count.textContent = page.dataset.no ?? '';
+      if (body) body.scrollTop = 0;
+      page.classList.remove('is-fresh');
+      if (still()) return;
+      void page.offsetWidth;
+      page.classList.add('is-fresh');
     };
 
-    const choose = (tab) => show(tab.getAttribute('aria-controls'), { animate: true, revealTab: true });
+    const finishClose = () => {
+      closing = 0;
+      dialog.classList.remove('is-out');
+      dialog.close();
+      root.classList.remove('ef-rule-open');
+      // 焦点回到点中的那一格，键盘用户不会掉到页首。
+      opener?.focus({ preventScroll: true });
+    };
 
-    for (const tab of tabs) tab.addEventListener('click', () => choose(tab));
+    const close = () => {
+      if (!dialog.open || closing) return;
+      // 退场与 CSS 的 170ms 对齐；减少动态效果时不留这段空档。
+      closing = setTimeout(finishClose, still() ? 0 : 170);
+      dialog.classList.add('is-out');
+    };
 
-    list.addEventListener('keydown', (event) => {
-      const index = tabs.indexOf(document.activeElement);
-      if (index < 0) return;
-      let next;
-      switch (event.key) {
-        case 'ArrowDown':
-        case 'ArrowRight':
-          next = (index + 1) % tabs.length;
-          break;
-        case 'ArrowUp':
-        case 'ArrowLeft':
-          next = (index - 1 + tabs.length) % tabs.length;
-          break;
-        case 'Home':
-          next = 0;
-          break;
-        case 'End':
-          next = tabs.length - 1;
-          break;
-        default:
-          return;
-      }
-      event.preventDefault();
-      tabs[next].focus();
-      choose(tabs[next]);
+    const open = (card) => {
+      fill(card.dataset.rule);
+      opener = card;
+      dialog.classList.remove('is-out');
+      root.classList.add('ef-rule-open');
+      dialog.showModal();
+    };
+
+    for (const card of cards) {
+      card.addEventListener('click', () => open(card));
+    }
+
+    closeBtn?.addEventListener('click', close);
+
+    // 点遮罩：事件目标是 dialog 自己（面板内部点到的是子元素）。
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) close();
     });
 
-    // 初始只留第一块（HTML 里标着 aria-selected="true" 那一格），不播换入动画。
-    show(tabs[0].getAttribute('aria-controls'));
-  };
+    // Esc 默认会直接 close()，先拦下来走同一段退场。
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      close();
+    });
 
-  // ---------- 吸附强度 ----------
+    // 任何路径真的关掉之后，都要把锁滚动和退场标记清干净。
+    dialog.addEventListener('close', () => {
+      root.classList.remove('ef-rule-open');
+      dialog.classList.remove('is-out');
+    });
 
-  /**
-   * 每屏高度都 ≤ 一屏（减去顶栏）时才敢用 mandatory：这时一个滚轮动作正好一屏。
-   * 有一屏比视口高（窄屏首屏、玩法九条）就必须退回 proximity，否则中间那截滚不出来。
-   * 窗口尺寸与字体度量都会改变结果，所以 resize 与 fonts.ready 之后各重量一次。
-   */
-  const measureSnap = () => {
-    /* 顶栏高度直接量盒子：读 --top-h 拿到的是「3.5rem」这种字符串，
-       parseFloat 出来是 3.5 而不是像素，会把每屏都判成装得下。 */
-    const header = document.querySelector('.top');
-    const topH = header ? header.getBoundingClientRect().height : 0;
-    const room = innerHeight - topH + 2;
-    const screens = [...document.querySelectorAll('.screen')];
-    const fit = screens.length > 0 && screens.every((screen) => screen.getBoundingClientRect().height <= room);
-    root.dataset.snap = fit ? 'strict' : 'loose';
+    // 先把第一块摆好，再挂 ef-rules：挂上之前，CSS 让弹层以平铺形态出现在页面里。
+    fill(cards[0].dataset.rule);
+    root.classList.add('ef-rules');
   };
 
   onReady(() => {
@@ -282,21 +275,5 @@
     bindParallax();
     bindReveal();
     bindRules();
-    measureSnap();
-
-    /* 量一次不够：字体换上来、图解码完、窗口被拖动都会改每屏高度。
-       拿 ResizeObserver 盯住每屏自己，比「等 load 再量一次」靠谱。 */
-    let timer = 0;
-    const later = () => {
-      clearTimeout(timer);
-      timer = setTimeout(measureSnap, 80);
-    };
-    if ('ResizeObserver' in window) {
-      const ro = new ResizeObserver(later);
-      for (const screen of document.querySelectorAll('.screen')) ro.observe(screen);
-    }
-    addEventListener('resize', later);
-    addEventListener('load', measureSnap);
-    if (document.fonts?.ready) document.fonts.ready.then(measureSnap).catch(() => {});
   });
 })();

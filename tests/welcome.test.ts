@@ -10,7 +10,7 @@ import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
-import { RULE_PAGES, renderRulesMarkup } from '../src/room/game-rules-doc.ts';
+import { RULE_PAGES, renderRuleDialog, renderRulesMarkup } from '../src/room/game-rules-doc.ts';
 import { WEREWOLF_MAX_DAYS } from '../src/room/games/werewolf.ts';
 import { DEFAULT_TURN_MS as DDZ_TURN_MS } from '../src/room/games/doudizhu-table.ts';
 import { ENABLED_GAMES, gameLabel } from '../web-src/lib/games.ts';
@@ -200,21 +200,20 @@ describe('对外页的静态契约', () => {
   });
 
   /**
-   * 三条动效口径：吸附按「每屏装不装得下」在两档之间切；换屏内容依次抬起；
+   * 三条动效口径：吸附只有接近一档（不硬拽、不限一次一屏）；换屏内容依次抬起；
    * 明暗从按钮向外扩散，且都留了「减少动态效果」的退路。
    */
   it('吸附、换屏进场与明暗扩散都有脚本配合，并且都能关掉', () => {
     const css = read('welcome.css');
     const js = read('welcome.js');
 
-    // 吸附：默认接近吸附，脚本量完才收紧成强制
-    expect(css).toMatch(/html\[data-snap='strict'\]\s*\{[^}]*scroll-snap-type:\s*y mandatory/);
-    // 强制吸附只给「不介意动效」的人；开了减少动态效果就留在接近吸附
-    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*no-preference\)\s*\{\s*html\[data-snap='strict'\]/);
-    expect(js).toContain("root.dataset.snap");
-    expect(js).toContain('measureSnap');
-    // 每屏高度都量，不是只看第一屏
-    expect(js).toMatch(/querySelectorAll\('\.screen'\)/);
+    // 吸附只有接近一档：滚到一屏附近才吸，滚快一点可以连着走，也不限一次只走一屏
+    expect(css).toMatch(/html\s*\{[^}]*scroll-snap-type:\s*y proximity/);
+    expect(css).not.toMatch(/scroll-snap-type:\s*y mandatory/);
+    expect(css).not.toMatch(/scroll-snap-stop:\s*always/);
+    // 既然没有强制吸附，就不需要脚本量「每屏装不装得下」再切档
+    expect(js).not.toContain('measureSnap');
+    expect(js).not.toContain('dataset.snap');
 
     // 换屏进场：脚本挂 data-reveal + is-in，CSS 按 --i 错开（屏级 100ms）
     expect(js).toContain("screen.dataset.reveal");
@@ -269,37 +268,48 @@ describe('对外页的静态契约', () => {
 });
 
 /**
- * 规则页由 `src/room/game-rules-doc.ts` 生成：这里核三件事 ——
- * 生成物确实写进了页面、覆盖网页能开的每一种玩法、#66 里玩家问到的口径都在。
+ * 规则页由 `src/room/game-rules-doc.ts` 生成：这里核四件事 ——
+ * 两段生成物都真的写进了页面、八格按钮与八块规则一一对上、
+ * 没脚本时规则仍读得到、#66 里玩家问到的口径都在。
  */
 describe('八种玩法的规则页', () => {
-  const BEGIN = '<!-- rules:begin -->';
-  const END = '<!-- rules:end -->';
-  const from = page.indexOf(BEGIN);
-  const to = page.indexOf(END);
-  const rendered = page.slice(from + BEGIN.length, to).trim();
+  const slice = (begin: string, end: string) => {
+    const from = page.indexOf(begin);
+    const to = page.indexOf(end);
+    expect(from, begin).toBeGreaterThan(-1);
+    expect(to, begin).toBeGreaterThan(from);
+    return page.slice(from + begin.length, to).trim();
+  };
 
-  it('页面里那段就是生成器的输出，没有手改', () => {
-    expect(from).toBeGreaterThan(-1);
-    expect(to).toBeGreaterThan(from);
-    expect(rendered).toBe(renderRulesMarkup().trim());
+  const cards = slice('<!-- rules:begin -->', '<!-- rules:end -->');
+  const dialog = slice('<!-- rules-dialog:begin -->', '<!-- rules-dialog:end -->');
+
+  it('页面里的两段就是生成器的输出，没有手改', () => {
+    expect(cards).toBe(renderRulesMarkup().trim());
+    expect(dialog).toBe(renderRuleDialog().trim());
   });
 
-  it('左列八格、右列八块，与网页能开的玩法一一对上', () => {
-    const tabs = [...rendered.matchAll(/class="rule-tab"[^>]*\bid="rule-tab-([^"]+)"/g)].map(([, id]) => id);
-    const panels = [...rendered.matchAll(/class="rule"\s+id="rule-([^"]+)"/g)].map(([, id]) => id);
-    expect(tabs).toEqual(RULE_PAGES.map((rule) => rule.id));
-    expect(panels).toEqual(tabs);
-    expect([...tabs].sort()).toEqual([...ENABLED_GAMES].sort());
+  it('八格按钮与八块规则一一对上，编号 01–08', () => {
+    const buttons = [...cards.matchAll(/class="rule-card"[^>]*\bdata-rule="([^"]+)"/g)].map(([, id]) => id);
+    const articles = [...dialog.matchAll(/class="rule"\s+id="rule-([^"]+)"/g)].map(([, id]) => id);
+    expect(buttons).toEqual(RULE_PAGES.map((rule) => rule.id));
+    expect(articles).toEqual(buttons);
+    expect([...buttons].sort()).toEqual([...ENABLED_GAMES].sort());
     expect(RULE_PAGES.map((rule) => rule.no)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
+    // 按钮与规则块靠 data-rule 对上，脚本就是按它找的
+    for (const id of buttons) expect(dialog).toContain(`data-rule="${id}"`);
   });
 
-  it('面板默认不隐藏：脚本没跑时八块规则全展开，仍读得到', () => {
-    expect(rendered).not.toMatch(/<article class="rule"[^>]*\shidden/);
-    expect(rendered).toContain('role="tablist"');
-    const selected = [...rendered.matchAll(/aria-selected="(true|false)"/g)].map(([, value]) => value);
-    expect(selected).toHaveLength(RULE_PAGES.length);
-    expect(selected.filter((value) => value === 'true')).toHaveLength(1);
+  it('没有脚本时八块规则平铺在页面里，仍读得到', () => {
+    // 规则块默认不带 hidden：脚本跑起来才收成一块
+    expect(dialog).not.toMatch(/<article class="rule"[^>]*\shidden/);
+    // 弹层放在所有屏之后：平铺时不会把某一屏撑破
+    expect(page.indexOf('<!-- rules-dialog:begin -->')).toBeGreaterThan(page.indexOf('id="parent"'));
+    const js = read('welcome.js');
+    const css = read('welcome.css');
+    expect(js).toContain("root.classList.add('ef-rules')");
+    expect(css).toMatch(/html:not\(\.ef-rules\) \.rule-dialog/);
+    expect(css).toMatch(/html:not\(\.ef-rules\) \.rule-dialog-bar\s*\{[^}]*display:\s*none/);
   });
 
   it('#66 里玩家问到的四件事都有成文说法', () => {
@@ -327,16 +337,23 @@ describe('八种玩法的规则页', () => {
     expect(ddz.facts.join(' ')).toContain(`出牌 ${Math.round(DDZ_TURN_MS / 1000)} 秒`);
   });
 
-  it('左列是页签、右列是面板，脚本按 aria-controls 换块', () => {
+  it('规则层是 dialog：点一格开、Esc 与点遮罩都能关，进出都有动画', () => {
     const js = read('welcome.js');
     const css = read('welcome.css');
     expect(js).toContain('bindRules');
-    expect(js).toContain("getAttribute('aria-controls')");
-    expect(js).toContain("case 'ArrowDown'");
-    expect(css).toMatch(/\.rule-tab\[aria-selected='true'\]\s*\{[^}]*background:\s*var\(--ef-signal\)/);
-    // 面板自己滚，滚到底不把整页带走；整屏高度仍是一屏
+    expect(js).toContain('showModal');
+    expect(js).toContain("addEventListener('cancel'");
+    // 退场先挂 is-out 播动画，再 close()
+    expect(js).toContain('is-out');
+    expect(css).toMatch(/@keyframes ef-dialog-in/);
+    expect(css).toMatch(/@keyframes ef-dialog-out/);
+    expect(css).toMatch(/\.rule-dialog\[open\]\.is-out/);
+    // 整屏仍是一屏，规则不占它的高度；层里只有正文滚，滚到底不带动身后的页
     expect(css).toMatch(/\.games-screen\s*\{[^}]*height:\s*calc\(100svh - var\(--top-h\)/);
-    expect(css).toMatch(/\.rules-panels\s*\{[^}]*overscroll-behavior:\s*contain/);
+    expect(css).toMatch(/\.rule-pages\s*\{[^}]*overscroll-behavior:\s*contain/);
+    expect(css).toMatch(/html\.ef-rule-open\s*\{[^}]*overflow:\s*hidden/);
+    // 减少动态效果时两层都不播
+    expect(css).toMatch(/prefers-reduced-motion: no-preference\)\s*\{\s*\.rule-dialog\[open\]/);
   });
 });
 
