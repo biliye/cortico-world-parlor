@@ -85,14 +85,14 @@ export class XiangqiTable implements TableEngine {
   readonly stateVersion = 1;
   readonly host: string;
   status: TableStatus = 'open';
-  private readonly turnMs: number;
+  private readonly turnMs?: number;
   private redIndex: number;
   private seats: TableSeat[];
   private deadline = 0;
   private match = new Match();
   private advice: TurnAdvice | undefined;
 
-  constructor(host: TableSeat, turnMs = 60_000, firstSeat = 0) {
+  constructor(host: TableSeat, turnMs?: number, firstSeat = 0) {
     this.host = host.id;
     this.seats = [{ ...host }];
     this.turnMs = turnMs;
@@ -101,6 +101,10 @@ export class XiangqiTable implements TableEngine {
 
   private seatOf(color: Color): TableSeat {
     return this.seats[color === 1 ? this.redIndex : 1 - this.redIndex];
+  }
+
+  private turnDuration(seat: TableSeat): number {
+    return this.turnMs ?? (seat.kind === 'human' ? 180_000 : 60_000);
   }
 
   has(seatId: string): boolean { return this.seats.some(seat => seat.id === seatId); }
@@ -130,8 +134,8 @@ export class XiangqiTable implements TableEngine {
     if (by !== this.host) throw new TableError('not_host', '只有桌主可以开局');
     if (this.status !== 'open' || this.seats.length !== 2) throw new TableError('not_open', '需要两席坐满才能开局');
     this.status = 'playing';
-    this.deadline = now + this.turnMs;
     const first = this.seatOf(1);
+    this.deadline = now + this.turnDuration(first);
     return { events: [this.event('start', `象棋开局，${first.name} 执红先行。`)], views: [first.id] };
   }
 
@@ -162,8 +166,9 @@ export class XiangqiTable implements TableEngine {
       `${seat.name}${automatic ? '（托管）' : ''}走${pieceName(played.piece)} ${moveText(move)}${capture}${check}。`,
       { move: played, seat: seat.id })];
     if (this.match.result) return this.end(this.match.result, events);
-    this.deadline = now + this.turnMs;
-    return { events, views: [this.seatOf(this.match.turn).id] };
+    const next = this.seatOf(this.match.turn);
+    this.deadline = now + this.turnDuration(next);
+    return { events, views: [next.id] };
   }
 
   private end(result: Result, events: TableEvent[]): TableStep {

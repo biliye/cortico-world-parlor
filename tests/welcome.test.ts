@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
+import { ENABLED_GAMES, gameLabel } from '../web-src/lib/games.ts';
 import { GATEWAY_RETRY_DELAYS, gatewayOf, gatewaySettlement, isGatewayServer } from '../web-src/lib/gateway.ts';
 
 const web = new URL('../src/web/', import.meta.url);
@@ -29,6 +30,16 @@ describe('对外页的静态契约', () => {
     expect(page).toContain('data-ef-ground="hatch"');
     expect(page).toMatch(/<title>[^<]{4,}<\/title>/);
     expect(page).toMatch(/<meta name="description" content="[^"]{20,}"/);
+  });
+
+  it('玩法目录和两份跑马灯都只列网页可开桌的玩法', () => {
+    const compact = (label: string) => label.replace(/\s+/g, '');
+    const enabled = ENABLED_GAMES.map(id => compact(gameLabel(id))).sort();
+    const listed = [...markup.matchAll(/<span class="g">([^<]+)<\/span>/g)].map(([, label]) => compact(label));
+    const ticker = [...markup.matchAll(/<a href="#games"[^>]*><b>\d+<\/b>([^<]+)<\/a>/g)]
+      .map(([, label]) => compact(label));
+    expect(listed.sort()).toEqual(enabled);
+    expect(ticker.sort()).toEqual([...enabled, ...enabled].sort());
   });
 
   it('没有内联样式、内联脚本和表单（CSP 是 default-src none，form-action none）', () => {
