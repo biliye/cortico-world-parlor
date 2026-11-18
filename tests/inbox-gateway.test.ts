@@ -48,6 +48,19 @@ async function operator(path: string, body?: unknown, key = OPERATOR, method = '
 const publish = (body: unknown, key?: string) => operator('news', body, key);
 
 describe('统一 inbox 网关（真实 PG）', () => {
+  it('长公告协商 gzip，未接受 gzip 时返回相同 JSON', async () => {
+    const { token } = await start();
+    expect((await operator('announcements', { requestId: 'gzip-test', text: '茶馆公告。'.repeat(150) })).status).toBe(200);
+    const url = `${app!.url}/v1/support/inbox?topics=announcements`;
+    const get = (encoding: string) => fetch(url, { headers: { authorization: `Bearer ${token}`, 'accept-encoding': encoding } });
+    const plain = await get('identity');
+    const gzip = await get('gzip');
+    expect(plain.headers.get('content-encoding')).toBeNull();
+    expect(gzip.headers.get('content-encoding')).toBe('gzip');
+    expect(gzip.headers.get('vary')).toBe('accept-encoding');
+    expect(await gzip.json()).toEqual(await plain.json());
+  });
+
   it('公告版本相同时省略正文，修改和删除会更新版本，旧客户端仍收到完整列表', async () => {
     const { client, token } = await start();
     const path = 'announcements';

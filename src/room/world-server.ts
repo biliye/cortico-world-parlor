@@ -1154,7 +1154,7 @@ export class WorldServer {
           ...(topics.has('news') ? { news: await support.newsFeed(afterPublish, afterId) } : {}),
           ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3, here) } } : {}),
           ...(topics.has('story') ? { story: await this.story.liveHint(actor) } : {}),
-        });
+        }, req);
         return;
       }
       // 主动查：一律 200，找不到就是 news:null。旧服务器没有这条路由才是 404，
@@ -2395,7 +2395,7 @@ export class WorldServer {
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
       const snapshot: RoomSnapshot = await host.snapshot(seat.cooId, { since, limit });
-      json(res, 200, { ...snapshot, online: this.onlineSeatIds(roomId) });
+      json(res, 200, { ...snapshot, online: this.onlineSeatIds(roomId) }, req);
       return;
     }
 
@@ -2456,7 +2456,7 @@ export class WorldServer {
       await host.refreshClientVersion(seat.cooId, headerValue(req, 'x-parlor-client').trim());
       const tableId = url.searchParams.get('table')?.trim() || undefined;
       const slice = await host.tableSlice(seat.cooId, tableId);
-      json(res, 200, { ok: true, ...slice });
+      json(res, 200, { ok: true, ...slice }, req);
       return;
     }
 

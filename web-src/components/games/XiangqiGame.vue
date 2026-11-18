@@ -28,6 +28,7 @@ const selected = ref<number | null>(null);
 const destination = ref<number | null>(null);
 const hintIndex = ref(-1);
 const submitting = ref(false);
+const flipped = ref(false);
 
 const canPlay = computed(() => table.value.status === 'playing' && mine.value?.canAct === true);
 const ended = computed(() => table.value.status === 'ended');
@@ -35,6 +36,10 @@ const mySeat = computed(() => table.value.seats?.find(seat => seat.id === props.
 const hints = computed(() => canPlay.value ? mine.value?.hints ?? [] : []);
 const hint = computed(() => hints.value[hintIndex.value]);
 const last = computed(() => table.value.last ? [indexOf(table.value.last.from), indexOf(table.value.last.to)] : []);
+const points = computed(() => {
+  const entries = table.value.board.map((piece, index) => ({ piece, index }));
+  return flipped.value ? entries.reverse() : entries;
+});
 const movesBySource = computed(() => {
   const bySource = new Map<number, Map<number, XiangqiMove>>();
   for (const move of mine.value?.legalMoves ?? []) {
@@ -109,17 +114,17 @@ function resign(): void {
     <div class="xiangqi-layout">
       <div class="xiangqi-frame">
         <div class="file-labels" aria-hidden="true">
-          <span v-for="col in XIANGQI_COLS" :key="col">{{ col - 1 }}</span>
+          <span v-for="col in XIANGQI_COLS" :key="col">{{ flipped ? XIANGQI_COLS - col : col - 1 }}</span>
         </div>
         <div class="rank-labels" aria-hidden="true">
-          <span v-for="row in XIANGQI_ROWS" :key="row">{{ row - 1 }}</span>
+          <span v-for="row in XIANGQI_ROWS" :key="row">{{ flipped ? XIANGQI_ROWS - row : row - 1 }}</span>
         </div>
-        <div class="xiangqi-board" role="group" aria-label="中国象棋棋盘，红方在下">
+        <div class="xiangqi-board" role="group" :aria-label="flipped ? '中国象棋棋盘，黑方在下' : '中国象棋棋盘，红方在下'">
           <span class="palace north" aria-hidden="true" />
           <span class="palace south" aria-hidden="true" />
           <div class="river" aria-hidden="true"><span>楚河</span><span>汉界</span></div>
           <button
-            v-for="(piece, i) in table.board"
+            v-for="{ piece, index: i } in points"
             :key="i"
             type="button"
             class="xiangqi-point"
@@ -136,6 +141,7 @@ function resign(): void {
       </div>
 
       <aside class="xiangqi-side">
+        <button class="btn ghost" type="button" :aria-pressed="flipped" @click="flipped = !flipped">翻转棋盘</button>
         <p class="muted">{{ mySeat ? '你执' + colorName(mySeat.color) : '观战' }} · {{ table.plies }} 手</p>
         <ul class="xiangqi-seats">
           <li v-for="seat in table.seats" :key="seat.id" :class="{ current: seat.id === table.turn }">

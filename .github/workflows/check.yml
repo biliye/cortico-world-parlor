@@ -31,3 +31,48 @@ jobs:
           git diff --exit-code -- src/web/vue
           test -z "$(git ls-files --others --exclude-standard -- src/web/vue)"
       - run: pnpm test
+
+  pg:
+    name: PG (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: core
+            filter: ''
+          - suite: web-player
+            filter: tests/web-player.test.ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run managed PG tests
+        env:
+          PG_TEST_FILTER: ${{ matrix.filter }}
+        run: |
+          if [ -n "$PG_TEST_FILTER" ]; then
+            pnpm test:pg "$PG_TEST_FILTER"
+          else
+            pnpm test:pg
+          fi
+      - name: Report test and cleanup separately
+        if: ${{ always() }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+          const dir = '.task-tmp/test-results';
+          const file = existsSync(dir) && readdirSync(dir).find(name => name.endsWith('.json'));
+          const receipt = file ? JSON.parse(readFileSync(`${dir}/${file}`, 'utf8')) : null;
+          const status = (code, incomplete) => code == null ? incomplete : code === 0 ? 'passed (0)' : `failed (${code})`;
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            '### PostgreSQL',
+            `- Tests: ${status(receipt?.testExitCode, 'did not complete')}`,
+            `- Cleanup: ${status(receipt?.cleanupExitCode, 'no receipt')}`,
+            '',
+          ].join('\n'));
+          JS

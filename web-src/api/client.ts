@@ -45,7 +45,7 @@ export function roomPath(path: string): string {
 }
 
 /** 普通接口 25 秒没回话就当超时；首屏卡住时能自己走到「重试」，而不是一直转。 */
-function timeoutSignal(): AbortSignal | undefined {
+export function timeoutSignal(): AbortSignal | undefined {
   if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) return undefined;
   return AbortSignal.timeout(25_000);
 }
