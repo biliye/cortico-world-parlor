@@ -18,7 +18,9 @@ import { GATEWAY_RETRY_DELAYS, gatewayOf, gatewaySettlement, isGatewayServer } f
 
 const web = new URL('../src/web/', import.meta.url);
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-const read = (file: string) => readFileSync(new URL(file, web), 'utf8');
+/* 源码里有中文与生成块，换行随平台（Windows 工作树是 CRLF、CI 是 LF）。
+   断言只看内容，先归一成 LF，免得同一份文本在两边结论不同。 */
+const read = (file: string) => readFileSync(new URL(file, web), 'utf8').replace(/\r\n/g, '\n');
 const page = read('welcome.html');
 /** 注释里会提到 <style>、CSP 这类字样，和 check-release 一样先剥掉注释再判。 */
 const markup = page.replace(/<!--[\s\S]*?-->/g, '');

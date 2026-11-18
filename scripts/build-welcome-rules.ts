@@ -41,7 +41,11 @@ export function spliceRules(
 
 function main(): void {
   const check = process.argv.includes('--check');
-  const page = readFileSync(PAGE, 'utf8');
+  const raw = readFileSync(PAGE, 'utf8');
+  /* 换行按目标文件自己的风格走。工作树在 Windows 上是 CRLF、Linux 上是 LF，
+     不归一就比不出内容差异（--check 永远报不一致），写回还会让文件变成半 CRLF 半 LF。 */
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  const page = raw.replace(/\r\n/g, '\n');
   const next = spliceRules(page);
   if (next === page) {
     console.log('欢迎页规则已是最新');
@@ -52,7 +56,7 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
-  writeFileSync(PAGE, next);
+  writeFileSync(PAGE, eol === '\n' ? next : next.replace(/\n/g, eol));
   console.log('已写入 src/web/welcome.html');
 }
 
