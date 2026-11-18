@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay } from '../api/client.ts';
+import { ApiError, beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay, timeoutSignal } from '../api/client.ts';
 import { guestJoinEnabled } from '../lib/join.ts';
 import ThemePicker from '../components/ThemePicker.vue';
 import WebInvites from '../components/WebInvites.vue';
 import type { Health } from '../api/types.ts';
-import { logoutWebPlayer, takeWebSeat, webPlayerRequest, type WebPlayer } from '../api/web-player.ts';
+import { logoutWebPlayer, takeWebSeat, uncertainWebResult, webPlayerRequest, type WebPlayer } from '../api/web-player.ts';
 import { seat } from '../stores/session.ts';
 import { detectGateway, gateway } from '../stores/server.ts';
 
@@ -26,17 +26,41 @@ const password = ref('');
 const code = ref('');
 const guestName = ref('');
 const player = ref<WebPlayer | null>(null);
+const checkingPlayer = ref(false);
+const statusError = ref('');
+const redeemRecovery = ref<'unknown' | 'accepted' | null>(null);
 
 watch(() => props.inviteCode, inviteCode => {
   if (!inviteCode) return;
   entry.value = 'guest';
+  if (inviteCode !== code.value) redeemRecovery.value = null;
   code.value = inviteCode;
   error.value = '';
 }, { immediate: true });
 
 async function loadWebPlayer(): Promise<void> {
-  player.value = await webPlayerRequest<WebPlayer>('me').catch(() => null);
-  if (player.value?.guest && !guestName.value) guestName.value = player.value.name;
+  if (checkingPlayer.value) return;
+  checkingPlayer.value = true;
+  statusError.value = '';
+  try {
+    player.value = await webPlayerRequest<WebPlayer>('me');
+    if (player.value.guest) {
+      if (!guestName.value) guestName.value = player.value.name;
+      if (redeemRecovery.value) {
+        if (redeemRecovery.value === 'unknown') clearInvite();
+        redeemRecovery.value = null;
+        error.value = '';
+      }
+    }
+  } catch (cause) {
+    if (cause instanceof ApiError && (cause.status === 401 || cause.status === 404)) {
+      player.value = null;
+    } else {
+      statusError.value = '暂时无法确认登录状态，请重查。';
+    }
+  } finally {
+    checkingPlayer.value = false;
+  }
 }
 
 onMounted(async () => {
@@ -49,7 +73,7 @@ onMounted(async () => {
     globalIdentity.value = health.globalIdentity || null;
   }
   try {
-    const response = await fetch('/v1/parent/me');
+    const response = await fetch('/v1/parent/me', { signal: timeoutSignal() });
     if (response.ok) {
       const body = await response.json().catch(() => null);
       parentName.value = (body && body.account && body.account.displayName) || '家长';
@@ -59,15 +83,26 @@ onMounted(async () => {
   }
 });
 
-async function webAction(action: () => Promise<void>): Promise<void> {
-  if (busy.value) return;
+async function webAction(action: () => Promise<void>, operation?: 'login' | 'play'): Promise<void> {
+  if (busy.value || checkingPlayer.value || statusError.value) return;
   busy.value = true;
   error.value = '';
   try {
     await action();
   } catch (cause) {
     error.value = (cause as Error).message;
-    await loadWebPlayer();
+    if (uncertainWebResult(cause)) {
+      await loadWebPlayer();
+      if (operation === 'login' && !statusError.value && player.value) {
+        password.value = '';
+        error.value = '';
+      }
+      if (operation === 'play' && !statusError.value && player.value?.seated) {
+        error.value = '已查到账号有席位。若本机还没入场，可以手动确认接管。';
+      }
+    } else if (cause instanceof ApiError && (cause.status === 409 || cause.status === 401)) {
+      await loadWebPlayer();
+    }
   } finally {
     busy.value = false;
   }
@@ -78,25 +113,45 @@ async function signIn() {
     await webPlayerRequest('login', { loginName: loginName.value, password: password.value });
     password.value = '';
     await loadWebPlayer();
-  });
+  }, 'login');
 }
 
 async function redeem() {
+  if (redeemRecovery.value === 'accepted') return;
   await webAction(async () => {
-    await webPlayerRequest('redeem', { code: code.value, name: guestName.value });
-    code.value = '';
-    emit('redeemed');
+    redeemRecovery.value = null;
+    try {
+      await webPlayerRequest('redeem', { code: code.value, name: guestName.value });
+    } catch (cause) {
+      if (uncertainWebResult(cause)) redeemRecovery.value = 'unknown';
+      throw cause;
+    }
+    redeemRecovery.value = 'accepted';
+    clearInvite();
     await loadWebPlayer();
+    if (!player.value?.guest) return;
     await takeWebSeat(false);
     emit('entered');
-  });
+  }, 'play');
+}
+
+function clearInvite(): void {
+  code.value = '';
+  emit('redeemed');
+}
+
+function useAnotherInvite(): void {
+  clearInvite();
+  redeemRecovery.value = null;
+  error.value = '';
+  entry.value = 'guest';
 }
 
 async function play() {
   await webAction(async () => {
     await takeWebSeat(player.value?.seated === true, player.value?.guest ? guestName.value : undefined);
     emit('entered');
-  });
+  }, 'play');
 }
 
 async function logout() {
@@ -191,12 +246,17 @@ async function parentPlay(): Promise<void> {
       <p v-else class="brand">鲸语 <small>PARLOR CLUB</small></p>
       <h1>进入会馆</h1>
       <p v-if="error || props.initialError" class="warn error" role="alert">{{ error || props.initialError }}</p>
+      <p v-if="statusError" class="warn error" role="alert">{{ statusError }}</p>
+      <p v-if="redeemRecovery === 'accepted' && !checkingPlayer" class="warn error" role="alert">
+        邀请已领取。{{ statusError ? '请重查本机的试玩会话。' : '本机未建立试玩会话。重查后仍无法恢复时，请向邀请人要新链接。' }}
+      </p>
+      <button v-if="statusError || redeemRecovery" class="btn ghost" type="button" :disabled="busy || checkingPlayer" @click="loadWebPlayer">重查登录状态</button>
       <template v-if="player">
         <p class="sub">{{ player.name }}<template v-if="player.guest"> · 游客资格至 {{ new Date(player.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</template></p>
         <p v-if="props.inviteCode" class="note">要使用这张新邀请，请先退出当前会馆登录。</p>
         <div v-if="player.guest && !player.seated" class="field"><label for="resume-guest-name">游客昵称</label><input id="resume-guest-name" v-model="guestName" maxlength="24" autocomplete="nickname"></div>
-        <button class="btn primary" type="button" :disabled="busy" @click="play">{{ player.seated ? (player.guest ? '继续试玩' : '接管席位') : (player.guest ? '进入试玩客厅' : '进入大厅') }}</button>
-        <button class="btn ghost" type="button" :disabled="busy" @click="logout">{{ player.guest ? '结束试玩' : '退出登录' }}</button>
+        <button class="btn primary" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="play">{{ player.seated ? (player.guest ? '继续试玩' : '接管席位') : (player.guest ? '进入试玩客厅' : '进入大厅') }}</button>
+        <button class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="logout">{{ player.guest ? '结束试玩' : '退出登录' }}</button>
         <WebInvites v-if="!player.guest" />
       </template>
       <template v-else>
@@ -207,13 +267,16 @@ async function parentPlay(): Promise<void> {
         <form v-if="entry === 'login'" @submit.prevent="signIn">
           <div class="field"><label for="login-name">登录名</label><input id="login-name" v-model="loginName" maxlength="48" autocomplete="username" required></div>
           <div class="field"><label for="login-password">密码</label><input id="login-password" v-model="password" type="password" autocomplete="current-password" required></div>
-          <button class="btn primary" type="submit" :disabled="busy">登录</button>
+          <button class="btn primary" type="submit" :disabled="busy || checkingPlayer || !!statusError">登录</button>
           <p class="note">可从 Coo 的家长页设置登录名和密码。</p>
         </form>
+        <button v-else-if="redeemRecovery === 'accepted'" class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="useAnotherInvite">使用另一张邀请</button>
         <form v-else @submit.prevent="redeem">
           <div class="field"><label for="guest-name">游客昵称</label><input id="guest-name" v-model="guestName" maxlength="24" autocomplete="nickname" required></div>
-          <div class="field"><label for="guest-code">一次性邀请码</label><input id="guest-code" v-model="code" maxlength="22" type="password" autocomplete="off" required></div>
-          <button class="btn primary" type="submit" :disabled="busy">开始试玩</button>
+          <div class="field"><label for="guest-code">一次性邀请码</label><input id="guest-code" v-model="code" :readonly="redeemRecovery === 'unknown'" maxlength="22" type="password" autocomplete="off" required></div>
+          <p v-if="redeemRecovery === 'unknown'" class="note">还没确认这张邀请是否领取成功。重查确认未登录后，可手动重试原码。若提示已使用，请向邀请人要新链接。</p>
+          <button class="btn primary" type="submit" :disabled="busy || checkingPlayer || !!statusError">{{ redeemRecovery === 'unknown' ? '重试原邀请码' : '开始试玩' }}</button>
+          <button v-if="redeemRecovery === 'unknown'" class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="useAnotherInvite">使用另一张邀请</button>
         </form>
       </template>
       <p v-if="seat" class="note"><a href="/play">返回当前席位</a></p>

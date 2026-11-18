@@ -88,7 +88,7 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
   });
 
   it('中国象棋从目录开桌，只有执棋方能收到提示和合法走法', async () => {
-    const [a, b, spectator] = await start();
+    const [a, b, spectator] = await start({ now: Date.now() });
     const catalog = await a.client.games(a.token, { op: 'list' }, 'lobby');
     expect(catalog.games).toContainEqual(expect.objectContaining({ id: 'xiangqi', label: '中国象棋' }));
     const info = await a.client.games(a.token, { op: 'describe', game: 'xiangqi' }, 'lobby');
@@ -107,6 +107,16 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     expect(watching.tablePrivate).toBeNull();
     expect(state.tablePrivate.hints).toHaveLength(3);
     expect(state.tablePrivate.text).toContain('建议走法');
+    for (const path of ['room', `table?table=${table}`]) {
+      const url = `${app!.url}/v1/rooms/lobby/${path}`;
+      const get = (encoding: string) => fetch(url, { headers: { authorization: `Bearer ${red.token}`, 'accept-encoding': encoding } });
+      const plain = await get('identity');
+      const gzip = await get('gzip');
+      expect(plain.headers.get('content-encoding')).toBeNull();
+      expect(gzip.headers.get('content-encoding')).toBe('gzip');
+      expect(gzip.headers.get('vary')).toBe('accept-encoding');
+      expect(await gzip.json()).toEqual(await plain.json());
+    }
     expect(state.availableActions.map((entry: { action: string }) => entry.action)).toEqual(['move', 'resign']);
     const { from, to } = state.tablePrivate.hints[0];
     const body = {

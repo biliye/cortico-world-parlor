@@ -5,12 +5,14 @@ import { seat } from '../stores/session.ts';
 import { detectGateway, gateway } from '../stores/server.ts';
 import WebInvites from './WebInvites.vue';
 import { logoutWebPlayer } from '../api/web-player.ts';
+import { ENABLED_GAMES, GAMES, gameLabel } from '../lib/games.ts';
 
 const props = defineProps<{ open:boolean }>();
 const emit = defineEmits<{ 'update:open':[boolean] }>();
 const dialog = ref<HTMLDialogElement|null>(null);
 const kind = ref<'games'|'gifts'>('games');
 const game = ref('');
+const historyGameIds = [...ENABLED_GAMES, ...Object.keys(GAMES).filter(id => !GAMES[id].enabled)];
 const from = ref('');
 const until = ref('');
 const room = ref('');
@@ -41,7 +43,7 @@ async function load(more = false):Promise<void> {
   if (!more) { items.value = []; next.value = null; }
   try {
     const q = new URLSearchParams({ kind:kind.value, limit:'20' });
-    if (game.value) q.set('game', game.value);
+    if (kind.value === 'games' && game.value) q.set('game', game.value);
     if (room.value.trim()) q.set('room', room.value.trim());
     if (from.value) q.set('from', String(new Date(from.value + 'T00:00:00+08:00').getTime()));
     if (until.value) q.set('until', String(new Date(until.value + 'T00:00:00+08:00').getTime() + 86400000));
@@ -74,13 +76,19 @@ onMounted(() => { void detectGateway(); });
     <div class="rooms-box">
       <div class="rooms-head"><h2>我的账户</h2><a v-if="gateway" class="btn ghost small" href="/" title="回鲸语会馆首页">← 会馆首页</a><button class="btn ghost small" type="button" @click="close">关闭</button></div>
       <div class="access-body">
+        <p v-if="gateway && seat && !seat.guest" class="muted">改名请到<a href="/parent" target="_blank" rel="noopener">家长页</a>。</p>
         <WebInvites v-if="open && seat && !seat.guest" :key="seat.token" :seat-token="seat.token" />
         <button v-if="seat?.token.startsWith('web_')" class="btn ghost small" type="button" @click="logout">{{ seat.guest ? '结束试玩' : '退出网页登录' }}</button>
         <p v-if="summary">{{ summary.games }} 局 · {{ summary.wins }} 胜 {{ summary.losses }} 负 {{ summary.draws }} 平</p>
         <p class="muted">包含你在所有客厅的记录；已归档客厅的对局仍可查看。时间按北京时间显示。</p>
         <form class="account-filters" @submit.prevent="load()">
           <label>记录 <select v-model="kind"><option value="games">历史对局</option><option value="gifts">礼物流水</option></select></label>
-          <label v-if="kind === 'games'">游戏 <select v-model="game"><option value="">全部</option><option value="ddz">斗地主</option><option value="werewolf">狼人杀</option><option value="dice">骰子</option><option value="gomoku">五子棋</option><option value="xiangqi">中国象棋</option><option value="monopoly2d">快局大富翁</option><option value="aeroplane">飞行棋</option></select></label>
+          <label v-if="kind === 'games'">游戏
+            <select v-model="game">
+              <option value="">全部</option>
+              <option v-for="id in historyGameIds" :key="id" :value="id">{{ gameLabel(id) }}</option>
+            </select>
+          </label>
           <label>开始日期 <input v-model="from" type="date" /></label>
           <label>结束日期 <input v-model="until" type="date" /></label>
           <label>原客厅号 <input v-model="room" placeholder="全部客厅" /></label>
@@ -92,7 +100,7 @@ onMounted(() => { void detectGateway(); });
         <section v-for="item in items" :key="item.id" class="access-section">
           <strong>{{ kind === 'games' ? resultLabel(item.result) : giftLabel(item.direction) + ' · ' + (item.itemName || '礼物') }}</strong>
           <p>{{ item.text }}</p>
-          <small class="muted">{{ when(item.ts) }} · {{ item.roomName }}{{ kind === 'games' ? ' · ' + (item.game || '其他') : '' }}</small>
+          <small class="muted">{{ when(item.ts) }} · {{ item.roomName }}{{ kind === 'games' ? ' · ' + (item.game ? gameLabel(item.game) : '其他') : '' }}</small>
         </section>
         <button v-if="next" class="btn ghost" type="button" :disabled="busy" @click="load(true)">更早的记录</button>
       </div>
