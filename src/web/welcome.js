@@ -1,9 +1,11 @@
 /**
- * 对外页的脚本负责四件事：
+ * 对外页的脚本负责五件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
  * 3. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
- * 4. 吸附强度：量一遍每屏是否都装得下，装得下就把 scroll-snap 收紧成 mandatory。
+ *    屏里的列表再挂一层 data-stagger，编号与条目按 45ms 一个地排队浮现；
+ * 4. 玩法规则：左列八格是页签，点一格右列换一块；没脚本时八块全展开，仍可读；
+ * 5. 吸附强度：量一遍每屏是否都装得下，装得下就把 scroll-snap 收紧成 mandatory。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
  * 所以只有这一段外链脚本。滚动翻页本身仍是纯 CSS（html 上的 scroll-snap）。
@@ -11,6 +13,8 @@
 (() => {
   const root = document.documentElement;
   const KEY = 'parlor-welcome-theme';
+  /** 需要「一条一条排队浮现」的列表：玩法编号、入场三步、首屏三栏。 */
+  const STAGGER_GROUPS = '.hero .what-cols, .enter .steps, .rule-tabs';
 
   /** 系统开了「减少动态效果」就一律走静止分支：不扩散、不淡入、不收紧吸附。 */
   const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -156,8 +160,6 @@
    */
   const bindReveal = () => {
     if (still() || !('IntersectionObserver' in window)) return;
-    const screens = [...document.querySelectorAll('.screen')].filter((screen) => screen.id !== 'top');
-    if (!screens.length) return;
 
     const io = new IntersectionObserver(
       (entries) => {
@@ -170,10 +172,91 @@
       // 露出 12% 就开始抬；底边留 8% 余量，免得刚探个头就响。
       { threshold: 0.12, rootMargin: '0px 0px -8% 0px' },
     );
+
+    const screens = [...document.querySelectorAll('.screen')].filter((screen) => screen.id !== 'top');
     for (const screen of screens) {
       screen.dataset.reveal = '';
       io.observe(screen);
     }
+
+    /* 屏里的队列单独观察：首屏那三栏和首屏同屏，但常在折叠线以下，
+       跟着自己什么时候进视口走，比跟着「屏」走准。 */
+    for (const group of document.querySelectorAll(STAGGER_GROUPS)) {
+      group.dataset.stagger = '';
+      io.observe(group);
+    }
+  };
+
+  // ---------- 玩法规则：左列选、右列读 ----------
+
+  /**
+   * 没脚本时八块规则全部展开（面板上没有 hidden），有脚本才收成一块一块的页签。
+   * 键盘按 ARIA tablist 的约定：上下左右换格、Home / End 跳首尾。
+   */
+  const bindRules = () => {
+    const list = document.querySelector('.rules-tabs');
+    const tabs = [...document.querySelectorAll('.rule-tab')];
+    if (!list || tabs.length === 0) return;
+
+    const show = (id, { animate = false, revealTab = false } = {}) => {
+      for (const tab of tabs) {
+        const on = tab.getAttribute('aria-controls') === id;
+        tab.setAttribute('aria-selected', on ? 'true' : 'false');
+        tab.tabIndex = on ? 0 : -1;
+      }
+      for (const panel of document.querySelectorAll('.rule')) {
+        const on = panel.id === id;
+        panel.hidden = !on;
+        if (!on) continue;
+        // 先摘再挂，连点同一格也能重播一次；换人时不弹跳，只淡入。
+        panel.classList.remove('is-fresh');
+        if (animate && !still()) {
+          void panel.offsetWidth;
+          panel.classList.add('is-fresh');
+        }
+      }
+      // 窄屏那条横向编号条：选中的一格滚进可视范围，别让它藏在边上。
+      if (!revealTab || list.scrollWidth <= list.clientWidth) return;
+      const tab = tabs.find((item) => item.getAttribute('aria-controls') === id);
+      if (!tab) return;
+      const box = tab.getBoundingClientRect();
+      const frame = list.getBoundingClientRect();
+      list.scrollTo({ left: list.scrollLeft + (box.left - frame.left) - 10, behavior: still() ? 'auto' : 'smooth' });
+    };
+
+    const choose = (tab) => show(tab.getAttribute('aria-controls'), { animate: true, revealTab: true });
+
+    for (const tab of tabs) tab.addEventListener('click', () => choose(tab));
+
+    list.addEventListener('keydown', (event) => {
+      const index = tabs.indexOf(document.activeElement);
+      if (index < 0) return;
+      let next;
+      switch (event.key) {
+        case 'ArrowDown':
+        case 'ArrowRight':
+          next = (index + 1) % tabs.length;
+          break;
+        case 'ArrowUp':
+        case 'ArrowLeft':
+          next = (index - 1 + tabs.length) % tabs.length;
+          break;
+        case 'Home':
+          next = 0;
+          break;
+        case 'End':
+          next = tabs.length - 1;
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+      tabs[next].focus();
+      choose(tabs[next]);
+    });
+
+    // 初始只留第一块（HTML 里标着 aria-selected="true" 那一格），不播换入动画。
+    show(tabs[0].getAttribute('aria-controls'));
   };
 
   // ---------- 吸附强度 ----------
@@ -198,6 +281,7 @@
     bindTheme();
     bindParallax();
     bindReveal();
+    bindRules();
     measureSnap();
 
     /* 量一次不够：字体换上来、图解码完、窗口被拖动都会改每屏高度。

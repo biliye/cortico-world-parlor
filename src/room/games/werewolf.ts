@@ -31,7 +31,8 @@ export const ROLE_COUNTS: ReadonlyArray<{ role: WerewolfRole; count: number }> =
   { role: 'hunter', count: 1 },
 ];
 
-const ROLE_COUNTS_BY_SIZE: Record<WerewolfSeatCount, typeof ROLE_COUNTS> = {
+/** 各人数局的发牌配置；对外页的规则页直接引用这一份。 */
+export const ROLE_COUNTS_BY_SIZE: Record<WerewolfSeatCount, typeof ROLE_COUNTS> = {
   6: [
     { role: 'wolf', count: 2 }, { role: 'villager', count: 2 },
     { role: 'seer', count: 1 }, { role: 'witch', count: 1 },

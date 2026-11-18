@@ -15,6 +15,9 @@ interface FlightState {
   last: { seat: string; die: number; text: string } | null;
 }
 
+/** 每手时长；对外页的规则页直接引用这一份。 */
+export const AEROPLANE_TURN_MS = 60_000;
+
 interface Options {
   host: TableSeat;
   turnMs?: number;
@@ -42,7 +45,7 @@ export class AeroplaneTable implements TableEngine {
 
   constructor(options: Options) {
     this.host = options.host.id;
-    this.turnMs = options.turnMs ?? 60_000;
+    this.turnMs = options.turnMs ?? AEROPLANE_TURN_MS;
     this.rollDie = options.rollDie ?? (() => randomInt(1, 7));
     this.firstSeat = options.firstSeat ?? (seats => randomInt(seats));
     this.state = {

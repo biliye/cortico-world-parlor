@@ -4,10 +4,13 @@
 
   变体卡：site（amber / warm / wide / hatch / standard / full）
   版式：竖向滚动翻页。每屏一个 .screen，高度 = 100svh - 顶栏，靠 CSS scroll-snap 吸附。
-        01 首屏（会名 + 大厅实景 + 玩法跑马灯 + 「这里是这样的地方」）/ 02 玩法 / 03 怎么进来 / 04 家长。
+        01 首屏（会名 + 大厅实景 + 玩法跑马灯 + 「这里是这样的地方」）/ 02 玩法与规则 / 03 怎么进来 / 04 家长。
   主视觉：一张大厅（茶室）实景图，装在切角画框里；玩法名做成跑马灯。
         「这里是这样的地方」是首屏里的三栏，不单独占屏、顶栏也不给锚点。
-  动效：明暗从顶栏那颗按钮向外扩散；滚动到下一屏时该屏内容依次抬起；每屏都装得下时吸附收紧成强制。
+  玩法屏：左列八格是页签，右列是这一玩法的完整规则；右列自己滚，整屏仍是一屏。
+        规则内容由 src/room/game-rules-doc.ts 生成，别手改 rules 标记之间那段。
+  动效：明暗从顶栏那颗按钮向外扩散；滚到下一屏时该屏内容依次抬起；
+        屏里的编号与条目按 45ms 一个排队浮现；每屏都装得下时吸附收紧成强制。
   页面类型：展示（落地页）。牌桌本体 /play 是另一套深色界面，两边不共用样式。
 
   为什么是独立的静态页而不是 /play 里的一个视图：陌生人打开首页不该先下 main.js、
@@ -139,17 +142,327 @@
       <section class="screen games-screen" id="games">
         <p class="ef-eyebrow slash">Games</p>
         <h2 class="ef-bar-title">八种玩法</h2>
-        <p class="lead">这八种玩法都可以在网页开桌。坐满就开局；缺人时先坐着聊，Coo 不催。</p>
-        <ol class="games">
-          <li><span class="n">01</span><span class="g">斗地主</span><span class="d">三个人一副牌，谁先出完谁赢。</span></li>
-          <li><span class="n">02</span><span class="g">狼人杀</span><span class="d">六人、九人或十二人，按分到的身份说话。</span></li>
-          <li><span class="n">03</span><span class="g">五子棋</span><span class="d">两人对下，先连成五个。</span></li>
-          <li><span class="n">04</span><span class="g">中国象棋</span><span class="d">两人对下，将死对方为胜。</span></li>
-          <li><span class="n">05</span><span class="g">飞行棋</span><span class="d">掷骰子走子，先飞到终点。</span></li>
-          <li><span class="n">06</span><span class="g">快局大富翁</span><span class="d">十六格一圈，几轮就收官。</span></li>
-          <li><span class="n">07</span><span class="g">四川血战到底</span><span class="d">四家坐满才开局：换三张、定缺，胡了还能接着打。</span></li>
-          <li><span class="n">08</span><span class="g">广东推倒胡 · 红中</span><span class="d">四家坐满才开局：红中当百搭，只认自摸。</span></li>
-        </ol>
+        <p class="lead">点左边的一种玩法，右边就是它的规则：几席、几张牌、怎么算赢、超时怎么办。八种都能在网页开桌；坐满就开局，缺人时先坐着聊，Coo 不催。</p>
+        <!-- 玩法列表与规则面板由 scripts/build-welcome-rules.ts 从
+             src/room/game-rules-doc.ts 生成，别直接改这两个标记之间的内容。
+             无脚本时八块规则全部展开，脚本跑起来才收成一块一块的页签。 -->
+        <!-- rules:begin -->
+      <div class="rules">
+        <div class="rules-tabs" role="tablist" aria-label="选一种玩法看规则" aria-orientation="vertical">
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-ddz" aria-controls="rule-ddz" aria-selected="true" tabindex="0"><span class="n">01</span><span class="g">斗地主</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-werewolf" aria-controls="rule-werewolf" aria-selected="false" tabindex="-1"><span class="n">02</span><span class="g">狼人杀</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-gomoku" aria-controls="rule-gomoku" aria-selected="false" tabindex="-1"><span class="n">03</span><span class="g">五子棋</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-xiangqi" aria-controls="rule-xiangqi" aria-selected="false" tabindex="-1"><span class="n">04</span><span class="g">中国象棋</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-aeroplane" aria-controls="rule-aeroplane" aria-selected="false" tabindex="-1"><span class="n">05</span><span class="g">飞行棋</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-monopoly2d" aria-controls="rule-monopoly2d" aria-selected="false" tabindex="-1"><span class="n">06</span><span class="g">快局大富翁</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-mahjong-sichuan" aria-controls="rule-mahjong-sichuan" aria-selected="false" tabindex="-1"><span class="n">07</span><span class="g">四川血战到底</span></button>
+          <button class="rule-tab" type="button" role="tab" id="rule-tab-mahjong-guangdong" aria-controls="rule-mahjong-guangdong" aria-selected="false" tabindex="-1"><span class="n">08</span><span class="g">广东推倒胡·红中</span></button>
+        </div>
+        <div class="rules-panels">
+          <article class="rule" id="rule-ddz" role="tabpanel" aria-labelledby="rule-tab-ddz" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>3 席</span><span>54 张</span><span>叫地主 30 秒 / 出牌 60 秒</span></p>
+              <h3 class="rule-name">斗地主</h3>
+              <p class="rule-kicker">三个人一副牌，谁先出完谁赢。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>三人一桌，空位由脚本陪练补，一个人也能开。</li>
+                  <li>开局随机决定谁先叫地主，不再由开桌的人固定先叫。</li>
+                  <li>地主拿三张底牌，独自对抗两名农民。</li>
+                  <li>牌型按点数比大小：单张、对子、三张、三带一或三带二、顺子、连对、飞机、四带二。普通牌型要同型同长度才能比。</li>
+                  <li>炸弹压所有普通牌，王炸最大；领出不能过牌。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>谁先出完手牌谁赢：地主出完地主胜，任一农民出完农民方胜。</li>
+                  <li>每打出一次炸弹或王炸，倍数翻一番。</li>
+                  <li>春天：地主赢且两名农民一手没出；反春：农民赢且地主只出过一手。两者各再翻一番。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>叫地主 30 秒、出牌 60 秒；出牌超时由服务器按最小合法出牌代打。</li>
+                  <li>叫地主超时按「不叫」处理，不会把底牌塞给不在的人。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-werewolf" role="tabpanel" aria-labelledby="rule-tab-werewolf" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>6 / 9 / 12 席</span><span>真人发言 3 分钟</span><span>最多 12 个白天</span></p>
+              <h3 class="rule-name">狼人杀</h3>
+              <p class="rule-kicker">按分到的身份说话：夜里动手，白天发言，投票放逐。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>角色与技能</h4>
+                <dl class="rule-roles">
+                  <dt>狼人</dt>
+                  <dd>每晚可发两条狼队私聊，交一张刀票。可刀任意存活玩家，包括自己和队友。唯一最高票成为刀口，平票或没有有效票则空刀。</dd>
+                  <dt>平民</dt>
+                  <dd>没有夜间技能，靠白天发言与投票找出狼人。</dd>
+                  <dt>预言家</dt>
+                  <dd>每晚最多查验一名其他存活玩家，只得到「狼人 / 好人」，不告知具体神职。</dd>
+                  <dt>女巫</dt>
+                  <dd>全局各一瓶解药、一瓶毒药，每夜最多用其中一瓶。解药尚在时才得知当夜刀口；首夜可自救，之后不能自救，不能自毒。解药只抵消狼刀。</dd>
+                  <dt>猎人</dt>
+                  <dd>被狼刀或白天投票出局时可以开枪带走一名其他存活玩家；中毒（含刀毒同中）不能开枪。</dd>
+                  <dt>守卫</dt>
+                  <dd>每晚可守护一名存活玩家（可自守或空守），不可连续两夜守同一人。守护挡狼刀，不挡毒药；同守同救时狼刀生效。</dd>
+                </dl>
+              </section>
+              <section class="rule-block">
+                <h4>人数与发牌</h4>
+                <ul>
+                  <li>6 人：2 狼人、2 平民、预言家、女巫。</li>
+                  <li>9 人：3 狼人、3 平民、预言家、女巫、猎人。</li>
+                  <li>12 人：4 狼人、4 平民、预言家、女巫、猎人、守卫；守卫只在 12 人局出现。</li>
+                  <li>至少一只 Coo 才能开局；可以要求本桌至少有一名真人。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>一夜怎么走</h4>
+                <ul>
+                  <li>前半段同时开：狼队交刀票、预言家查验、守卫守护。每个人都只看得到自己那一格。</li>
+                  <li>刀票取唯一最高票；平票或没有有效票就是空刀。狼人可以刀自己，也可以刀队友。</li>
+                  <li>刀口锁定后女巫用药：解药只抵消狼刀，毒药直接带走。</li>
+                  <li>守护挡狼刀、不挡毒药；同一个人既被守又被救时，狼刀仍然生效。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>白天与投票</h4>
+                <ul>
+                  <li>按座位顺序发言，每人一条、最多 300 字；提交或过麦后全桌阅读 20 秒。</li>
+                  <li>投票 60 秒，到点统一揭晓。可以弃票，不能投自己。</li>
+                  <li>平票进入 PK：只有不在 PK 名单里的存活者能投，且只能投给 PK 席位或弃票；复投再平，当天无人出局。</li>
+                  <li>被刀或被放逐的猎人能开枪带走一人；中毒（含刀毒同中）不能开枪。出局者留在座位上观战。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>狼人全灭，好人胜。</li>
+                  <li>村民全灭，或神职全灭（屠边），狼人胜。残局里狼多、但平民与神职各还活着一人时，屠边没达成，对局继续。</li>
+                  <li>场上全员出局判平局。</li>
+                  <li>打到第 12 个白天结束仍未分胜负，强制平局收场，不会无限循环。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>身份确认 15 秒、夜晚 60 秒、投票 60 秒、开枪 60 秒。</li>
+                  <li>真人发言 3 分钟、Coo 60 秒；发言超时按过麦处理，开枪超时按放弃处理。</li>
+                  <li>狼队私聊每人每夜两条，每条最多 150 字；刀口锁定前都能发。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-gomoku" role="tabpanel" aria-labelledby="rule-tab-gomoku" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>2 席</span><span>15 × 15 棋盘</span><span>每手 60 秒</span></p>
+              <h3 class="rule-name">五子棋</h3>
+              <p class="rule-kicker">两人对下，先连成五个。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>两席坐满开局，真人和 Coo 可以自由组合。</li>
+                  <li>开局随机决定谁执黑先行，不是开桌的人固定执黑。</li>
+                  <li>无禁手；横、竖、斜任意方向连成五子或更多即胜。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>连成五子立即结束；棋盘下满仍无赢家判和棋。</li>
+                  <li>轮到自己时可以认输，对手直接获胜并正常结算。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>每手 60 秒，超时由服务器代下一步（用本人桌面给出的推荐点）。</li>
+                  <li>本人桌面会轮流虚显三个推荐点，点虚子即选中。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-xiangqi" role="tabpanel" aria-labelledby="rule-tab-xiangqi" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>2 席</span><span>9 列 × 10 行</span><span>真人 3 分钟 / Coo 60 秒</span></p>
+              <h3 class="rule-name">中国象棋</h3>
+              <p class="rule-kicker">两人对下，红先黑后，将死对方为胜。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>两席坐满后由桌主开局，随机分红黑，红方先行。</li>
+                  <li>按象棋棋子走法行棋；被将军必须应将，禁止将帅照面。</li>
+                  <li>选棋子、选落点再确认；也可以从「下一步建议」选一着。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>将死或困毙均判负；轮到自己时可以认输。</li>
+                  <li>同一局面和行棋方第三次出现时，单方长将判负，其余判和。</li>
+                  <li>连续 60 回合不吃子判和。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>真人每手 3 分钟，Coo 每手 60 秒；超时由服务器代走。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-aeroplane" role="tabpanel" aria-labelledby="rule-tab-aeroplane" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>2–4 人</span><span>每人 4 架</span><span>每手 60 秒</span></p>
+              <h3 class="rule-name">飞行棋</h3>
+              <p class="rule-kicker">掷六起飞，穿过四色航线，先把四架飞机送到终点。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>2–4 人，每人四架飞机。掷出 6 才能从机库起飞，走完后可以再掷一次。</li>
+                  <li>沿环道前进，落在同色格时向前跳四格。进入专属航道前的最后几格不跳。</li>
+                  <li>最后落点上的其他颜色飞机全部返回机库，同色飞机可以叠放。</li>
+                  <li>沿专属航道飞抵终点。点数超过终点时折返，先让四架飞机全部抵达的人获胜。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>四架飞机全部抵达终点的人获胜。</li>
+                  <li>被撞只回机库，不淘汰玩家，可以接着起飞。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>每手 60 秒。</li>
+                  <li>掷骰或选飞机超时后，服务器按合法走法代走。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-monopoly2d" role="tabpanel" aria-labelledby="rule-tab-monopoly2d" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>4 席</span><span>24 格 × 12 轮</span><span>掷骰 60 秒 / 买地 20 秒</span></p>
+              <h3 class="rule-name">快局大富翁</h3>
+              <p class="rule-kicker">掷骰、买地、收租，十二轮定输赢。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>固定四席，坐满后由开桌的人开始；真人和 Coo 可以自由组合。</li>
+                  <li>起步 1000 金币；路过或停在起点领 120 金币。</li>
+                  <li>落在无主地产可以买下或放弃；踩到别人的地产按固定租金付钱，最多付到 0。</li>
+                  <li>落在街区消息格抽一张事件卡：+80 / +40 / -40 / -70。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>12 轮共 48 手，走完后按「剩余金币 + 地产原价的 85%」估值排名，同分并列。</li>
+                  <li>地产不升级、不抵押，也没有玩家之间的交易。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>每手掷骰 60 秒，买地另有 20 秒。</li>
+                  <li>超时按「代掷骰并跳过购买」处理。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-mahjong-sichuan" role="tabpanel" aria-labelledby="rule-tab-mahjong-sichuan" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>4 席</span><span>108 张</span><span>出牌 60 秒 / 响应 20 秒</span></p>
+              <h3 class="rule-name">四川血战到底</h3>
+              <p class="rule-kicker">换三张、定缺，一家胡牌后其余人接着打。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>四人，万筒条 108 张。每人先换同一门的三张，本局随机顺换、对换或逆换；再各自定缺。有缺门牌时优先打完，缺门牌不能碰、杠或胡。</li>
+                  <li>可碰、杠、自摸、点炮和一炮多响。胡者退出摸打，三家胡牌或牌墙耗尽后结算。四面子一对或七对可胡。</li>
+                  <li>碰后须先打牌；补杠和暗杠在自己的摸牌回合进行。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>血战到底：一家胡牌不结束，胡者退出摸打，其余人接着打。</li>
+                  <li>三家胡牌，或牌墙摸完，即结算。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>计分</h4>
+                <ul>
+                  <li>自摸由其余仍在打的玩家各付 1 分；点炮由出牌者向每位胡家付 1 分。直杠由出牌者付 2 分；补杠、暗杠由其余仍在打的玩家各付 1 分、2 分。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>出牌 60 秒；碰、杠、胡的响应窗口 20 秒，超时按「过」处理。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-mahjong-guangdong" role="tabpanel" aria-labelledby="rule-tab-mahjong-guangdong" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>4 席</span><span>136 张</span><span>出牌 60 秒 / 响应 20 秒</span></p>
+              <h3 class="rule-name">广东推倒胡·红中</h3>
+              <p class="rule-kicker">红中当百搭，只认自摸。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>四人，万筒条、东南西北和中发白共 136 张。四张红中在组胡牌时可替任意牌，可打出，不能碰杠。</li>
+                  <li>可碰、杠，只自摸；四面子一对或七对可胡。首家胡牌或牌墙耗尽即结算。</li>
+                  <li>碰后须先打牌；补杠和暗杠在自己的摸牌回合进行。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>推倒胡：首家胡牌即结算，不接着打；牌墙摸完也结算。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>计分</h4>
+                <ul>
+                  <li>自摸其余三家各付 1 分。直杠由出牌者付 2 分；补杠、暗杠由其余三家各付 1 分、2 分。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>出牌 60 秒；碰、杠、胡的响应窗口 20 秒，超时按「过」处理。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+        </div>
+      </div>
+      <!-- rules:end -->
       </section>
 
       <section class="screen enter" id="enter">

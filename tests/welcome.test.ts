@@ -10,6 +10,9 @@ import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
+import { RULE_PAGES, renderRulesMarkup } from '../src/room/game-rules-doc.ts';
+import { WEREWOLF_MAX_DAYS } from '../src/room/games/werewolf.ts';
+import { DEFAULT_TURN_MS as DDZ_TURN_MS } from '../src/room/games/doudizhu-table.ts';
 import { ENABLED_GAMES, gameLabel } from '../web-src/lib/games.ts';
 import { GATEWAY_RETRY_DELAYS, gatewayOf, gatewaySettlement, isGatewayServer } from '../web-src/lib/gateway.ts';
 
@@ -213,12 +216,20 @@ describe('对外页的静态契约', () => {
     // 每屏高度都量，不是只看第一屏
     expect(js).toMatch(/querySelectorAll\('\.screen'\)/);
 
-    // 换屏进场：脚本挂 data-reveal + is-in，CSS 按 --i 错开
+    // 换屏进场：脚本挂 data-reveal + is-in，CSS 按 --i 错开（屏级 100ms）
     expect(js).toContain("screen.dataset.reveal");
     expect(js).toContain("classList.add('is-in')");
     expect(js).toContain('IntersectionObserver');
     expect(css).toMatch(/\.screen\[data-reveal\]\.is-in\s*>\s*\*/);
-    expect(css).toMatch(/animation-delay:\s*calc\(var\(--i, 0\) \* 70ms\)/);
+    expect(css).toMatch(/animation-delay:\s*calc\(var\(--i, 0\) \* 100ms\)/);
+
+    // 屏里的列表再挂一层队列：编号与条目 45ms 一个地浮现
+    expect(js).toContain('STAGGER_GROUPS');
+    expect(js).toContain('dataset.stagger');
+    expect(css).toMatch(/\[data-stagger\]\.is-in\s*>\s*\*/);
+    expect(css).toMatch(/animation-delay:\s*calc\(var\(--i, 0\) \* 45ms\)/);
+    // 队列里超过八项就停在同一档，整段出场不拖过一秒
+    expect(css).toMatch(/\[data-stagger\] > \*:nth-child\(n \+ 8\)\s*\{\s*--i:\s*7/);
 
     // 明暗：View Transitions 的圆形裁切 + 不支持时整页淡过去
     expect(js).toContain('startViewTransition');
@@ -254,6 +265,78 @@ describe('对外页的静态契约', () => {
     // 明暗记在 localStorage，重开还是上次选的那个
     expect(js).toContain('parlor-welcome-theme');
     expect(js).toContain('dataset.theme');
+  });
+});
+
+/**
+ * 规则页由 `src/room/game-rules-doc.ts` 生成：这里核三件事 ——
+ * 生成物确实写进了页面、覆盖网页能开的每一种玩法、#66 里玩家问到的口径都在。
+ */
+describe('八种玩法的规则页', () => {
+  const BEGIN = '<!-- rules:begin -->';
+  const END = '<!-- rules:end -->';
+  const from = page.indexOf(BEGIN);
+  const to = page.indexOf(END);
+  const rendered = page.slice(from + BEGIN.length, to).trim();
+
+  it('页面里那段就是生成器的输出，没有手改', () => {
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    expect(rendered).toBe(renderRulesMarkup().trim());
+  });
+
+  it('左列八格、右列八块，与网页能开的玩法一一对上', () => {
+    const tabs = [...rendered.matchAll(/class="rule-tab"[^>]*\bid="rule-tab-([^"]+)"/g)].map(([, id]) => id);
+    const panels = [...rendered.matchAll(/class="rule"\s+id="rule-([^"]+)"/g)].map(([, id]) => id);
+    expect(tabs).toEqual(RULE_PAGES.map((rule) => rule.id));
+    expect(panels).toEqual(tabs);
+    expect([...tabs].sort()).toEqual([...ENABLED_GAMES].sort());
+    expect(RULE_PAGES.map((rule) => rule.no)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
+  });
+
+  it('面板默认不隐藏：脚本没跑时八块规则全展开，仍读得到', () => {
+    expect(rendered).not.toMatch(/<article class="rule"[^>]*\shidden/);
+    expect(rendered).toContain('role="tablist"');
+    const selected = [...rendered.matchAll(/aria-selected="(true|false)"/g)].map(([, value]) => value);
+    expect(selected).toHaveLength(RULE_PAGES.length);
+    expect(selected.filter((value) => value === 'true')).toHaveLength(1);
+  });
+
+  it('#66 里玩家问到的四件事都有成文说法', () => {
+    const werewolf = RULE_PAGES.find((rule) => rule.id === 'werewolf');
+    expect(werewolf).toBeTruthy();
+    const text = werewolf!.blocks
+      .flatMap((block) => block.items)
+      .map((item) => (typeof item === 'string' ? item : item.text))
+      .join('\n');
+    expect(text).toContain('首夜可自救，之后不能自救，不能自毒');
+    expect(text).toContain('屠边没达成，对局继续');
+    expect(text).toContain('复投再平，当天无人出局');
+    expect(text).toContain('强制平局收场');
+    expect(text).toContain(`第 ${WEREWOLF_MAX_DAYS} 个白天`);
+  });
+
+  it('每个玩法都写了胜负与超时，秒数直接来自实现常量', () => {
+    for (const rule of RULE_PAGES) {
+      const titles = rule.blocks.map((block) => block.title);
+      expect(titles, rule.id).toContain('胜负与收尾');
+      expect(titles, rule.id).toContain('时长与超时');
+      expect(rule.facts.length, rule.id).toBeGreaterThanOrEqual(3);
+    }
+    const ddz = RULE_PAGES.find((rule) => rule.id === 'ddz')!;
+    expect(ddz.facts.join(' ')).toContain(`出牌 ${Math.round(DDZ_TURN_MS / 1000)} 秒`);
+  });
+
+  it('左列是页签、右列是面板，脚本按 aria-controls 换块', () => {
+    const js = read('welcome.js');
+    const css = read('welcome.css');
+    expect(js).toContain('bindRules');
+    expect(js).toContain("getAttribute('aria-controls')");
+    expect(js).toContain("case 'ArrowDown'");
+    expect(css).toMatch(/\.rule-tab\[aria-selected='true'\]\s*\{[^}]*background:\s*var\(--ef-signal\)/);
+    // 面板自己滚，滚到底不把整页带走；整屏高度仍是一屏
+    expect(css).toMatch(/\.games-screen\s*\{[^}]*height:\s*calc\(100svh - var\(--top-h\)/);
+    expect(css).toMatch(/\.rules-panels\s*\{[^}]*overscroll-behavior:\s*contain/);
   });
 });
 

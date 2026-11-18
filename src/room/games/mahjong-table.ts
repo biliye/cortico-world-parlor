@@ -4,7 +4,9 @@ import { TableError, type TableEngine, type TableEvent, type TableSeat, type Tab
 import { canHu, isTile, RED, SUITS, suitOf, TILES, tileCounts, tileKinds, type MahjongGame } from './mahjong-rules.ts';
 
 const CAPACITY = 4;
-const REPLY_MS = 20_000;
+/** 碰杠胡的响应窗口与出牌时长；对外页的规则页直接引用这一份。 */
+export const MAHJONG_REPLY_MS = 20_000;
+export const MAHJONG_TURN_MS = 60_000;
 export const MAHJONG_ACTIONS = ['exchange', 'missing', 'discard', 'pung', 'kong', 'hu', 'pass'] as const;
 type ActionName = typeof MAHJONG_ACTIONS[number];
 type Choice = 'pung' | 'kong' | 'hu' | 'pass';
@@ -70,7 +72,7 @@ export class MahjongTable implements TableEngine {
   private readonly turnMs: number;
   private state: State;
 
-  constructor(game: MahjongGame, host: TableSeat, turnMs = 60_000, dealer = 0) {
+  constructor(game: MahjongGame, host: TableSeat, turnMs = MAHJONG_TURN_MS, dealer = 0) {
     this.game = game;
     this.label = GAME_PRESENTATION[game].label;
     this.host = host.id;
@@ -196,7 +198,7 @@ export class MahjongTable implements TableEngine {
   private openPhase(phase: Phase, now: number): void {
     this.state.phase = phase;
     this.state.window++;
-    this.state.deadline = now + (phase === 'claim' ? Math.min(REPLY_MS, this.turnMs) : this.turnMs);
+    this.state.deadline = now + (phase === 'claim' ? Math.min(MAHJONG_REPLY_MS, this.turnMs) : this.turnMs);
   }
 
   private step(events: TableEvent[] = [], views: string[] = []): TableStep {

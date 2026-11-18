@@ -1,6 +1,8 @@
 import { TableError, type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep } from '../table-engine.ts';
 
 export const GOMOKU_SIZE = 15;
+/** 每手时长；对外页的规则页直接引用这一份。 */
+export const GOMOKU_TURN_MS = 60_000;
 const SIZE = GOMOKU_SIZE;
 const CAPACITY = SIZE * SIZE;
 type Color = 1 | 2;
@@ -173,7 +175,7 @@ export class GomokuTable implements TableEngine {
 
   // 不用参数属性（`constructor(private readonly x)`）：那段语法过不了 Node 的
   // --experimental-strip-types（strip-only），线上 serve-world 就是这么起的。
-  constructor(host: TableSeat, turnMs = 60_000, firstSeat = 0) {
+  constructor(host: TableSeat, turnMs = GOMOKU_TURN_MS, firstSeat = 0) {
     this.host = host.id;
     this.seats = [{ ...host }];
     this.turnMs = turnMs;

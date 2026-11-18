@@ -370,64 +370,282 @@ html {
   }
 }
 
-/* ---------- 第 2 屏：玩法 ---------- */
+/* ---------- 第 2 屏：玩法与规则 ---------- */
 
-/* 九条平分一屏：行高由剩余空间决定，不够时按 2.75rem 兜底 */
-.games {
+/* 一屏装下：左列选玩法，右列读规则。右列自己滚，滚到边界不会再顺手把整页翻走，
+   所以这一屏仍是一滚一屏里的一屏；矮到连标题区都放不下时，才由 min-height 撑高。 */
+.games-screen {
+  height: calc(100svh - var(--top-h) - var(--tri-h));
+  min-height: 32rem;
+  overflow: hidden;
+}
+
+.games-screen > .lead {
+  margin-bottom: clamp(0.7rem, 1.8vh, 1.2rem);
+}
+
+.rules {
   display: grid;
+  grid-template-columns: minmax(0, 13rem) minmax(0, 1fr);
   flex: 1;
-  align-content: space-between;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  min-height: 0;
   border-top: 1px solid var(--ef-rule);
 }
 
-.games > li {
-  display: grid;
-  grid-template-columns: 3rem minmax(0, 10rem) minmax(0, 1fr);
-  align-items: baseline;
-  gap: 0.25rem 1.25rem;
-  padding: 0.7rem 0;
-  border-bottom: 1px solid var(--ef-rule);
+/* 左列：八个编号平分这一列的高度，和原来那条玩法列表的节奏一样。 */
+.rules-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--ef-rule);
 }
 
-.games .n {
-  color: var(--ef-ink-2);
+.rule-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  grid-template-columns: 2.2rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0 0.45rem;
+  flex: 1;
+  min-height: 0;
+  padding: 0.35rem 0.9rem 0.35rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--ef-rule);
+  background: none;
+  color: var(--ef-ink);
   font-family: var(--ef-font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rule-tab:last-child {
+  border-bottom: 0;
+}
+
+.rule-tab .n {
+  color: var(--ef-ink-2);
+  font-size: 0.7rem;
   font-stretch: var(--ef-wider);
-  font-size: 0.78rem;
   letter-spacing: 0.1em;
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.games .g {
+.rule-tab .g {
+  font-family: var(--ef-font-text);
+  font-size: 0.95rem;
   font-weight: 700;
+  line-height: 1.3;
 }
 
-.games .d {
+/* 当前这一格整块黄底、墨字：浅色下黄块上只写墨色，深色下也一样。
+   非当前项悬停给一层浅灰，和 kit 里的 chip 一致。 */
+.rule-tab[aria-selected='true'] {
+  background: var(--ef-signal);
+}
+
+.rule-tab[aria-selected='true'] :is(.n, .g) {
+  color: var(--ef-on-signal);
+}
+
+.rule-tab:is(:hover, :focus-visible):not([aria-selected='true']) {
+  background: var(--ef-chip);
+}
+
+/* 右列：只有面板滚动。overscroll-behavior 挡住滚动链接，滚到底不会突然翻屏。 */
+.rules-panels {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: clamp(0.6rem, 1.6vh, 1rem) 0 0 clamp(1rem, 2.4vw, 1.75rem);
+  scrollbar-width: thin;
+  scrollbar-color: var(--ef-ink-2) transparent;
+}
+
+.rules-panels::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rules-panels::-webkit-scrollbar-thumb {
+  background: var(--ef-rule);
+}
+
+.rules-panels::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rule[hidden] {
+  display: none;
+}
+
+/* 换一个玩法时短促地淡入一次：回应「我点了另一格」这一下操作，不弹跳 */
+@media (prefers-reduced-motion: no-preference) {
+  .rule.is-fresh {
+    animation: ef-rule-in 200ms var(--ef-ease) both;
+  }
+}
+
+@keyframes ef-rule-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* 字段条：席位数、牌张数、时长。真数字就是这一屏的装饰。 */
+.rule-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0;
+  margin: 0 0 0.45rem;
+}
+
+.rule-facts > span {
+  padding: 0 0.7rem;
+  border-left: 1px solid var(--ef-rule);
+}
+
+.rule-facts > span:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.rule-name {
+  margin: 0;
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.rule-kicker {
+  margin: 0.3rem 0 0;
   color: var(--ef-ink-2);
   font-family: var(--ef-font-text);
+  font-size: 0.94rem;
+  line-height: 1.7;
 }
 
-/* 矮窗口（1080×675 这类）：九条也要挤进一屏，否则整页退回接近吸附 */
-@media (max-height: 780px) {
-  .games > li {
-    padding-block: 0.5rem;
-  }
+.rule-body {
+  margin-top: clamp(0.7rem, 1.8vh, 1.05rem);
 }
 
+.rule-block + .rule-block {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--ef-rule);
+}
+
+.rule-block h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.92rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.rule-block ul {
+  margin: 0;
+  padding-left: 1.05rem;
+}
+
+.rule-block li {
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  font-size: 0.92rem;
+  line-height: 1.78;
+}
+
+.rule-block li + li {
+  margin-top: 0.22rem;
+}
+
+/* 角色技能：名字一列、说明一列。六条排下来比长列表好扫。 */
+.rule-roles {
+  display: grid;
+  grid-template-columns: 4.4rem minmax(0, 1fr);
+  gap: 0.3rem 0.9rem;
+  margin: 0;
+}
+
+.rule-roles dt {
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.75;
+}
+
+.rule-roles dd {
+  margin: 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  font-size: 0.9rem;
+  line-height: 1.75;
+}
+
+/* 窄屏：左列改成一条横向的编号条，面板接在下面，其余不变。 */
 @media (max-width: 719px) {
-  .games > li {
-    grid-template-columns: 2.5rem minmax(0, 1fr);
-    padding: 0.45rem 0;
+  .rules {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
-  .games .d {
-    grid-column: 2;
-    font-size: 0.86rem;
-    line-height: 1.55;
+
+  .rules-tabs {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--ef-rule);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .rules-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rule-tab {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: baseline;
+    gap: 0.35rem;
+    padding: 0.55rem 0.85rem;
+    border-right: 1px solid var(--ef-rule);
+    border-bottom: 0;
+    white-space: nowrap;
+  }
+
+  .rule-tab .n {
+    font-size: 0.66rem;
+  }
+
+  .rule-tab .g {
+    font-size: 0.9rem;
+  }
+
+  .rules-panels {
+    padding: 0.9rem 0 0;
+  }
+
+  .rule-roles {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.05rem;
+  }
+
+  .rule-roles dd {
+    margin-bottom: 0.5rem;
   }
 }
+
+/* 矮窗口（1080×675 这类）：标题区收一点，把高度让给规则面板 */
+@media (max-height: 780px) {
+  .games-screen > .lead {
+    margin-bottom: 0.6rem;
+    line-height: 1.65;
+  }
+
+  .rule-tab {
+    padding-block: 0.2rem;
+  }
+}
+
 
 /* ---------- 第 3 屏：怎么进来 ---------- */
 
@@ -600,16 +818,29 @@ html {
 
 /* ---------- 换屏进场：滚到哪一屏，哪一屏的内容依次抬起来 ---------- */
 
-/* 脚本只在浏览器支持 IntersectionObserver 时才给 <html> 加 ef-js；
+/* 脚本只在浏览器支持 IntersectionObserver 时才给 <html> 加 ef-js，
+   并且由脚本给每屏挂 data-reveal、给列表挂 data-stagger；
    脚本没跑或跑不动时内容照常显示，不会留一屏空白。 */
 @media (prefers-reduced-motion: no-preference) {
   html.ef-js .screen[data-reveal]:not(.is-in) > * {
     opacity: 0;
   }
 
+  /* 屏级大块（眉标、标题、正文、面板）走 100ms 的梯子 */
   html.ef-js .screen[data-reveal].is-in > * {
     animation: ef-rise 460ms var(--ef-snap) both;
-    animation-delay: calc(var(--i, 0) * 70ms);
+    animation-delay: calc(var(--i, 0) * 100ms);
+  }
+
+  /* 屏里的一组队列（玩法编号、入场三步、首屏三栏）走 45ms 的梯子：
+     一条一条浮上来，整组在 1 秒内出完。 */
+  html.ef-js [data-stagger]:not(.is-in) > * {
+    opacity: 0;
+  }
+
+  html.ef-js [data-stagger].is-in > * {
+    animation: ef-rise 420ms var(--ef-snap) both;
+    animation-delay: calc(var(--i, 0) * 45ms);
   }
 }
 
@@ -624,15 +855,23 @@ html {
   }
 }
 
-/* 屏内子元素的先后：一组 70ms 的梯子，超过 8 个就不再往后错 */
+/* 屏内子元素的先后：一组 100ms 的梯子，超过 6 个就不再往后错 */
 .screen > *:nth-child(1) { --i: 0; }
 .screen > *:nth-child(2) { --i: 1; }
 .screen > *:nth-child(3) { --i: 2; }
 .screen > *:nth-child(4) { --i: 3; }
 .screen > *:nth-child(5) { --i: 4; }
 .screen > *:nth-child(6) { --i: 5; }
-.screen > *:nth-child(7) { --i: 5; }
-.screen > *:nth-child(8) { --i: 5; }
+
+/* 队列里的每一项：45ms 一个；超过 8 个停在同一档，免得最后几项等太久 */
+[data-stagger] > *:nth-child(1) { --i: 0; }
+[data-stagger] > *:nth-child(2) { --i: 1; }
+[data-stagger] > *:nth-child(3) { --i: 2; }
+[data-stagger] > *:nth-child(4) { --i: 3; }
+[data-stagger] > *:nth-child(5) { --i: 4; }
+[data-stagger] > *:nth-child(6) { --i: 5; }
+[data-stagger] > *:nth-child(7) { --i: 6; }
+[data-stagger] > *:nth-child(n + 8) { --i: 7; }
 
 /* ---------- 明暗切换：从顶栏那颗按钮向外扩散 ---------- */
 

@@ -9,6 +9,9 @@ const QUIET_LIMIT = 120;
 // 将帅不能被吃。每次吃子前最多 119 手不吃子，最后一段最多 120 手。
 const MAX_CAPTURES = 30;
 const MAX_PLIES = (MAX_CAPTURES + 1) * QUIET_LIMIT;
+/** 每手时长；对外页的规则页直接引用这一份。 */
+export const XIANGQI_HUMAN_MS = 180_000;
+export const XIANGQI_COO_MS = 60_000;
 const causeLabel = {
   mate: '将死', stalemate: '困毙', resign: '认输',
   perpetual_check: '单方长将判负', repetition: '三次重复局面', no_capture: '连续 60 回合未吃子',
@@ -105,7 +108,7 @@ export class XiangqiTable implements TableEngine {
   }
 
   private turnDuration(seat: TableSeat): number {
-    return this.turnMs ?? (seat.kind === 'human' ? 180_000 : 60_000);
+    return this.turnMs ?? (seat.kind === 'human' ? XIANGQI_HUMAN_MS : XIANGQI_COO_MS);
   }
 
   has(seatId: string): boolean { return this.seats.some(seat => seat.id === seatId); }
