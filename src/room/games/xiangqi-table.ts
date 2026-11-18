@@ -85,6 +85,7 @@ export class XiangqiTable implements TableEngine {
   readonly stateVersion = 1;
   readonly host: string;
   status: TableStatus = 'open';
+  /** 网关或测试的显式时限覆盖，省略时按行动席位类型取默认值。 */
   private readonly turnMs?: number;
   private redIndex: number;
   private seats: TableSeat[];

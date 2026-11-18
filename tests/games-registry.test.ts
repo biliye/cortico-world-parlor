@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { GAME_PRESENTATION, gameLabelOf as historyGameLabelOf } from '../src/room/game-labels.ts';
+import { describeGame } from '../src/room/game-api.ts';
 import {
   GAME_LIST, gameByActionType, gameById, gameIds, gameLabelOf,
 } from '../src/room/games/registry.ts';
@@ -13,6 +14,12 @@ vi.mock('../web-src/components/games/DdzGame.vue', () => ({ default: {} }));
 vi.mock('../web-src/components/games/WerewolfGame.vue', () => ({ default: {} }));
 
 describe('牌桌注册表', () => {
+  it('象棋工具规则和网页指南公布相同的真人及 Coo 时限', () => {
+    const timing = '真人每手 3 分钟，Coo 每手 60 秒，超时由服务器代走';
+    expect(describeGame(gameById('xiangqi')!).rules).toEqual(expect.arrayContaining([expect.stringContaining(timing)]));
+    expect(GAMES.xiangqi.guide).toEqual(expect.arrayContaining([expect.stringContaining(timing)]));
+  });
+
   it('每个游戏一条登记，id / 动作类型 / 工具名不撞', () => {
     const ids = GAME_LIST.map((game) => game.id);
     const actions = GAME_LIST.map((game) => game.actionType);
