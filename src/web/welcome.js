@@ -3,7 +3,9 @@
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
  * 3. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
- * 4. 吸附强度：量一遍每屏是否都装得下，装得下就把 scroll-snap 收紧成 mandatory。
+ *    屏里的列表再挂一层 data-stagger，编号与条目按 45ms 一个地排队浮现；
+ * 4. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
+ *    没脚本时不挂 ef-rules，八块规则平铺在页尾，仍然读得到。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
  * 所以只有这一段外链脚本。滚动翻页本身仍是纯 CSS（html 上的 scroll-snap）。
@@ -11,6 +13,8 @@
 (() => {
   const root = document.documentElement;
   const KEY = 'parlor-welcome-theme';
+  /** 需要「一条一条排队浮现」的列表：玩法八格、入场三步、首屏三栏。 */
+  const STAGGER_GROUPS = '.hero .what-cols, .enter .steps, .rule-grid';
 
   /** 系统开了「减少动态效果」就一律走静止分支：不扩散、不淡入、不收紧吸附。 */
   const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -156,8 +160,6 @@
    */
   const bindReveal = () => {
     if (still() || !('IntersectionObserver' in window)) return;
-    const screens = [...document.querySelectorAll('.screen')].filter((screen) => screen.id !== 'top');
-    if (!screens.length) return;
 
     const io = new IntersectionObserver(
       (entries) => {
@@ -170,49 +172,108 @@
       // 露出 12% 就开始抬；底边留 8% 余量，免得刚探个头就响。
       { threshold: 0.12, rootMargin: '0px 0px -8% 0px' },
     );
+
+    const screens = [...document.querySelectorAll('.screen')].filter((screen) => screen.id !== 'top');
     for (const screen of screens) {
       screen.dataset.reveal = '';
       io.observe(screen);
     }
+
+    /* 屏里的队列单独观察：首屏那三栏和首屏同屏，但常在折叠线以下，
+       跟着自己什么时候进视口走，比跟着「屏」走准。 */
+    for (const group of document.querySelectorAll(STAGGER_GROUPS)) {
+      group.dataset.stagger = '';
+      io.observe(group);
+    }
   };
 
-  // ---------- 吸附强度 ----------
+  // ---------- 玩法规则：点一格，规则从弹层里出来 ----------
 
   /**
-   * 每屏高度都 ≤ 一屏（减去顶栏）时才敢用 mandatory：这时一个滚轮动作正好一屏。
-   * 有一屏比视口高（窄屏首屏、玩法九条）就必须退回 proximity，否则中间那截滚不出来。
-   * 窗口尺寸与字体度量都会改变结果，所以 resize 与 fonts.ready 之后各重量一次。
+   * 八格是按钮，规则都装在页尾那个 <dialog> 里：点一格开一层，只显这一块。
+   * 关上走一段 170ms 的退场动画再 close()，不然会「啪」地消失。
+   * 不支持 showModal 的浏览器直接 return：页面上没有 ef-rules，CSS 就退回平铺。
    */
-  const measureSnap = () => {
-    /* 顶栏高度直接量盒子：读 --top-h 拿到的是「3.5rem」这种字符串，
-       parseFloat 出来是 3.5 而不是像素，会把每屏都判成装得下。 */
-    const header = document.querySelector('.top');
-    const topH = header ? header.getBoundingClientRect().height : 0;
-    const room = innerHeight - topH + 2;
-    const screens = [...document.querySelectorAll('.screen')];
-    const fit = screens.length > 0 && screens.every((screen) => screen.getBoundingClientRect().height <= room);
-    root.dataset.snap = fit ? 'strict' : 'loose';
+  const bindRules = () => {
+    const dialog = document.getElementById('rule-dialog');
+    const cards = [...document.querySelectorAll('.rule-card')];
+    const pages = [...document.querySelectorAll('.rule-pages .rule')];
+    if (!dialog || !cards.length || !pages.length || typeof dialog.showModal !== 'function') return;
+
+    const body = dialog.querySelector('.rule-pages');
+    const count = dialog.querySelector('.rule-dialog-no');
+    const closeBtn = dialog.querySelector('[data-act="rule-close"]');
+    let opener = null;
+    let closing = 0;
+
+    /** 只留一块：其余 hidden，编号条跟着换，正文回到顶部。 */
+    const fill = (id) => {
+      const page = pages.find((item) => item.dataset.rule === id) ?? pages[0];
+      for (const item of pages) item.hidden = item !== page;
+      if (count) count.textContent = page.dataset.no ?? '';
+      if (body) body.scrollTop = 0;
+      page.classList.remove('is-fresh');
+      if (still()) return;
+      void page.offsetWidth;
+      page.classList.add('is-fresh');
+    };
+
+    const finishClose = () => {
+      closing = 0;
+      dialog.classList.remove('is-out');
+      dialog.close();
+      root.classList.remove('ef-rule-open');
+      // 焦点回到点中的那一格，键盘用户不会掉到页首。
+      opener?.focus({ preventScroll: true });
+    };
+
+    const close = () => {
+      if (!dialog.open || closing) return;
+      // 退场与 CSS 的 170ms 对齐；减少动态效果时不留这段空档。
+      closing = setTimeout(finishClose, still() ? 0 : 170);
+      dialog.classList.add('is-out');
+    };
+
+    const open = (card) => {
+      fill(card.dataset.rule);
+      opener = card;
+      dialog.classList.remove('is-out');
+      root.classList.add('ef-rule-open');
+      dialog.showModal();
+    };
+
+    for (const card of cards) {
+      card.addEventListener('click', () => open(card));
+    }
+
+    closeBtn?.addEventListener('click', close);
+
+    // 点遮罩：事件目标是 dialog 自己（面板内部点到的是子元素）。
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) close();
+    });
+
+    // Esc 默认会直接 close()，先拦下来走同一段退场。
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      close();
+    });
+
+    // 任何路径真的关掉之后，都要把锁滚动和退场标记清干净。
+    dialog.addEventListener('close', () => {
+      root.classList.remove('ef-rule-open');
+      dialog.classList.remove('is-out');
+    });
+
+    // 先把第一块摆好，再挂 ef-rules：挂上之前，CSS 让弹层以平铺形态出现在页面里。
+    fill(cards[0].dataset.rule);
+    root.classList.add('ef-rules');
   };
 
   onReady(() => {
     bindTheme();
     bindParallax();
     bindReveal();
-    measureSnap();
-
-    /* 量一次不够：字体换上来、图解码完、窗口被拖动都会改每屏高度。
-       拿 ResizeObserver 盯住每屏自己，比「等 load 再量一次」靠谱。 */
-    let timer = 0;
-    const later = () => {
-      clearTimeout(timer);
-      timer = setTimeout(measureSnap, 80);
-    };
-    if ('ResizeObserver' in window) {
-      const ro = new ResizeObserver(later);
-      for (const screen of document.querySelectorAll('.screen')) ro.observe(screen);
-    }
-    addEventListener('resize', later);
-    addEventListener('load', measureSnap);
-    if (document.fonts?.ready) document.fonts.ready.then(measureSnap).catch(() => {});
+    bindRules();
   });
 })();

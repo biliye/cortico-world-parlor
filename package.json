@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-parlor",
-  "version": "0.47.0",
+  "version": "0.48.0",
   "type": "module",
   "author": {
     "name": "筆離嘢"
@@ -87,6 +87,7 @@
     "src/room/clock.ts",
     "src/room/game-api.ts",
     "src/room/game-labels.ts",
+    "src/room/game-rules-doc.ts",
     "src/room/games",
     "src/room/gifts",
     "src/room/handles.ts",
@@ -128,6 +129,7 @@
     "typecheck": "tsc --noEmit && pnpm typecheck:web && tsc --noEmit -p tsconfig.webui.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "sync:version": "node scripts/sync-release-version.mjs",
+    "build:welcome": "node --experimental-strip-types scripts/build-welcome-rules.ts",
     "build:web": "node scripts/sync-release-version.mjs --check && vite build",
     "build:webui": "vite build --config vite.webui.config.ts",
     "check:webui": "node scripts/check-webui.mjs",

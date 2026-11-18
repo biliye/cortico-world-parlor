@@ -120,7 +120,7 @@ interface WorkingNight {
   witchDone: boolean;
 }
 
-interface Durations {
+export interface Durations {
   revealMs: number;
   nightMs: number;
   humanSpeechMs: number;
@@ -130,7 +130,8 @@ interface Durations {
   shootMs: number;
 }
 
-const DEFAULT_DURATIONS: Durations = {
+/** 正式时长：对外页的规则页直接引用这一份，改这里就两边一起改。 */
+export const DEFAULT_DURATIONS: Durations = {
   revealMs: 15_000,
   nightMs: 60_000,
   humanSpeechMs: 180_000,

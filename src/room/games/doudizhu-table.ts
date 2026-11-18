@@ -53,8 +53,9 @@ interface LastPlay {
 }
 
 const SEAT_COUNT = 3;
-const DEFAULT_TURN_MS = 60_000;
-const DEFAULT_BID_MS = 30_000;
+/** 出牌与叫地主的时长；对外页的规则页直接引用这一份。 */
+export const DEFAULT_TURN_MS = 60_000;
+export const DEFAULT_BID_MS = 30_000;
 const DEFAULT_BOT_DELAY_MS = 1500;
 const BOT_NAMES = ['陪练甲', '陪练乙'];
 const MAX_REDEALS = 5;
