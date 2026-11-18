@@ -7,6 +7,7 @@ export function uncertainWebResult(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 0 || error.status >= 500);
 }
 
+/** `/v1/web/*` 的成功响应必须包含 JSON 对象，只有操作回执的端点也返回 `{ ok: true }`。 */
 export async function webPlayerRequest<T>(path: string, body?: Record<string, unknown>, token?: string): Promise<T> {
   const signal = timeoutSignal();
   let status = 0;

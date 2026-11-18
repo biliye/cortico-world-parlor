@@ -43,4 +43,11 @@ describe('网页登录网络层', () => {
     expect(fetch.mock.calls.map(([path]) => path)).toEqual(['/v1/web/play', '/v1/web/me']);
     expect(fetch.mock.calls[1][1]).toMatchObject({ cache: 'no-store' });
   });
+
+  it('成功状态缺少约定的 JSON 回执时仍需核对操作结果', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    const failure = await webPlayerRequest('redeem', { code: 'fixture' }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: 0 });
+    expect(uncertainWebResult(failure)).toBe(true);
+  });
 });

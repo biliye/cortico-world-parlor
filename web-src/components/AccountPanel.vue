@@ -5,13 +5,14 @@ import { seat } from '../stores/session.ts';
 import { detectGateway, gateway } from '../stores/server.ts';
 import WebInvites from './WebInvites.vue';
 import { logoutWebPlayer } from '../api/web-player.ts';
-import { GAMES, gameLabel } from '../lib/games.ts';
+import { ENABLED_GAMES, GAMES, gameLabel } from '../lib/games.ts';
 
 const props = defineProps<{ open:boolean }>();
 const emit = defineEmits<{ 'update:open':[boolean] }>();
 const dialog = ref<HTMLDialogElement|null>(null);
 const kind = ref<'games'|'gifts'>('games');
 const game = ref('');
+const historyGameIds = [...ENABLED_GAMES, ...Object.keys(GAMES).filter(id => !GAMES[id].enabled)];
 const from = ref('');
 const until = ref('');
 const room = ref('');
@@ -85,7 +86,7 @@ onMounted(() => { void detectGateway(); });
           <label v-if="kind === 'games'">游戏
             <select v-model="game">
               <option value="">全部</option>
-              <option v-for="(definition, id) in GAMES" :key="id" :value="id">{{ definition.label }}</option>
+              <option v-for="id in historyGameIds" :key="id" :value="id">{{ gameLabel(id) }}</option>
             </select>
           </label>
           <label>开始日期 <input v-model="from" type="date" /></label>

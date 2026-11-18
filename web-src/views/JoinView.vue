@@ -28,12 +28,12 @@ const guestName = ref('');
 const player = ref<WebPlayer | null>(null);
 const checkingPlayer = ref(false);
 const statusError = ref('');
-const unconfirmedRedeem = ref(false);
+const redeemRecovery = ref<'unknown' | 'accepted' | null>(null);
 
 watch(() => props.inviteCode, inviteCode => {
   if (!inviteCode) return;
   entry.value = 'guest';
-  if (inviteCode !== code.value) unconfirmedRedeem.value = false;
+  if (inviteCode !== code.value) redeemRecovery.value = null;
   code.value = inviteCode;
   error.value = '';
 }, { immediate: true });
@@ -46,7 +46,11 @@ async function loadWebPlayer(): Promise<void> {
     player.value = await webPlayerRequest<WebPlayer>('me');
     if (player.value.guest) {
       if (!guestName.value) guestName.value = player.value.name;
-      if (unconfirmedRedeem.value) finishRedeem();
+      if (redeemRecovery.value) {
+        if (redeemRecovery.value === 'unknown') clearInvite();
+        redeemRecovery.value = null;
+        error.value = '';
+      }
     }
   } catch (cause) {
     if (cause instanceof ApiError && (cause.status === 401 || cause.status === 404)) {
@@ -113,15 +117,17 @@ async function signIn() {
 }
 
 async function redeem() {
-  if (unconfirmedRedeem.value) return;
+  if (redeemRecovery.value === 'accepted') return;
   await webAction(async () => {
+    redeemRecovery.value = null;
     try {
       await webPlayerRequest('redeem', { code: code.value, name: guestName.value });
     } catch (cause) {
-      if (uncertainWebResult(cause)) unconfirmedRedeem.value = true;
+      if (uncertainWebResult(cause)) redeemRecovery.value = 'unknown';
       throw cause;
     }
-    finishRedeem();
+    redeemRecovery.value = 'accepted';
+    clearInvite();
     await loadWebPlayer();
     if (!player.value?.guest) return;
     await takeWebSeat(false);
@@ -129,15 +135,15 @@ async function redeem() {
   }, 'play');
 }
 
-function finishRedeem(): void {
-  unconfirmedRedeem.value = false;
+function clearInvite(): void {
   code.value = '';
-  error.value = '';
   emit('redeemed');
 }
 
 function useAnotherInvite(): void {
-  finishRedeem();
+  clearInvite();
+  redeemRecovery.value = null;
+  error.value = '';
   entry.value = 'guest';
 }
 
@@ -241,7 +247,10 @@ async function parentPlay(): Promise<void> {
       <h1>进入会馆</h1>
       <p v-if="error || props.initialError" class="warn error" role="alert">{{ error || props.initialError }}</p>
       <p v-if="statusError" class="warn error" role="alert">{{ statusError }}</p>
-      <button v-if="statusError || unconfirmedRedeem" class="btn ghost" type="button" :disabled="busy || checkingPlayer" @click="loadWebPlayer">重查登录状态</button>
+      <p v-if="redeemRecovery === 'accepted' && !checkingPlayer" class="warn error" role="alert">
+        邀请已领取。{{ statusError ? '请重查本机的试玩会话。' : '本机未建立试玩会话。重查后仍无法恢复时，请向邀请人要新链接。' }}
+      </p>
+      <button v-if="statusError || redeemRecovery" class="btn ghost" type="button" :disabled="busy || checkingPlayer" @click="loadWebPlayer">重查登录状态</button>
       <template v-if="player">
         <p class="sub">{{ player.name }}<template v-if="player.guest"> · 游客资格至 {{ new Date(player.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</template></p>
         <p v-if="props.inviteCode" class="note">要使用这张新邀请，请先退出当前会馆登录。</p>
@@ -261,12 +270,13 @@ async function parentPlay(): Promise<void> {
           <button class="btn primary" type="submit" :disabled="busy || checkingPlayer || !!statusError">登录</button>
           <p class="note">可从 Coo 的家长页设置登录名和密码。</p>
         </form>
+        <button v-else-if="redeemRecovery === 'accepted'" class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="useAnotherInvite">使用另一张邀请</button>
         <form v-else @submit.prevent="redeem">
           <div class="field"><label for="guest-name">游客昵称</label><input id="guest-name" v-model="guestName" maxlength="24" autocomplete="nickname" required></div>
-          <div class="field"><label for="guest-code">一次性邀请码</label><input id="guest-code" v-model="code" maxlength="22" type="password" autocomplete="off" required></div>
-          <p v-if="unconfirmedRedeem" class="note">还没确认这张邀请码是否领取成功。重查后仍未登录时，请向邀请人要新链接。</p>
-          <button v-if="unconfirmedRedeem" class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="useAnotherInvite">使用另一张邀请</button>
-          <button v-else class="btn primary" type="submit" :disabled="busy || checkingPlayer || !!statusError">开始试玩</button>
+          <div class="field"><label for="guest-code">一次性邀请码</label><input id="guest-code" v-model="code" :readonly="redeemRecovery === 'unknown'" maxlength="22" type="password" autocomplete="off" required></div>
+          <p v-if="redeemRecovery === 'unknown'" class="note">还没确认这张邀请是否领取成功。重查确认未登录后，可手动重试原码。若提示已使用，请向邀请人要新链接。</p>
+          <button class="btn primary" type="submit" :disabled="busy || checkingPlayer || !!statusError">{{ redeemRecovery === 'unknown' ? '重试原邀请码' : '开始试玩' }}</button>
+          <button v-if="redeemRecovery === 'unknown'" class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="useAnotherInvite">使用另一张邀请</button>
         </form>
       </template>
       <p v-if="seat" class="note"><a href="/play">返回当前席位</a></p>
