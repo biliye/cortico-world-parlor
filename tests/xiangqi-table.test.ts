@@ -95,6 +95,23 @@ describe('象棋走法', () => {
 });
 
 describe('象棋牌桌', () => {
+  it('真人每手 3 分钟，Coo 每手 60 秒，恢复后仍在各自时限托管', () => {
+    const human = { ...red, kind: 'human' as const };
+    const table = new XiangqiTable(human);
+    table.join(black);
+    table.start(human.id, 1);
+    expect(table.nextWakeAt()).toBe(180_001);
+
+    const restored = new XiangqiTable(human);
+    restored.restoreState(table.exportState());
+    expect(restored.tick(180_000)).toBeNull();
+    expect(restored.tick(180_001)?.views).toEqual([black.id]);
+    expect(restored.nextWakeAt()).toBe(240_001);
+    expect(restored.tick(240_000)).toBeNull();
+    expect(restored.tick(240_001)?.views).toEqual([human.id]);
+    expect(restored.nextWakeAt()).toBe(420_001);
+  });
+
   it('抽到第二席执红的等人桌可恢复，开局通知只给红方', () => {
     const waiting = new XiangqiTable(black, 100, 1);
     const restored = new XiangqiTable(black, 100);
