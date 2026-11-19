@@ -214,6 +214,40 @@ export class ParlorClient {
     return this.parse<RoomSnapshot>(response);
   }
 
+  /**
+   * 换一把新的家长钥匙。服务端只在新建家长账户时发一次 ownerKey，已有账户再入座不会补发；
+   * 本机的钥匙丢了（换机器、卸载重装、当年没落盘）时只能这样换。轮换会让旧钥匙与旧家长会话失效。
+   */
+  async rotateOwnerKey(): Promise<string> {
+    const response = await fetchParlor(this.url('/v1/me/owner-key/rotate'), {
+      method: 'POST',
+      headers: await this.headers({}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await this.parse<{ ownerKey?: unknown }>(response);
+    return typeof body.ownerKey === 'string' ? body.ownerKey.trim() : '';
+  }
+
+  /**
+   * 看一把家长钥匙还能不能用。200 = 有效，401 = 已失效（被别的设备轮换过，或本来就不存在）；
+   * 其余状态（旧服务器没有这条路由、限流、网络）一律「判不了」——宁可这次不修，也不能把好钥匙换掉。
+   * 走只读的 verify：不开家长会话，也不占家长登录的试错额度。
+   */
+  async ownerKeyState(key: string): Promise<'valid' | 'invalid' | 'unknown'> {
+    let response: Response;
+    try {
+      response = await fetchParlor(this.url('/v1/me/owner-key/verify'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch { return 'unknown'; }
+    void response.body?.cancel().catch(() => {});
+    if (response.ok) return 'valid';
+    return response.status === 401 ? 'invalid' : 'unknown';
+  }
+
   /** 只改当前令牌所属席位的名字，不重新入座。 */
   async rename(token: string, name: string): Promise<{ name: string }> {
     const response = await fetchParlor(this.url('/v1/me/rename'), {

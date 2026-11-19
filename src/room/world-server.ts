@@ -307,6 +307,11 @@ export class WorldServer {
   private readonly inviteTimes = new Map<string, number[]>();
   /** 家长链接试错限频：每个 IP 一小时最多 10 次。 */
   private readonly parentKeyTimes = new Map<string, number[]>();
+  /**
+   * 只读校验钥匙的限频：跟真实家长登录分开算。多个 Coo 在同一出口 IP 启动时
+   * 不该把家长本人的 10 次额度吃掉，所以额度更宽（一小时 60 次）。
+   */
+  private readonly ownerKeyVerifyTimes = new Map<string, number[]>();
   /** 事件清理：每小时一次，超过 7 天且不在最后 500 条的删掉。 */
   private lastPrune = 0;
   /** 推送循环与客厅时钟改成异步后，上一轮没跑完就跳过这一轮（原来同步循环天然串行）。 */
@@ -1402,6 +1407,19 @@ export class WorldServer {
         await this.coo.renameCooDisplay(seat.cooId, name);
       });
       json(res, 200, { name });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/v1/me/owner-key/verify') {
+      // 只回答「这把钥匙还能不能用」，不开家长会话、不写库；扩展启动自检走这里，
+      // 免得每次启动都在家长会话表里留一行，也免得占用家长实际登录的试错额度。
+      const body = await readJson(req);
+      const key = typeof body.key === 'string' ? body.key.trim() : '';
+      this.checkOwnerKeyVerifyRate(req);
+      if (!key || !(await this.coo.verifyOwnerKey(key))) {
+        throw new HttpError(401, '这个家长链接不对，或已经失效了');
+      }
+      json(res, 200, { ok: true });
       return;
     }
 
@@ -2849,6 +2867,17 @@ export class WorldServer {
     if (times.length >= 10) throw new HttpError(429, '试得太多了，过一会儿再试');
     times.push(now);
     this.parentKeyTimes.set(ip, times);
+  }
+
+  /** 只读校验单独计数：额度比家长登录宽，正常启动的设备不会互相挤掉。 */
+  private checkOwnerKeyVerifyRate(req: IncomingMessage): void {
+    const ip = (headerValue(req, 'x-forwarded-for').split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
+    const now = this.now();
+    const cutoff = now - 3_600_000;
+    const times = (this.ownerKeyVerifyTimes.get(ip) ?? []).filter((at) => at >= cutoff);
+    if (times.length >= 60) throw new HttpError(429, '试得太多了，过一会儿再试');
+    times.push(now);
+    this.ownerKeyVerifyTimes.set(ip, times);
   }
 
   private parentCookie(token: string, req: IncomingMessage): string {

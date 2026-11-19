@@ -2,7 +2,7 @@
  * 客厅 World：连上房间，把可见事件按提醒挡位交给 Core，提供说话/私聊/查看工具。
  * 它不判断谁能看见什么；服务器只发这个席位能看见的事件。
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +39,14 @@ const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
 const SEAT_SECRET = 'PARLOR_SEAT_TOKEN';
 const OWNER_SECRET = 'PARLOR_OWNER_TOKEN';
+/** 上次自动轮换家长钥匙的时间。只在「本机有钥匙但已失效」时用它退避，避免两台同身份的 Coo 来回作废。 */
+const OWNER_ROTATED_SECRET = 'PARLOR_OWNER_TOKEN_ROTATED_AT';
+/** 绑定网关、Coo 身份和钥匙指纹；配置只写成功一部分时，不能误用归属不明的钥匙。 */
+const OWNER_ISSUER_SECRET = 'PARLOR_OWNER_TOKEN_ISSUER';
+/** 失效钥匙的退避时长：窗口内先不动，宁可这台暂时没有链接，也不和另一台对打。 */
+const OWNER_ROTATE_COOLDOWN_MS = 30 * 60_000;
+/** 停用并重启会创建新的 World。同一个账户的补钥匙任务需跨 World 排队。 */
+const ownerKeyRepairs = new Map<string, Promise<void>>();
 /** 运营者开关：是否在面板给出可转发的网页访客链接。不放进扩展设置页。 */
 const GUEST_JOIN_SECRET = 'PARLOR_ALLOW_GUEST_JOIN';
 /** 当前客厅；换房后写回，重启时用它找回席位。 */
@@ -161,6 +169,10 @@ export class ParlorWorld implements World {
   private inviteCode = '';
   private token = '';
   private ownerToken = '';
+  /** 这次启动已经确认本机那把钥匙失效（服务端回 401）；重连入座时别又从 .env 里把它捡回面板。 */
+  private ownerKeyDead = false;
+  /** 后台补钥匙：连上就能收消息，不等它；stop 之后只把已经拿到的新钥匙落盘，不再推事件。 */
+  private ownerKeyTask?: Promise<void>;
   private seat?: Seat;
   /** 当前客厅；普通聊、牌桌与所有默认动作都落在它上面。 */
   private currentRoom = '';
@@ -408,6 +420,7 @@ export class ParlorWorld implements World {
 
   async start(host: WorldHost): Promise<void> {
     this.stopped = false;
+    this.ownerKeyDead = false;
     this.host = host;
     this.history?.close(); this.history = undefined;
     this.historySeats.clear(); this.historyRooms.clear(); this.historyError = '';
@@ -424,6 +437,8 @@ export class ParlorWorld implements World {
     this.digestTimer = setInterval(() => { void this.flushDigest(); }, DIGEST_MS);
     this.digestTimer.unref?.();
     this.streamTask = this.runStream();
+    // 补钥匙放后台：复用席位时连上就能收消息，不该为一把钥匙多等一次轮换。
+    this.queueOwnerKeyRepair();
     if (this.multiRoom) {
       this.supportTimer = setInterval(() => { void this.pollInbox(); }, 60_000);
       this.supportTimer.unref?.();
@@ -458,6 +473,15 @@ export class ParlorWorld implements World {
     this.digestTimer = undefined;
     await this.streamTask?.catch(() => {});
     this.streamTask = undefined;
+    // 补钥匙多半已经结束；没结束就最多等一秒——它拿到钥匙还要写回 .env，别在写一半时退出。
+    if (this.ownerKeyTask) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        this.ownerKeyTask,
+        new Promise<void>((done) => { timer = setTimeout(done, 1_000); }),
+      ]);
+      if (timer) clearTimeout(timer);
+    }
     await this.historyTask;
     await this.storyNoticeTask;
     this.history?.close();
@@ -543,7 +567,7 @@ export class ParlorWorld implements World {
       }
       if (snapshot) {
         this.token = stored;
-        this.ownerToken = this.ctx.secret(OWNER_SECRET).trim();
+        this.ownerToken = this.adoptStoredOwnerKey();
         this.seat = snapshot.seat;
         this.lastSeq = this.resumeFrom(snapshot.latest);
         this.applySnapshot(snapshot);
@@ -583,13 +607,13 @@ export class ParlorWorld implements World {
     if (joined.room) this.currentRoom = joined.room;
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
-    // 已有账户再次加入不会发新钥匙：这时要留住 .env 里那把，别拿空串覆盖。
+    // 已有账户再入座时，只使用已确认归属的钥匙。
     const issued = (joined.ownerKey ?? joined.ownerToken ?? '').trim();
-    this.ownerToken = issued || this.ctx.secret(OWNER_SECRET).trim();
+    this.ownerToken = issued || this.adoptStoredOwnerKey();
     this.seat = joined.seat;
+    if (issued) this.storeOwnerKey(issued, this.ownerKeyIssuer());
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
-      if (this.ownerToken) this.ctx.storeSecret(OWNER_SECRET, this.ownerToken);
       this.saveCursor();
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
@@ -597,6 +621,132 @@ export class ParlorWorld implements World {
     this.lastSeq = this.resumeFrom(snapshot.latest);
     this.applySnapshot(snapshot);
     await this.syncSeatName(client);
+  }
+
+  /**
+   * 补钥匙不挡启动：连上就该能收消息，没必要为一把钥匙多等一次轮换（最坏两次 15 秒超时）。
+   * 任务挂在 World 上，stop 之后只把已经拿到的新钥匙落盘，不再推事件。
+   */
+  private queueOwnerKeyRepair(): void {
+    const client = this.client;
+    if (!client || !this.multiRoom) return;
+    const issuer = this.ownerKeyIssuer();
+    const previous = ownerKeyRepairs.get(issuer);
+    const task = (async () => {
+      await previous;
+      if (this.stopped || this.client !== client) return;
+      // 等旧实例落盘后再读一次。这样重启期间拿到的一把钥匙可以直接复用。
+      await this.ensureOwnerKey(client);
+    })()
+      .catch(() => { /* ensureOwnerKey 自己会报；后台任务不能把启动拖红 */ });
+    this.ownerKeyTask = task;
+    ownerKeyRepairs.set(issuer, task);
+    void task.then(() => {
+      if (this.ownerKeyTask === task) this.ownerKeyTask = undefined;
+      if (ownerKeyRepairs.get(issuer) === task) ownerKeyRepairs.delete(issuer);
+    });
+  }
+
+  /**
+   * 让本机有一把能用的家长钥匙。服务端只在新建家长账户时发一次 ownerKey，已有账户再入座不补发，
+   * 所以换机器、卸载重装、或早期版本没把 key 落盘之后，面板里那两条带钥匙的链接会一直缺席。
+   * 本机存的钥匙还可能被另一台同身份的 Coo 轮换掉；只查「有没有」会让这台设备永久停在失效钥匙上。
+   */
+  private async ensureOwnerKey(client: ParlorClient): Promise<void> {
+    let why = '这台设备上没有家长钥匙';
+    const stored = this.adoptStoredOwnerKey() || this.ownerToken;
+    this.ownerToken = stored;
+    if (stored) {
+      const state = await client.ownerKeyState(stored);
+      if (this.stopped || this.client !== client || state !== 'invalid') return;
+      why = '这台设备存的家长钥匙已经失效';
+      // 401 是确定的失效：这轮先把面板上那两条死链接收起来。轮换失败或还在冷却时，
+      // 也不能让人点进一个换不到席位的页面；.env 里仍留着这把，下面靠冷却记录退避。
+      this.ownerKeyDead = true;
+      this.ownerToken = '';
+      const waitMs = this.rotateCooldownLeft();
+      if (waitMs > 0) {
+        const minutes = Math.ceil(waitMs / 60_000);
+        await this.reportLink('internal', `${why}，多半是另一台同身份的 Coo 换过钥匙；这台刚换过一次又被作废，${minutes} 分钟内先不再自动换，免得两边来回把对方的钥匙作废。面板里这两条带钥匙的链接先收起来了。等 ${minutes} 分钟后重启客厅会自动再换；急着用就删掉部署 .env 里的 ${OWNER_SECRET} 再重启，立刻换一把。`);
+        return;
+      }
+    }
+    await this.rotateOwnerKey(client, why);
+  }
+
+  /** 距离上次自动轮换多久才能再换；本机没记录过就是 0。 */
+  private rotateCooldownLeft(): number {
+    // 存的是 ISO 时间；纯毫秒数字符串 Date.parse 解析不了，会永远当成「没轮换过」。
+    const at = Date.parse(this.ctx.secret(OWNER_ROTATED_SECRET).trim());
+    if (!Number.isFinite(at)) return 0;
+    return Math.max(0, at + OWNER_ROTATE_COOLDOWN_MS - Date.now());
+  }
+
+  /** 这把钥匙是哪个网关、哪个身份发的；换服务器之后旧值不能再当本机的用。 */
+  private ownerKeyIssuer(): string {
+    return `${this.baseUrl}|${this.identity?.cooId ?? ''}`;
+  }
+
+  private ownerKeyBinding(issuer: string, key: string): string {
+    return `${issuer}|${createHash('sha256').update(key).digest('base64url')}`;
+  }
+
+  /** 只对签发范围已知的钥匙生成链接或发校验请求；无标记的旧钥匙走身份认证换新。 */
+  private adoptStoredOwnerKey(): string {
+    if (this.ownerKeyDead) return '';
+    if (this.server) {
+      // 自开单厅可直接从已续上的本机席位取钥匙，也兼容临时端口变化。
+      const auth = this.server.kernel.authenticate(this.token);
+      return auth?.role === 'pet' ? auth.seat.ownerToken : '';
+    }
+    const key = this.ctx.secret(OWNER_SECRET).trim();
+    if (!key) return '';
+    const recorded = this.ctx.secret(OWNER_ISSUER_SECRET).trim();
+    return recorded === this.ownerKeyBinding(this.ownerKeyIssuer(), key) ? key : '';
+  }
+
+  private storeOwnerKey(key: string, issuer: string): boolean {
+    try {
+      this.ctx.storeSecret(OWNER_SECRET, key);
+      this.ctx.storeSecret(OWNER_ISSUER_SECRET, this.ownerKeyBinding(issuer, key));
+      return true;
+    } catch { return false; }
+  }
+
+  /** 换一把新钥匙并写回部署 .env；拿到就落盘，哪怕这期间已经 stop（旧钥匙已经作废）。 */
+  private async rotateOwnerKey(client: ParlorClient, why: string): Promise<void> {
+    const issuer = this.ownerKeyIssuer();
+    const wasStored = this.ctx.secret(OWNER_SECRET);
+    const wasBound = this.ctx.secret(OWNER_ISSUER_SECRET);
+    let key: string;
+    try {
+      key = await client.rotateOwnerKey();
+    } catch (error) {
+      if (!this.stopped && this.client === client) await this.reportLink('internal', `${why}，向服务器换新钥匙没成功（${messageOf(error)}）。面板里不会出现「我下场玩」链接；网络恢复后再重启一次客厅。`);
+      return;
+    }
+    if (!key) return;
+    // 旧实例可以存下已经轮换成功的钥匙，但不能覆盖新实例在此期间保存的值。
+    const retired = this.stopped || this.client !== client;
+    if (retired && (this.ctx.secret(OWNER_SECRET) !== wasStored || this.ctx.secret(OWNER_ISSUER_SECRET) !== wasBound)) return;
+    const stored = this.storeOwnerKey(key, issuer);
+    try { this.ctx.storeSecret(OWNER_ROTATED_SECRET, new Date().toISOString()); }
+    catch { /* 冷却记录写不进去只影响退避，不影响这把钥匙 */ }
+    if (retired) return;
+    this.ownerToken = key;
+    this.ownerKeyDead = false;
+    // 刚换到就又被作废：另一台同身份的 Coo 也在换。留着这条链接也是死的，先收起来并说清怎么恢复。
+    const state = await client.ownerKeyState(key);
+    if (this.stopped || this.client !== client) return;
+    if (state === 'invalid') {
+      this.ownerToken = '';
+      this.ownerKeyDead = true;
+      await this.reportLink('internal', '刚向服务器换到的家长钥匙立刻失效了：另一台同身份的 Coo 也在轮换，两边会互相把对方的钥匙作废。先在那台设备上停用客厅，再重启这台；这台 30 分钟内不再自动换，免得来回打。');
+      return;
+    }
+    await this.reportLink('internal', stored
+      ? `${why}，已向服务器换了一把新的；旧钥匙和旧家长会话同时失效。面板里的「我下场玩」与「家长页」现在可以用了。`
+      : `${why}，已向服务器换了一把新的，但没写进部署 .env（重启后会再换一次）。面板里的「我下场玩」与「家长页」这次可以用。`);
   }
 
   /** 续用席位或重新领令牌时，配置里的名字也要生效；不换席位。 */
