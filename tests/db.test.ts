@@ -33,7 +33,7 @@ const seat = async (roomId: string, id: string, cooId: string, name: string, tok
 };
 
 describe('SQLite 地基', () => {
-  itSqlite('现有普通厅含归档厅统一到 30，大厅与席位数据保留，迁移幂等', async () => {
+  itSqlite('现有普通厅含归档厅统一到 30，大厅扩容并保留席位，迁移幂等', async () => {
     await coo('coo-cap-owner');
     for (const capacity of [2, 8, 16, 30, 64]) await room('room-' + capacity, 'coo-cap-owner', capacity);
     await room('hall', 'coo-cap-owner', 400, 'hall');
@@ -44,7 +44,7 @@ describe('SQLite 地基', () => {
     const rooms = await db.prepare("SELECT capacity FROM rooms WHERE kind = 'room'").all();
     expect(rooms).toHaveLength(5);
     expect(rooms.every(row => row.capacity === 30)).toBe(true);
-    expect((await db.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get())?.capacity).toBe(400);
+    expect((await db.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get())?.capacity).toBe(1000);
     expect((await db.prepare("SELECT archived_at FROM rooms WHERE id = 'room-8'").get())?.archived_at).toBe(123);
     expect((await db.prepare("SELECT token_hash FROM room_seats WHERE id = 'seat-kept'").get())?.token_hash).toBe('token-kept');
     expect(await db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
@@ -115,21 +115,21 @@ describe('SQLite 地基', () => {
 
       await migrate(oldDb);
 
-      // 大厅从 32 抬到 400；普通客厅从 64 收到 30。
+      // 大厅从 32 抬到 1000；普通客厅从 64 收到 30。
       const hall = await oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get() as { capacity: number };
-      expect(hall.capacity).toBe(400);
+      expect(hall.capacity).toBe(1000);
       const big = await oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'big'").get() as { capacity: number };
       expect(big.capacity).toBe(30);
 
-      // 库级 CHECK 仍允许 300、拒绝 501（这是最后兜底；接口层才是 30）。
+      // 库级 CHECK 允许 300、拒绝 1001（接口层才是 30）。
       await oldDb.prepare("UPDATE rooms SET capacity = 300 WHERE id = 'big'").run();
-      await expect(oldDb.prepare("UPDATE rooms SET capacity = 501 WHERE id = 'hall'").run())
+      await expect(oldDb.prepare("UPDATE rooms SET capacity = 1001 WHERE id = 'hall'").run())
         .rejects.toThrow(/CHECK|check constraint/i);
 
       // 再跑一次 migrate：大房被收回 30，大厅不动。
       await migrate(oldDb);
       expect((await oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'big'").get() as { capacity: number }).capacity).toBe(30);
-      expect((await oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get() as { capacity: number }).capacity).toBe(400);
+      expect((await oldDb.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get() as { capacity: number }).capacity).toBe(1000);
 
       // 外键、索引与触发器都还在。
       expect(await oldDb.prepare('PRAGMA foreign_key_check').all()).toEqual([]);

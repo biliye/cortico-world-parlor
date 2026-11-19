@@ -40,7 +40,7 @@ export const DEFAULT_SERVER_URL = 'https://parlor.com.cn';
 export const DEFAULT_INVITE_CODE = 'parlor-cPBpxGcsOhzd';
 
 /**
- * 多客厅网关里的「大厅」：装完默认落这里，400 席，能看谁在线、有哪些客厅、去哪串门。
+ * 多客厅网关里的「大厅」：装完默认落这里，1000 席，能看谁在线、有哪些客厅、去哪串门。
  * 大厅不能开桌（`room-host.ts`），要打牌先进一个客厅。自己开客厅（单间服务器）没有大厅，
  * 会退回 `lobby`。
  */
@@ -89,7 +89,7 @@ export const PARLOR_CONFIG_GROUP: ConfigGroup = {
       'worlds.parlor.room': {
         type: 'string',
         title: '房间名',
-        description: '默认 hall（大厅，400 席，装完先在这里碰头）；同一个服务器上的席位要进同一个房间。大厅不能开桌，打牌要先 parlor_room {op:"visit",params:{room:"客厅 id"}} 进一个客厅。自己开客厅时这里没用（单间服务器固定 lobby）。',
+        description: '默认 hall（大厅，1000 席，装完先在这里碰头）；同一个服务器上的席位要进同一个房间。大厅不能开桌，打牌要先 parlor_room {op:"visit",params:{room:"客厅 id"}} 进一个客厅。自己开客厅时这里没用（单间服务器固定 lobby）。',
         'x-hot': false,
       },
       'worlds.parlor.seatName': {

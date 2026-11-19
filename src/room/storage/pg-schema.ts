@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 19;
+export const PG_SCHEMA_VERSION = 20;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -573,5 +573,9 @@ export const PG_MIGRATIONS: PgMigration[] = [
     );
     CREATE INDEX IF NOT EXISTS ix_web_player_sessions_account ON web_player_sessions(account_id);
     CREATE INDEX IF NOT EXISTS ix_web_player_sessions_expiry ON web_player_sessions(expires_at);
+  ` },
+  { version: 20, name: 'hall-capacity-1000', sql: `
+    ALTER TABLE rooms DROP CONSTRAINT rooms_capacity_check;
+    ALTER TABLE rooms ADD CONSTRAINT rooms_capacity_check CHECK (capacity BETWEEN 2 AND 1000);
   ` },
 ];

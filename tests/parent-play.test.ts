@@ -61,6 +61,41 @@ const getWith = async (base: string, path: string, headers: Record<string, strin
 const cookieOf = (response: Response): string => (response.headers.get('set-cookie') || '').split(';')[0];
 
 describe('家长下场', () => {
+  it('普通客厅占满 30 席时，带钥匙和会话下场都直接落到大厅', async () => {
+    const app = await start();
+    const child = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, {
+      ...cooHeaders(COO), 'x-parlor-invite': 'inv',
+    });
+    expect(child.status).toBe(200);
+    await app.dbHandle.exec(`
+      INSERT INTO coos(id, kind, display_name, created_at)
+        SELECT 'coo-fill-' || n, 'pet', '成员' || n, 1 FROM generate_series(1, 29) AS n;
+      INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, visible_from_seq)
+        SELECT 'lobby', 'fill-' || n, 'coo-fill-' || n, 'pet', '成员' || n, 'off', 'fill-token-' || n, 1, 0
+        FROM generate_series(1, 29) AS n;
+    `);
+    const first = await post(app.url, '/v1/parent/play', { key: child.body.ownerKey });
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ room: 'hall', roomName: '大厅', fallback: 'room_full', seat: { kind: 'human' } });
+    const cookie = first.headers.get('set-cookie')!.split(';')[0];
+    const retry = await post(app.url, '/v1/parent/play', {}, { cookie });
+    expect(retry.status).toBe(200);
+    expect(retry.body).toMatchObject({ room: 'hall', fallback: 'room_full', seat: first.body.seat });
+    expect(await app.dbHandle.prepare("SELECT capacity FROM rooms WHERE id = 'hall'").get()).toEqual({ capacity: 1000 });
+    const hall = await getWith(app.url, '/v1/rooms/hall/room', { authorization: `Bearer ${retry.body.token}` });
+    expect(hall.status).toBe(200);
+    expect(hall.body).toMatchObject({ seat: { id: (first.body.seat as { id: string }).id } });
+
+    await app.dbHandle.prepare("UPDATE room_seats SET released_at=1 WHERE room_id='lobby' AND id='fill-29'").run();
+    const returned = await post(app.url, '/v1/parent/play', {}, { cookie });
+    expect(returned.status).toBe(200);
+    expect(returned.body.room).toBe('lobby');
+    expect(returned.body).not.toHaveProperty('fallback');
+    const reissue = await post(app.url, '/v1/parent/play', {}, { cookie });
+    expect(reissue.status).toBe(200);
+    expect(reissue.body).toMatchObject({ room: 'lobby', seat: returned.body.seat });
+  });
+
   it('先过滤不展示的事件再取最近消息，牌桌推进不会重发消息区块', async () => {
     const app = await start();
     const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, {

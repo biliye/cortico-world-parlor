@@ -868,13 +868,10 @@ export async function leaveRoomTable(): Promise<boolean> {
 export async function boot(): Promise<boolean> {
   const previousSeat = seat.value;
   const identityArgs = new URLSearchParams(location.hash.slice(1));
-  const entrySearch = location.search;
   const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
   const explicitEntry = identityArgs.has('identity') || identityArgs.has('key');
   // 新打开的分享链接是换厅意图；刷新、历史恢复及已消费的页内地址只恢复当前位置。
   const useEntryRoom = explicitEntry || (navigation?.type !== 'reload' && navigation?.type !== 'back_forward' && !history.state?.parlor);
-  const target = new URLSearchParams(entrySearch);
-  const wanted = useEntryRoom ? target.get('room') || '' : '';
   const hashIdentity = identityArgs.get('identity') || '';
   if (hashIdentity) {
     identityTicket = hashIdentity;
@@ -908,7 +905,7 @@ export async function boot(): Promise<boolean> {
   if (key) {
     entryKey = key;
     try {
-      const played = await parentPlay(key);
+      const played = await parentPlay(key, new URLSearchParams(location.search).get('room') || '');
       if (played.globalEntry) {
         beginGlobalEntry(played.globalEntry, { room: played.room || 'hall', parent: true });
         // 已经转交统一身份：回来时用 sessionStorage 里的 pending，不再需要这把钥匙。
@@ -925,7 +922,11 @@ export async function boot(): Promise<boolean> {
   // 页面内换席位（#key= / 身份回跳）：清掉上一个厅的日志与游标，否则旧厅 seq 会吞新厅事件。
   if (seatChanged(previousSeat, seat.value)) resetRoomState();
   if (!seat.value) return false;
-  history.replaceState({ ...history.state, parlor: true }, '', location.pathname + location.search);
+  // 家长入场可能已将地址改为大厅；按回包更新后的地址决定要不要换厅。
+  const entrySearch = location.search;
+  const target = new URLSearchParams(entrySearch);
+  const wanted = useEntryRoom ? target.get('room') || '' : '';
+  history.replaceState({ ...history.state, parlor: true }, '', location.pathname + entrySearch);
   await syncLocation();
   if (!seat.value) return false;
   const unfinishedEntry = readPendingEntry();

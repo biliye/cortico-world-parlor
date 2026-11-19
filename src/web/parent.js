@@ -1,5 +1,6 @@
 /** 家长只读页：用 ownerKey 换 HttpOnly 会话，然后按孩子当前席位的可见范围看。 */
 import { mountStoryArchive } from './story-archive.js';
+import { beginGlobalEntry } from './identity-entry.js';
 
 const ui = {
   account: document.getElementById('account'),
@@ -314,7 +315,7 @@ function openRename(account, who) {
   input.select();
 }
 
-/** 家长下场：借家长会话领一个 human 席位，把席位令牌写进 localStorage，再去 /play。 */
+/** 家长下场：领席位或完成统一身份跳转，然后去 /play。 */
 async function playAsParent(button) {
   button.disabled = true;
   try {
@@ -323,6 +324,10 @@ async function playAsParent(button) {
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
+    if (result.globalEntry) {
+      beginGlobalEntry(result.globalEntry, { room: result.room, parent: true }, location.origin + '/play');
+      return;
+    }
     localStorage.setItem('parlor-play-v1', JSON.stringify({
       room: result.room,
       seatId: result.seat.id,

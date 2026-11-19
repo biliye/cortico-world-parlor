@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 
 /** 来源 SQLite 的库结构版本。 */
-export const SQLITE_SCHEMA_VERSION = 13;
+export const SQLITE_SCHEMA_VERSION = 14;
 
 const roomsCapacityMax = (db: SqliteDb): number | null => {
   const row = db.raw.prepare(
@@ -226,16 +226,15 @@ export const migrateSqlite = async (db: SqliteDb): Promise<void> => {
   // 一房一桌的约束从这一版起取消；多桌的「一人一桌」由 active_table_players 保证。
   handle.exec('DROP INDEX IF EXISTS ux_live_table_per_room');
 
-  // 老库的 rooms.capacity CHECK 还是 2–64；放宽的唯一办法是重建表。
+  // 老库可能仍限制为 64 或 500；放宽 rooms.capacity CHECK 需要重建表。
   // 用实际 DDL 判断（而不是只看版本号），新库与已升级的库都不会白重建一次。
   if (roomsCapacityMax(db) !== DB_MAX_ROOM_CAPACITY) rebuildRooms(db);
 
   // tables.game 的 CHECK 加了新游戏（狼人杀、快局大富翁）；老库照 rooms 的先例整表重建。
   if (tablesGameCheckMissing(db)) rebuildTables(db);
 
-  // 大厅最初写死 32；只抬这个默认值，手工改过的不动。
-  handle.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity = ?')
-    .run(HALL_CAPACITY, 'hall', 32);
+  handle.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity < ?')
+    .run(HALL_CAPACITY, 'hall', HALL_CAPACITY);
 
   // 所有普通客厅固定 30 席，含归档厅；大厅不动。
   handle.prepare('UPDATE rooms SET capacity = ? WHERE kind = ? AND capacity <> ?')
@@ -295,6 +294,9 @@ export const migratePg = async (db: PgDb): Promise<void> => {
         }
       }
 
+      // 离线导入会先建目标结构再复制旧大厅；启动时扩容并保留导入的逐行校验。
+      await client.query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity < $1', [HALL_CAPACITY, 'hall']);
+
       // 与 SQLite 侧同一批数据兜底。都在版本迁移之后，可重复执行。
       await applyPgDataRules((sql, params) => client.query(sql, params));
     } finally {
@@ -322,7 +324,6 @@ export const applyPgDataRules = async (
       'CREATE UNIQUE INDEX IF NOT EXISTS ux_active_seat_name ON room_seats(room_id, lower(name)) WHERE released_at IS NULL',
     );
   }
-  await query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity = $3', [HALL_CAPACITY, 'hall', 32]);
   await query('UPDATE rooms SET capacity = $1 WHERE kind = $2 AND capacity <> $1', [MAX_USER_ROOM_CAPACITY, 'room']);
   await query(
     "INSERT INTO meta(key, value) VALUES ('storage_mode', 'postgres') ON CONFLICT (key) DO UPDATE SET value = excluded.value",

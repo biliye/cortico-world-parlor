@@ -167,13 +167,19 @@ describe('全局身份', () => {
     expect((await session(authority, id('aaaa'))).status).toBe(403);
   });
 
-  it('其他服务器的家长入口沿用统一玩家身份，关闭访客入口时仍可下场', async () => {
+  it.each([false, true])('其他服务器的家长入口沿用统一玩家身份（客厅满员=%s）', async (full) => {
     const authority = await start();
     const remote = await WorldServer.create({ ...(await pgServerStorage(':memory:')), identityAuthority: authority.url, allowGuestJoin: false });
     servers.push(remote); await remote.listen();
     const child = new ParlorClient(remote.url, id('cccc'));
     await child.initializeIdentity(authority.url, '', '小满');
     const joined = await child.join('', { name: '小满' });
+    if (full) {
+      await remote.dbHandle.prepare("UPDATE rooms SET capacity = 2 WHERE id = 'lobby'").run();
+      const other = new ParlorClient(remote.url, id('eeee'));
+      await other.initializeIdentity(authority.url, '', '邻座');
+      await other.join('', { name: '邻座' });
+    }
     const entry = await fetch(remote.url + '/v1/parent/play', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ key: joined.ownerKey }) });
     expect(entry.status).toBe(200);
@@ -187,6 +193,8 @@ describe('全局身份', () => {
       body: JSON.stringify({ parent: true, room: 'lobby' }) });
     expect(play.status).toBe(200);
     const played = await play.json() as any;
+    expect(played.room).toBe(full ? 'hall' : 'lobby');
+    expect(played.fallback).toBe(full ? 'room_full' : undefined);
     expect(played.identity.cooId).toBe(id('dddd').cooId);
     expect(played.seat.handle).toBe(passport.person.handle);
   });
