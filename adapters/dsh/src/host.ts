@@ -84,7 +84,7 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
   };
 
   const roomOps = ['list', 'visit'] as const;
-  register('parlor_room', '列出可见的普通客厅，或按客厅 ID 进入。大厅用于进场和选房，不能开桌。',
+  register('parlor_room', '列出可见的普通客厅，或按客厅 ID 进入。大厅用于进场和选房，不能开桌。换厅前先离开未开局的桌，已开局则等结算。',
     object({ op: choices(...roomOps), room: text('visit 时必填，使用客厅 ID。') }, ['op']),
     (args, signal) => operation(args, roomOps) === 'list'
       ? session.rooms(signal)
