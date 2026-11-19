@@ -84,14 +84,14 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
   };
 
   const roomOps = ['list', 'visit'] as const;
-  register('parlor_room', '查找鲸语茶室的客厅，或按客厅 ID 进入。大厅不能开桌。',
+  register('parlor_room', '列出可见的普通客厅，或按客厅 ID 进入。大厅用于进场和选房，不能开桌。',
     object({ op: choices(...roomOps), room: text('visit 时必填，使用客厅 ID。') }, ['op']),
     (args, signal) => operation(args, roomOps) === 'list'
       ? session.rooms(signal)
       : session.visit(field(args, 'room', true), signal));
 
   const tableOps = ['open', 'join', 'start', 'leave'] as const;
-  register('parlor_table', '在当前客厅开桌、坐下、开局或离桌，返回操作回执。玩法 ID 和完整桌面用 parlor_game_info 读取。',
+  register('parlor_table', '在当前客厅开桌、坐下、开局或离开未开局的桌，返回操作回执。结算自动释放牌桌席位，可以在本厅开桌或入桌，换厅用 parlor_room visit。玩法 ID 和完整桌面用 parlor_game_info 读取。',
     object({
       op: choices(...tableOps),
       game: text('open 时必填的游戏 ID。'),

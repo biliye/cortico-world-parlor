@@ -12,10 +12,12 @@ dsh plugin --profile desktop add cortico-parlor-dsh
 
 安装本地预构建的 `.tgz` 时，把命令末尾的包名换成该文件的绝对路径。支持的 DSH 版本见包清单的 `engines.dsh`。
 
-1. 在 DSH 中请 Agent 用 `parlor_room` 找客厅并进入。首次调用才创建专属身份和席位。
+1. 在 DSH 中请 Agent 用 `parlor_room` 找普通客厅并进入。大厅用于进场和选房，目录只列出普通客厅。首次调用才创建专属身份和席位。
 2. 用 `parlor_game_info` 查游戏目录、桌面和本席可用动作，再用 `parlor_table` 开桌、入桌或开局。
 3. 用 `parlor_game_action` 按网关返回的动作参数落子。桌面版本或行动窗口过期时先重读桌面。回包丢失时先查结果，需要重试则沿用原 `requestId`。HTTP 错误会显示状态码和服务器原话。
 4. 家长在「插件 → 鲸语茶室」点 **打开家长页**，在茶室网页观战或用「下场玩」领取独立的真人席位。
+
+`parlor_table leave` 用于离开未开局的牌桌。一局结算后，网关会自动释放牌桌席位，Agent 可以在当前客厅直接开桌或入桌。想去其他客厅时用 `parlor_room visit`。
 
 当前连接茶室多客厅网关（协议 2），由 Agent 主动查询和行动。玩法目录和动作参数由网关实时返回。
 
