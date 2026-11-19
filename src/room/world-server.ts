@@ -2026,13 +2026,12 @@ export class WorldServer {
       const wanted = typeof body.room === 'string' ? body.room : (await this.ensureHall()).id;
       const target = await getRoom(this.db, wanted);
       if (!target) throw new HttpError(404, '客厅不存在');
-      await this.assertRoomEntry(target.id, person.cooId);
-      const current = await activeSeatForCoo(this.db, person.cooId);
-      const joined = current ? current.roomId === target.id ? await (await this.host(target.id)).reissueSeatToken(person.cooId)
-        : await (await this.host(current.roomId)).switchTo(person.cooId, target.id, { name: person.name })
-        : await (await this.host(target.id)).join(person.cooId, { name: person.name, kind: 'human', tier: 'off' });
-      json(res, 200, { room: target.id, token: joined.token, seat: await seatOfRow(this.db, target.id, joined.seat),
-        identity: { cooId: person.cooId, cooSecret: 'seat-only' } }); return;
+      const { room, seat, token } = await this.enterPlayerRoom(target, person, parent !== null);
+      json(res, 200, { room: room.id, token, seat: await seatOfRow(this.db, room.id, seat),
+        identity: { cooId: person.cooId, cooSecret: 'seat-only' },
+        ...(room.id !== target.id ? { fallback: 'room_full' } : {}),
+      });
+      return;
     }
     const route = url.pathname.match(/^\/v1\/rooms\/([^/]+)\/(join|leave|switch|room|table|games|gifts|history|action|mail|stream|replay|table-log)$/);
     if (route) {
@@ -2956,33 +2955,37 @@ export class WorldServer {
     }
     const player = await this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
     if (this.identityAuthority === 'self') await this.registry.enroll(player.cooId, player.secret, player.name, 'human');
-    // 家长作为玩家也要按自己的身份准入（孩子被邀请不等于家长玩家也是成员）。
-    await this.assertRoomEntry(target.id, player.cooId);
-    let seat = await activeSeatForCoo(this.db, player.cooId);
-    let token: string;
-    if (!seat) {
-      const joined = await (await this.host(target.id)).join(player.cooId, {
-        name: player.name, kind: 'human', tier: 'off',
-      });
-      seat = joined.seat;
-      token = joined.token;
-    } else if (seat.roomId === target.id) {
-      const reissued = await (await this.host(target.id)).reissueSeatToken(player.cooId);
-      seat = reissued.seat;
-      token = reissued.token;
-    } else {
-      const moved = await (await this.host(seat.roomId)).switchTo(player.cooId, target.id, { name: player.name });
-      seat = moved.seat;
-      token = moved.token;
-    }
+    const { room, seat, token } = await this.enterPlayerRoom(target, player, true);
     return {
-      room: target.id,
-      roomName: target.name,
-      seat: await seatOfRow(this.db, target.id, seat),
+      room: room.id,
+      roomName: room.name,
+      seat: await seatOfRow(this.db, room.id, seat),
       token,
       identity: { cooId: player.cooId, cooSecret: this.identityAuthority ? 'seat-only' : player.secret },
       player: true,
+      ...(room.id !== target.id ? { fallback: 'room_full' } : {}),
     };
+  }
+
+  private async enterPlayerRoom(target: RoomRow, player: { cooId: string; name: string }, allowHallFallback: boolean) {
+    const enter = async (room: RoomRow) => {
+      const { cooId, name } = player;
+      await this.assertRoomEntry(room.id, cooId);
+      const current = await activeSeatForCoo(this.db, cooId);
+      if (!current) {
+        return { room, ...await (await this.host(room.id)).join(cooId, { name, kind: 'human', tier: 'off' }) };
+      }
+      if (current.roomId === room.id) {
+        return { room, ...await (await this.host(room.id)).reissueSeatToken(cooId) };
+      }
+      return { room, ...await (await this.host(current.roomId)).switchTo(cooId, room.id, { name }) };
+    };
+    try {
+      return await enter(target);
+    } catch (error) {
+      if (!allowHallFallback || target.kind !== 'room' || !(error instanceof HostError) || error.code !== 'full') throw error;
+      return enter(await this.ensureHall());
+    }
   }
 
   /**

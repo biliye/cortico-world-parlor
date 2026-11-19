@@ -209,7 +209,7 @@ async function parentPlay(): Promise<void> {
   error.value = '';
   busy.value = true;
   try {
-    const body = await requestParentPlay();
+    const body = await requestParentPlay('', wantedRoom());
     removeEntryMode();
     if (body.globalEntry) {
       beginGlobalEntry(body.globalEntry, { room: body.room, parent: true });

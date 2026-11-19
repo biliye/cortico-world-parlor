@@ -98,6 +98,7 @@ export interface HallPayload {
 
 export interface JoinResult {
   room: string;
+  fallback?: 'room_full';
   seat: { id: string; name: string };
   token: string;
   identity: { cooId: string; cooSecret: string };

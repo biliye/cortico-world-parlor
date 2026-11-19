@@ -8,6 +8,7 @@ import type { Health, JoinResult } from './types.ts';
 
 export { parentPlayBody, parseEntryKey };
 export type { ParentPlayBody };
+export { beginGlobalEntry } from '../../src/web/identity-entry.js';
 
 export class ApiError extends Error {
   status: number;
@@ -147,22 +148,6 @@ export async function joinPlayer(name: string, invite: string, room = ''): Promi
   });
 }
 
-/** 统一身份：跳去身份服务，回来时带 #identity=…&state=…。 */
-export function beginGlobalEntry(authority: string, input: { invite?: string; name?: string; room?: string; parent?: boolean }): void {
-  const target = new URL(authority);
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname);
-  if (target.protocol !== 'https:' && !(target.protocol === 'http:' && local)) throw new Error('身份服务需要 HTTPS');
-  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  sessionStorage.setItem('parlor-identity-pending', JSON.stringify({ ...input, state: nonce }));
-  target.pathname = '/identity';
-  target.search = new URLSearchParams({
-    returnTo: location.origin + location.pathname + location.search,
-    state: nonce,
-    name: input.name || '',
-  }).toString();
-  location.assign(target.href);
-}
-
 /** 统一身份回跳：用地址栏里的票据换席位。 */
 export async function finishGlobalEntry(ticket: string, state: string): Promise<void> {
   const pending = JSON.parse(sessionStorage.getItem('parlor-identity-pending') || 'null');
@@ -182,6 +167,7 @@ export async function finishGlobalEntry(ticket: string, state: string): Promise<
     throw error;
   }
   sessionStorage.removeItem('parlor-identity-pending');
+  acceptHallFallback(body);
   saveSeat({
     room: body.room,
     seatId: body.seat.id,
@@ -202,9 +188,20 @@ export function takeKeyFromHash(): string {
 export interface ParentPlayResult {
   globalEntry?: string;
   room?: string;
+  fallback?: 'room_full';
   seat?: { id: string; name: string };
   token?: string;
   identity?: { cooId: string; cooSecret: string };
+}
+
+/** 满厅时以服务端的新落点为准，丢掉上一间客厅的桌号和视图。 */
+function acceptHallFallback(result: { room?: string; fallback?: 'room_full' }): void {
+  if (result.fallback !== 'room_full' || !result.room) return;
+  const url = new URL(location.href);
+  url.searchParams.set('room', result.room);
+  url.searchParams.delete('view');
+  url.searchParams.delete('table');
+  history.replaceState(history.state, '', url);
 }
 
 /**
@@ -222,6 +219,7 @@ export async function parentPlay(key = '', room = ''): Promise<ParentPlayResult>
   if (!response.ok) throw new Error(body.error || (key ? '这个家长链接不对，或已经失效了' : '现在下不了场'));
   if (body.globalEntry) return body;
   if (!body.seat || !body.token || !body.identity || !body.room) throw new Error('家长下场没有换到席位');
+  acceptHallFallback(body);
   saveSeat({
     room: body.room,
     seatId: body.seat.id,

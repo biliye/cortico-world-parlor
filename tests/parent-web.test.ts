@@ -17,6 +17,7 @@ const mount = (responses: unknown[] = []) => {
   const nodes = new Map<string, TestNode>();
   const fetch = vi.fn();
   for (const body of responses) fetch.mockResolvedValueOnce(Response.json(body));
+  const beginGlobalEntry = vi.fn();
   const setTimeout = vi.fn();
   const render = vi.fn();
   const document = {
@@ -30,12 +31,21 @@ const mount = (responses: unknown[] = []) => {
   };
   const source = readFileSync(new URL('../src/web/parent.js', import.meta.url), 'utf8')
     .replace("import { mountStoryArchive } from './story-archive.js';", '')
+    .replace("import { beginGlobalEntry } from './identity-entry.js';", '')
     .replace('void boot();', '');
-  const renderer = runInNewContext(source + '\nrender = captureRender; ({ renderMail, renderLog, loadView })', {
-    document, fetch, setTimeout, clearTimeout: vi.fn(), URLSearchParams, captureRender: render,
-  }) as { renderMail(view: unknown): void; renderLog(view: unknown): void; loadView(): Promise<boolean> };
-  return { ...renderer, nodes, document, fetch, render, setTimeout };
+  const renderer = runInNewContext(source + '\nrender = captureRender; ({ renderMail, renderLog, loadView, playAsParent })', {
+    document, fetch, setTimeout, clearTimeout: vi.fn(), URLSearchParams, captureRender: render, beginGlobalEntry,
+    location: { origin: 'https://parlor.test' },
+  }) as { renderMail(view: unknown): void; renderLog(view: unknown): void; loadView(): Promise<boolean>;
+    playAsParent(button: { disabled: boolean }): Promise<void> };
+  return { ...renderer, nodes, document, fetch, render, setTimeout, beginGlobalEntry };
 };
+
+it('家长页从统一身份服务返回游玩页后自动领席位', async () => {
+  const { playAsParent, beginGlobalEntry } = mount([{ globalEntry: 'https://identity.test', room: 'lobby' }]);
+  await playAsParent({ disabled: false });
+  expect(beginGlobalEntry).toHaveBeenCalledWith('https://identity.test', { room: 'lobby', parent: true }, 'https://parlor.test/play');
+});
 
 describe('家长页消息渲染', () => {
   it('合并版本响应、清空已失效的私牌与历史，并在后台降频', async () => {

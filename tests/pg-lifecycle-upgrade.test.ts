@@ -28,13 +28,52 @@ it('PG v18 升到 v19 为原有家长增加网页登录和邀请码表，保留�
   const { account } = await accounts.ensureAccount(child);
   await accounts.bindPlayerCoo(account.id, player);
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(19);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   expect(await accounts.playerCooOf(account.id)).toBe(player);
   await db.prepare('INSERT INTO web_player_credentials(account_id, login_name, login_key, password_hash) VALUES (?,?,?,?)')
     .run(account.id, '真人', '真人', 'test-placeholder');
   await migrate(db);
   expect(await db.prepare('SELECT login_name FROM web_player_credentials WHERE account_id=?').get(account.id))
     .toMatchObject({ login_name: '真人' });
+});
+
+it.each([
+  { label: '默认名', constraint: 'rooms_capacity_check' },
+  { label: '已改名', constraint: 'legacy_rooms_capacity' },
+  { label: '已缺失', constraint: null },
+])('PG v19 到 v20 扩容并保留已有席位（旧 CHECK $label）', async ({ constraint }) => {
+  db = await openTestDb();
+  const owner = 'coo-hall-upgrade-owner';
+  await new CooAccountDb(db).registerCoo(owner, 'hall-upgrade-owner-secret', 'pet', '已有成员');
+  await createRoom(db, { id: 'r-hall-upgrade', ownerCooId: owner, name: '普通客厅' }, 1);
+  await db.exec(`
+    ALTER TABLE rooms DROP CONSTRAINT rooms_capacity_check;
+    ALTER TABLE rooms ADD CONSTRAINT room_capacity_is_positive CHECK (capacity > 0);
+    INSERT INTO rooms (id, kind, name, visibility, capacity, epoch, seq, created_at, last_active_at)
+      VALUES ('hall', 'hall', '大厅', 'public', 400, 'legacy-hall', 0, 1, 1);
+    UPDATE meta SET value='19' WHERE key='schema_version';
+  `);
+  if (constraint) await db.exec(`ALTER TABLE rooms ADD CONSTRAINT ${constraint} CHECK (capacity BETWEEN 2 AND 500)`);
+  const host = await RoomHost.create(db, 'hall');
+  const { seat } = await host.join(owner, { name: '已有成员' });
+
+  await migrate(db);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(20);
+  expect(await db.prepare('SELECT id, capacity FROM rooms ORDER BY id').all()).toEqual([
+    { id: 'hall', capacity: 1000 }, { id: 'r-hall-upgrade', capacity: 30 },
+  ]);
+  expect(await db.prepare('SELECT id FROM room_seats WHERE room_id=? AND released_at IS NULL').get('hall'))
+    .toEqual({ id: seat.id });
+  await expect(db.prepare('UPDATE rooms SET capacity = 1001 WHERE id=?').run('hall'))
+    .rejects.toThrow(/rooms_capacity_check/);
+  expect(await db.prepare("SELECT conname FROM pg_constraint WHERE conrelid='rooms'::regclass AND conname=?")
+    .get('room_capacity_is_positive')).toEqual({ conname: 'room_capacity_is_positive' });
+
+  // 离线导入先建 v20 结构再复制旧数据库数据；下一次启动仍要扩容。
+  await db.prepare('UPDATE rooms SET capacity = 400 WHERE id=?').run('hall');
+  await migrate(db);
+  expect(await db.prepare('SELECT capacity FROM rooms WHERE id=?').get('hall')).toEqual({ capacity: 1000 });
 });
 
 it('当前 PG 约束允许所有注册玩法及旧长局，拒绝未知玩法', async () => {

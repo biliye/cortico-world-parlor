@@ -43,7 +43,7 @@ vi.mock('../web-src/stores/session.ts', async () => {
   const { ref } = await import('vue');
   return {
     seat: ref(null), saveSeat: vi.fn(), clearSeat: vi.fn(), readStoredSeat: vi.fn(),
-    adoptSeat: vi.fn(), STORE_KEY: 'parlor-play-v1',
+    adoptSeat: vi.fn(), currentRoom: () => '', STORE_KEY: 'parlor-play-v1',
   };
 });
 vi.mock('../web-src/stores/view.ts', async () => {
@@ -87,13 +87,13 @@ describe('家长钥匙的重试', () => {
 
     await expect(store.boot()).rejects.toThrow('fetch failed');
     expect(mocks.parentPlay).toHaveBeenCalledTimes(1);
-    expect(mocks.parentPlay).toHaveBeenLastCalledWith('key-1');
+    expect(mocks.parentPlay).toHaveBeenLastCalledWith('key-1', '');
 
     // 地址栏已经抹掉了，靠页内副本再试一次——这就是旧页有、Vue 漏掉的那一步。
     mocks.parentPlay.mockResolvedValueOnce({ globalEntry: 'https://identity.test/authorize', room: 'hall' });
     await expect(store.boot()).resolves.toBe(false);
     expect(mocks.parentPlay).toHaveBeenCalledTimes(2);
-    expect(mocks.parentPlay).toHaveBeenLastCalledWith('key-1');
+    expect(mocks.parentPlay).toHaveBeenLastCalledWith('key-1', '');
     expect(mocks.beginGlobalEntry).toHaveBeenCalledTimes(1);
   });
 
@@ -134,6 +134,41 @@ describe('家长钥匙的重试', () => {
     await expect(store.boot()).resolves.toBe(true);
     expect(mocks.parentPlay).toHaveBeenCalledTimes(1);
   });
+});
+
+it.each(['家长钥匙', '统一身份票据'])('%s入场时满员直接显示大厅，不再请求旧客厅', async (method) => {
+  const clientPath = '../web-src/api/client.ts';
+  const actual = await vi.importActual<any>(clientPath);
+  const url = new URL('https://parlor.test/play?room=lobby&view=table&table=old-table');
+  vi.stubGlobal('location', url);
+  vi.stubGlobal('history', {
+    state: null,
+    replaceState: vi.fn((_state, _title, next: string | URL) => { url.href = new URL(next, url).href; }),
+  });
+  if (method === '家长钥匙') {
+    url.hash = 'key=key-1';
+    mocks.takeKeyFromHash.mockImplementationOnce(actual.takeKeyFromHash);
+    mocks.parentPlay.mockImplementationOnce(actual.parentPlay);
+  } else {
+    url.hash = 'identity=ticket-1&state=nonce-1';
+    vi.stubGlobal('sessionStorage', {
+      getItem: () => JSON.stringify({ room: 'lobby', parent: true, state: 'nonce-1' }), removeItem: vi.fn(),
+    });
+    mocks.finishGlobalEntry.mockImplementationOnce(actual.finishGlobalEntry);
+  }
+  session.saveSeat.mockImplementation((next: unknown) => { session.seat.value = next; });
+  const seat = { id: 'new-seat', name: '家长' };
+  const identity = { cooId: 'parent', cooSecret: 'seat-only' };
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ room: 'hall', fallback: 'room_full', seat, identity, token: 'token' }));
+  mocks.api.mockImplementation(async (path: string) => {
+    if (path === '/v1/me/location') return { room: 'hall', seat };
+    if (path.startsWith('/v1/room')) return { id: 'hall', now: Date.now(), latest: 0, seats: [], online: [] };
+    return { events: [] };
+  });
+  await expect(store.boot()).resolves.toBe(true);
+  expect(url.search).toBe('?room=hall');
+  expect(url.hash).toBe('');
+  expect(mocks.api.mock.calls.map(([path]) => path).some(path => path.includes('/switch'))).toBe(false);
 });
 
 describe('统一身份回跳票据的重试', () => {

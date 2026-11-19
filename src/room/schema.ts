@@ -12,17 +12,14 @@
  * - 一个 Coo 全局最多一个活跃席位；一个客厅一个 Coo 一个活跃席位。
  * - 表顺序按外键依赖排；可重复执行。
  */
-/**
- * 库级硬顶（CHECK）。普通客厅的用户可见上限是 30、大厅是 400，
- * 这里留到 500 只作最后兜底；改这个值必须重建 rooms 表（SQLite 不能 ALTER CHECK）。
- */
-export const DB_MAX_ROOM_CAPACITY = 500;
-
 /** 普通客厅的单间上限（用户可见）。大厅不受它限制。 */
 export const MAX_USER_ROOM_CAPACITY = 30;
 
-/** 大厅的默认容量。它是所有人进场的入口，要装得下 300+ 人；老库从 32 抬到这个值。 */
-export const HALL_CAPACITY = 400;
+/** 所有人入场和客厅满员时的落点。 */
+export const HALL_CAPACITY = 1000;
+
+/** SQLite 修改容量 CHECK 需要重建 rooms 表。 */
+export const DB_MAX_ROOM_CAPACITY = HALL_CAPACITY;
 
 /**
  * rooms 的建表语句。正常建库与迁移重建表共用这一份，避免两处 DDL 漂移。
