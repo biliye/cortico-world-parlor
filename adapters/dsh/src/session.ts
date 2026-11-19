@@ -172,19 +172,29 @@ export class ParlorSession {
     return { room: seat.room, seat: publicSeat(seat.seat) };
   }
 
-  look(signal?: AbortSignal) {
+  look(options: { onlineOnly?: boolean; offset: number; limit: number }, signal?: AbortSignal) {
     return this.run(async (client, seat) => {
       const { id, name, topic, visibility, seats, online, latest } = await client.snapshot(seat.token, 0, 1, seat.room);
       const connected = new Set(online);
+      const onlineOnly = options.onlineOnly ?? seat.room === 'hall';
+      const onlineSeats = seats.filter(person => connected.has(person.id)).length;
+      const visible = seats.filter(person => !onlineOnly || connected.has(person.id) || person.id === seat.seat.id);
+      visible.sort((left, right) => Number(right.id === seat.seat.id) - Number(left.id === seat.seat.id)
+        || Number(connected.has(right.id)) - Number(connected.has(left.id)));
+      const end = options.offset + options.limit;
       return {
-        room: defined({ id, name, topic, visibility }), me: publicSeat(seat.seat), latest,
-        seats: seats.map(person => ({ ...publicSeat(person), online: connected.has(person.id) })),
+        room: defined({ id, name, topic, visibility }), me: publicSeat(seat.seat), latest, onlineOnly,
+        totalSeats: seats.length, onlineSeats,
+        ...(visible.length > end ? { nextOffset: end } : {}),
+        seats: visible.slice(options.offset, end).map(person => ({ ...publicSeat(person), online: connected.has(person.id) })),
       };
     }, signal);
   }
 
   createRoom(input: Parameters<ParlorClient['createRoom']>[0], signal?: AbortSignal) {
-    return this.run((client, seat) => client.createRoom(input, seat.token), signal);
+    return this.run(async (client, seat) => ({
+      ...await client.createRoom(input, seat.token), currentRoom: seat.room, entered: false,
+    }), signal);
   }
 
   invite(to: string, room?: string, text?: string, signal?: AbortSignal) {

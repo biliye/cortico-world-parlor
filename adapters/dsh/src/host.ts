@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { ParentKeyUnavailable, ParlorSession, type ParlorOptions, type StateStore } from './session.ts';
 import { ParlorWatch } from './watch.ts';
 import { ParlorHttpError } from '../../../src/room/client.ts';
@@ -13,8 +13,19 @@ type Grant = { kind: 'grant'; payload: State };
 type JsonObject = Record<string, unknown>;
 type Schema = { type: string; [key: string]: unknown };
 
+interface DshMessageRef {
+  id: string;
+  source: { kind: string };
+}
+
 interface DshAgent {
-  session: { id: string };
+  session: {
+    id: string;
+    snapshotEvents(from?: number): readonly {
+      type: string;
+      data: Partial<DshMessageRef> & { inserted?: readonly DshMessageRef[] };
+    }[];
+  };
   followup(message: {
     id: string;
     role: 'user';
@@ -30,6 +41,7 @@ interface ToolExecution {
 
 interface DshServices {
   sessionController: { resolveAgent(id: string): Promise<{ agent: DshAgent } | { error: unknown }> };
+  sessionPersistence: { stat(id: string): Promise<unknown | undefined> };
   workspaceRegistry: { archivedSessionIds: readonly string[] };
   sessions: { flush(session: DshAgent['session']): Promise<boolean> };
 }
@@ -39,6 +51,7 @@ interface DshContext {
   agents: { get(id: string): DshAgent | undefined };
   get<K extends keyof DshServices>(service: K): DshServices[K] | undefined;
   effect(setup: () => () => void): void;
+  on(event: 'workspace/session-archived', listener: (request: { sessionId: string }) => void): void;
   credentials: {
     modifyRecord(key: string, update: (current?: Grant) => Promise<Grant | undefined>): Promise<Grant | undefined>;
   };
@@ -85,9 +98,9 @@ function field(args: JsonObject, key: string, required = false): string | undefi
   return value.trim();
 }
 
-function operation<T extends string>(args: JsonObject, allowed: readonly T[]): T {
-  const value = allowed.find(op => op === args.op);
-  if (value === undefined) throw new Error(`op 必须为 ${allowed.join('、')} 之一。`);
+function operation<T extends string>(args: JsonObject, allowed: readonly T[], key = 'op'): T {
+  const value = allowed.find(option => option === args[key]);
+  if (value === undefined) throw new Error(`${key} 必须为 ${allowed.join('、')} 之一。`);
   return value;
 }
 
@@ -125,7 +138,7 @@ function registerTools(ctx: DshContext, session: ParlorSession, watch: ParlorWat
 
   const roomOps = ['list', 'look', 'visit', 'create', 'invite', 'invitations', 'accept', 'decline'] as const;
   const visibilities = ['public', 'unlisted', 'private'] as const;
-  register('parlor_room', '找厅、看当前客厅及在场名单、建厅、进厅和处理邀请。公开厅可直接 visit，私密厅先用 invitations 查看待处理邀请，用 accept 或 decline 处理。接受后会尝试进厅。大厅不能开桌。',
+  register('parlor_room', '找厅、看当前客厅及在场名单、建厅、进厅和处理邀请。create 后先 visit 新厅再开桌。公开厅可直接 visit，私密厅先用 invitations 查看待处理邀请，用 accept 或 decline 处理。接受后会尝试进厅。大厅不能开桌。',
     object({
       op: choices(...roomOps),
       room: text('旧版 visit 的客厅 ID 写法，也可用 params.room。'),
@@ -137,12 +150,18 @@ function registerTools(ctx: DshContext, session: ParlorSession, watch: ParlorWat
         name: text('create 必填，客厅名。'),
         topic: text('create 的可选主题。'),
         visibility: choices(...visibilities),
+        onlineOnly: { type: 'boolean', description: 'look 是否只看在线席位和自己。大厅默认 true。' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'look 每页席位数，默认 30。' },
+        offset: { type: 'integer', minimum: 0, description: 'look 的下一页使用上次的 nextOffset。' },
       }, []),
     }, ['op']), (args, signal) => {
       const params = args.params === undefined ? args : { ...args, ...record(args.params) };
       switch (operation(args, roomOps)) {
         case 'list': return session.rooms(signal);
-        case 'look': return session.look(signal);
+        case 'look': return session.look({
+          onlineOnly: flag(params, 'onlineOnly'), limit: integer(params, 'limit', 1, 50) ?? 30,
+          offset: integer(params, 'offset', 0) ?? 0,
+        }, signal);
         case 'visit': return session.visit(field(params, 'room', true), signal);
         case 'create': {
           const visibility = field(params, 'visibility');
@@ -207,7 +226,7 @@ function registerTools(ctx: DshContext, session: ParlorSession, watch: ParlorWat
       scope: choices(...messageScopes), text: text('消息正文。'),
       to: text('private 必填，目标的短号、身份 ID 或席位名。'),
     }, ['scope', 'text']), (args, signal) => {
-      const scope = operation({ op: args.scope }, messageScopes);
+      const scope = operation(args, messageScopes, 'scope');
       const message = field(args, 'text', true);
       if (scope === 'private') return session.message({ type: 'whisper', to: field(args, 'to', true), text: message }, signal);
       if (args.to !== undefined) throw new Error('指定私信对象时请使用 scope: private。');
@@ -230,7 +249,7 @@ function registerTools(ctx: DshContext, session: ParlorSession, watch: ParlorWat
       switch (op) {
         case 'mail': return session.mail(limit ?? 10, flag(args, 'peek') ?? true, signal);
         case 'chat': {
-          const scope = args.scope === undefined ? undefined : operation({ op: args.scope }, ['room', 'table'] as const);
+          const scope = args.scope === undefined ? undefined : operation(args, ['room', 'table'] as const, 'scope');
           return session.history(integer(args, 'since', 0) ?? 0, limit ?? 30, scope, signal);
         }
         case 'dm': return session.directMessages(field(args, 'peer'), integer(args, 'before', 1), limit, signal);
@@ -311,22 +330,63 @@ export function apply(ctx: DshContext, config: ParlorOptions = {}) {
   const scope = createHash('sha256').update(JSON.stringify([profile, session.serverUrl, session.identityUrl])).digest('hex');
   const recordKey = `${name}/profile-${scope}`;
 
-  const watch = new ParlorWatch(session, async (sessionId, text, signal) => {
-    signal.throwIfAborted();
-    if (ctx.get('workspaceRegistry')?.archivedSessionIds.includes(sessionId)) {
-      throw new Error('等待会话已归档。');
-    }
-    let agent = ctx.agents.get(sessionId);
-    if (!agent) {
-      const resolved = await ctx.get('sessionController')?.resolveAgent(sessionId);
-      if (resolved && 'error' in resolved) throw resolved.error;
-      agent = resolved?.agent;
-    }
-    if (!agent || agent.session.id !== sessionId) throw new Error('等待会话暂不可用。');
-    signal.throwIfAborted();
-    agent.followup({ id: randomUUID(), role: 'user', source: { kind: 'parlor' }, content: [{ type: 'text', text }] });
-    const sessions = ctx.get('sessions');
-    if (sessions && !await sessions.flush(agent.session)) throw new Error('等待会话未确认保存通知。');
+  const archived = (id: string) => ctx.get('workspaceRegistry')?.archivedSessionIds.includes(id) === true;
+  const receipts = new WeakMap<DshAgent['session'], { offset: number; ids: Set<string> }>();
+  const watch = new ParlorWatch(session, {
+    async unavailable(id) {
+      if (archived(id)) return 'archived';
+      const persistence = ctx.get('sessionPersistence');
+      if (!ctx.agents.get(id) && persistence) {
+        try {
+          if (await persistence.stat(id) === undefined) return 'missing';
+        } catch { /* A storage failure does not prove the session was deleted. */ }
+      }
+    },
+    async deliver(sessionId, cursor, text, signal) {
+      signal.throwIfAborted();
+      if (archived(sessionId)) return 'archived';
+      let agent = ctx.agents.get(sessionId);
+      if (!agent) {
+        const resolved = await ctx.get('sessionController')?.resolveAgent(sessionId);
+        if (resolved && 'error' in resolved) {
+          const error = resolved.error;
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'session/not-found') return 'missing';
+          throw error;
+        }
+        agent = resolved?.agent;
+      }
+      if (!agent || agent.session.id !== sessionId) throw new Error('等待会话暂不可用。');
+      signal.throwIfAborted();
+      if (archived(sessionId)) return 'archived';
+      // Rebuild acceptance receipts from DSH's durable inbox and turn log. An
+      // uncertain flush can then be retried without submitting a second prompt.
+      let receipt = receipts.get(agent.session);
+      if (!receipt) {
+        receipt = { offset: 0, ids: new Set() };
+        receipts.set(agent.session, receipt);
+      }
+      const events = agent.session.snapshotEvents(receipt.offset);
+      for (const event of events) {
+        if (event.type === 'agent/inbox/spliced') {
+          for (const message of event.data.inserted ?? []) {
+            if (message.source?.kind === 'parlor') receipt.ids.add(message.id);
+          }
+        } else if (event.type === 'user/message' && event.data.source?.kind === 'parlor' && event.data.id) {
+          receipt.ids.add(event.data.id);
+        }
+      }
+      receipt.offset += events.length;
+      const key = createHash('sha256').update(JSON.stringify([scope, sessionId, cursor.room, cursor.seat, cursor.seq])).digest('hex');
+      const id = `${key.slice(0, 8)}-${key.slice(8, 12)}-8${key.slice(13, 16)}-8${key.slice(17, 20)}-${key.slice(20, 32)}`;
+      if (!receipt.ids.has(id)) {
+        agent.followup({ id, role: 'user', source: { kind: 'parlor' }, content: [{ type: 'text', text }] });
+      }
+      const sessions = ctx.get('sessions');
+      if (sessions && !await sessions.flush(agent.session)) throw new Error('等待会话未确认保存通知。');
+    },
+  });
+  ctx.on('workspace/session-archived', ({ sessionId }) => {
+    void watch.retire(sessionId, 'archived').catch(() => { /* status and delivery will retry retirement */ });
   });
   ctx.effect(() => () => watch.dispose());
   registerTools(ctx, session, watch);

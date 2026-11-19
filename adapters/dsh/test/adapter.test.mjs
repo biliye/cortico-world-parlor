@@ -26,19 +26,41 @@ const tablePatch = {
 
 function harness() {
   let saved;
-  const start = ({ restoreAgent = false } = {}) => {
+  const logs = new Map();
+  const archived = new Set();
+  const missing = new Set();
+  const start = ({ restoreAgent = false, flush } = {}) => {
     const tools = new Map();
     const messages = [];
     const disposals = [];
-    const agent = id => ({ session: { id }, followup: message => messages.push({ session: id, ...message }) });
+    const agents = new Map();
+    const agent = id => {
+      if (!logs.has(id)) logs.set(id, []);
+      const log = logs.get(id);
+      if (!agents.has(id)) agents.set(id, {
+        session: { id, snapshotEvents: (from = 0) => log.slice(from) },
+        followup(message) {
+          log.push({ type: 'agent/inbox/spliced', data: { inserted: [message] } });
+          messages.push({ session: id, ...message });
+        },
+      });
+      return agents.get(id);
+    };
     let route;
+    let onArchived;
     apply({
       profileContext: { name: 'web' },
-      agents: { get: id => restoreAgent ? undefined : agent(id) },
-      get: key => key === 'sessionController' && restoreAgent
-        ? { async resolveAgent(id) { return { agent: agent(id) }; } }
-        : undefined,
+      agents: { get: id => (restoreAgent && !agents.has(id)) || missing.has(id) ? undefined : agent(id) },
+      get(key) {
+        if (key === 'workspaceRegistry') return { archivedSessionIds: [...archived] };
+        if (key === 'sessionPersistence') return { async stat(id) { return missing.has(id) ? undefined : {}; } };
+        if (key === 'sessionController' && restoreAgent) {
+          return { async resolveAgent(id) { return { agent: agent(id) }; } };
+        }
+        if (key === 'sessions' && flush) return { flush };
+      },
       effect: setup => disposals.push(setup()),
+      on: (_event, callback) => { onArchived = callback; },
       credentials: {
         async modifyRecord(key, update) {
           assert.match(key, /^cortico-parlor-dsh\/profile-[a-f0-9]{64}$/);
@@ -52,6 +74,8 @@ function harness() {
     }, { serverUrl: origin, inviteCode: 'fixture-invite' });
     return {
       messages,
+      archive(id) { archived.add(id); onArchived({ sessionId: id }); },
+      markMissing(id) { missing.add(id); },
       dispose: () => disposals.forEach(dispose => dispose()),
       call(name, parameters, sessionId = 'parlor-session') {
         const tool = tools.get(name);
@@ -70,7 +94,7 @@ function harness() {
   return { start };
 }
 
-function fakeGateway(t) {
+function fakeGateway(t, { hallCrowd = [] } = {}) {
   let actions = 0;
   let joins = 0;
   let profileIdentity;
@@ -105,6 +129,10 @@ function fakeGateway(t) {
           : { room: 'lobby', seat: testSeat, token: roomToken });
       case '/v1/rooms':
         assert.equal(token, 'Bearer ' + firstToken);
+        if (init.method === 'POST') {
+          assert.deepEqual(body, { name: '新私厅', visibility: 'private' });
+          return Response.json({ room: { id: 'lobby', name: body.name, visibility: body.visibility } });
+        }
         return Response.json({ rooms: roomsFixture });
       case '/v1/rooms/hall/switch':
       case '/v1/rooms/lobby/switch': {
@@ -119,9 +147,15 @@ function fakeGateway(t) {
         const room = url.pathname.split('/')[3];
         assert.equal(token, 'Bearer ' + (room === 'hall' ? firstToken : roomToken));
         return Response.json({
-          id: room, name: room, latest: 20, now: 100, seat: testSeat, seats: [testSeat], online: [testSeat.id],
+          id: room, name: room, latest: 20, now: 100, seat: testSeat,
+          seats: room === 'hall' ? [...hallCrowd, testSeat] : [testSeat],
+          online: room === 'hall' && hallCrowd.length
+            ? hallCrowd.filter((_, index) => index % 2 === 0).map(person => person.id) : [testSeat.id],
           ...(room === 'lobby' ? {
-            tablePrivate: { tableId: 't-test', hand: ['private-card'] },
+            tablePrivate: {
+              tableId: 't-test', hand: ['private-card'], canAct: mode === 'first-turn',
+              ...(mode === 'already-acted' ? { yourTurn: true } : {}),
+            },
             tables: [
               { id: 't-test', status: 'open', seats: [testSeat], capacity: 3, openDeadline: 200 },
               { id: 't-full', status: 'open', seats: [testSeat], capacity: 1 },
@@ -134,6 +168,7 @@ function fakeGateway(t) {
       case '/v1/rooms/hall/stream':
       case '/v1/rooms/lobby/stream': {
         const encoder = new TextEncoder();
+        let cancelled = false;
         return new Response(new ReadableStream({
           start(controller) {
             const stream = {
@@ -141,9 +176,11 @@ function fakeGateway(t) {
               send: event => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
               close: () => controller.close(),
               get aborted() { return init.signal.aborted; },
+              get cancelled() { return cancelled; },
             };
             streams.push(stream);
           },
+          cancel() { cancelled = true; },
         }), { headers: { 'content-type': 'text/event-stream' } });
       }
       case '/v1/me/invitations':
@@ -189,7 +226,8 @@ function fakeGateway(t) {
         assert.equal(url.searchParams.get('op'), 'state');
         if (mode === 'table-missing') return Response.json({ error: '这张桌子不存在' }, { status: 404 });
         return Response.json({
-          table: { id: 't-test', revision: 12 }, availableActions: [{ action: 'place' }],
+          table: { id: 't-test', revision: 12 },
+          availableActions: mode === 'already-acted' ? [] : [{ action: 'place' }],
         });
       case '/v1/rooms/hall/action':
         actions++;
@@ -350,6 +388,8 @@ test('discovers joinable tables and reads and sends messages with explicit scope
   assert.equal(history.nextSince, 24);
   assert.deepEqual(history.messages.map(message => message.text), ['同桌消息']);
 
+  await assert.rejects(plugin.call('parlor_message', { scope: 'wrong', text: '你好' }), /^Error: scope 必须为/);
+  await assert.rejects(plugin.call('parlor_query', { op: 'chat', scope: 'wrong' }), /^Error: scope 必须为/);
   await assert.rejects(plugin.call('parlor_message', { scope: 'room', text: '你好', to: '#human' }), /scope: private/);
   assert.equal(gateway.actions(), 0);
   assert.equal((await plugin.call('parlor_message', { scope: 'room', text: '你好' })).messageSeq, 23);
@@ -364,6 +404,32 @@ test('discovers joinable tables and reads and sends messages with explicit scope
   gateway.setMode('unknown');
   await assert.rejects(plugin.call('parlor_message', { scope: 'table', text: '你好' }), /先查看聊天记录/);
   assert.equal(gateway.actions(), 4);
+});
+
+test('pages a busy hall, includes the offline self, and indicates a newly created room must be visited', async t => {
+  const hallCrowd = Array.from({ length: 377 }, (_, n) => ({
+    id: `s-${n}`, name: `测试成员 ${n}`, kind: 'pet', handle: `test-${n}`,
+  }));
+  fakeGateway(t, { hallCrowd });
+  const plugin = harness().start();
+  const page = await plugin.call('parlor_room', { op: 'look' });
+  assert.equal(page.totalSeats, 378);
+  assert.equal(page.onlineSeats, 189);
+  assert.equal(page.onlineOnly, true);
+  assert.equal(page.seats.length, 30);
+  assert.equal(page.seats[0].id, testSeat.id);
+  assert.equal(page.seats[0].online, false);
+  assert.ok(page.seats.slice(1).every(person => person.online));
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) < 4000);
+  const next = await plugin.call('parlor_room', { op: 'look', params: { offset: page.nextOffset, limit: 50 } });
+  assert.equal(next.seats.length, 50);
+  assert.ok(next.seats.every(person => !page.seats.some(prior => prior.id === person.id)));
+  const offline = await plugin.call('parlor_room', { op: 'look', params: { onlineOnly: false, offset: 190 } });
+  assert.ok(offline.seats.length && offline.seats.every(person => !person.online));
+  const created = await plugin.call('parlor_room', { op: 'create', params: { name: '新私厅', visibility: 'private' } });
+  assert.equal(created.currentRoom, 'hall');
+  assert.equal(created.entered, false);
+  assert.equal((await plugin.call('parlor_room', { op: 'visit', params: { room: created.room.id } })).room, 'lobby');
 });
 
 async function eventually(condition) {
@@ -429,4 +495,65 @@ test('waiting wakes only the bound session, deduplicates events and restores its
   const stopped = context.start();
   t.after(stopped.dispose);
   assert.deepEqual(await stopped.call('parlor_wait', { op: 'status' }), { active: false });
+});
+
+test('arming after the first turn reports the already-available game action before replay begins', async t => {
+  const gateway = fakeGateway(t);
+  const plugin = harness().start();
+  t.after(plugin.dispose);
+  await enterLobby(plugin);
+  gateway.setMode('first-turn');
+  const armed = await plugin.call('parlor_wait', { op: 'start', table: 't-test' });
+  assert.equal(armed.since, 20);
+  assert.equal(armed.pendingAction, true);
+  assert.equal(plugin.messages.length, 0);
+  gateway.setMode('already-acted');
+  assert.equal((await plugin.call('parlor_wait', { op: 'start' })).pendingAction, false);
+});
+
+test('archive and missing-session detection free a persisted watch for another session', async t => {
+  const { streams } = fakeGateway(t);
+  const context = harness();
+  const plugin = context.start();
+  t.after(plugin.dispose);
+  await enterLobby(plugin);
+  await plugin.call('parlor_wait', { op: 'start' });
+  await eventually(() => streams.length === 1);
+  plugin.archive('parlor-session');
+  assert.deepEqual(await plugin.call('parlor_wait', { op: 'status' }, 'replacement'),
+    { active: false, reason: 'archived' });
+  assert.ok(streams[0].aborted);
+  assert.equal((await plugin.call('parlor_wait', { op: 'start' }, 'replacement')).active, true);
+  plugin.dispose();
+  plugin.markMissing('replacement');
+  const restarted = context.start({ restoreAgent: true });
+  t.after(restarted.dispose);
+  assert.deepEqual(await restarted.call('parlor_wait', { op: 'status' }, 'next'),
+    { active: false, reason: 'missing' });
+  assert.equal((await restarted.call('parlor_wait', { op: 'start' }, 'next')).active, true);
+});
+
+test('replays an unacknowledged notice from the old cursor without submitting it again', async t => {
+  const { streams } = fakeGateway(t);
+  const context = harness();
+  const plugin = context.start({ flush: async () => false });
+  t.after(plugin.dispose);
+  await enterLobby(plugin);
+  await plugin.call('parlor_wait', { op: 'start' });
+  await eventually(() => streams.length === 1);
+  const notice = roomEvent(21, 'parlor.whisper', { scope: { kind: 'seat', seatId: testSeat.id } });
+  streams[0].send(notice);
+  await eventually(() => plugin.messages.length === 1 && streams[0].cancelled);
+  assert.equal((await plugin.call('parlor_wait', { op: 'status' })).reason, 'delivery_failed');
+  plugin.dispose();
+
+  let flushes = 0;
+  const restarted = context.start({ restoreAgent: true, flush: async () => { flushes++; return true; } });
+  t.after(restarted.dispose);
+  await eventually(() => streams.length === 2);
+  assert.equal(streams[1].since, 20);
+  streams[1].send(notice);
+  await eventually(() => flushes === 1);
+  assert.equal(restarted.messages.length, 0);
+  await restarted.call('parlor_wait', { op: 'stop' });
 });
