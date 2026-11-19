@@ -366,6 +366,37 @@ export class ParlorClient {
     return this.parse<{ ok: boolean; room?: string }>(response);
   }
 
+  async invitations(token: string): Promise<{ invitations: unknown[] }> {
+    const response = await fetchParlor(this.url('/v1/me/invitations'), {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
+  async directMessages(token: string, peer?: string, before?: number, limit?: number): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams();
+    if (peer) query.set('peer', peer);
+    if (before !== undefined) query.set('before', String(before));
+    if (limit !== undefined) query.set('limit', String(limit));
+    const path = peer ? `/v1/dm?${query}` : '/v1/dm/threads';
+    const response = await fetchParlor(this.url(path), {
+      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
+  async markDirectMessagesRead(token: string, peer: string): Promise<{ ok: true; changed: number }> {
+    const response = await fetchParlor(this.url('/v1/dm/read'), {
+      method: 'POST',
+      headers: await this.headers({ authorization: `Bearer ${token}`, 'content-type': 'application/json' }),
+      body: JSON.stringify({ peer }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+
   /** 读回放：默认最近的；before 往前翻。 */
   async replay(token: string, limit = 30, before?: number, roomId?: string): Promise<ReplayResponse> {
     const query = new URLSearchParams({ limit: String(limit), ...(before ? { before: String(before) } : {}) });
@@ -520,7 +551,7 @@ export class ParlorClient {
   async stream(
     token: string,
     since: number,
-    onEvent: (event: RoomEvent) => void,
+    onEvent: (event: RoomEvent) => void | Promise<void>,
     signal?: AbortSignal,
     roomId?: string,
     onOpen?: () => void,
@@ -571,9 +602,11 @@ export class ParlorClient {
             .map((line) => line.slice(5).trimStart())
             .join('\n');
           if (!data) continue;
-          try {
-            onEvent(JSON.parse(data) as RoomEvent);
-          } catch { /* 单条坏消息不影响后续 */ }
+          let handled: void | Promise<void>;
+          try { handled = onEvent(JSON.parse(data) as RoomEvent); }
+          catch { continue; }
+          // An awaited consumer can fail the subscription and retry from its cursor.
+          if (handled) await handled;
         }
       }
     };

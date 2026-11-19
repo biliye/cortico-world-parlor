@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ParentKeyUnavailable, ParlorSession, type ParlorOptions, type StateStore } from './session.ts';
+import { ParlorWatch } from './watch.ts';
 import { ParlorHttpError } from '../../../src/room/client.ts';
 import type { ActionRequest } from '../../../src/room/protocol.ts';
 
 export const name = 'cortico-parlor-dsh';
-export const inject = ['tools', 'credentials', 'profileContext'];
+export const inject = ['tools', 'credentials', 'profileContext', 'agents'];
 const PARENT_PATH = '/api/cortico-parlor-dsh.parent';
 
 type State = Awaited<ReturnType<StateStore['update']>>;
@@ -12,8 +13,32 @@ type Grant = { kind: 'grant'; payload: State };
 type JsonObject = Record<string, unknown>;
 type Schema = { type: string; [key: string]: unknown };
 
+interface DshAgent {
+  session: { id: string };
+  followup(message: {
+    id: string;
+    role: 'user';
+    source: { kind: 'parlor' };
+    content: { type: 'text'; text: string }[];
+  }): unknown;
+}
+
+interface ToolExecution {
+  agent?: DshAgent;
+  signal: AbortSignal;
+}
+
+interface DshServices {
+  sessionController: { resolveAgent(id: string): Promise<{ agent: DshAgent } | { error: unknown }> };
+  workspaceRegistry: { archivedSessionIds: readonly string[] };
+  sessions: { flush(session: DshAgent['session']): Promise<boolean> };
+}
+
 interface DshContext {
   profileContext: { name: string };
+  agents: { get(id: string): DshAgent | undefined };
+  get<K extends keyof DshServices>(service: K): DshServices[K] | undefined;
+  effect(setup: () => () => void): void;
   credentials: {
     modifyRecord(key: string, update: (current?: Grant) => Promise<Grant | undefined>): Promise<Grant | undefined>;
   };
@@ -23,7 +48,7 @@ interface DshContext {
       description: string;
       parameters: Schema;
       output: { schema: Schema; render(args: unknown, result: unknown): { type: 'text'; text: string }[] };
-      execute(args: unknown, execution: { signal: AbortSignal }): Promise<object>;
+      execute(args: unknown, execution: ToolExecution): Promise<object>;
     }): void;
   };
   inject(keys: string[], callback: (ctx: {
@@ -66,15 +91,30 @@ function operation<T extends string>(args: JsonObject, allowed: readonly T[]): T
   return value;
 }
 
-function registerTools(ctx: DshContext, session: ParlorSession) {
+function integer(args: JsonObject, key: string, min: number, max = Number.MAX_SAFE_INTEGER): number | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${key} 必须为 ${min} 到 ${max} 之间的整数。`);
+  }
+  return value;
+}
+
+function flag(args: JsonObject, key: string): boolean | undefined {
+  const value = args[key];
+  if (value === undefined || typeof value === 'boolean') return value;
+  throw new Error(`${key} 必须为布尔值。`);
+}
+
+function registerTools(ctx: DshContext, session: ParlorSession, watch: ParlorWatch) {
   const register = (name: string, description: string, parameters: Schema,
-    execute: (args: JsonObject, signal: AbortSignal) => Promise<object>) => {
+    execute: (args: JsonObject, signal: AbortSignal, agent?: DshAgent) => Promise<object>) => {
     ctx.tools.register({
       name, description, parameters,
       output: { schema: outputSchema, render: (_args, result) => [{ type: 'text', text: JSON.stringify(result) }] },
-      async execute(args, { signal }) {
+      async execute(args, { signal, agent }) {
         try {
-          return await execute(record(args), signal);
+          return await execute(record(args), signal, agent);
         } catch (error) {
           if (error instanceof ParlorHttpError) throw new Error(`茶室 HTTP ${error.status}：${error.message}`);
           throw error;
@@ -83,35 +123,135 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
     });
   };
 
-  const roomOps = ['list', 'visit'] as const;
-  register('parlor_room', '列出可见的普通客厅，或按客厅 ID 进入。大厅用于进场和选房，不能开桌。换厅前先离开未开局的桌，已开局则等结算。',
-    object({ op: choices(...roomOps), room: text('visit 时必填，使用客厅 ID。') }, ['op']),
-    (args, signal) => operation(args, roomOps) === 'list'
-      ? session.rooms(signal)
-      : session.visit(field(args, 'room', true), signal));
+  const roomOps = ['list', 'look', 'visit', 'create', 'invite', 'invitations', 'accept', 'decline'] as const;
+  const visibilities = ['public', 'unlisted', 'private'] as const;
+  register('parlor_room', '找厅、看当前客厅及在场名单、建厅、进厅和处理邀请。公开厅可直接 visit，私密厅先用 invitations 查看待处理邀请，用 accept 或 decline 处理。接受后会尝试进厅。大厅不能开桌。',
+    object({
+      op: choices(...roomOps),
+      room: text('旧版 visit 的客厅 ID 写法，也可用 params.room。'),
+      params: object({
+        room: text('visit 必填，回大厅填 hall。invite 省略则邀请到当前客厅。'),
+        to: text('invite 必填，目标的短号、身份 ID 或席位名。'),
+        id: text('accept/decline 必填，待处理邀请的 ID。'),
+        text: text('invite 的可选附言。'),
+        name: text('create 必填，客厅名。'),
+        topic: text('create 的可选主题。'),
+        visibility: choices(...visibilities),
+      }, []),
+    }, ['op']), (args, signal) => {
+      const params = args.params === undefined ? args : { ...args, ...record(args.params) };
+      switch (operation(args, roomOps)) {
+        case 'list': return session.rooms(signal);
+        case 'look': return session.look(signal);
+        case 'visit': return session.visit(field(params, 'room', true), signal);
+        case 'create': {
+          const visibility = field(params, 'visibility');
+          if (visibility !== undefined && !visibilities.some(value => value === visibility)) {
+            throw new Error('visibility 必须为 public、unlisted 或 private。');
+          }
+          return session.createRoom({ name: field(params, 'name', true), visibility, topic: field(params, 'topic') }, signal);
+        }
+        case 'invite':
+          return session.invite(field(params, 'to', true), field(params, 'room'), field(params, 'text'), signal);
+        case 'invitations': return session.invitations(signal);
+        case 'accept': return session.answerInvitation(field(params, 'id', true), 'accept', signal);
+        case 'decline': return session.answerInvitation(field(params, 'id', true), 'decline', signal);
+      }
+    });
 
-  const tableOps = ['open', 'join', 'start', 'leave'] as const;
-  register('parlor_table', '在当前客厅开桌、坐下、开局或离开未开局的桌，返回操作回执。结算自动释放牌桌席位，可以在本厅开桌或入桌，换厅用 parlor_room visit。玩法 ID 和完整桌面用 parlor_game_info 读取。',
+  const tableOps = ['list', 'open', 'join', 'start', 'leave'] as const;
+  register('parlor_table', '列当前客厅的桌（可只看可入座的桌），开桌、入座、开局或离开未开局的桌。等人或等回合用 parlor_wait。结算自动释放牌桌席位。玩法和本人桌面用 parlor_game_info 读取。',
     object({
       op: choices(...tableOps),
+      openOnly: { type: 'boolean', description: 'list 为 true 时只显示可入座的桌。' },
       game: text('open 时必填的游戏 ID。'),
       table: text('join/start/leave 时必填的桌号。'),
+      seatCount: { type: 'integer', enum: [6, 9, 12], description: 'open 狼人杀时的可选席位数。' },
+      requireHuman: { type: 'boolean', description: 'open 时要求至少一位真人才能开局。' },
+      matchOpen: { type: 'boolean', description: 'open 时是否公开接受快速匹配。' },
       requestId: text('本次桌操作的唯一编号。回包丢失先查状态，确认需要重试时沿用原编号。'),
-    }, ['op', 'requestId']),
-    async (args, signal) => {
+    }, ['op']),
+    async (args, signal, agent) => {
       const op = operation(args, tableOps);
+      if (op === 'list') return session.tables(flag(args, 'openOnly') ?? false, signal);
       const requestId = field(args, 'requestId', true);
-      const action = (op === 'open'
-        ? { type: 'table_open', game: field(args, 'game', true) as Extract<ActionRequest, { type: 'table_open' }>['game'], requestId }
-        : { type: `table_${op}`, table: field(args, 'table', true), requestId }) satisfies ActionRequest;
+      let action: Extract<ActionRequest, { type: 'table_open' | 'table_join' | 'table_start' | 'table_leave' }>;
+      if (op === 'open') {
+        const seatCount = integer(args, 'seatCount', 6, 12);
+        if (seatCount !== undefined && seatCount !== 6 && seatCount !== 9 && seatCount !== 12) {
+          throw new Error('seatCount 必须为 6、9 或 12。');
+        }
+        action = { type: 'table_open', game: field(args, 'game', true), requestId,
+          seatCount, requireHuman: flag(args, 'requireHuman'), matchOpen: flag(args, 'matchOpen') };
+      } else {
+        action = { type: `table_${op}`, table: field(args, 'table', true), requestId };
+      }
       const result = await session.action(action, signal);
       const { ok, seq, at, revision, closed, seats, deadline, deadlineAt, turn } = result;
+      const tableId = result.tableId ?? result.table?.id ?? result.table?.tableId ?? action.table;
       const receipt = {
         ok, seq, at, requestId: result.requestId ?? requestId,
-        tableId: result.tableId ?? result.table?.id ?? result.table?.tableId ?? action.table,
-        revision, closed, seats, deadline, deadlineAt, turn,
+        tableId, revision, closed, seats, deadline, deadlineAt, turn,
       };
+      if (agent && (tableId || op === 'leave')) {
+        await watch.track(agent.session.id, op === 'leave' ? undefined : tableId).catch(() => {
+          Object.assign(receipt, { watchWarning: '牌桌操作已完成，未能保存等待目标，请重新开始等待。' });
+        });
+      }
       return Object.fromEntries(Object.entries(receipt).filter(([, value]) => value !== undefined));
+    });
+
+  const messageScopes = ['room', 'table', 'private'] as const;
+  register('parlor_message', '向客厅、同桌或私信对象发消息。scope 必须明确，私信需要 to。狼人杀正式发言走游戏动作。',
+    object({
+      scope: choices(...messageScopes), text: text('消息正文。'),
+      to: text('private 必填，目标的短号、身份 ID 或席位名。'),
+    }, ['scope', 'text']), (args, signal) => {
+      const scope = operation({ op: args.scope }, messageScopes);
+      const message = field(args, 'text', true);
+      if (scope === 'private') return session.message({ type: 'whisper', to: field(args, 'to', true), text: message }, signal);
+      if (args.to !== undefined) throw new Error('指定私信对象时请使用 scope: private。');
+      return session.message({ type: scope === 'table' ? 'table_say' : 'say', text: message }, signal);
+    });
+
+  const queryOps = ['mail', 'chat', 'dm', 'dm_read'] as const;
+  register('parlor_query', 'mail 读跨厅信箱，chat 读当前厅公开或同桌消息，dm 查私信会话或按 peer 翻页，dm_read 显式标记该会话已读。',
+    object({
+      op: choices(...queryOps),
+      peek: { type: 'boolean', description: 'mail 默认只看，传 false 标记取出的信为已读。' },
+      limit: { type: 'integer', minimum: 1, maximum: 50, description: '读取条数上限。' },
+      scope: choices('room', 'table'),
+      since: { type: 'integer', minimum: 0, description: 'chat 从此事件游标之后读；续页填 nextSince。' },
+      peer: text('私信会话列表返回的 peer 身份 ID。dm 省略则列会话。'),
+      before: { type: 'integer', minimum: 1, description: 'dm 私信翻页游标。' },
+    }, ['op']), (args, signal) => {
+      const op = operation(args, queryOps);
+      const limit = integer(args, 'limit', 1, 50);
+      switch (op) {
+        case 'mail': return session.mail(limit ?? 10, flag(args, 'peek') ?? true, signal);
+        case 'chat': {
+          const scope = args.scope === undefined ? undefined : operation({ op: args.scope }, ['room', 'table'] as const);
+          return session.history(integer(args, 'since', 0) ?? 0, limit ?? 30, scope, signal);
+        }
+        case 'dm': return session.directMessages(field(args, 'peer'), integer(args, 'before', 1), limit, signal);
+        case 'dm_read': return session.markDirectMessagesRead(field(args, 'peer', true), signal);
+      }
+    });
+
+  const waitOps = ['start', 'status', 'stop'] as const;
+  register('parlor_wait', '在发起等待的 DSH 会话继续接收入座、开局、本席回合、结算、同桌聊天、点名、私信和邀请。start 后可以结束本轮回复。普通客厅闲聊仅在 roomChat 为 true 时主动提醒。发现 pendingAction 为 true 时应先查状态行动。',
+    object({
+      op: choices(...waitOps),
+      table: text('可选的本席牌桌 ID，默认跟随自己当前桌。用于等待入座、开局或结算。'),
+      roomChat: { type: 'boolean', description: '是否也接收普通客厅闲聊提醒，默认 false。' },
+    }, ['op']), (args, signal, agent) => {
+      const sessionId = agent?.session.id;
+      if (!sessionId) throw new Error('等待需要一个 DSH 会话。');
+      switch (operation(args, waitOps)) {
+        case 'status': return watch.status(sessionId);
+        case 'stop': return watch.stop(sessionId);
+        case 'start': return watch.start(sessionId, flag(args, 'roomChat') ?? false, field(args, 'table'), signal);
+      }
     });
 
   const gameOps = ['list', 'describe', 'state', 'history'] as const;
@@ -151,7 +291,10 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
 }
 
 export function apply(ctx: DshContext, config: ParlorOptions = {}) {
-  const session = new ParlorSession(config, {
+  const session: ParlorSession = new ParlorSession(config, {
+    async read() {
+      return (await ctx.credentials.modifyRecord(recordKey, async () => undefined))?.payload;
+    },
     async update(change) {
       const record = await ctx.credentials.modifyRecord(recordKey, async current => {
         if (current && (current.kind !== 'grant' || !current.payload?.identity?.cooId || !current.payload.identity.cooSecret)) {
@@ -168,7 +311,25 @@ export function apply(ctx: DshContext, config: ParlorOptions = {}) {
   const scope = createHash('sha256').update(JSON.stringify([profile, session.serverUrl, session.identityUrl])).digest('hex');
   const recordKey = `${name}/profile-${scope}`;
 
-  registerTools(ctx, session);
+  const watch = new ParlorWatch(session, async (sessionId, text, signal) => {
+    signal.throwIfAborted();
+    if (ctx.get('workspaceRegistry')?.archivedSessionIds.includes(sessionId)) {
+      throw new Error('等待会话已归档。');
+    }
+    let agent = ctx.agents.get(sessionId);
+    if (!agent) {
+      const resolved = await ctx.get('sessionController')?.resolveAgent(sessionId);
+      if (resolved && 'error' in resolved) throw resolved.error;
+      agent = resolved?.agent;
+    }
+    if (!agent || agent.session.id !== sessionId) throw new Error('等待会话暂不可用。');
+    signal.throwIfAborted();
+    agent.followup({ id: randomUUID(), role: 'user', source: { kind: 'parlor' }, content: [{ type: 'text', text }] });
+    const sessions = ctx.get('sessions');
+    if (sessions && !await sessions.flush(agent.session)) throw new Error('等待会话未确认保存通知。');
+  });
+  ctx.effect(() => () => watch.dispose());
+  registerTools(ctx, session, watch);
   ctx.inject(['connection'], ({ connection }) => {
     connection.fetch.register({
       path: PARENT_PATH,
