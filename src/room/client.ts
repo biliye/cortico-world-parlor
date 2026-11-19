@@ -228,6 +228,26 @@ export class ParlorClient {
     return typeof body.ownerKey === 'string' ? body.ownerKey.trim() : '';
   }
 
+  /**
+   * 看一把家长钥匙还能不能用。200 = 有效，401 = 已失效（被别的设备轮换过，或本来就不存在）；
+   * 其余状态（旧服务器没有这条路由、限流、网络）一律「判不了」——宁可这次不修，也不能把好钥匙换掉。
+   * 注意它跟网页登录一样会开一个家长会话，所以只在启动时问一次。
+   */
+  async ownerKeyState(key: string): Promise<'valid' | 'invalid' | 'unknown'> {
+    let response: Response;
+    try {
+      response = await fetchParlor(this.url('/v1/parent/session'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch { return 'unknown'; }
+    void response.body?.cancel().catch(() => {});
+    if (response.ok) return 'valid';
+    return response.status === 401 ? 'invalid' : 'unknown';
+  }
+
   /** 只改当前令牌所属席位的名字，不重新入座。 */
   async rename(token: string, name: string): Promise<{ name: string }> {
     const response = await fetchParlor(this.url('/v1/me/rename'), {

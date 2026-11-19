@@ -39,6 +39,10 @@ const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
 const SEAT_SECRET = 'PARLOR_SEAT_TOKEN';
 const OWNER_SECRET = 'PARLOR_OWNER_TOKEN';
+/** 上次自动轮换家长钥匙的时间。只在「本机有钥匙但已失效」时用它退避，避免两台同身份的 Coo 来回作废。 */
+const OWNER_ROTATED_SECRET = 'PARLOR_OWNER_TOKEN_ROTATED_AT';
+/** 失效钥匙的退避时长：窗口内先不动，宁可这台暂时没有链接，也不和另一台对打。 */
+const OWNER_ROTATE_COOLDOWN_MS = 30 * 60_000;
 /** 运营者开关：是否在面板给出可转发的网页访客链接。不放进扩展设置页。 */
 const GUEST_JOIN_SECRET = 'PARLOR_ALLOW_GUEST_JOIN';
 /** 当前客厅；换房后写回，重启时用它找回席位。 */
@@ -163,6 +167,8 @@ export class ParlorWorld implements World {
   private ownerToken = '';
   /** 本轮启动已经试过补钥匙；存储写不进去时不要每次重连都轮换一遍。 */
   private ownerKeyRepairTried = false;
+  /** 后台补钥匙：连上就能收消息，不等它；stop 之后只把已经拿到的新钥匙落盘，不再推事件。 */
+  private ownerKeyTask?: Promise<void>;
   private seat?: Seat;
   /** 当前客厅；普通聊、牌桌与所有默认动作都落在它上面。 */
   private currentRoom = '';
@@ -427,6 +433,8 @@ export class ParlorWorld implements World {
     this.digestTimer = setInterval(() => { void this.flushDigest(); }, DIGEST_MS);
     this.digestTimer.unref?.();
     this.streamTask = this.runStream();
+    // 补钥匙放后台：复用席位时连上就能收消息，不该为一把钥匙多等一次轮换。
+    this.queueOwnerKeyRepair();
     if (this.multiRoom) {
       this.supportTimer = setInterval(() => { void this.pollInbox(); }, 60_000);
       this.supportTimer.unref?.();
@@ -461,6 +469,15 @@ export class ParlorWorld implements World {
     this.digestTimer = undefined;
     await this.streamTask?.catch(() => {});
     this.streamTask = undefined;
+    // 补钥匙多半已经结束；没结束就最多等一秒——它拿到钥匙还要写回 .env，别在写一半时退出。
+    if (this.ownerKeyTask) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        this.ownerKeyTask,
+        new Promise<void>((done) => { timer = setTimeout(done, 1_000); }),
+      ]);
+      if (timer) clearTimeout(timer);
+    }
     await this.historyTask;
     await this.storyNoticeTask;
     this.history?.close();
@@ -551,7 +568,6 @@ export class ParlorWorld implements World {
         this.lastSeq = this.resumeFrom(snapshot.latest);
         this.applySnapshot(snapshot);
         await this.syncSeatName(client);
-        await this.repairOwnerKey(client);
         return;
       }
     }
@@ -560,7 +576,6 @@ export class ParlorWorld implements World {
       throw new Error('客厅：扩展设置里的「邀请码」是空的，部署 .env 里也没有 PARLOR_INVITE_CODE。连房主的客厅要填对方的邀请码；自己开客厅就留空让 World 生成。');
     }
     await this.joinRoom(client);
-    await this.repairOwnerKey(client);
   }
 
   /** 用现有身份入座，拿一枚新令牌；启动和「席位被释放后自动重连」共用。 */
@@ -605,27 +620,75 @@ export class ParlorWorld implements World {
   }
 
   /**
-   * 本机没有家长钥匙时补一把。服务端只在新建家长账户时发一次 ownerKey，已有账户再入座不补发，
-   * 所以换机器、卸载重装、或早期版本没把 key 落盘之后，面板里那两条带钥匙的链接会一直缺席。
-   * 这里用本机身份向服务器轮换一把并写回部署 .env；轮换会让旧钥匙与旧家长会话失效。
+   * 补钥匙不挡启动：连上就该能收消息，没必要为一把钥匙多等一次轮换（最坏两次 15 秒超时）。
+   * 任务挂在 World 上，stop 之后只把已经拿到的新钥匙落盘，不再推事件。
    */
-  private async repairOwnerKey(client: ParlorClient): Promise<void> {
-    if (this.ownerToken || !this.multiRoom || this.ownerKeyRepairTried) return;
+  private queueOwnerKeyRepair(): void {
+    const client = this.client;
+    if (!client) return;
+    const task = this.ensureOwnerKey(client)
+      .catch(() => { /* ensureOwnerKey 自己会报；后台任务不能把启动拖红 */ });
+    this.ownerKeyTask = task;
+    void task.then(() => { if (this.ownerKeyTask === task) this.ownerKeyTask = undefined; });
+  }
+
+  /**
+   * 让本机有一把能用的家长钥匙。服务端只在新建家长账户时发一次 ownerKey，已有账户再入座不补发，
+   * 所以换机器、卸载重装、或早期版本没把 key 落盘之后，面板里那两条带钥匙的链接会一直缺席。
+   * 本机存的钥匙还可能被另一台同身份的 Coo 轮换掉；只查「有没有」会让这台设备永久停在失效钥匙上。
+   */
+  private async ensureOwnerKey(client: ParlorClient): Promise<void> {
+    if (!this.multiRoom || this.ownerKeyRepairTried) return;
     this.ownerKeyRepairTried = true;
+    let why = '这台设备上没有家长钥匙';
+    const stored = this.ownerToken.trim();
+    if (stored) {
+      const state = await client.ownerKeyState(stored);
+      if (this.stopped || state !== 'invalid') return;
+      why = '这台设备存的家长钥匙已经失效';
+      const waitMs = this.rotateCooldownLeft();
+      if (waitMs > 0) {
+        const minutes = Math.ceil(waitMs / 60_000);
+        await this.reportLink('internal', `${why}，多半是另一台同身份的 Coo 换过钥匙；这台刚换过一次又被作废，${minutes} 分钟内先不再自动换，免得两边来回把对方的钥匙作废。等 ${minutes} 分钟后重启客厅会自动再换；急着用就删掉部署 .env 里的 ${OWNER_SECRET} 再重启，立刻换一把。`);
+        return;
+      }
+    }
+    await this.rotateOwnerKey(client, why);
+  }
+
+  /** 距离上次自动轮换多久才能再换；本机没记录过就是 0。 */
+  private rotateCooldownLeft(): number {
+    // 存的是 ISO 时间；纯毫秒数字符串 Date.parse 解析不了，会永远当成「没轮换过」。
+    const at = Date.parse(this.ctx.secret(OWNER_ROTATED_SECRET).trim());
+    if (!Number.isFinite(at)) return 0;
+    return Math.max(0, at + OWNER_ROTATE_COOLDOWN_MS - Date.now());
+  }
+
+  /** 换一把新钥匙并写回部署 .env；拿到就落盘，哪怕这期间已经 stop（旧钥匙已经作废）。 */
+  private async rotateOwnerKey(client: ParlorClient, why: string): Promise<void> {
     let key: string;
     try {
       key = await client.rotateOwnerKey();
     } catch (error) {
-      await this.reportLink('internal', `这台设备上没有家长钥匙，向服务器换新钥匙没成功（${messageOf(error)}）。面板里不会出现「我下场玩」链接；网络恢复后再重启一次客厅。`);
+      if (!this.stopped) await this.reportLink('internal', `${why}，向服务器换新钥匙没成功（${messageOf(error)}）。面板里不会出现「我下场玩」链接；网络恢复后再重启一次客厅。`);
       return;
     }
     if (!key) return;
     this.ownerToken = key;
     let stored = true;
     try { this.ctx.storeSecret(OWNER_SECRET, key); } catch { stored = false; }
+    try { this.ctx.storeSecret(OWNER_ROTATED_SECRET, new Date().toISOString()); }
+    catch { /* 冷却记录写不进去只影响退避，不影响这把钥匙 */ }
+    if (this.stopped) return;
+    // 刚换到就又被作废：另一台同身份的 Coo 也在换。留着这条链接也是死的，先收起来并说清怎么恢复。
+    if (await client.ownerKeyState(key) === 'invalid') {
+      this.ownerToken = '';
+      await this.reportLink('internal', '刚向服务器换到的家长钥匙立刻失效了：另一台同身份的 Coo 也在轮换，两边会互相把对方的钥匙作废。先在那台设备上停用客厅，再重启这台；这台 30 分钟内不再自动换，免得来回打。');
+      return;
+    }
     await this.reportLink('internal', stored
-      ? '这台设备上没有家长钥匙，已向服务器换了一把新的；旧钥匙和旧家长会话同时失效。面板里的「我下场玩」与「家长页」现在可以用了。'
-      : '这台设备上没有家长钥匙，已向服务器换了一把新的，但没写进部署 .env（重启后会再换一次）。面板里的「我下场玩」与「家长页」这次可以用。');
+      ? `${why}，已向服务器换了一把新的；旧钥匙和旧家长会话同时失效。面板里的「我下场玩」与「家长页」现在可以用了。`
+      : `${why}，已向服务器换了一把新的，但没写进部署 .env（重启后会再换一次）。面板里的「我下场玩」与「家长页」这次可以用。`);
   }
 
   /** 续用席位或重新领令牌时，配置里的名字也要生效；不换席位。 */
