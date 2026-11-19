@@ -19,6 +19,7 @@ import { FakeHost } from './helpers/fake-host.ts';
 
 let scratchDir: string;
 let server: WorldServer | undefined;
+let servers: WorldServer[] = [];
 let world: ReturnType<typeof PARLOR.create> | undefined;
 let dataDir = '';
 
@@ -26,8 +27,9 @@ beforeEach(() => { scratchDir = mkdtempSync(join(tmpdir(), 'parlor-owner-key-'))
 afterEach(async () => {
   await world?.stop();
   world = undefined;
-  await server?.close();
   server = undefined;
+  for (const created of servers) await created.close();
+  servers = [];
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
@@ -64,22 +66,25 @@ const eventText = (): string => (host?.events ?? []).map((event) => event.text).
 
 describe('家长钥匙丢失后的启动自愈', () => {
   /** unified = 网关启用统一身份（Coo 用通行证而不是账本身份头），两条认证分支都要能补钥匙。 */
-  const bootServer = async (unified = false): Promise<void> => {
-    server = await WorldServer.create({
+  const bootServer = async (unified = false): Promise<WorldServer> => {
+    const created = await WorldServer.create({
       allowGuestJoin: true, ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv',
       ...(unified ? { identityAuthority: 'self' } : {}),
     });
-    await server.listen();
+    await created.listen();
+    servers.push(created);
+    server = created;
+    return created;
   };
 
-  const boot = async (secrets: Record<string, string>): Promise<FakeHost> => {
+  const boot = async (secrets: Record<string, string>, target = server!): Promise<FakeHost> => {
     const ctx: WorldContext<ParlorConfigSection> = {
       ...fakeWorldContext(PARLOR, { scratchDir }),
       secret: (name) => secrets[name] ?? '',
       storeSecret: (name, value) => { secrets[name] = value; },
     };
-    ctx.cfg.serverUrl = server!.url;
-    ctx.cfg.identityUrl = server!.url;
+    ctx.cfg.serverUrl = target.url;
+    ctx.cfg.identityUrl = target.url;
     ctx.cfg.inviteCode = 'inv';
     ctx.cfg.room = 'lobby';
     ctx.cfg.seatName = '小满';
@@ -261,14 +266,45 @@ describe('家长钥匙丢失后的启动自愈', () => {
     expect(linkLabels()).not.toContain('客厅 · 家长页（只读，带钥匙）');
   });
 
-  it('停止后才返回的轮换结果：不覆盖新实例已经写入的钥匙', async () => {
-    await bootServer();
+  const cooIdOf = (): string =>
+    (JSON.parse(readFileSync(join(dataDir, IDENTITY_FILE), 'utf8')) as { cooId: string }).cooId;
+
+  it('切回已有账号的网关：不把旧网关的钥匙发过去，换一把本网关的', async () => {
+    const first = await bootServer();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
-    await boot(secrets);
+    await boot(secrets, first);
+    const keyA = secrets.PARLOR_OWNER_TOKEN ?? '';
+    expect(keyA).toBeTruthy();
+    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${first.url}|${cooIdOf()}`);
+    await world!.stop();
+
+    // 换到 B：同一个身份在 B 上首次入座，B 发一把新钥匙。
+    const second = await bootServer();
+    await boot(secrets, second);
+    const keyB = secrets.PARLOR_OWNER_TOKEN ?? '';
+    expect(keyB).not.toBe(keyA);
+    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${second.url}|${cooIdOf()}`);
+    await world!.stop();
+
+    // 切回 A：A 已有这个身份的账号，入座不发钥匙；本地只剩 B 的钥匙，不能拿去 A 上试。
+    server = first;
+    await boot(secrets, first);
+    await waitFor(() => (secrets.PARLOR_OWNER_TOKEN ?? '') !== keyB, '在 A 上换到本网关的钥匙');
+    const back = secrets.PARLOR_OWNER_TOKEN ?? '';
+    expect(back).not.toBe(keyA);
+    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${first.url}|${cooIdOf()}`);
+    expect(await parentSession(back)).toBe(200);
+    expect(await parentSession(keyB)).toBe(401);
+    expect(linkLabels()).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
+  });
+
+  it('新网关首次入座写入之后，旧实例晚到的轮换结果不覆盖它', async () => {
+    const first = await bootServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    await boot(secrets, first);
     expect(secrets.PARLOR_OWNER_TOKEN).toBeTruthy();
     await world!.stop();
     delete secrets.PARLOR_OWNER_TOKEN;
-    delete secrets.PARLOR_OWNER_TOKEN_ISSUER;
 
     const original = ParlorClient.prototype.rotateOwnerKey;
     let release!: () => void;
@@ -280,18 +316,22 @@ describe('家长钥匙丢失后的启动自愈', () => {
       return original.call(this);
     };
     try {
-      await boot(secrets);
+      await boot(secrets, first);
       await waitFor(() => asked, '开始轮换');
-      // 旧实例停掉之后，换了服务器的新实例已经把它自己的钥匙写进了同一个 .env。
       await world!.stop();
-      secrets.PARLOR_OWNER_TOKEN = 'key-written-by-new-instance';
-      secrets.PARLOR_OWNER_TOKEN_ISSUER = 'https://other.example|coo-other-0001';
-      const before = secrets.PARLOR_OWNER_TOKEN;
+
+      // 换到 B：B 没有这个身份的账号，入座时首次签发钥匙（这条路径也要写签发方与写入时间）。
+      const second = await bootServer();
+      await boot(secrets, second);
+      const fresh = secrets.PARLOR_OWNER_TOKEN ?? '';
+      expect(fresh).toBeTruthy();
+      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${second.url}|${cooIdOf()}`);
+
       release();
       await new Promise((done) => setTimeout(done, 800));
-      // 晚到的旧响应只能作废服务器上那把，不能把新实例的钥匙和冷却记录改回去。
-      expect(secrets.PARLOR_OWNER_TOKEN).toBe(before);
-      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe('https://other.example|coo-other-0001');
+      // 晚到的旧响应只能作废 A 上那把，不能把 B 首次签发的钥匙覆盖回去。
+      expect(secrets.PARLOR_OWNER_TOKEN).toBe(fresh);
+      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${second.url}|${cooIdOf()}`);
     } finally {
       release();
       ParlorClient.prototype.rotateOwnerKey = original;

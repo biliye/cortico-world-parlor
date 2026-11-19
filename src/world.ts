@@ -43,9 +43,11 @@ const OWNER_SECRET = 'PARLOR_OWNER_TOKEN';
 const OWNER_ROTATED_SECRET = 'PARLOR_OWNER_TOKEN_ROTATED_AT';
 /**
  * 钥匙是哪个「服务器 + 身份」发的。同一个 .env 可能被换过服务器的新实例写入；
- * 旧实例的轮换响应晚到时，靠它认出自己已经不是当前写入方，不能把新钥匙盖回去。
+ * 读回本机钥匙、以及旧实例的轮换响应晚到时，都靠它判断归属。
  */
 const OWNER_ISSUER_SECRET = 'PARLOR_OWNER_TOKEN_ISSUER';
+/** 最近一次把钥匙写进 .env 的时间（首次签发也算）。只用于挡住飞行中的旧轮换结果，不参与冷却。 */
+const OWNER_WRITTEN_SECRET = 'PARLOR_OWNER_TOKEN_WRITTEN_AT';
 /** 失效钥匙的退避时长：窗口内先不动，宁可这台暂时没有链接，也不和另一台对打。 */
 const OWNER_ROTATE_COOLDOWN_MS = 30 * 60_000;
 /** 运营者开关：是否在面板给出可转发的网页访客链接。不放进扩展设置页。 */
@@ -570,7 +572,7 @@ export class ParlorWorld implements World {
       }
       if (snapshot) {
         this.token = stored;
-        this.ownerToken = this.ctx.secret(OWNER_SECRET).trim();
+        this.ownerToken = this.adoptStoredOwnerKey();
         this.seat = snapshot.seat;
         this.lastSeq = this.resumeFrom(snapshot.latest);
         this.applySnapshot(snapshot);
@@ -611,14 +613,20 @@ export class ParlorWorld implements World {
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
     // 已有账户再次加入不会发新钥匙：这时要留住 .env 里那把，别拿空串覆盖。
-    // 已经确认失效的那把不要再捡回来——面板上挂着一条点进去 401 的链接比没有更糟。
+    // 已经确认失效、或属于别的网关的那把不要再捡回来——面板上挂着一条点进去 401 的链接比没有更糟。
     const issued = (joined.ownerKey ?? joined.ownerToken ?? '').trim();
-    const storedKey = this.ownerKeyDead ? '' : this.ctx.secret(OWNER_SECRET).trim();
-    this.ownerToken = issued || storedKey;
+    this.ownerToken = issued || this.adoptStoredOwnerKey();
     this.seat = joined.seat;
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
-      if (this.ownerToken) this.ctx.storeSecret(OWNER_SECRET, this.ownerToken);
+      if (this.ownerToken) {
+        this.ctx.storeSecret(OWNER_SECRET, this.ownerToken);
+        // 首次签发也要登记签发方与写入时间：否则旧实例晚到的轮换响应会以为「没人写过」而覆盖它。
+        if (issued) {
+          this.ctx.storeSecret(OWNER_ISSUER_SECRET, this.ownerKeyIssuer());
+          this.ctx.storeSecret(OWNER_WRITTEN_SECRET, new Date().toISOString());
+        }
+      }
       this.saveCursor();
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
@@ -677,6 +685,23 @@ export class ParlorWorld implements World {
     return Math.max(0, at + OWNER_ROTATE_COOLDOWN_MS - Date.now());
   }
 
+  /** 这把钥匙是哪个网关、哪个身份发的；换服务器之后旧值不能再当本机的用。 */
+  private ownerKeyIssuer(): string {
+    return `${this.baseUrl}|${this.identity?.cooId ?? ''}`;
+  }
+
+  /**
+   * 本机存的钥匙能不能直接拿来用。老版本只写钥匙、没写签发方（标记为空），无法判断归属，
+   * 按旧行为先当作本网关的——校验回 401 再换；标记指向别的网关时不要拿去发请求。
+   */
+  private adoptStoredOwnerKey(): string {
+    if (this.ownerKeyDead) return '';
+    const key = this.ctx.secret(OWNER_SECRET).trim();
+    if (!key) return '';
+    const recorded = this.ctx.secret(OWNER_ISSUER_SECRET).trim();
+    return !recorded || recorded === this.ownerKeyIssuer() ? key : '';
+  }
+
   /** 换一把新钥匙并写回部署 .env；拿到就落盘，哪怕这期间已经 stop（旧钥匙已经作废）。 */
   private async rotateOwnerKey(client: ParlorClient, why: string): Promise<void> {
     const startedAt = Date.now();
@@ -688,20 +713,22 @@ export class ParlorWorld implements World {
       return;
     }
     if (!key) return;
-    // 同一个 .env 可能被换过服务器的新实例、或同身份的另一台同时写入。
-    // 请求在飞的时候别人已经写过了，这个晚到的结果就不能再把新值盖回去。
-    const issuer = `${client.baseUrl}|${this.identity?.cooId ?? ''}`;
-    const recorded = this.ctx.secret(OWNER_ISSUER_SECRET).trim();
-    const wroteAt = Date.parse(this.ctx.secret(OWNER_ROTATED_SECRET).trim());
-    if ((recorded && recorded !== issuer) || (Number.isFinite(wroteAt) && wroteAt >= startedAt)) return;
+    // 别的实例（换服务器后的新实例、或同身份另一台）在本次请求飞行期间写过钥匙：
+    // 晚到的结果不能盖回去。签发方不参与这个判断——切回旧网关时标记本来就指向别处，
+    // 当前实例必须能存下自己换到的钥匙，否则切回来会一直没有家长入口。
+    const wroteAt = Date.parse(this.ctx.secret(OWNER_WRITTEN_SECRET).trim());
+    if (Number.isFinite(wroteAt) && wroteAt >= startedAt) return;
     this.ownerToken = key;
     this.ownerKeyDead = false;
+    const issuer = this.ownerKeyIssuer();
+    const now = new Date().toISOString();
     let stored = true;
     try {
       this.ctx.storeSecret(OWNER_SECRET, key);
       this.ctx.storeSecret(OWNER_ISSUER_SECRET, issuer);
+      this.ctx.storeSecret(OWNER_WRITTEN_SECRET, now);
     } catch { stored = false; }
-    try { this.ctx.storeSecret(OWNER_ROTATED_SECRET, new Date().toISOString()); }
+    try { this.ctx.storeSecret(OWNER_ROTATED_SECRET, now); }
     catch { /* 冷却记录写不进去只影响退避，不影响这把钥匙 */ }
     if (this.stopped) return;
     // 刚换到就又被作废：另一台同身份的 Coo 也在换。留着这条链接也是死的，先收起来并说清怎么恢复。
