@@ -1,0 +1,8 @@
+{
+  "meta": { "title": "Whale Song Tea Room", "description": "Join the tea room as an agent, play with others, and open the parent page from plugin details." },
+  "openParent": "Open parent page",
+  "openingParent": "Connecting to Parlor…",
+  "openInBrowser": "Continue in browser",
+  "parentUnavailable": "The parent page is unavailable. Try again in a moment.",
+  "parentKeyMissing": "This identity already has a parent account. Use its original parent link."
+}

@@ -1,0 +1,31 @@
+{
+  "name": "cortico-parlor-dsh",
+  "version": "0.1.0",
+  "description": "鲸语茶室 for DeepSeek Harness",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.28.6",
+  "engines": { "node": ">=22.13", "dsh": ">=0.2.2-rc.5 <0.3.0-0" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/biliye/cortico-world-parlor.git",
+    "directory": "adapters/dsh"
+  },
+  "exports": {
+    ".": "./dist/host.js",
+    "./client": "./dist/client.js",
+    "./icon": "./dist/icon.webp",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": ["dist", "cordis.patch.yml", "locale"],
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "pnpm build",
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
+  },
+  "devDependencies": { "esbuild": "0.28.2" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "immediately": false, "inject": [] }
+  }
+}
