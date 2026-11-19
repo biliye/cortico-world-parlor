@@ -5,6 +5,7 @@ import { identityOrigin } from '../../../src/room/identity-protocol.ts';
 import type { CooIdentity } from '../../../src/room/identity.ts';
 import type { ActionRequest, JoinResponse, Seat } from '../../../src/room/protocol.ts';
 import type { GameQuery } from '../../../src/room/game-api.ts';
+import type { WatchState } from './watch.ts';
 
 export interface ParlorOptions {
   serverUrl?: string;
@@ -18,9 +19,11 @@ interface SavedState {
   identity: CooIdentity;
   seat?: { room: string; token: string };
   ownerKey?: string;
+  watch?: WatchState;
 }
 
 export interface StateStore {
+  read(): Promise<SavedState | undefined>;
   update(change: (current: SavedState | undefined) => SavedState | undefined): Promise<SavedState>;
 }
 
@@ -29,7 +32,15 @@ export interface AgentSeat {
   seat: Pick<Seat, 'id' | 'name' | 'kind'>;
 }
 
-type ActiveSeat = AgentSeat & { token: string };
+type ActiveSeat = AgentSeat & { token: string; joinSeq?: number };
+
+function publicSeat({ id, name, kind, handle }: AgentSeat['seat'] & { handle?: string }) {
+  return { id, name, kind, ...(handle ? { handle } : {}) };
+}
+
+function defined(value: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+}
 
 export class ParlorSession {
   readonly serverUrl: string;
@@ -42,6 +53,7 @@ export class ParlorSession {
   private client?: ParlorClient;
   private seat?: ActiveSeat;
   private pendingJoin?: JoinResponse;
+  onSeatChange?: () => void;
 
   constructor(options: ParlorOptions, store: StateStore) {
     this.store = store;
@@ -101,7 +113,13 @@ export class ParlorSession {
         ...(ownerKey ? { ownerKey } : {}),
       };
     });
+    this.setSeat(seat);
+  }
+
+  private setSeat(seat?: ActiveSeat): void {
+    if (this.seat === seat) return;
     this.seat = seat;
+    this.onSeatChange?.();
   }
 
   private run<T>(
@@ -116,7 +134,7 @@ export class ParlorSession {
         return await operation(client, seat);
       } catch (error) {
         // Reconnect on the next explicit call; never replay a write as a side effect.
-        if (error instanceof ParlorHttpError && error.status === 401) this.seat = undefined;
+        if (error instanceof ParlorHttpError && error.status === 401) this.setSeat();
         throw error;
       }
     });
@@ -141,16 +159,118 @@ export class ParlorSession {
   }
 
   visit(room: string, signal?: AbortSignal) {
-    return this.run(async (client, seat): Promise<AgentSeat> => {
-      if (room !== seat.room) {
-        const moved = await client.switchTo(seat.token, seat.room, room);
-        // Keep the authoritative new token even if persistence briefly fails.
-        this.seat = moved;
-        await this.saveSeat(moved);
-        seat = moved;
-      }
-      return { room: seat.room, seat: { id: seat.seat.id, name: seat.seat.name, kind: seat.seat.kind } };
+    return this.run((client, seat) => this.move(client, seat, room), signal);
+  }
+
+  private async move(client: ParlorClient, seat: ActiveSeat, room: string): Promise<AgentSeat> {
+    if (room !== seat.room) {
+      seat = await client.switchTo(seat.token, seat.room, room);
+      // Switch invalidates the previous token even if local persistence fails.
+      this.setSeat(seat);
+      await this.saveSeat(seat);
+    }
+    return { room: seat.room, seat: publicSeat(seat.seat) };
+  }
+
+  look(options: { onlineOnly?: boolean; offset: number; limit: number }, signal?: AbortSignal) {
+    return this.run(async (client, seat) => {
+      const { id, name, topic, visibility, seats, online, latest } = await client.snapshot(seat.token, 0, 1, seat.room);
+      const connected = new Set(online);
+      const onlineOnly = options.onlineOnly ?? seat.room === 'hall';
+      const onlineSeats = seats.filter(person => connected.has(person.id)).length;
+      const visible = seats.filter(person => !onlineOnly || connected.has(person.id) || person.id === seat.seat.id);
+      visible.sort((left, right) => Number(right.id === seat.seat.id) - Number(left.id === seat.seat.id)
+        || Number(connected.has(right.id)) - Number(connected.has(left.id)));
+      const end = options.offset + options.limit;
+      return {
+        room: defined({ id, name, topic, visibility }), me: publicSeat(seat.seat), latest, onlineOnly,
+        totalSeats: seats.length, onlineSeats,
+        ...(visible.length > end ? { nextOffset: end } : {}),
+        seats: visible.slice(options.offset, end).map(person => ({ ...publicSeat(person), online: connected.has(person.id) })),
+      };
     }, signal);
+  }
+
+  createRoom(input: Parameters<ParlorClient['createRoom']>[0], signal?: AbortSignal) {
+    return this.run(async (client, seat) => ({
+      ...await client.createRoom(input, seat.token), currentRoom: seat.room, entered: false,
+    }), signal);
+  }
+
+  invite(to: string, room?: string, text?: string, signal?: AbortSignal) {
+    return this.run((client, seat) => client.invite(to, room, text, seat.token), signal);
+  }
+
+  invitations(signal?: AbortSignal) {
+    return this.run((client, seat) => client.invitations(seat.token), signal);
+  }
+
+  answerInvitation(id: string, action: 'accept' | 'decline', signal?: AbortSignal) {
+    return this.run(async (client, seat) => {
+      const result = await client.respondInvitation(seat.token, id, action);
+      if (action === 'decline' || !result.room) return result;
+      try {
+        const moved = await this.move(client, seat, result.room);
+        return { ...result, entered: true, seat: moved.seat };
+      } catch (error) {
+        const entered = this.seat?.room === result.room;
+        if (error instanceof ParlorHttpError && error.status === 401) this.setSeat();
+        const reason = error instanceof ParlorHttpError
+          ? `茶室 HTTP ${error.status}：${error.message}`
+          : entered ? '新席位已取得，保存状态失败。' : '换厅结果未知，请先查看当前位置。';
+        return { ...result, entered, reason };
+      }
+    }, signal);
+  }
+
+  tables(openOnly: boolean, signal?: AbortSignal) {
+    return this.run(async (client, seat) => {
+      const view = await client.snapshot(seat.token, 0, 1, seat.room);
+      const tables = (view.tables ?? []).map(table => {
+        const id = table.tableId ?? table.id;
+        const occupied = Array.isArray(table.seats) ? table.seats.length : undefined;
+        const capacity = typeof table.capacity === 'number' ? table.capacity : undefined;
+        const openDeadline = typeof table.openDeadline === 'number' ? table.openDeadline : undefined;
+        const joinable = table.status === 'open' && !table.frozen
+          && (openDeadline === undefined || openDeadline > view.now)
+          && (capacity === undefined || occupied === undefined || occupied < capacity);
+        return { id, game: table.game, label: table.label, status: table.status, host: table.host,
+          occupied, capacity, joinable, mine: id !== undefined && id === view.tablePrivate?.tableId,
+          deadline: openDeadline ?? table.deadline };
+      });
+      return { room: seat.room, tables: (openOnly ? tables.filter(table => table.joinable) : tables).map(defined) };
+    }, signal);
+  }
+
+  mail(limit: number, peek: boolean, signal?: AbortSignal) {
+    return this.run((client) => client.mailAsIdentity(limit, peek), signal);
+  }
+
+  history(since: number, limit: number, scope: 'room' | 'table' | undefined, signal?: AbortSignal) {
+    return this.run(async (client, seat) => {
+      const { latest, events } = await client.history(seat.token, since, limit, seat.room);
+      const messages = events.filter(event =>
+        (scope !== 'table' && event.type === 'parlor.say') || (scope !== 'room' && event.type === 'parlor.table.say'));
+      return {
+        room: seat.room, latest, nextSince: events.at(-1)?.seq ?? Math.max(since, latest),
+        messages: messages.map(({ seq, ts, type, from, text, data }) => defined({
+          seq, ts, scope: type === 'parlor.say' ? 'room' : 'table', from, name: data?.name, text, table: data?.tableId,
+        })),
+      };
+    }, signal);
+  }
+
+  directMessages(peer?: string, before?: number, limit?: number, signal?: AbortSignal) {
+    return this.run((client, seat) => client.directMessages(seat.token, peer, before, limit), signal);
+  }
+
+  markDirectMessagesRead(peer: string, signal?: AbortSignal) {
+    return this.run((client, seat) => client.markDirectMessagesRead(seat.token, peer), signal);
+  }
+
+  async message(action: Extract<ActionRequest, { type: 'say' | 'table_say' | 'whisper' }>, signal?: AbortSignal) {
+    const { ok, seq, at, delivered, event } = await this.action(action, signal);
+    return defined({ ok, seq, at, messageSeq: event?.seq, delivered });
   }
 
   games(query: GameQuery, signal?: AbortSignal) {
@@ -164,9 +284,37 @@ export class ParlorSession {
       } catch (error) {
         if (error instanceof ParlorHttpError) throw error;
         const requestId = 'requestId' in action ? action.requestId : undefined;
+        if (action.type === 'say' || action.type === 'table_say' || action.type === 'whisper') {
+          throw new Error('消息发送结果不明，请先查看聊天记录，确认后再发送。');
+        }
         throw new Error(`茶室动作结果不明，请先重新读取桌面。${requestId ? `本次 requestId：${requestId}` : ''}`);
       }
     }, signal);
+  }
+
+  watchConnection(signal: AbortSignal) {
+    return this.run((client, seat) => Promise.resolve({ client, seat }), signal);
+  }
+
+  hasSeat(seat: ActiveSeat): boolean {
+    return this.seat === seat;
+  }
+
+  invalidateSeat(seat: ActiveSeat): void {
+    if (this.hasSeat(seat)) this.setSeat();
+  }
+
+  async loadWatch(): Promise<WatchState | undefined> {
+    return (await this.store.read())?.watch;
+  }
+
+  async saveWatch(change: (watch: WatchState | undefined) => WatchState | undefined): Promise<void> {
+    await this.store.update(current => {
+      if (!current) throw new Error('茶室身份凭据已移除，请重启插件。');
+      const { watch, ...state } = current;
+      const next = change(watch);
+      return next ? { ...state, watch: next } : state;
+    });
   }
 
   /** Only the authenticated plugin UI calls this method. */
