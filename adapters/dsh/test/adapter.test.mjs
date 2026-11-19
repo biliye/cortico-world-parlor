@@ -10,6 +10,19 @@ const testSeat = { id: 's-test', name: 'DSH', kind: 'pet' };
 const endpoint = 'http://dsh.invalid/api/cortico-parlor-dsh.parent';
 const gameBody = { type: 'game_action', table: 't-test', action: 'place',
   params: { row: 7, col: 7 }, revision: 12, requestId: 'move-01' };
+const roomsFixture = Array.from({ length: 110 }, (_, i) => ({
+  id: i === 0 ? 'lobby' : `r-fixture-${i}`,
+  name: i === 0 ? '客厅' : `回归客厅 ${i}`,
+  kind: 'room', visibility: i === 1 ? 'private' : 'public', capacity: 30,
+  seats: i === 1 ? 2 : 0, tableCount: i === 1 ? 1 : 0,
+  games: i === 1 ? ['ddz'] : [], mine: i === 1, archived: i === 1,
+  topic: '给 DSH 做联调的客厅', lastActiveAt: 1_700_000_000_000,
+}));
+const tablePatch = {
+  table: { id: 't-test', status: 'playing' },
+  tablePrivate: { seat: 's-test', hand: ['A'] },
+  tables: [{ id: 't-other', status: 'ended', revealed: [{ seat: 'other', hand: ['K'] }] }],
+};
 
 function harness() {
   let saved;
@@ -81,10 +94,11 @@ function fakeGateway(t) {
           : { room: 'lobby', seat: testSeat, token: roomToken });
       case '/v1/rooms':
         assert.equal(token, 'Bearer ' + firstToken);
-        return Response.json({ rooms: [{ id: 'lobby', name: '客厅' }] });
+        return Response.json({ rooms: roomsFixture });
       case '/v1/rooms/hall/switch':
         assert.equal(token, 'Bearer ' + firstToken);
         assert.equal(body.to, 'lobby');
+        if (mode === 'room-full') return Response.json({ error: '客厅最多 30 个会说话的席位' }, { status: 409 });
         return Response.json({ room: 'lobby', seat: testSeat, token: roomToken });
       case '/v1/me/location':
         assert.equal(token, 'Bearer ' + roomToken);
@@ -94,16 +108,31 @@ function fakeGateway(t) {
       case '/v1/rooms/lobby/games':
         assert.equal(token, 'Bearer ' + roomToken);
         assert.equal(url.searchParams.get('op'), 'state');
+        if (mode === 'table-missing') return Response.json({ error: '这张桌子不存在' }, { status: 404 });
         return Response.json({
           table: { id: 't-test', revision: 12 }, availableActions: [{ action: 'place' }],
         });
+      case '/v1/rooms/hall/action':
+        actions++;
+        assert.equal(token, 'Bearer ' + firstToken);
+        assert.equal(body.type, 'table_open');
+        return Response.json({ error: '大厅是进场和选房的地方，不能开桌；先走进一个客厅' }, { status: 409 });
       case '/v1/rooms/lobby/action':
         actions++;
         assert.equal(token, 'Bearer ' + roomToken);
+        if (body.type === 'table_start') {
+          return Response.json({ ok: true, requestId: body.requestId, tableId: body.table, revision: 2,
+            seq: 12, at: '2026-11-19 16:00:00', seats: ['DSH', '陪练甲', '陪练乙'], deadline: 1_700_000_060_000,
+            deadlineAt: '2026-11-19 16:01:00', turn: 'DSH', ...tablePatch });
+        }
+        if (body.type === 'table_leave') {
+          return Response.json({ ok: true, revision: 3, closed: false, seq: 13, ...tablePatch, table: null });
+        }
         assert.deepEqual(body, gameBody);
         if (mode === 'unknown') throw new Error('connection closed');
         if (mode === 'expired') return Response.json({ error: 'expired' }, { status: 401 });
         if (mode === 'stale') return Response.json({ error: 'old revision' }, { status: 409 });
+        if (mode === 'invalid-action') return Response.json({ error: '未知动作 place；先查询游戏动作说明' }, { status: 400 });
         return Response.json({ ok: true, revision: 13 });
       default:
         assert.fail('Unexpected request ' + url.pathname);
@@ -146,16 +175,53 @@ test('does not replay a mutation on a conflict, lost response or expired seat', 
   await enterLobby(plugin);
   const { type, ...move } = gameBody;
   gateway.setMode('stale');
-  await assert.rejects(plugin.call('parlor_game_action', move), /重新读取桌面/);
+  await assert.rejects(plugin.call('parlor_game_action', move), /^Error: 茶室 HTTP 409：old revision$/);
   assert.equal(gateway.actions(), 1);
   gateway.setMode('unknown');
   await assert.rejects(plugin.call('parlor_game_action', move), /本次 requestId：move-01/);
   assert.equal(gateway.actions(), 2);
   gateway.setMode('expired');
-  await assert.rejects(plugin.call('parlor_game_action', move), /expired/);
+  await assert.rejects(plugin.call('parlor_game_action', move), /^Error: 茶室 HTTP 401：expired$/);
   assert.equal(gateway.actions(), 3);
   assert.equal(gateway.joins(), 1);
   assert.equal((await plugin.call('parlor_game_info', { op: 'state' })).table.revision, 12);
   assert.equal(gateway.joins(), 2);
   assert.equal(gateway.actions(), 3);
+});
+
+test('keeps the precise HTTP status and server reason across room, table, and game tools', async t => {
+  const gateway = fakeGateway(t);
+  const plugin = harness().start();
+  await assert.rejects(plugin.call('parlor_table', { op: 'open', game: 'gomoku', requestId: 'open-01' }),
+    /^Error: 茶室 HTTP 409：大厅是进场和选房的地方，不能开桌；先走进一个客厅$/);
+  gateway.setMode('room-full');
+  await assert.rejects(plugin.call('parlor_room', { op: 'visit', room: 'lobby' }),
+    /^Error: 茶室 HTTP 409：客厅最多 30 个会说话的席位$/);
+  gateway.setMode('table-missing');
+  await enterLobby(plugin);
+  await assert.rejects(plugin.call('parlor_game_info', { op: 'state' }),
+    /^Error: 茶室 HTTP 404：这张桌子不存在$/);
+  gateway.setMode('invalid-action');
+  const { type, ...move } = gameBody;
+  await assert.rejects(plugin.call('parlor_game_action', move),
+    /^Error: 茶室 HTTP 400：未知动作 place；先查询游戏动作说明$/);
+});
+
+test('keeps all visible rooms in a compact directory and only returns the touched table receipt', async t => {
+  fakeGateway(t);
+  const plugin = harness().start();
+  const directory = await plugin.call('parlor_room', { op: 'list' });
+  assert.deepEqual(directory.rooms.map(room => room.id), roomsFixture.map(room => room.id));
+  assert.deepEqual(directory.rooms[0], { id: 'lobby', name: '客厅', seats: 0, capacity: 30, visibility: 'public' });
+  assert.deepEqual(directory.rooms[1], { id: 'r-fixture-1', name: '回归客厅 1', seats: 2, capacity: 30,
+    visibility: 'private', archived: true, mine: true, games: ['ddz'], tableCount: 1 });
+  assert.ok(Buffer.byteLength(JSON.stringify(directory.rooms)) < Buffer.byteLength(JSON.stringify(roomsFixture)) * 0.7);
+
+  await plugin.call('parlor_room', { op: 'visit', room: 'lobby' });
+  const started = await plugin.call('parlor_table', { op: 'start', table: 't-test', requestId: 'start-01' });
+  assert.deepEqual(started, { ok: true, requestId: 'start-01', tableId: 't-test', revision: 2,
+    seq: 12, at: '2026-11-19 16:00:00', seats: ['DSH', '陪练甲', '陪练乙'], deadline: 1_700_000_060_000,
+    deadlineAt: '2026-11-19 16:01:00', turn: 'DSH' });
+  const left = await plugin.call('parlor_table', { op: 'leave', table: 't-test', requestId: 'leave-01' });
+  assert.deepEqual(left, { ok: true, requestId: 'leave-01', tableId: 't-test', revision: 3, closed: false, seq: 13 });
 });

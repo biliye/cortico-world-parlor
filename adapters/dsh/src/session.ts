@@ -127,7 +127,16 @@ export class ParlorSession {
   rooms(signal?: AbortSignal) {
     return this.run(async (client, seat) => {
       const { rooms } = await client.rooms(true, seat.token);
-      return { currentRoom: seat.room, rooms };
+      return {
+        currentRoom: seat.room,
+        rooms: rooms.map(({ id, name, visibility, seats, capacity, archived, mine, games, tableCount }) => ({
+          id, name, visibility, seats, capacity,
+          ...(archived ? { archived: true } : {}),
+          ...(mine ? { mine: true } : {}),
+          ...(games?.length ? { games } : {}),
+          ...(tableCount ? { tableCount } : {}),
+        })),
+      };
     }, signal);
   }
 
@@ -153,10 +162,7 @@ export class ParlorSession {
       try {
         return await client.action(seat.token, action, seat.room);
       } catch (error) {
-        if (error instanceof ParlorHttpError) {
-          if (error.status !== 409) throw error;
-          throw new Error('茶室拒绝了过期或冲突的操作。请重新读取桌面再决定下一步。');
-        }
+        if (error instanceof ParlorHttpError) throw error;
         const requestId = 'requestId' in action ? action.requestId : undefined;
         throw new Error(`茶室动作结果不明，请先重新读取桌面。${requestId ? `本次 requestId：${requestId}` : ''}`);
       }

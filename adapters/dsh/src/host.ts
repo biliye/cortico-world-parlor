@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ParentKeyUnavailable, ParlorSession, type ParlorOptions, type StateStore } from './session.ts';
+import { ParlorHttpError } from '../../../src/room/client.ts';
 import type { ActionRequest } from '../../../src/room/protocol.ts';
 
 export const name = 'cortico-parlor-dsh';
@@ -71,7 +72,14 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
     ctx.tools.register({
       name, description, parameters,
       output: { schema: outputSchema, render: (_args, result) => [{ type: 'text', text: JSON.stringify(result) }] },
-      execute: (args, { signal }) => execute(record(args), signal),
+      async execute(args, { signal }) {
+        try {
+          return await execute(record(args), signal);
+        } catch (error) {
+          if (error instanceof ParlorHttpError) throw new Error(`茶室 HTTP ${error.status}：${error.message}`);
+          throw error;
+        }
+      },
     });
   };
 
@@ -83,20 +91,27 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
       : session.visit(field(args, 'room', true), signal));
 
   const tableOps = ['open', 'join', 'start', 'leave'] as const;
-  register('parlor_table', '在当前客厅开桌、坐下、开局或离桌。先读取目录或桌面，游戏 ID 来自 parlor_game_info。',
+  register('parlor_table', '在当前客厅开桌、坐下、开局或离桌，返回操作回执。玩法 ID 和完整桌面用 parlor_game_info 读取。',
     object({
       op: choices(...tableOps),
       game: text('open 时必填的游戏 ID。'),
       table: text('join/start/leave 时必填的桌号。'),
       requestId: text('本次桌操作的唯一编号。回包丢失先查状态，确认需要重试时沿用原编号。'),
     }, ['op', 'requestId']),
-    (args, signal) => {
+    async (args, signal) => {
       const op = operation(args, tableOps);
       const requestId = field(args, 'requestId', true);
-      const action: ActionRequest = op === 'open'
+      const action = (op === 'open'
         ? { type: 'table_open', game: field(args, 'game', true) as Extract<ActionRequest, { type: 'table_open' }>['game'], requestId }
-        : { type: `table_${op}`, table: field(args, 'table', true), requestId };
-      return session.action(action, signal);
+        : { type: `table_${op}`, table: field(args, 'table', true), requestId }) satisfies ActionRequest;
+      const result = await session.action(action, signal);
+      const { ok, seq, at, revision, closed, seats, deadline, deadlineAt, turn } = result;
+      const receipt = {
+        ok, seq, at, requestId: result.requestId ?? requestId,
+        tableId: result.tableId ?? result.table?.id ?? result.table?.tableId ?? action.table,
+        revision, closed, seats, deadline, deadlineAt, turn,
+      };
+      return Object.fromEntries(Object.entries(receipt).filter(([, value]) => value !== undefined));
     });
 
   const gameOps = ['list', 'describe', 'state', 'history'] as const;
@@ -112,7 +127,7 @@ function registerTools(ctx: DshContext, session: ParlorSession) {
       return session.games({ op, ...(game ? { game } : {}), ...(table ? { table } : {}) }, signal);
     });
 
-  register('parlor_game_action', '提交本席当前的合法动作。按服务端说明传 revision 或 params.windowId；收到冲突时先重读桌面。',
+  register('parlor_game_action', '提交本席当前的合法动作。按服务端说明传 revision 或 params.windowId；桌面版本或行动窗口过期时先重读桌面。',
     object({
       table: text('state 返回的桌号。'),
       action: text('state 返回的可用动作名。'),

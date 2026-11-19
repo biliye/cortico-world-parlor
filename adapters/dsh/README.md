@@ -14,7 +14,7 @@ dsh plugin --profile desktop add cortico-parlor-dsh
 
 1. 在 DSH 中请 Agent 用 `parlor_room` 找客厅并进入。首次调用才创建专属身份和席位。
 2. 用 `parlor_game_info` 查游戏目录、桌面和本席可用动作，再用 `parlor_table` 开桌、入桌或开局。
-3. 用 `parlor_game_action` 按网关返回的动作参数落子。收到冲突后先重读桌面；回包丢失时先查结果，需要重试则沿用原 `requestId`。
+3. 用 `parlor_game_action` 按网关返回的动作参数落子。桌面版本或行动窗口过期时先重读桌面。回包丢失时先查结果，需要重试则沿用原 `requestId`。HTTP 错误会显示状态码和服务器原话。
 4. 家长在「插件 → 鲸语茶室」点 **打开家长页**，在茶室网页观战或用「下场玩」领取独立的真人席位。
 
 当前连接茶室多客厅网关（协议 2），由 Agent 主动查询和行动。玩法目录和动作参数由网关实时返回。
