@@ -60,6 +60,17 @@ const getWith = async (base: string, path: string, headers: Record<string, strin
 
 const cookieOf = (response: Response): string => (response.headers.get('set-cookie') || '').split(';')[0];
 
+/** 给孩子所在的默认客厅再填 29 个席位。 */
+const fillLobby = async (app: WorldServer): Promise<void> => {
+  await app.dbHandle.exec(`
+    INSERT INTO coos(id, kind, display_name, created_at)
+      SELECT 'coo-fill-' || n, 'pet', '成员' || n, 1 FROM generate_series(1, 29) AS n;
+    INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, visible_from_seq)
+      SELECT 'lobby', 'fill-' || n, 'coo-fill-' || n, 'pet', '成员' || n, 'off', 'fill-token-' || n, 1, 0
+      FROM generate_series(1, 29) AS n;
+  `);
+};
+
 describe('家长下场', () => {
   it('普通客厅占满 30 席时，带钥匙和会话下场都直接落到大厅', async () => {
     const app = await start();
@@ -67,13 +78,7 @@ describe('家长下场', () => {
       ...cooHeaders(COO), 'x-parlor-invite': 'inv',
     });
     expect(child.status).toBe(200);
-    await app.dbHandle.exec(`
-      INSERT INTO coos(id, kind, display_name, created_at)
-        SELECT 'coo-fill-' || n, 'pet', '成员' || n, 1 FROM generate_series(1, 29) AS n;
-      INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, visible_from_seq)
-        SELECT 'lobby', 'fill-' || n, 'coo-fill-' || n, 'pet', '成员' || n, 'off', 'fill-token-' || n, 1, 0
-        FROM generate_series(1, 29) AS n;
-    `);
+    await fillLobby(app);
     const first = await post(app.url, '/v1/parent/play', { key: child.body.ownerKey });
     expect(first.status).toBe(200);
     expect(first.body).toMatchObject({ room: 'hall', roomName: '大厅', fallback: 'room_full', seat: { kind: 'human' } });
@@ -94,6 +99,34 @@ describe('家长下场', () => {
     const reissue = await post(app.url, '/v1/parent/play', {}, { cookie });
     expect(reissue.status).toBe(200);
     expect(reissue.body).toMatchObject({ room: 'lobby', seat: returned.body.seat });
+  });
+
+  it('家长从另一间客厅入场遇满员时，只提交去大厅的换厅', async () => {
+    const app = await start();
+    const child = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, {
+      ...cooHeaders(COO), 'x-parlor-invite': 'inv',
+    });
+    expect(child.status).toBe(200);
+    const created = await post(app.url, '/v1/rooms', { name: '二厅', visibility: 'public' }, cooHeaders(COO));
+    expect(created.status).toBe(200);
+    const sourceRoom = (created.body.room as { id: string }).id;
+    const first = await post(app.url, '/v1/parent/play', { key: child.body.ownerKey, room: sourceRoom });
+    expect(first.status).toBe(200);
+    expect(first.body.room).toBe(sourceRoom);
+    const sourceSeat = (first.body.seat as { id: string }).id;
+    const playerCooId = (first.body.identity as { cooId: string }).cooId;
+    const cookie = first.headers.get('set-cookie')!.split(';')[0];
+    await fillLobby(app);
+
+    const moved = await post(app.url, '/v1/parent/play', { room: 'lobby' }, { cookie });
+    expect(moved.status).toBe(200);
+    expect(moved.body).toMatchObject({ room: 'hall', fallback: 'room_full', identity: { cooId: playerCooId } });
+    expect(await app.dbHandle.prepare('SELECT room_id, id FROM room_seats WHERE coo_id=? AND released_at IS NULL')
+      .all(playerCooId)).toEqual([{ room_id: 'hall', id: (moved.body.seat as { id: string }).id }]);
+    expect(await app.dbHandle.prepare('SELECT id FROM room_seats WHERE room_id=? AND id=? AND released_at IS NOT NULL')
+      .get(sourceRoom, sourceSeat)).toEqual({ id: sourceSeat });
+    expect(await app.dbHandle.prepare("SELECT data_json->>'to' AS destination FROM events WHERE room_id=? AND from_id=? AND type='parlor.left'")
+      .all(sourceRoom, sourceSeat)).toEqual([{ destination: 'hall' }]);
   });
 
   it('先过滤不展示的事件再取最近消息，牌桌推进不会重发消息区块', async () => {

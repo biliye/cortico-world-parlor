@@ -574,8 +574,21 @@ export const PG_MIGRATIONS: PgMigration[] = [
     CREATE INDEX IF NOT EXISTS ix_web_player_sessions_account ON web_player_sessions(account_id);
     CREATE INDEX IF NOT EXISTS ix_web_player_sessions_expiry ON web_player_sessions(expires_at);
   ` },
+  // v1 保留历史建表定义，由此处替换 500 席的旧约束。
   { version: 20, name: 'hall-capacity-1000', sql: `
-    ALTER TABLE rooms DROP CONSTRAINT rooms_capacity_check;
+    ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_capacity_check;
+    DO $migration$
+    DECLARE legacy_name text;
+    BEGIN
+      FOR legacy_name IN
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = 'rooms'::regclass AND contype = 'c'
+          AND pg_get_expr(conbin, conrelid) = '((capacity >= 2) AND (capacity <= 500))'
+      LOOP
+        EXECUTE format('ALTER TABLE rooms DROP CONSTRAINT %I', legacy_name);
+      END LOOP;
+    END;
+    $migration$;
     ALTER TABLE rooms ADD CONSTRAINT rooms_capacity_check CHECK (capacity BETWEEN 2 AND 1000);
   ` },
 ];

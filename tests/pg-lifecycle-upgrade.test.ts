@@ -37,18 +37,23 @@ it('PG v18 升到 v19 为原有家长增加网页登录和邀请码表，保留�
     .toMatchObject({ login_name: '真人' });
 });
 
-it('PG v19 到 v20 将已有大厅扩至 1000 席并保留普通客厅的容量和已有席位', async () => {
+it.each([
+  { label: '默认名', constraint: 'rooms_capacity_check' },
+  { label: '已改名', constraint: 'legacy_rooms_capacity' },
+  { label: '已缺失', constraint: null },
+])('PG v19 到 v20 扩容并保留已有席位（旧 CHECK $label）', async ({ constraint }) => {
   db = await openTestDb();
   const owner = 'coo-hall-upgrade-owner';
   await new CooAccountDb(db).registerCoo(owner, 'hall-upgrade-owner-secret', 'pet', '已有成员');
   await createRoom(db, { id: 'r-hall-upgrade', ownerCooId: owner, name: '普通客厅' }, 1);
   await db.exec(`
     ALTER TABLE rooms DROP CONSTRAINT rooms_capacity_check;
-    ALTER TABLE rooms ADD CONSTRAINT rooms_capacity_check CHECK (capacity BETWEEN 2 AND 500);
+    ALTER TABLE rooms ADD CONSTRAINT room_capacity_is_positive CHECK (capacity > 0);
     INSERT INTO rooms (id, kind, name, visibility, capacity, epoch, seq, created_at, last_active_at)
       VALUES ('hall', 'hall', '大厅', 'public', 400, 'legacy-hall', 0, 1, 1);
     UPDATE meta SET value='19' WHERE key='schema_version';
   `);
+  if (constraint) await db.exec(`ALTER TABLE rooms ADD CONSTRAINT ${constraint} CHECK (capacity BETWEEN 2 AND 500)`);
   const host = await RoomHost.create(db, 'hall');
   const { seat } = await host.join(owner, { name: '已有成员' });
 
@@ -62,6 +67,8 @@ it('PG v19 到 v20 将已有大厅扩至 1000 席并保留普通客厅的容量�
     .toEqual({ id: seat.id });
   await expect(db.prepare('UPDATE rooms SET capacity = 1001 WHERE id=?').run('hall'))
     .rejects.toThrow(/rooms_capacity_check/);
+  expect(await db.prepare("SELECT conname FROM pg_constraint WHERE conrelid='rooms'::regclass AND conname=?")
+    .get('room_capacity_is_positive')).toEqual({ conname: 'room_capacity_is_positive' });
 
   // 离线导入先建 v20 结构再复制旧数据库数据；下一次启动仍要扩容。
   await db.prepare('UPDATE rooms SET capacity = 400 WHERE id=?').run('hall');
