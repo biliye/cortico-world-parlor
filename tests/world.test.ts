@@ -438,6 +438,27 @@ describe('群友接入的默认值', () => {
     expect(secrets.PARLOR_INVITE_CODE).not.toBe(DEFAULT_INVITE_CODE);
   });
 
+  it('自开客厅续用本机席位时从该席位恢复家长链接', async () => {
+    const secrets: Record<string, string> = {};
+    const ctx = makeContext(secrets);
+    ctx.cfg.serverUrl = '';
+    ctx.cfg.port = 0;
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+    const ownerKey = secrets.PARLOR_OWNER_TOKEN;
+    expect(ownerKey).toBeTruthy();
+    await world.stop();
+
+    delete secrets.PARLOR_OWNER_TOKEN_ISSUER;
+    secrets.PARLOR_OWNER_TOKEN = 'key-from-another-server';
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+    const link = world.webUi?.()?.links?.find((item) => item.label?.includes('家长页'));
+    expect(link).toBeDefined();
+    expect(new URL(link!.href).searchParams.get('token')).toBe(ownerKey);
+    expect((await fetch(link!.href)).status).toBe(200);
+  });
+
   it('邀请码可以从扩展设置读，不必改 .env', async () => {
     await startServer();
     const secrets: Record<string, string> = {};

@@ -3,7 +3,8 @@
  * 面板里「我下场玩」「家长页」两条带钥匙的链接就一直缺席。启动时应当自己在后台换一把；
  * 本机存着的那把被另一台同身份的 Coo 换掉时也要认得出来，而不是只看「有没有」。
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -269,13 +270,82 @@ describe('家长钥匙丢失后的启动自愈', () => {
   const cooIdOf = (): string =>
     (JSON.parse(readFileSync(join(dataDir, IDENTITY_FILE), 'utf8')) as { cooId: string }).cooId;
 
+  const bindingFor = (target: WorldServer, key: string): string =>
+    `${target.url}|${cooIdOf()}|${createHash('sha256').update(key).digest('base64url')}`;
+
+  it('换网关时不展示或发送没有签发方标记的存量钥匙', async () => {
+    const first = await bootServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    await boot(secrets, first);
+    const legacy = secrets.PARLOR_OWNER_TOKEN;
+    expect(legacy).toBeTruthy();
+    await world!.stop();
+    const second = await bootServer();
+    await boot(secrets, second);
+    await world!.stop();
+
+    // 模拟旧版只保存了 A 的钥匙，随后升级并连接已经有账户的 B。
+    secrets.PARLOR_OWNER_TOKEN = legacy;
+    delete secrets.PARLOR_OWNER_TOKEN_ISSUER;
+    const validate = vi.spyOn(ParlorClient.prototype, 'ownerKeyState');
+    try {
+      await boot(secrets, second);
+      expect(world?.webUi?.()?.links?.some((link) => link.href.includes(legacy))).toBe(false);
+      await waitFor(() => eventText().includes('换了一把新的'), '通过 B 的 Coo 身份换到新钥匙');
+      const fresh = secrets.PARLOR_OWNER_TOKEN;
+      expect(fresh).not.toBe(legacy);
+      expect(validate.mock.calls).toEqual([[fresh]]);
+      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(bindingFor(second, fresh));
+      expect(await parentSession(fresh)).toBe(200);
+      expect(linkLabels()).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
+      server = first;
+      expect(await parentSession(legacy)).toBe(200);
+    } finally {
+      validate.mockRestore();
+    }
+  });
+
+  it('重启同一网关时等待旧轮换落盘，复用结果且不再次轮换', async () => {
+    await bootServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    await boot(secrets);
+    await world!.stop();
+    delete secrets.PARLOR_OWNER_TOKEN;
+
+    const original = ParlorClient.prototype.rotateOwnerKey;
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const rotate = vi.spyOn(ParlorClient.prototype, 'rotateOwnerKey');
+    rotate.mockImplementationOnce(async function (this: ParlorClient) {
+      await gate;
+      return original.call(this);
+    });
+    try {
+      await boot(secrets);
+      await waitFor(() => rotate.mock.calls.length > 0, '旧实例开始轮换');
+      await world!.stop();
+      const restarted = await boot(secrets);
+      expect(restarted.events.some((event) => event.type === 'parlor.started')).toBe(true);
+      expect(rotate).toHaveBeenCalledTimes(1);
+      expect(secrets.PARLOR_OWNER_TOKEN).toBeUndefined();
+
+      release();
+      await waitFor(() => linkLabels().includes('客厅 · 我下场玩（带钥匙，勿转发）'), '新实例复用已经落盘的钥匙');
+      expect(rotate).toHaveBeenCalledTimes(1);
+      expect(await parentSession(secrets.PARLOR_OWNER_TOKEN)).toBe(200);
+    } finally {
+      release();
+      rotate.mockRestore();
+    }
+  });
+
   it('切回已有账号的网关：不把旧网关的钥匙发过去，换一把本网关的', async () => {
     const first = await bootServer();
     const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
     await boot(secrets, first);
     const keyA = secrets.PARLOR_OWNER_TOKEN ?? '';
     expect(keyA).toBeTruthy();
-    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${first.url}|${cooIdOf()}`);
+    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(bindingFor(first, keyA));
     await world!.stop();
 
     // 换到 B：同一个身份在 B 上首次入座，B 发一把新钥匙。
@@ -283,7 +353,7 @@ describe('家长钥匙丢失后的启动自愈', () => {
     await boot(secrets, second);
     const keyB = secrets.PARLOR_OWNER_TOKEN ?? '';
     expect(keyB).not.toBe(keyA);
-    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${second.url}|${cooIdOf()}`);
+    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(bindingFor(second, keyB));
     await world!.stop();
 
     // 切回 A：A 已有这个身份的账号，入座不发钥匙；本地只剩 B 的钥匙，不能拿去 A 上试。
@@ -292,7 +362,7 @@ describe('家长钥匙丢失后的启动自愈', () => {
     await waitFor(() => (secrets.PARLOR_OWNER_TOKEN ?? '') !== keyB, '在 A 上换到本网关的钥匙');
     const back = secrets.PARLOR_OWNER_TOKEN ?? '';
     expect(back).not.toBe(keyA);
-    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${first.url}|${cooIdOf()}`);
+    expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(bindingFor(first, back));
     expect(await parentSession(back)).toBe(200);
     expect(await parentSession(keyB)).toBe(401);
     expect(linkLabels()).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
@@ -320,18 +390,18 @@ describe('家长钥匙丢失后的启动自愈', () => {
       await waitFor(() => asked, '开始轮换');
       await world!.stop();
 
-      // 换到 B：B 没有这个身份的账号，入座时首次签发钥匙（这条路径也要写签发方与写入时间）。
+      // 换到 B：B 没有这个身份的账号，入座时首次签发并绑定钥匙。
       const second = await bootServer();
       await boot(secrets, second);
       const fresh = secrets.PARLOR_OWNER_TOKEN ?? '';
       expect(fresh).toBeTruthy();
-      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${second.url}|${cooIdOf()}`);
+      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(bindingFor(second, fresh));
 
       release();
       await new Promise((done) => setTimeout(done, 800));
       // 晚到的旧响应只能作废 A 上那把，不能把 B 首次签发的钥匙覆盖回去。
       expect(secrets.PARLOR_OWNER_TOKEN).toBe(fresh);
-      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(`${second.url}|${cooIdOf()}`);
+      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe(bindingFor(second, fresh));
     } finally {
       release();
       ParlorClient.prototype.rotateOwnerKey = original;
