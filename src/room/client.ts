@@ -231,12 +231,12 @@ export class ParlorClient {
   /**
    * 看一把家长钥匙还能不能用。200 = 有效，401 = 已失效（被别的设备轮换过，或本来就不存在）；
    * 其余状态（旧服务器没有这条路由、限流、网络）一律「判不了」——宁可这次不修，也不能把好钥匙换掉。
-   * 注意它跟网页登录一样会开一个家长会话，所以只在启动时问一次。
+   * 走只读的 verify：不开家长会话，也不占家长登录的试错额度。
    */
   async ownerKeyState(key: string): Promise<'valid' | 'invalid' | 'unknown'> {
     let response: Response;
     try {
-      response = await fetchParlor(this.url('/v1/parent/session'), {
+      response = await fetchParlor(this.url('/v1/me/owner-key/verify'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ key }),

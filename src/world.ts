@@ -41,6 +41,11 @@ const SEAT_SECRET = 'PARLOR_SEAT_TOKEN';
 const OWNER_SECRET = 'PARLOR_OWNER_TOKEN';
 /** 上次自动轮换家长钥匙的时间。只在「本机有钥匙但已失效」时用它退避，避免两台同身份的 Coo 来回作废。 */
 const OWNER_ROTATED_SECRET = 'PARLOR_OWNER_TOKEN_ROTATED_AT';
+/**
+ * 钥匙是哪个「服务器 + 身份」发的。同一个 .env 可能被换过服务器的新实例写入；
+ * 旧实例的轮换响应晚到时，靠它认出自己已经不是当前写入方，不能把新钥匙盖回去。
+ */
+const OWNER_ISSUER_SECRET = 'PARLOR_OWNER_TOKEN_ISSUER';
 /** 失效钥匙的退避时长：窗口内先不动，宁可这台暂时没有链接，也不和另一台对打。 */
 const OWNER_ROTATE_COOLDOWN_MS = 30 * 60_000;
 /** 运营者开关：是否在面板给出可转发的网页访客链接。不放进扩展设置页。 */
@@ -167,6 +172,8 @@ export class ParlorWorld implements World {
   private ownerToken = '';
   /** 本轮启动已经试过补钥匙；存储写不进去时不要每次重连都轮换一遍。 */
   private ownerKeyRepairTried = false;
+  /** 这次启动已经确认本机那把钥匙失效（服务端回 401）；重连入座时别又从 .env 里把它捡回面板。 */
+  private ownerKeyDead = false;
   /** 后台补钥匙：连上就能收消息，不等它；stop 之后只把已经拿到的新钥匙落盘，不再推事件。 */
   private ownerKeyTask?: Promise<void>;
   private seat?: Seat;
@@ -604,8 +611,10 @@ export class ParlorWorld implements World {
     this.token = joined.token;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
     // 已有账户再次加入不会发新钥匙：这时要留住 .env 里那把，别拿空串覆盖。
+    // 已经确认失效的那把不要再捡回来——面板上挂着一条点进去 401 的链接比没有更糟。
     const issued = (joined.ownerKey ?? joined.ownerToken ?? '').trim();
-    this.ownerToken = issued || this.ctx.secret(OWNER_SECRET).trim();
+    const storedKey = this.ownerKeyDead ? '' : this.ctx.secret(OWNER_SECRET).trim();
+    this.ownerToken = issued || storedKey;
     this.seat = joined.seat;
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
@@ -646,10 +655,14 @@ export class ParlorWorld implements World {
       const state = await client.ownerKeyState(stored);
       if (this.stopped || state !== 'invalid') return;
       why = '这台设备存的家长钥匙已经失效';
+      // 401 是确定的失效：这轮先把面板上那两条死链接收起来。轮换失败或还在冷却时，
+      // 也不能让人点进一个换不到席位的页面；.env 里仍留着这把，下面靠冷却记录退避。
+      this.ownerKeyDead = true;
+      this.ownerToken = '';
       const waitMs = this.rotateCooldownLeft();
       if (waitMs > 0) {
         const minutes = Math.ceil(waitMs / 60_000);
-        await this.reportLink('internal', `${why}，多半是另一台同身份的 Coo 换过钥匙；这台刚换过一次又被作废，${minutes} 分钟内先不再自动换，免得两边来回把对方的钥匙作废。等 ${minutes} 分钟后重启客厅会自动再换；急着用就删掉部署 .env 里的 ${OWNER_SECRET} 再重启，立刻换一把。`);
+        await this.reportLink('internal', `${why}，多半是另一台同身份的 Coo 换过钥匙；这台刚换过一次又被作废，${minutes} 分钟内先不再自动换，免得两边来回把对方的钥匙作废。面板里这两条带钥匙的链接先收起来了。等 ${minutes} 分钟后重启客厅会自动再换；急着用就删掉部署 .env 里的 ${OWNER_SECRET} 再重启，立刻换一把。`);
         return;
       }
     }
@@ -666,6 +679,7 @@ export class ParlorWorld implements World {
 
   /** 换一把新钥匙并写回部署 .env；拿到就落盘，哪怕这期间已经 stop（旧钥匙已经作废）。 */
   private async rotateOwnerKey(client: ParlorClient, why: string): Promise<void> {
+    const startedAt = Date.now();
     let key: string;
     try {
       key = await client.rotateOwnerKey();
@@ -674,15 +688,26 @@ export class ParlorWorld implements World {
       return;
     }
     if (!key) return;
+    // 同一个 .env 可能被换过服务器的新实例、或同身份的另一台同时写入。
+    // 请求在飞的时候别人已经写过了，这个晚到的结果就不能再把新值盖回去。
+    const issuer = `${client.baseUrl}|${this.identity?.cooId ?? ''}`;
+    const recorded = this.ctx.secret(OWNER_ISSUER_SECRET).trim();
+    const wroteAt = Date.parse(this.ctx.secret(OWNER_ROTATED_SECRET).trim());
+    if ((recorded && recorded !== issuer) || (Number.isFinite(wroteAt) && wroteAt >= startedAt)) return;
     this.ownerToken = key;
+    this.ownerKeyDead = false;
     let stored = true;
-    try { this.ctx.storeSecret(OWNER_SECRET, key); } catch { stored = false; }
+    try {
+      this.ctx.storeSecret(OWNER_SECRET, key);
+      this.ctx.storeSecret(OWNER_ISSUER_SECRET, issuer);
+    } catch { stored = false; }
     try { this.ctx.storeSecret(OWNER_ROTATED_SECRET, new Date().toISOString()); }
     catch { /* 冷却记录写不进去只影响退避，不影响这把钥匙 */ }
     if (this.stopped) return;
     // 刚换到就又被作废：另一台同身份的 Coo 也在换。留着这条链接也是死的，先收起来并说清怎么恢复。
     if (await client.ownerKeyState(key) === 'invalid') {
       this.ownerToken = '';
+      this.ownerKeyDead = true;
       await this.reportLink('internal', '刚向服务器换到的家长钥匙立刻失效了：另一台同身份的 Coo 也在轮换，两边会互相把对方的钥匙作废。先在那台设备上停用客厅，再重启这台；这台 30 分钟内不再自动换，免得来回打。');
       return;
     }

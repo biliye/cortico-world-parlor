@@ -48,6 +48,16 @@ const parentSession = async (key: string): Promise<number> => {
   return response.status;
 };
 
+/** 只读校验：不建会话、不下发 cookie。 */
+const verifyKey = async (key: string): Promise<{ status: number; setCookie: string | null }> => {
+  const response = await fetch(`${server!.url}/v1/me/owner-key/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key }),
+  });
+  return { status: response.status, setCookie: response.headers.get('set-cookie') };
+};
+
 const linkLabels = (): string[] => (world?.webUi?.()?.links ?? []).map((link) => link.label ?? '');
 let host: FakeHost | undefined;
 const eventText = (): string => (host?.events ?? []).map((event) => event.text).join('\n');
@@ -105,6 +115,8 @@ describe('家长钥匙丢失后的启动自愈', () => {
     delete secrets.PARLOR_OWNER_TOKEN;
     await boot(secrets);
     await waitFor(() => Boolean(secrets.PARLOR_OWNER_TOKEN), '后台补回钥匙');
+    await waitFor(() => linkLabels().includes('客厅 · 我下场玩（带钥匙，勿转发）'), '面板链接恢复');
+    await waitFor(() => eventText().includes('换了一把新的'), '补钥匙事件说明结果');
 
     const repaired = secrets.PARLOR_OWNER_TOKEN ?? '';
     expect(repaired).not.toBe(first);
@@ -114,7 +126,22 @@ describe('家长钥匙丢失后的启动自愈', () => {
       '客厅 · 我下场玩（带钥匙，勿转发）',
       '客厅 · 家长页（只读，带钥匙）',
     ]));
-    expect(eventText()).toContain('换了一把新的');
+  });
+
+  it('启动自检不占家长登录的试错额度', async () => {
+    await bootServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    await boot(secrets);
+    const key = secrets.PARLOR_OWNER_TOKEN ?? '';
+    expect(key).toBeTruthy();
+
+    // 同一出口 IP 把「家长登录」额度打满（一小时 10 次）。
+    for (let i = 0; i < 10; i += 1) expect(await parentSession('wrong-key-000000')).toBe(401);
+    expect(await parentSession('wrong-key-000000')).toBe(429);
+
+    // 只读校验走独立额度：多个 Coo 同时启动不会把家长本人挤成 429。
+    expect((await verifyKey(key)).status).toBe(200);
+    expect((await verifyKey(key)).status).toBe(200);
   });
 
   it('轮换挂起时启动照常完成，照样收得到消息', async () => {
@@ -171,6 +198,12 @@ describe('家长钥匙丢失后的启动自愈', () => {
     expect(secrets.PARLOR_OWNER_TOKEN).toBe(first);
     expect(await parentSession(first)).toBe(200);
     expect(linkLabels()).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
+
+    // 启动自检走只读校验：200 且不下发家长会话 cookie（不再多开一条会话）。
+    const verified = await verifyKey(first);
+    expect(verified.status).toBe(200);
+    expect(verified.setCookie).toBeNull();
+    expect((await verifyKey('not-a-real-key')).status).toBe(401);
   });
 
   it('钥匙被另一台同身份的 Coo 换掉：启动时认得出来，再换一把', async () => {
@@ -186,11 +219,10 @@ describe('家长钥匙丢失后的启动自愈', () => {
     expect(await parentSession(stale)).toBe(401);
 
     await boot(secrets);
-    await waitFor(() => (secrets.PARLOR_OWNER_TOKEN ?? '') !== stale, '认出失效钥匙并换新');
+    await waitFor(() => (secrets.PARLOR_OWNER_TOKEN ?? '') !== stale && linkLabels().includes('客厅 · 我下场玩（带钥匙，勿转发）'), '认出失效钥匙并换新');
     const fresh = secrets.PARLOR_OWNER_TOKEN ?? '';
     expect(await parentSession(fresh)).toBe(200);
-    expect(linkLabels()).toContain('客厅 · 我下场玩（带钥匙，勿转发）');
-    await waitFor(() => eventText().includes('已经失效'), '补钥匙事件说明原因');
+    await waitFor(() => eventText().includes('换了一把新的'), '补钥匙事件说明结果');
   });
 
   it('刚换到就被作废：不反复打，给出恢复入口并退避', async () => {
@@ -224,5 +256,45 @@ describe('家长钥匙丢失后的启动自愈', () => {
     await boot(secrets);
     await waitFor(() => eventText().includes('分钟内先不再自动换'), '冷却期内不重复轮换');
     expect(secrets.PARLOR_OWNER_TOKEN).toBe(dead);
+    // 冷却期也不能把两条死链接重新挂回面板：这一轮就当作没有钥匙。
+    expect(linkLabels()).not.toContain('客厅 · 我下场玩（带钥匙，勿转发）');
+    expect(linkLabels()).not.toContain('客厅 · 家长页（只读，带钥匙）');
+  });
+
+  it('停止后才返回的轮换结果：不覆盖新实例已经写入的钥匙', async () => {
+    await bootServer();
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: 'inv' };
+    await boot(secrets);
+    expect(secrets.PARLOR_OWNER_TOKEN).toBeTruthy();
+    await world!.stop();
+    delete secrets.PARLOR_OWNER_TOKEN;
+    delete secrets.PARLOR_OWNER_TOKEN_ISSUER;
+
+    const original = ParlorClient.prototype.rotateOwnerKey;
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    let asked = false;
+    ParlorClient.prototype.rotateOwnerKey = async function (this: ParlorClient) {
+      asked = true;
+      await gate;
+      return original.call(this);
+    };
+    try {
+      await boot(secrets);
+      await waitFor(() => asked, '开始轮换');
+      // 旧实例停掉之后，换了服务器的新实例已经把它自己的钥匙写进了同一个 .env。
+      await world!.stop();
+      secrets.PARLOR_OWNER_TOKEN = 'key-written-by-new-instance';
+      secrets.PARLOR_OWNER_TOKEN_ISSUER = 'https://other.example|coo-other-0001';
+      const before = secrets.PARLOR_OWNER_TOKEN;
+      release();
+      await new Promise((done) => setTimeout(done, 800));
+      // 晚到的旧响应只能作废服务器上那把，不能把新实例的钥匙和冷却记录改回去。
+      expect(secrets.PARLOR_OWNER_TOKEN).toBe(before);
+      expect(secrets.PARLOR_OWNER_TOKEN_ISSUER).toBe('https://other.example|coo-other-0001');
+    } finally {
+      release();
+      ParlorClient.prototype.rotateOwnerKey = original;
+    }
   });
 });
