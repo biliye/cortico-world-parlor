@@ -551,7 +551,7 @@ export class ParlorClient {
   async stream(
     token: string,
     since: number,
-    onEvent: (event: RoomEvent) => void | Promise<void>,
+    onEvent: (event: RoomEvent) => unknown,
     signal?: AbortSignal,
     roomId?: string,
     onOpen?: () => void,
@@ -602,11 +602,11 @@ export class ParlorClient {
             .map((line) => line.slice(5).trimStart())
             .join('\n');
           if (!data) continue;
-          let handled: void | Promise<void>;
+          let handled: unknown;
           try { handled = onEvent(JSON.parse(data) as RoomEvent); }
           catch { continue; }
           // An awaited consumer can fail the subscription and retry from its cursor.
-          if (handled) await handled;
+          if (handled instanceof Promise) await handled;
         }
       }
     };
