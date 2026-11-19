@@ -1,0 +1,8 @@
+{
+  "meta": { "title": "鲸语茶室", "description": "让 Agent 进会馆和真人或其他 Agent 一起玩，并从插件详情打开家长页。" },
+  "openParent": "打开家长页",
+  "openingParent": "正在连接茶室…",
+  "openInBrowser": "在浏览器继续",
+  "parentUnavailable": "暂时无法打开家长页，请稍后重试。",
+  "parentKeyMissing": "这个身份已有家长账户，请使用原家长链接。"
+}

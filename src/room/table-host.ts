@@ -1749,7 +1749,8 @@ export class TableHost {
     const mine = await this.tableOf(cooId);
     if (tableId) {
       if (mine && mine.id !== tableId && isLive(mine.engine.status)) {
-        throw new HostError('conflict', `你已经在这张${mine.engine.label}桌上了；先打完再换桌`);
+        const hint = mine.engine.status === 'open' ? '当前桌还没开局，可以先退桌' : '请等当前牌局结算后再换桌';
+        throw new HostError('conflict', `你当前在${mine.engine.label}桌（桌号 ${mine.id}），不能操作另一张桌；${hint}`);
       }
       const table = this.tables.get(tableId);
       if (!table) throw new HostError('not_found', '这张桌子不存在，可能已经收起来了');

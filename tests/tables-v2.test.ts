@@ -109,6 +109,11 @@ describe('多桌', () => {
     expect((aAfter.body.tablePrivate as { tableId: string }).tableId).toBe(ddzId);
     expect((aAfter.body.tables as { id: string; status: string }[])
       .find((table) => table.id === diceId)?.status).toBe('ended');
+
+    // 指定已结束的骰子桌时，冲突原因应指向仍在进行的斗地主桌。
+    const wrongLeave = await act(app, a, { type: 'table_leave', table: diceId, requestId: 'wrong-leave' });
+    expect(wrongLeave.status).toBe(409);
+    expect(wrongLeave.body.error).toBe(`你当前在斗地主桌（桌号 ${ddzId}），不能操作另一张桌；请等当前牌局结算后再换桌`);
   });
 
   it('两张桌都开着时，坐下必须指定桌号', async () => {
@@ -146,27 +151,43 @@ describe('多桌', () => {
 });
 
 describe('动作回执与桌面版本', () => {
-  it('同一个 requestId 重试拿原回执；换参数冲突', async () => {
+  const startBidding = async () => {
     const app = await start();
     const a = await enter(app, A, '阿岚');
     const b = await enter(app, B, '小满');
+    const c = await enter(app, C, '小柚');
+    const players = new Map([['阿岚', a], ['小满', b], ['小柚', c]]);
     const opened = await act(app, a, { type: 'table_open', game: 'ddz', requestId: 'open' });
+    expect(opened.status).toBe(200);
     const id = opened.body.tableId as string;
-    await act(app, b, { type: 'table_join', table: id, requestId: 'join' });
-    await act(app, a, { type: 'table_start', table: id, requestId: 'start' });
+    expect((await act(app, b, { type: 'table_join', table: id, requestId: 'join-b' })).status).toBe(200);
+    expect((await act(app, c, { type: 'table_join', table: id, requestId: 'join-c' })).status).toBe(200);
+    const started = await act(app, a, { type: 'table_start', table: id, requestId: 'start' });
+    expect(started.status).toBe(200);
 
-    const ref = await myTable(app, a);
-    const body = {
-      type: 'ddz_action', move: 'bid', call: false, table: id, revision: ref!.revision, requestId: 'bid-r1',
+    // 斗地主随机选先叫者，按服务端回执找实际轮到的人。
+    const playerForTurn = (turn: unknown): string => {
+      const token = players.get(String(turn));
+      if (!token) throw new Error(`回执里的行动者没有测试席位：${String(turn)}`);
+      return token;
     };
-    const first = await act(app, a, body);
+    return { app, id, started: started.body, playerForTurn };
+  };
+
+  it('同一个 requestId 重试拿原回执；换参数冲突', async () => {
+    const { app, id, started, playerForTurn } = await startBidding();
+    const firstPlayer = playerForTurn(started.turn);
+    const body = {
+      type: 'ddz_action', move: 'bid', call: false, table: id, revision: started.revision, requestId: 'bid-r1',
+    };
+    const first = await act(app, firstPlayer, body);
     expect(first.status).toBe(200);
-    const again = await act(app, a, body);
+    const again = await act(app, firstPlayer, body);
     expect(again.status).toBe(200);
     expect(again.body.seq).toBe(first.body.seq);
     expect(again.body.revision).toBe(first.body.revision);
 
-    const conflict = await act(app, a, { ...body, call: true });
+    const conflict = await act(app, firstPlayer, { ...body, call: true });
     expect(conflict.status).toBe(409);
   });
 
@@ -183,28 +204,18 @@ describe('动作回执与桌面版本', () => {
   });
 
   it('旧桌面版本打不进新回合', async () => {
-    const app = await start();
-    const a = await enter(app, A, '阿岚');
-    const b = await enter(app, B, '小满');
-    const opened = await act(app, a, { type: 'table_open', game: 'ddz', requestId: 'open' });
-    const id = opened.body.tableId as string;
-    await act(app, b, { type: 'table_join', table: id, requestId: 'join' });
-    await act(app, a, { type: 'table_start', table: id, requestId: 'start' });
+    const { app, id, started, playerForTurn } = await startBidding();
+    const firstBid = await act(app, playerForTurn(started.turn), {
+      type: 'ddz_action', move: 'bid', call: false, table: id, revision: started.revision, requestId: 'first-bid',
+    });
+    expect(firstBid.status).toBe(200);
 
-    const aRef = await myTable(app, a);
-    const bRef = await myTable(app, b);
-    expect((await act(app, a, {
-      type: 'ddz_action', move: 'bid', call: false, table: id, revision: aRef!.revision, requestId: 'a-bid',
-    })).status).toBe(200);
-
-    const bCurrent = await myTable(app, b);
-    // B 手里还是 A 出牌前的版本：拒绝。
-    expect((await act(app, b, {
-      type: 'ddz_action', move: 'bid', call: false, table: id, revision: bRef!.revision, requestId: 'b-stale',
+    const nextPlayer = playerForTurn(firstBid.body.turn);
+    expect((await act(app, nextPlayer, {
+      type: 'ddz_action', move: 'bid', call: false, table: id, revision: started.revision, requestId: 'stale-bid',
     })).status).toBe(409);
-    // 用当前版本可以正常叫。
-    expect((await act(app, b, {
-      type: 'ddz_action', move: 'bid', call: true, table: id, revision: bCurrent!.revision, requestId: 'b-fresh',
+    expect((await act(app, nextPlayer, {
+      type: 'ddz_action', move: 'bid', call: true, table: id, revision: firstBid.body.revision, requestId: 'fresh-bid',
     })).status).toBe(200);
   });
 });
@@ -250,6 +261,11 @@ describe('打完一局就算下桌', () => {
     expect(next.status).toBe(200);
     const after = await get(app.url, '/v1/room?limit=1', a);
     expect((after.body.tablePrivate as { tableId: string }).tableId).toBe(next.body.tableId as string);
+
+    // 拿上一局的桌号退桌时，应指出刚开的那张桌可以退桌。
+    const wrongLeave = await act(app, a, { type: 'table_leave', table: id, requestId: 'wrong-open-leave' });
+    expect(wrongLeave.status).toBe(409);
+    expect(wrongLeave.body.error).toBe(`你当前在斗地主桌（桌号 ${next.body.tableId}），不能操作另一张桌；当前桌还没开局，可以先退桌`);
   });
 
   it('退桌回执带 closed：开桌的人收桌，另一个人只是离桌', async () => {
