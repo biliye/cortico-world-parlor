@@ -161,6 +161,8 @@ export class ParlorWorld implements World {
   private inviteCode = '';
   private token = '';
   private ownerToken = '';
+  /** 本轮启动已经试过补钥匙；存储写不进去时不要每次重连都轮换一遍。 */
+  private ownerKeyRepairTried = false;
   private seat?: Seat;
   /** 当前客厅；普通聊、牌桌与所有默认动作都落在它上面。 */
   private currentRoom = '';
@@ -408,6 +410,7 @@ export class ParlorWorld implements World {
 
   async start(host: WorldHost): Promise<void> {
     this.stopped = false;
+    this.ownerKeyRepairTried = false;
     this.host = host;
     this.history?.close(); this.history = undefined;
     this.historySeats.clear(); this.historyRooms.clear(); this.historyError = '';
@@ -548,6 +551,7 @@ export class ParlorWorld implements World {
         this.lastSeq = this.resumeFrom(snapshot.latest);
         this.applySnapshot(snapshot);
         await this.syncSeatName(client);
+        await this.repairOwnerKey(client);
         return;
       }
     }
@@ -556,6 +560,7 @@ export class ParlorWorld implements World {
       throw new Error('客厅：扩展设置里的「邀请码」是空的，部署 .env 里也没有 PARLOR_INVITE_CODE。连房主的客厅要填对方的邀请码；自己开客厅就留空让 World 生成。');
     }
     await this.joinRoom(client);
+    await this.repairOwnerKey(client);
   }
 
   /** 用现有身份入座，拿一枚新令牌；启动和「席位被释放后自动重连」共用。 */
@@ -597,6 +602,30 @@ export class ParlorWorld implements World {
     this.lastSeq = this.resumeFrom(snapshot.latest);
     this.applySnapshot(snapshot);
     await this.syncSeatName(client);
+  }
+
+  /**
+   * 本机没有家长钥匙时补一把。服务端只在新建家长账户时发一次 ownerKey，已有账户再入座不补发，
+   * 所以换机器、卸载重装、或早期版本没把 key 落盘之后，面板里那两条带钥匙的链接会一直缺席。
+   * 这里用本机身份向服务器轮换一把并写回部署 .env；轮换会让旧钥匙与旧家长会话失效。
+   */
+  private async repairOwnerKey(client: ParlorClient): Promise<void> {
+    if (this.ownerToken || !this.multiRoom || this.ownerKeyRepairTried) return;
+    this.ownerKeyRepairTried = true;
+    let key: string;
+    try {
+      key = await client.rotateOwnerKey();
+    } catch (error) {
+      await this.reportLink('internal', `这台设备上没有家长钥匙，向服务器换新钥匙没成功（${messageOf(error)}）。面板里不会出现「我下场玩」链接；网络恢复后再重启一次客厅。`);
+      return;
+    }
+    if (!key) return;
+    this.ownerToken = key;
+    let stored = true;
+    try { this.ctx.storeSecret(OWNER_SECRET, key); } catch { stored = false; }
+    await this.reportLink('internal', stored
+      ? '这台设备上没有家长钥匙，已向服务器换了一把新的；旧钥匙和旧家长会话同时失效。面板里的「我下场玩」与「家长页」现在可以用了。'
+      : '这台设备上没有家长钥匙，已向服务器换了一把新的，但没写进部署 .env（重启后会再换一次）。面板里的「我下场玩」与「家长页」这次可以用。');
   }
 
   /** 续用席位或重新领令牌时，配置里的名字也要生效；不换席位。 */

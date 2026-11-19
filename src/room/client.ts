@@ -214,6 +214,20 @@ export class ParlorClient {
     return this.parse<RoomSnapshot>(response);
   }
 
+  /**
+   * 换一把新的家长钥匙。服务端只在新建家长账户时发一次 ownerKey，已有账户再入座不会补发；
+   * 本机的钥匙丢了（换机器、卸载重装、当年没落盘）时只能这样换。轮换会让旧钥匙与旧家长会话失效。
+   */
+  async rotateOwnerKey(): Promise<string> {
+    const response = await fetchParlor(this.url('/v1/me/owner-key/rotate'), {
+      method: 'POST',
+      headers: await this.headers({}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await this.parse<{ ownerKey?: unknown }>(response);
+    return typeof body.ownerKey === 'string' ? body.ownerKey.trim() : '';
+  }
+
   /** 只改当前令牌所属席位的名字，不重新入座。 */
   async rename(token: string, name: string): Promise<{ name: string }> {
     const response = await fetchParlor(this.url('/v1/me/rename'), {
