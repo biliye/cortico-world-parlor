@@ -73,7 +73,7 @@ export class ParlorWatch {
   private readonly session: ParlorSession;
   private readonly host: WatchHost;
   private current?: ActiveWatch;
-  private stoppedReason?: StopReason;
+  private retirement?: { sessionId: string; reason: StopReason };
   private disposed = false;
   private tail: Promise<unknown> = Promise.resolve();
 
@@ -131,7 +131,7 @@ export class ParlorWatch {
       await this.session.saveWatch(() => state);
       previous?.abort.abort();
       if (!this.disposed) {
-        this.stoppedReason = undefined;
+        this.retirement = undefined;
         this.activate(state);
       }
       return { ...this.view(sessionId), since: state.cursor.seq, pendingAction };
@@ -153,10 +153,10 @@ export class ParlorWatch {
     });
   }
 
-  retire(sessionId: string, reason: StopReason) {
+  retireArchived(archivedIds: readonly unknown[]) {
     return this.run(async () => {
       const active = this.current;
-      if (active?.state.sessionId === sessionId) await this.deactivate(active, reason);
+      if (active && archivedIds.includes(active.state.sessionId)) await this.deactivate(active, 'archived');
     });
   }
 
@@ -174,7 +174,7 @@ export class ParlorWatch {
     await this.session.saveWatch(saved => saved?.id === active.state.id ? undefined : saved);
     active.abort.abort();
     this.current = undefined;
-    this.stoppedReason = reason;
+    this.retirement = reason ? { sessionId: active.state.sessionId, reason } : undefined;
   }
 
   track(sessionId: string, table?: string) {
@@ -195,7 +195,10 @@ export class ParlorWatch {
 
   private view(sessionId: string) {
     const active = this.current;
-    if (!active) return { active: false, ...(this.stoppedReason ? { reason: this.stoppedReason } : {}) };
+    if (!active) {
+      const retirement = this.retirement;
+      return { active: false, ...(retirement?.sessionId === sessionId ? { reason: retirement.reason } : {}) };
+    }
     if (active.state.sessionId !== sessionId) return { active: false, anotherSession: true };
     const { roomChat, table, cursor } = active.state;
     return { active: true, connection: active.connection, roomChat, room: cursor.room, ...(table ? { table } : {}),

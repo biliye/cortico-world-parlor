@@ -47,7 +47,7 @@ function harness() {
       return agents.get(id);
     };
     let route;
-    let onArchived;
+    let onDomainChange;
     apply({
       profileContext: { name: 'web' },
       agents: { get: id => (restoreAgent && !agents.has(id)) || missing.has(id) ? undefined : agent(id) },
@@ -60,7 +60,10 @@ function harness() {
         if (key === 'sessions' && flush) return { flush };
       },
       effect: setup => disposals.push(setup()),
-      on: (_event, callback) => { onArchived = callback; },
+      on(event, callback) {
+        assert.equal(event, 'domain/changed');
+        onDomainChange = callback;
+      },
       credentials: {
         async modifyRecord(key, update) {
           assert.match(key, /^cortico-parlor-dsh\/profile-[a-f0-9]{64}$/);
@@ -74,7 +77,11 @@ function harness() {
     }, { serverUrl: origin, inviteCode: 'fixture-invite' });
     return {
       messages,
-      archive(id) { archived.add(id); onArchived({ sessionId: id }); },
+      archive(id) {
+        onDomainChange({ domain: 'workspace', table: '', operation: 'put',
+          value: { archivedSessionIds: [...archived, id] } });
+        archived.add(id);
+      },
       markMissing(id) { missing.add(id); },
       dispose: () => disposals.forEach(dispose => dispose()),
       call(name, parameters, sessionId = 'parlor-session') {
@@ -519,17 +526,21 @@ test('archive and missing-session detection free a persisted watch for another s
   await enterLobby(plugin);
   await plugin.call('parlor_wait', { op: 'start' });
   await eventually(() => streams.length === 1);
+  plugin.archive('unrelated-session');
+  assert.equal((await plugin.call('parlor_wait', { op: 'status' })).active, true);
   plugin.archive('parlor-session');
-  assert.deepEqual(await plugin.call('parlor_wait', { op: 'status' }, 'replacement'),
-    { active: false, reason: 'archived' });
-  assert.ok(streams[0].aborted);
+  // Check the listener closed the stream before status can trigger the fallback.
+  await eventually(() => streams[0].aborted);
+  assert.deepEqual(await plugin.call('parlor_wait', { op: 'status' }), { active: false, reason: 'archived' });
+  assert.deepEqual(await plugin.call('parlor_wait', { op: 'status' }, 'replacement'), { active: false });
   assert.equal((await plugin.call('parlor_wait', { op: 'start' }, 'replacement')).active, true);
   plugin.dispose();
   plugin.markMissing('replacement');
   const restarted = context.start({ restoreAgent: true });
   t.after(restarted.dispose);
-  assert.deepEqual(await restarted.call('parlor_wait', { op: 'status' }, 'next'),
+  assert.deepEqual(await restarted.call('parlor_wait', { op: 'status' }, 'replacement'),
     { active: false, reason: 'missing' });
+  assert.deepEqual(await restarted.call('parlor_wait', { op: 'status' }, 'next'), { active: false });
   assert.equal((await restarted.call('parlor_wait', { op: 'start' }, 'next')).active, true);
 });
 

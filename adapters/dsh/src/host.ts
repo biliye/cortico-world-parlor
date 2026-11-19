@@ -46,12 +46,19 @@ interface DshServices {
   sessions: { flush(session: DshAgent['session']): Promise<boolean> };
 }
 
+interface DomainChange {
+  domain: string;
+  table: string;
+  operation: string;
+  value?: { archivedSessionIds?: unknown };
+}
+
 interface DshContext {
   profileContext: { name: string };
   agents: { get(id: string): DshAgent | undefined };
   get<K extends keyof DshServices>(service: K): DshServices[K] | undefined;
   effect(setup: () => () => void): void;
-  on(event: 'workspace/session-archived', listener: (request: { sessionId: string }) => void): void;
+  on(event: 'domain/changed', listener: (change: DomainChange) => void): void;
   credentials: {
     modifyRecord(key: string, update: (current?: Grant) => Promise<Grant | undefined>): Promise<Grant | undefined>;
   };
@@ -385,8 +392,11 @@ export function apply(ctx: DshContext, config: ParlorOptions = {}) {
       if (sessions && !await sessions.flush(agent.session)) throw new Error('等待会话未确认保存通知。');
     },
   });
-  ctx.on('workspace/session-archived', ({ sessionId }) => {
-    void watch.retire(sessionId, 'archived').catch(() => { /* status and delivery will retry retirement */ });
+  ctx.on('domain/changed', ({ domain, table, operation, value }) => {
+    const archivedIds = value?.archivedSessionIds;
+    if (domain !== 'workspace' || table !== '' || operation !== 'put' || !Array.isArray(archivedIds)) return;
+    // The committed value is available before WorkspaceRegistry updates its in-memory state.
+    void watch.retireArchived(archivedIds).catch(() => { /* status and delivery will retry retirement */ });
   });
   ctx.effect(() => () => watch.dispose());
   registerTools(ctx, session, watch);
