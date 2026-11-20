@@ -31,6 +31,7 @@ function harness() {
   const missing = new Set();
   const start = ({ restoreAgent = false, flush } = {}) => {
     const tools = new Map();
+    const sections = [];
     const messages = [];
     const disposals = [];
     const agents = new Map();
@@ -51,6 +52,7 @@ function harness() {
     apply({
       profileContext: { name: 'web' },
       agents: { get: id => (restoreAgent && !agents.has(id)) || missing.has(id) ? undefined : agent(id) },
+      systemPrompt: { section: value => sections.push(value) },
       get(key) {
         if (key === 'workspaceRegistry') return { archivedSessionIds: [...archived] };
         if (key === 'sessionPersistence') return { async stat(id) { return missing.has(id) ? undefined : {}; } };
@@ -77,6 +79,7 @@ function harness() {
     }, { serverUrl: origin, inviteCode: 'fixture-invite' });
     return {
       messages,
+      sections,
       archive(id) {
         onDomainChange({ domain: 'workspace', table: '', operation: 'put',
           value: { archivedSessionIds: [...archived, id] } });
@@ -281,6 +284,17 @@ async function enterLobby(plugin) {
     room: 'lobby', seat: testSeat,
   });
 }
+
+test('registers tea house guidance on plugin load before a session calls a tool', t => {
+  const gateway = fakeGateway(t);
+  const host = harness().start();
+  t.after(host.dispose);
+  assert.equal(host.sections.length, 1);
+  const [section] = host.sections;
+  assert.equal(section.name, 'world:parlor');
+  assert.match(section.text, /去茶室看看.*parlor_room（op: look）/);
+  assert.equal(gateway.joins(), 0);
+});
 
 test('joins once, saves both keys privately and restores the authoritative room after restart', async t => {
   const gateway = fakeGateway(t);
