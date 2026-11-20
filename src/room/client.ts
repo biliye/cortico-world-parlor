@@ -74,7 +74,8 @@ export class ParlorClient {
     return this.storyRequest(token, '/v1/story/live?' + params);
   }
 
-  storyAction(token: string, action: Record<string, unknown>): Promise<StoryState> {
+  async storyAction(token: string, action: Record<string, unknown>): Promise<StoryState> {
+    if (!token) throw new ParlorHttpError(401, '请先入座，再操作说书厅');
     return this.storyRequest(token, '/v1/story/action', action);
   }
 
