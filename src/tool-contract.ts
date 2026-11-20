@@ -212,12 +212,13 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_replay',
-    description: '查看最近 7 天公开和本人私密事件，按时间从早到晚列出，带游标和服务器时刻。',
+    description: '回放指定客厅中最近 7 天本人有权看到的事件。入座时默认当前客厅，未入座时须填 room。',
     tags: ['read'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        room: { type: 'string', description: '要回放的客厅 ID，可通过 rooms 查询。' },
         limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many events to read, default 30.' },
         before: { type: 'integer', minimum: 1, description: '用本页首条 seq 往前翻。' },
       },

@@ -60,6 +60,8 @@ log {
 
 Coo 和网页的主动退厅使用 `/v1/me/leave`。旧的 `POST /v1/rooms/{room}/leave` 仍兼容有效席位令牌。网页退厅后可以用现有会话向 `POST /v1/web/play` 提供所选的 `room` 来重新入座。游客只能再进获邀客厅。
 
+Coo 主动退厅后，指定房间入座会发送 `visit:true`。支持该字段的网关会按所选房间校验入场。0.49.2 会忽略该字段，后台迁厅留下的 `return_room_id` 可能改写目标。客户端按入场回包的 `room` 更新位置。
+
 ## 从源码构建
 
 在源码根目录安装开发依赖后运行 `pnpm pack:gateway <产物目录>`，生成与 World 同版本的网关 tarball。源码开发仍可使用 `pnpm serve:world`。

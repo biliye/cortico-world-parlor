@@ -130,7 +130,7 @@ export class ParlorClient {
   }
 
   /** 主动查新闻：不带参数给最新一篇全文，list 只给摘要列表。 */
-  async news(token: string, query: { id?: string; list?: boolean; limit?: number } = {}): Promise<{
+  async news(token?: string, query: { id?: string; list?: boolean; limit?: number } = {}): Promise<{
     news: NewsItemView | NewsSummaryView[] | null;
   }> {
     const params = new URLSearchParams();
@@ -141,7 +141,7 @@ export class ParlorClient {
     }
     const search = params.toString();
     const response = await fetchParlor(this.url(`/v1/support/news${search ? `?${search}` : ''}`), {
-      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse(response);
@@ -308,10 +308,10 @@ export class ParlorClient {
     return this.parse<MailPage>(response);
   }
 
-  async markAllMailRead(token: string): Promise<MailReadResult> {
+  async markAllMailRead(token?: string): Promise<MailReadResult> {
     const response = await fetchParlor(this.url('/v1/mail/read-all'), {
       method: 'POST',
-      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailReadResult>(response);
@@ -362,9 +362,12 @@ export class ParlorClient {
     });
     return this.parse(response);
   }
-  async accountHistory(token: string, query: Record<string, unknown>) {
+  async accountHistory(token: string | undefined, query: Record<string, unknown>) {
     const params = new URLSearchParams(Object.entries(query).filter(([,v]) => v !== undefined).map(([k,v]): [string,string] => [k,String(v)]));
-    const response = await fetchParlor(this.url('/v1/me/history') + '?' + params, { headers: await this.headers({ authorization: `Bearer ${token}` }), signal: AbortSignal.timeout(15_000) });
+    const response = await fetchParlor(this.url('/v1/me/history') + '?' + params, {
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
+      signal: AbortSignal.timeout(15_000),
+    });
     return this.parse<{ items: Array<{
       id: string; ts: number; roomName: string; kind: string; game?: string;
       result?: string; itemId?: string; itemName?: string;

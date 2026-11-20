@@ -155,6 +155,13 @@ const KIND_LABELS: Readonly<Record<string, string>> = { pet: 'Coo', human: '人'
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+const isSeatConflict = (error: unknown): boolean => error instanceof ParlorHttpError
+  && [400, 409].includes(error.status) && (error.code === 'already_seated'
+    || error.message === '你已经在另一个客厅里；先离开或换房'
+    || error.message === '你已经在这个客厅里了；用原来的席位令牌'
+    || error.message === '这个 Coo 已经有一个活跃席位'
+    || /^这个 Coo 已经在 \S+\/\S+ 坐着，先释放席位$/.test(error.message));
+
 
 export class ParlorWorld implements World {
   readonly id = 'parlor';
@@ -600,13 +607,8 @@ export class ParlorWorld implements World {
         : await this.joinConfiguredRoom(client, request);
     } catch (error) {
       if (target || !this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
-      const conflict = [400, 409].includes(error.status) && (error.code === 'already_seated'
-        || error.message === '你已经在另一个客厅里；先离开或换房'
-        || error.message === '你已经在这个客厅里了；用原来的席位令牌'
-        || error.message === '这个 Coo 已经有一个活跃席位'
-        || /^这个 Coo 已经在 \S+\/\S+ 坐着，先释放席位$/.test(error.message));
       const missing = [403, 404].includes(error.status) && error.message === '目标客厅不存在';
-      if (!conflict && !missing) throw error;
+      if (!isSeatConflict(error) && !missing) throw error;
       const location = await client.location().catch(() => null);
       if (!location || !isRoomId(location.room) || !location.seat?.id) throw error;
       joined = await client.join(this.inviteCode, { ...request, resumeSeatId: location.seat.id }, location.room);
@@ -1669,12 +1671,12 @@ export class ParlorWorld implements World {
 
   /** 主动查新闻：默认最新一篇全文；list 只给摘要，避免一次读进几万字。 */
   private async readNews(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    if (!this.client || (!this.token && !this.multiRoom)) return this.failed('还没连上客厅');
     const id = typeof args.id === 'string' ? args.id.trim() : '';
     const list = args.list === true;
     const limit = Number(args.limit ?? 5);
     try {
-      const result = await this.client.news(this.token, list ? { list: true, limit } : (id ? { id } : {}));
+      const result = await this.client.news(this.token || undefined, list ? { list: true, limit } : (id ? { id } : {}));
       if (list) {
         const items = Array.isArray(result.news) ? result.news : [];
         if (!items.length) return '还没有新闻。';
@@ -1905,6 +1907,12 @@ export class ParlorWorld implements World {
       this.queueOwnerKeyRepair();
       return `已进入${this.currentRoom === DEFAULT_ROOM_ID ? '大厅' : `「${this.currentRoom}」`}。`;
     } catch (error) {
+      if (isSeatConflict(error)) {
+        const location = await client.location().catch(() => null);
+        if (location && !location.seat) return this.failed('会馆现在已没有你的席位，请重试 visit。');
+        const where = location?.seat && isRoomId(location.room) ? `，当前在「${this.roomLabel(location.room)}」` : '';
+        return this.failed(`会馆仍有你的席位${where}。请先用 parlor_room 的 leave 操作确认退厅，再重试 visit。`);
+      }
       return this.failed(messageOf(error));
     } finally {
       this.switchingRoom = false;
@@ -1915,8 +1923,7 @@ export class ParlorWorld implements World {
   private async leaveRoom(): Promise<string | ToolOutcome> {
     const client = this.client;
     if (!client) return this.failed('还没连上客厅');
-    const blocked = this.needMultiRoom();
-    if (blocked) return blocked;
+    if (!this.multiRoom) return this.failed('主动退厅只在多客厅网关可用。');
     if (this.switchingRoom || this.enteringTable) return this.failed('正在处理客厅或牌桌操作，请稍后重试');
     this.switchingRoom = true;
     const previouslyLeft = this.voluntarilyLeft;
@@ -2301,25 +2308,28 @@ export class ParlorWorld implements World {
   }
 
   private async readMail(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const { client, token } = this;
+    if (!client || (!token && !this.multiRoom)) return this.failed('还没连上客厅');
     const limit = args.limit === undefined ? 10 : Number(args.limit);
     if (!Number.isInteger(limit) || limit < 1) return this.failed('limit 要是 1 到 50 的整数');
+    const pageLimit = Math.min(50, limit);
     const peek = args.peek === true;
     try {
       if (args.markAllRead === true) {
         if (peek) return this.failed('peek 和 markAllRead 不能一起用');
-        const { changed, remaining } = await this.client.markAllMailRead(this.token);
+        const { changed, remaining } = await client.markAllMailRead(token || undefined);
         this.mailUnread = remaining;
         return `【信箱】剩余未读 ${remaining} 封。原有 ${changed + remaining} 封，本次标了 ${changed} 封。`;
       }
       let page: MailPage;
       try {
-        page = await this.client.mail(this.token, Math.min(50, limit), peek, this.roomArg(), true, true);
+        page = token ? await client.mail(token, pageLimit, peek, this.roomArg(), true, true)
+          : await client.mailAsIdentity(pageLimit, peek, undefined, true);
       } catch (error) {
         // 席位没了（比如被移出客厅）也要能看自己的信箱与结算。
-        if (!(error instanceof ParlorHttpError)
+        if (!token || !(error instanceof ParlorHttpError)
           || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
-        page = await this.client.mailAsIdentity(Math.min(50, limit), peek, undefined, true);
+        page = await client.mailAsIdentity(pageLimit, peek, undefined, true);
       }
       this.mailUnread = peek ? page.unread : page.remaining;
       const lines = [peek ? `【信箱】未读 ${page.unread} 封（只看，没标已读）。`
@@ -2352,9 +2362,9 @@ export class ParlorWorld implements World {
   }
 
   private async readLedger(): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    if (!this.client || (!this.token && !this.multiRoom)) return this.failed('还没连上客厅');
     try {
-      const summary = (this.multiRoom ? (await this.client.ledgerAsIdentity(this.token)).ledger : (await this.client.snapshot(this.token,0,1)).ledger) as import('./room/ledger.ts').LedgerSummary;
+      const summary = (this.multiRoom ? (await this.client.ledgerAsIdentity(this.token || undefined)).ledger : (await this.client.snapshot(this.token,0,1)).ledger) as import('./room/ledger.ts').LedgerSummary;
       const room: LedgerEntryView[] = [];
       const lines: string[] = [];
       if (!summary) {
@@ -2399,7 +2409,7 @@ export class ParlorWorld implements World {
   private async readAccountHistory(args: Record<string, unknown>): Promise<string | ToolOutcome> {
     if (!this.client) return this.failed('还没连接茶室');
     try {
-      const page = await this.client.accountHistory(this.token, args);
+      const page = await this.client.accountHistory(this.token || undefined, args);
       const resultLabels: Record<string, string> = { win:'胜', loss:'负', draw:'平' };
       const giftLabels: Record<string, string> = { in: '收到', out: '送出', used: '喝掉/吃掉' };
       return ['【我的全局记录】', ...page.items.map((row: { ts: number; roomName: string; game?: string; result?: string; itemName?: string; direction?: string; text: string }) => {
@@ -2428,7 +2438,13 @@ export class ParlorWorld implements World {
   }
 
   private async readReplay(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    const { client, token } = this;
+    if (!client || (!token && !this.multiRoom)) return this.failed('还没连上客厅');
+    const room = typeof args.room === 'string' ? args.room.trim() : this.currentRoom;
+    if (args.room !== undefined && !isRoomId(room)) return this.failed('room 要填客厅 ID');
+    if (!room) return this.failed('未入座时，请在 params.room 填要回放的客厅 ID');
+    if (!this.multiRoom && room !== this.currentRoom) return this.failed('单客厅服务器只能回放当前客厅');
+    const useSeat = Boolean(token) && room === this.currentRoom;
     const limit = args.limit === undefined ? 30 : Number(args.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) return this.failed('limit 要是 1 到 200 的整数');
     const before = args.before === undefined ? undefined : Number(args.before);
@@ -2438,12 +2454,13 @@ export class ParlorWorld implements World {
     try {
       let page;
       try {
-        page = await this.client.replay(this.token, limit, before, this.roomArg());
+        page = useSeat ? await client.replay(token, limit, before, this.roomArg())
+          : await client.replayAsIdentity(room, limit, before);
       } catch (error) {
         // 席位没了也能看自己过去有权看的内容（按历次到访区间的并集）。
-        if (!(error instanceof ParlorHttpError)
+        if (!useSeat || !(error instanceof ParlorHttpError)
           || (error.status !== 401 && error.status !== 403 && error.status !== 404)) throw error;
-        page = await this.client.replayAsIdentity(this.currentRoom, limit, before);
+        page = await client.replayAsIdentity(room, limit, before);
       }
       const lines = [
         `【回放】最近 ${page.retentionDays} 天；服务器时刻 ${page.at}（UTC+8）。`,
