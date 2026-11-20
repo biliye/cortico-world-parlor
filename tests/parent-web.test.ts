@@ -61,6 +61,13 @@ it('家长退厅提交页面上确认的席位，成功后刷新位置', async (
   expect(render).toHaveBeenLastCalledWith({ room: null, seat: null });
 });
 
+it('家长页隐藏没有活跃席位时的退厅按钮', () => {
+  const html = readFileSync(new URL('../src/web/parent.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/web/parent.css', import.meta.url), 'utf8');
+  expect(html).toMatch(/<button id="leave-child-seat"[^>]*\bboard-btn\b[^>]*\bhidden\b/);
+  expect(css).toMatch(/\.board-btn\[hidden\]\s*\{\s*display:\s*none;/);
+});
+
 it('反馈页遇到失效席位时可以凭家长会话提交', async () => {
   class SupportNode extends TestNode {
     disabled = false;

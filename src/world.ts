@@ -592,13 +592,15 @@ export class ParlorWorld implements World {
       const conflict = [400, 409].includes(error.status) && (error.code === 'already_seated'
         || error.message === '你已经在另一个客厅里；先离开或换房'
         || error.message === '你已经在这个客厅里了；用原来的席位令牌'
-        || error.message === '这个 Coo 已经有一个活跃席位');
+        || error.message === '这个 Coo 已经有一个活跃席位'
+        || /^这个 Coo 已经在 \S+\/\S+ 坐着，先释放席位$/.test(error.message));
       const missing = [403, 404].includes(error.status) && error.message === '目标客厅不存在';
       if (!conflict && !missing) throw error;
       const location = await client.location().catch(() => null);
       if (!location || !isRoomId(location.room) || !location.seat?.id) throw error;
       joined = await client.join(this.inviteCode, { ...request, resumeSeatId: location.seat.id }, location.room);
-      recovered = true;
+      // 旧网关仍可迁厅，只在回包确认厅和席位都相同时报告找回原席。
+      recovered = joined.room === location.room && joined.seat.id === location.seat.id;
       this.clearPendingMessages();
       this.focused = false;
     }
@@ -627,7 +629,7 @@ export class ParlorWorld implements World {
       return await client.join(this.inviteCode, request, this.roomArg());
     } catch (error) {
       if (!this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
-      const archived = error.status === 403 && error.message.includes('已经归档');
+      const archived = [400, 403, 409].includes(error.status) && error.message.includes('已经归档');
       const defaultRoom = this.ctx.cfg.room || DEFAULT_ROOM_ID;
       // 旧网关的准入检查把「不存在」也回成 403，兼容它但不吞权限/邀请码错误。
       const missing = (error.status === 404 || (error.status === 403 && error.message === '目标客厅不存在'))
@@ -639,8 +641,8 @@ export class ParlorWorld implements World {
       this.currentRoom = joined.room || target;
       this.clearPendingMessages();
       this.focused = false;
-      await this.reportLink('internal', archived ? '原客厅已被房主删除，已回到大厅。'
-        : `原客厅不存在，已回到${this.currentRoom === DEFAULT_ROOM_ID ? '大厅' : this.currentRoom}。`);
+      const destination = this.currentRoom === DEFAULT_ROOM_ID ? '大厅' : this.currentRoom;
+      await this.reportLink('internal', `${archived ? '原客厅已归档' : '原客厅不存在'}，已回到${destination}。`);
       return joined;
     }
   }

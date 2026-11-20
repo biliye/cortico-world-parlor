@@ -144,6 +144,8 @@ svg { display: block; }
 
 /* ── 像素按钮 ─────────────────────────────────── */
 
+.board-btn[hidden] { display: none; }
+
 .board-btn {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 5px 10px;
