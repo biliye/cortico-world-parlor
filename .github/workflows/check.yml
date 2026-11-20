@@ -31,6 +31,12 @@ jobs:
           git diff --exit-code -- src/web/vue
           test -z "$(git ls-files --others --exclude-standard -- src/web/vue)"
       - run: pnpm test
+      - name: Check DSH adapter
+        working-directory: adapters/dsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm pack --pack-destination "$RUNNER_TEMP"
 
   pg:
     name: PG (${{ matrix.suite }})

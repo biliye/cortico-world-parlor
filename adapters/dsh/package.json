@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.28.6",
-  "engines": { "node": ">=22.13", "dsh": ">=0.2.2-rc.1 <0.3.0-0" },
+  "engines": { "node": ">=22.13", "dsh": ">=0.2.0-rc.1 <0.3.0-0" },
   "repository": {
     "type": "git",
     "url": "https://github.com/biliye/cortico-world-parlor.git",
