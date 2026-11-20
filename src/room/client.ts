@@ -57,7 +57,10 @@ export class ParlorClient {
   private async storyRequest<T>(token: string, path: string, body?: Record<string, unknown>): Promise<T> {
     const response = await fetchParlor(this.url(path), {
       method: body ? 'POST' : 'GET',
-      headers: await this.headers({ authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }),
+      headers: await this.headers({
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      }),
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(15_000),
     });
@@ -71,7 +74,8 @@ export class ParlorClient {
     return this.storyRequest(token, '/v1/story/live?' + params);
   }
 
-  storyAction(token: string, action: Record<string, unknown>): Promise<StoryState> {
+  async storyAction(token: string, action: Record<string, unknown>): Promise<StoryState> {
+    if (!token) throw new ParlorHttpError(401, '请先入座，再操作说书厅');
     return this.storyRequest(token, '/v1/story/action', action);
   }
 
@@ -103,7 +107,10 @@ export class ParlorClient {
   async support(token: string, action: 'feedback' | 'announcements', body?: { text: string; requestId: string }): Promise<{ feedback?: Feedback[] | Feedback; announcements?: Announcement[] }> {
     const response = await fetchParlor(this.url(`/v1/support/${action}`), {
       method: body ? 'POST' : 'GET',
-      headers: await this.headers({ authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }),
+      headers: await this.headers({
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      }),
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(15_000),
     });
@@ -130,7 +137,7 @@ export class ParlorClient {
   }
 
   /** 主动查新闻：不带参数给最新一篇全文，list 只给摘要列表。 */
-  async news(token: string, query: { id?: string; list?: boolean; limit?: number } = {}): Promise<{
+  async news(token?: string, query: { id?: string; list?: boolean; limit?: number } = {}): Promise<{
     news: NewsItemView | NewsSummaryView[] | null;
   }> {
     const params = new URLSearchParams();
@@ -141,7 +148,7 @@ export class ParlorClient {
     }
     const search = params.toString();
     const response = await fetchParlor(this.url(`/v1/support/news${search ? `?${search}` : ''}`), {
-      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse(response);
@@ -308,10 +315,10 @@ export class ParlorClient {
     return this.parse<MailPage>(response);
   }
 
-  async markAllMailRead(token: string): Promise<MailReadResult> {
+  async markAllMailRead(token?: string): Promise<MailReadResult> {
     const response = await fetchParlor(this.url('/v1/mail/read-all'), {
       method: 'POST',
-      headers: await this.headers({ authorization: `Bearer ${token}` }),
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
       signal: AbortSignal.timeout(15_000),
     });
     return this.parse<MailReadResult>(response);
@@ -352,9 +359,22 @@ export class ParlorClient {
     const response = await fetchParlor(this.url('/v1/me/location'), { headers, signal: AbortSignal.timeout(15_000) });
     return this.parse(response);
   }
-  async accountHistory(token: string, query: Record<string, unknown>) {
+
+  async leaveSeat(seatId: string): Promise<{ ok: true; left: boolean }> {
+    const response = await fetchParlor(this.url('/v1/me/leave'), {
+      method: 'POST',
+      headers: await this.headers({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ seatId }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
+  async accountHistory(token: string | undefined, query: Record<string, unknown>) {
     const params = new URLSearchParams(Object.entries(query).filter(([,v]) => v !== undefined).map(([k,v]): [string,string] => [k,String(v)]));
-    const response = await fetchParlor(this.url('/v1/me/history') + '?' + params, { headers: await this.headers({ authorization: `Bearer ${token}` }), signal: AbortSignal.timeout(15_000) });
+    const response = await fetchParlor(this.url('/v1/me/history') + '?' + params, {
+      headers: await this.headers(token ? { authorization: `Bearer ${token}` } : {}),
+      signal: AbortSignal.timeout(15_000),
+    });
     return this.parse<{ items: Array<{
       id: string; ts: number; roomName: string; kind: string; game?: string;
       result?: string; itemId?: string; itemName?: string;

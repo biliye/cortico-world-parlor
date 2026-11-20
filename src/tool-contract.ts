@@ -212,12 +212,13 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_replay',
-    description: '查看最近 7 天公开和本人私密事件，按时间从早到晚列出，带游标和服务器时刻。',
+    description: '回放指定客厅中最近 7 天本人有权看到的事件。入座时默认当前客厅，未入座时须填 room。',
     tags: ['read'],
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        room: { type: 'string', description: '要回放的客厅 ID，可通过 rooms 查询。' },
         limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many events to read, default 30.' },
         before: { type: 'integer', minimum: 1, description: '用本页首条 seq 往前翻。' },
       },
@@ -368,7 +369,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_room_visit',
-    description: '换客厅或返回大厅（hall），保留成员资格。未离开活动牌桌时不能换厅。',
+    description: '进入或换到指定客厅，也可以进入大厅（hall）。保留成员资格，活动牌桌未结束时不能换厅。',
     tags: ['write'],
     parameters: {
       type: 'object',
@@ -378,6 +379,12 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       },
       required: ['room'],
     },
+  },
+  {
+    name: 'parlor_room_leave',
+    description: '主动离开当前客厅，保留身份和成员资格。保持未入座直到主动 visit。活动牌桌没有退出时不能退厅。',
+    tags: ['write'],
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
     name: 'parlor_invite_accept',
@@ -426,7 +433,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
 export const TOOL_OPERATIONS: Record<string, Record<string, string>> = {
   query: { room: 'parlor_look', rooms: 'parlor_rooms', mail: 'parlor_mail', account: 'parlor_ledger', history: 'parlor_replay', gifts: 'parlor_gifts', announcements: 'parlor_announcements', news: 'parlor_news', feedback: 'parlor_feedback', table: 'parlor_table_view', story: 'parlor_story_view' },
   gift: { send: 'parlor_gift_send', eat: 'parlor_gift_eat' },
-  room: { create: 'parlor_room_create', visit: 'parlor_room_visit', invite: 'parlor_invite', accept: 'parlor_invite_accept', decline: 'parlor_invite_decline', story: 'parlor_story_action' },
+  room: { create: 'parlor_room_create', visit: 'parlor_room_visit', leave: 'parlor_room_leave', invite: 'parlor_invite', accept: 'parlor_invite_accept', decline: 'parlor_invite_decline', story: 'parlor_story_action' },
   table: { open: 'parlor_table_open', join: 'parlor_table_join', start: 'parlor_table_start', leave: 'parlor_table_leave', discovery: 'parlor_table_discovery', legacy_monopoly: 'parlor_monopoly' },
   message: { room: 'parlor_say', table: 'parlor_table_say', private: 'parlor_whisper' },
 };
@@ -447,7 +454,7 @@ export const PARLOR_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       scope: { type: 'string', enum: ['room', 'table', 'private'] }, text: { type: 'string', maxLength: 400 },
       to: { type: 'string', description: '仅 private 使用：昵称、身份或 #短号。' }, table: { type: 'string', description: '仅 table 使用，默认自己的桌。' },
     }, required: ['scope', 'text'] } },
-  nested('parlor_room', 'room', '客厅操作：create 创建、visit 换厅/回 hall、invite 发邀请、accept/decline 接受/拒绝邀请、story 说书厅。params 按操作填写，需要时先查 help。'),
+  nested('parlor_room', 'room', '客厅操作：create 创建、visit 入厅或换厅、leave 主动退厅、invite 发邀请、accept/decline 接受/拒绝邀请、story 说书厅。params 按操作填写，需要时先查 help。'),
   nested('parlor_table', 'table', '牌桌操作：open 开桌（matchOpen 开放匹配）、join 入座/快速匹配/分享链接、start 开始、leave 未开局退桌、discovery 设置匹配或招募。join 带 game 就是快速匹配公开厅里主动开放、未坐满的桌；没匹配上会留在原厅。想看哪些桌开放着匹配，用 parlor_query 的 rooms（recruitments）。legacy_monopoly 仅兼容旧单厅长局。参数按需查 help。'),
   declared('parlor_game_info'),
   { ...declared('parlor_game_action'), parameters: { ...declared('parlor_game_action').parameters,

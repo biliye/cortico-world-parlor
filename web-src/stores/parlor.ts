@@ -537,6 +537,58 @@ export function disconnect(): void {
 
 let switching = false;
 
+/** 退厅只撤销席位。网页会话由入场页继续使用。 */
+export async function leaveRoom(): Promise<boolean> {
+  const cfg = seat.value;
+  if (!cfg || switching) return false;
+  if (acting) {
+    showToast('上一操作正在处理，请稍后再离开客厅。', 'bad');
+    return false;
+  }
+  switching = true;
+  const key = seatKey(cfg);
+  disconnect();
+  try {
+    const current = await api<{ room: string | null; seat: { id: string } | null }>('/v1/me/location');
+    if (seatKey() !== key || seatKey(readStoredSeat()) !== key) {
+      sharedSeatPending = true;
+      return false;
+    }
+    if (current.seat) {
+      if (current.seat.id !== cfg.seatId) {
+        sharedSeatPending = true;
+        showToast('席位已变化，请确认当前客厅后再离开。', 'bad');
+        return false;
+      }
+      const result = await api<{ ok: true }>('/v1/me/leave', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ seatId: current.seat.id }),
+      });
+      if (result?.ok !== true) throw new Error('暂时未确认是否退厅，请重试。');
+    }
+    if (seatKey() !== key || seatKey(readStoredSeat()) !== key) {
+      sharedSeatPending = true;
+      return false;
+    }
+    resetRoomState();
+    roomTransition.value = null;
+    // 未列出的客厅不会出现在公开目录里，保留原厅供本人再次选择。
+    const room = current.room || cfg.room;
+    const url = room ? '/play?' + new URLSearchParams({ room }) : '/play';
+    history.replaceState({ ...history.state, parlor: true }, '', url);
+    readView();
+    clearSeat('已离开客厅。你可以重新选择要进入的客厅。');
+    return true;
+  } catch (error) {
+    sharedSeatPending = true;
+    showToast((error as Error).message || '暂时未确认是否退厅，请重试。', 'bad');
+    return false;
+  } finally {
+    switching = false;
+    if (sharedSeatPending) { sharedSeatPending = false; void followSharedSeat(); }
+    else if (seat.value && !stream) connect();
+  }
+}
+
 /** 服务器确认换席位后就地加载目的地，不再重载整页和串行等待聊天历史。 */
 export async function goRoom(id: string, targetTable = '', replace = false): Promise<boolean> {
   const cfg = seat.value;

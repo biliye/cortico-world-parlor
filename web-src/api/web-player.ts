@@ -33,11 +33,11 @@ export async function webPlayerRequest<T>(path: string, body?: Record<string, un
   }
 }
 
-export async function takeWebSeat(takeover: boolean, name?: string): Promise<void> {
+export async function takeWebSeat(takeover: boolean, name?: string, room?: string): Promise<void> {
   const joined = await webPlayerRequest<{
     room: string; token: string; guest: boolean; tableId?: string;
     seat: { id: string; name: string }; identity: { cooId: string; cooSecret: string };
-  }>('play', { takeover, name });
+  }>('play', { takeover, name, room });
   const query = new URLSearchParams({ room: joined.room });
   if (joined.tableId) {
     query.set('view', 'table');

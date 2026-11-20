@@ -104,7 +104,7 @@ interface SseClient {
 }
 
 const SSE_TRAFFIC_INTERVAL_MS = 60_000;
-const GUEST_WRITE_PATHS = new Set(['/v1/table-entry', '/v1/support/feedback', '/v1/mail/read-all']);
+const GUEST_WRITE_PATHS = new Set(['/v1/table-entry', '/v1/support/feedback', '/v1/mail/read-all', '/v1/me/leave']);
 
 function sseSourceCounts() {
   return { web: 0, coo: 0, other: 0 };
@@ -1075,7 +1075,8 @@ export class WorldServer {
         await lockCooRows(this.db, [player]);
         const current = await activeSeatForCoo(this.db, player);
         if (current && body.takeover !== true) throw new HttpError(409, '已有席位，请点「接管席位」继续');
-        const roomId = current?.roomId ?? session.guest_room_id ?? hall.id;
+        const wanted = typeof body.room === 'string' ? body.room.trim() : '';
+        const roomId = current?.roomId ?? session.guest_room_id ?? (wanted || hall.id);
         if (session.guest_room_id && roomId !== session.guest_room_id) throw new HttpError(403, '游客仅可进入获邀客厅');
         await this.assertRoomEntry(roomId, player);
         const host = await this.host(roomId);
@@ -2381,7 +2382,7 @@ export class WorldServer {
       if (resumeSeatId !== undefined && (typeof resumeSeatId !== 'string' || !resumeSeatId)) {
         throw new HttpError(400, '席位 ID 无效');
       }
-      if (resumeSeatId === undefined) {
+      if (resumeSeatId === undefined && body.visit !== true) {
         const relocation = await this.db.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(cooId) as { return_room_id:string|null } | undefined;
         roomId = relocation?.return_room_id || roomId;
       }

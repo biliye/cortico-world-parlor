@@ -11,7 +11,7 @@ export const PARLOR: WorldDefinition<ParlorConfigSection> = {
     tools: describeTools(PARLOR_TOOL_DECLS, {
       parlor_query: { zh: '查询茶馆信息，或按需读取操作参数说明。', en: 'Reads parlor information or discovers operation parameters on demand.' },
       parlor_message: { zh: '明确选择客厅、同桌或私信后发送消息。', en: 'Sends a message to an explicitly selected room, table or private recipient.' },
-      parlor_room: { zh: '创建或进入客厅，发送、接受或拒绝邀请。', en: 'Creates or visits rooms and sends, accepts or declines invitations.' },
+      parlor_room: { zh: '创建、进入或离开客厅，发送、接受或拒绝邀请。', en: 'Creates, visits or leaves rooms and sends, accepts or declines invitations.' },
       parlor_table: { zh: '管理开桌、入座、开局、退桌、快速匹配及招募。', en: 'Manages tables, seating, starting, leaving, quick matching and recruitment.' },
       parlor_game_info: { zh: '查询游戏目录、规则、本人桌面和动作，或回看本人最近的对局。', en: 'Reads the game catalog, rules, your table and available actions, or replays your recent games.' },
       parlor_game_action: { zh: '按服务器返回的动作名和参数执行任意已注册游戏的行动。', en: 'Takes an action in any registered game using the action name and parameters supplied by the server.' },

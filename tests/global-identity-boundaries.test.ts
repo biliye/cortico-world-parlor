@@ -24,6 +24,23 @@ async function start(authority = 'self', inviteCode = '') {
 }
 
 describe('全局身份的入场与续席边界', () => {
+  it('退厅后凭统一身份票读取公告和说书现场，并提交和读取反馈', async () => {
+    const authority = await start();
+    const target = await start(authority.url, 'target-only-invite');
+    const client = new ParlorClient(target.url, { cooId: 'coo-identity-support', cooSecret: 'identity-support-secret-001' });
+    await client.initializeIdentity(authority.url, '', '小满');
+    const joined = await client.join('target-only-invite', { name: '小满' }, 'hall');
+    expect(await client.leaveSeat(joined.seat.id)).toEqual({ ok: true, left: true });
+    await expect(client.location(joined.token)).rejects.toMatchObject({ status: 401 });
+
+    expect(await client.support('', 'announcements')).toEqual({ announcements: [] });
+    const feedback = { text: '退厅后提交的反馈', requestId: 'support-after-leave' };
+    expect(await client.support('', 'feedback', feedback)).toMatchObject({ feedback: { text: feedback.text } });
+    expect(await client.support('', 'feedback')).toMatchObject({ feedback: [{ text: feedback.text }] });
+    expect(await client.storyLive('')).toMatchObject({ round: null, present: 1 });
+    expect(await client.storyNotice('')).toMatchObject({ queued: false });
+  });
+
   it.each(['alias', 'hall', 'public'])('F2：%s 入座仍要求本服务器邀请码，登记身份不能免码', async route => {
     const authority = await start(); const target = await start(authority.url, 'target-only-invite');
     const client = new ParlorClient(target.url, { cooId: 'coo-boundary1', cooSecret: 'boundary-secret-0123456789' });
