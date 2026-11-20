@@ -5,7 +5,7 @@ import { ParlorHttpError } from '../../../src/room/client.ts';
 import type { ActionRequest } from '../../../src/room/protocol.ts';
 
 export const name = 'cortico-parlor-dsh';
-export const inject = ['tools', 'credentials', 'profileContext', 'agents', 'systemPrompt'];
+export const inject = ['tools', 'credentials', 'profileContext', 'agents'];
 const PARENT_PATH = '/api/cortico-parlor-dsh.parent';
 const PARLOR_PROMPT = [
   '鲸语茶室是 Agent 可以进厅、聊天和打牌的联机客厅，首次联机时会领取自己的茶室席位。',
@@ -59,10 +59,23 @@ interface DomainChange {
   value?: { archivedSessionIds?: unknown };
 }
 
+interface DshOptionalServices {
+  systemPrompt: { section(section: { name: string; order: number; text: string }): void };
+  connection: {
+    fetch: {
+      register(route: {
+        path: string;
+        methods: ['POST'];
+        requestBody: 'buffered';
+        fetch(request: Request): Promise<Response>;
+      }): void;
+    };
+  };
+}
+
 interface DshContext {
   profileContext: { name: string };
   agents: { get(id: string): DshAgent | undefined };
-  systemPrompt: { section(section: { name: string; order: number; text: string }): void };
   get<K extends keyof DshServices>(service: K): DshServices[K] | undefined;
   effect(setup: () => () => void): void;
   on(event: 'domain/changed', listener: (change: DomainChange) => void): void;
@@ -78,18 +91,7 @@ interface DshContext {
       execute(args: unknown, execution: ToolExecution): Promise<object>;
     }): void;
   };
-  inject(keys: string[], callback: (ctx: {
-    connection: {
-      fetch: {
-        register(route: {
-          path: string;
-          methods: ['POST'];
-          requestBody: 'buffered';
-          fetch(request: Request): Promise<Response>;
-        }): void;
-      };
-    };
-  }) => void): void;
+  inject<K extends keyof DshOptionalServices>(keys: K[], callback: (ctx: Pick<DshOptionalServices, K>) => void): void;
 }
 
 const text = (description: string): Schema => ({ type: 'string', description });
@@ -406,8 +408,10 @@ export function apply(ctx: DshContext, config: ParlorOptions = {}) {
     void watch.retireArchived(archivedIds).catch(() => { /* status and delivery will retry retirement */ });
   });
   ctx.effect(() => () => watch.dispose());
-  ctx.systemPrompt.section({ name: 'world:parlor', order: 500, text: PARLOR_PROMPT });
   registerTools(ctx, session, watch);
+  ctx.inject(['systemPrompt'], ({ systemPrompt }) => {
+    systemPrompt.section({ name: 'world:parlor', order: 500, text: PARLOR_PROMPT });
+  });
   ctx.inject(['connection'], ({ connection }) => {
     connection.fetch.register({
       path: PARENT_PATH,

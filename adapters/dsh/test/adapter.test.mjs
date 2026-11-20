@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { apply } from '../src/host.ts';
+import { apply, inject } from '../src/host.ts';
 
 const origin = 'http://127.0.0.1:8790';
 const ownerKey = 'test-parent-owner-key';
@@ -29,7 +29,7 @@ function harness() {
   const logs = new Map();
   const archived = new Set();
   const missing = new Set();
-  const start = ({ restoreAgent = false, flush } = {}) => {
+  const start = ({ restoreAgent = false, flush, withSystemPrompt = true } = {}) => {
     const tools = new Map();
     const sections = [];
     const messages = [];
@@ -49,10 +49,13 @@ function harness() {
     };
     let route;
     let onDomainChange;
+    const optionalServices = {
+      connection: { fetch: { register: value => { route = value; } } },
+    };
+    if (withSystemPrompt) optionalServices.systemPrompt = { section: value => sections.push(value) };
     apply({
       profileContext: { name: 'web' },
       agents: { get: id => (restoreAgent && !agents.has(id)) || missing.has(id) ? undefined : agent(id) },
-      systemPrompt: { section: value => sections.push(value) },
       get(key) {
         if (key === 'workspaceRegistry') return { archivedSessionIds: [...archived] };
         if (key === 'sessionPersistence') return { async stat(id) { return missing.has(id) ? undefined : {}; } };
@@ -75,7 +78,9 @@ function harness() {
         },
       },
       tools: { register: tool => tools.set(tool.name, tool) },
-      inject: (_keys, init) => init({ connection: { fetch: { register: value => { route = value; } } } }),
+      inject(keys, init) {
+        if (keys.every(key => key in optionalServices)) init(optionalServices);
+      },
     }, { serverUrl: origin, inviteCode: 'fixture-invite' });
     return {
       messages,
@@ -294,6 +299,15 @@ test('registers tea house guidance on plugin load before a session calls a tool'
   assert.equal(section.name, 'world:parlor');
   assert.match(section.text, /去茶室看看.*parlor_room（op: look）/);
   assert.equal(gateway.joins(), 0);
+});
+
+test('keeps the tools available in a profile without systemPrompt', async t => {
+  fakeGateway(t);
+  assert.ok(!inject.includes('systemPrompt'));
+  const host = harness().start({ withSystemPrompt: false });
+  t.after(host.dispose);
+  assert.equal(host.sections.length, 0);
+  assert.equal((await host.call('parlor_room', { op: 'look' })).me.id, testSeat.id);
 });
 
 test('joins once, saves both keys privately and restores the authoritative room after restart', async t => {
