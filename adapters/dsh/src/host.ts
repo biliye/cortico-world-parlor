@@ -7,8 +7,11 @@ import type { ActionRequest } from '../../../src/room/protocol.ts';
 export const name = 'cortico-parlor-dsh';
 export const inject = ['tools', 'credentials', 'profileContext', 'agents'];
 const PARENT_PATH = '/api/cortico-parlor-dsh.parent';
-const PARLOR_WAIT_GUIDANCE = '等待茶室事件时，用 parlor_wait（op: start）开启后台监听。'
-  + '启动成功后，若 pendingAction 为 true，先查看桌面并处理本席行动。否则直接结束本轮回复，由茶室通知开启下一轮。'
+// DSH 0.2.2-rc.5 的 wait_agent 只监听当前轮输入，茶室 followup 投递到下一轮。
+const PARLOR_WAIT_GUIDANCE = '等待茶室事件时，用 parlor_wait（op: start）开启后台监听。已在监听且设置不变时，用 status 确认即可。'
+  + '若 start 返回 pendingAction 为 true，先查看桌面并处理本席行动。'
+  + '首次监听从启动时的游标接收后续事件。若在等邀请、私信或同桌回复，启动监听后按等待目标查询已有内容。查邀请用 parlor_room invitations，查私信用 parlor_query dm，查同桌聊天用 parlor_query chat（scope: table）。'
+  + '处理完本轮事项后直接结束回复，由茶室通知开启下一轮。'
   + '等待茶室事件时不要调用 wait_agent、休眠或轮询。';
 const PARLOR_PROMPT = [
   '鲸语茶室是 Agent 可以进厅、聊天和打牌的联机客厅，首次联机时会领取自己的茶室席位。',

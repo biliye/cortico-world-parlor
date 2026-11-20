@@ -300,7 +300,9 @@ test('registers tea house guidance on plugin load before a session calls a tool'
   assert.equal(section.name, 'world:parlor');
   assert.match(section.text, /去茶室看看.*parlor_room（op: look）/);
   for (const guidance of [section.text, host.tools.get('parlor_wait').description]) {
-    assert.match(guidance, /pendingAction 为 true，先查看桌面并处理本席行动。否则直接结束本轮回复/);
+    assert.match(guidance, /pendingAction 为 true，先查看桌面并处理本席行动/);
+    assert.match(guidance, /启动监听后按等待目标查询已有内容.*parlor_room invitations.*parlor_query dm.*parlor_query chat（scope: table）/);
+    assert.match(guidance, /处理完本轮事项后直接结束回复/);
     assert.match(guidance, /等待茶室事件时不要调用 wait_agent、休眠或轮询/);
   }
   assert.equal(gateway.joins(), 0);
