@@ -24,7 +24,7 @@ import { mentionsInText } from './mentions.ts';
 import { lockCooRows, lockRoomRow } from './storage/locks.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, getRoom, hashSeatToken, joinSeat, releaseSeat,
-  seatByTokenHash, updateSeatToken, type RoomRow, type SeatRow,
+  seatByTokenHash, touchSeatSeen, updateSeatToken, type RoomRow, type SeatRow,
 } from './room-seat-db.ts';
 import { serverClock } from './clock.ts';
 import { HostError, type HostErrorCode } from './host-error.ts';
@@ -238,12 +238,14 @@ export class RoomHost {
   }
 
   /** 同一个席位换一枚新令牌（家长再次下场）：席位、可见区间、账本都不动。 */
-  async reissueSeatToken(cooId: string, token = this.makeToken()): Promise<{ seat: SeatRow; token: string }> {
+  async reissueSeatToken(cooId: string, token = this.makeToken(), expectedSeatId?: string): Promise<{ seat: SeatRow; token: string }> {
     return withTransaction(this.db, async () => {
       await lockCooRows(this.db, [cooId]);
       const seat = await this.seatOf(cooId);
       if (!seat) throw new HostError('not_found', '你不在这个客厅里');
+      if (expectedSeatId !== undefined && seat.id !== expectedSeatId) throw new HostError('conflict', '席位已变化，请重新连接');
       await updateSeatToken(this.db, this.roomId, seat.id, hashSeatToken(token));
+      await touchSeatSeen(this.db, this.roomId, seat.id, this.now());
       return { seat, token };
     });
   }
@@ -309,14 +311,15 @@ export class RoomHost {
     });
   }
 
-  async leave(cooId: string): Promise<LeaveResult> {
-    await this.requireRoom();
-    const seat = await this.seatOf(cooId);
-    if (!seat) throw new HostError('not_found', '你不在这个客厅里');
-    await this.assertNotLocked(cooId, '离开客厅');
-    const now = this.now();
-
+  async leave(cooId: string, expectedSeatId?: string): Promise<LeaveResult> {
     return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId]);
+      await this.requireRoom();
+      const seat = await this.seatOf(cooId);
+      if (!seat) throw new HostError('not_found', '你不在这个客厅里');
+      if (expectedSeatId !== undefined && seat.id !== expectedSeatId) throw new HostError('conflict', '席位已变化，请刷新后再离开');
+      await this.assertNotLocked(cooId, '离开客厅');
+      const now = this.now();
       const event = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,
@@ -339,11 +342,13 @@ export class RoomHost {
    * 长时间没有 SSE 的席位：写一条带原因的离开事件再释放。
    * 牌桌锁着就不动（等这局结束，下一轮清理再看）。
    */
-  async releaseOffline(cooId: string, now = this.now()): Promise<LeaveResult | null> {
-    const seat = await this.seatOf(cooId);
-    if (!seat) return null;
-    if (await this.tableHost.lockOf(cooId)) return null;
+  async releaseOffline(cooId: string, expectedSeatId: string, cutoff: number, now: number): Promise<LeaveResult | null> {
     return withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [cooId]);
+      const seat = await this.seatOf(cooId);
+      // 候选扫描之后，用户可能已经退厅重入或找回了同一个席位。
+      if (!seat || seat.id !== expectedSeatId || (seat.lastSeenAt ?? seat.joinedAt) > cutoff) return null;
+      if (await this.tableHost.lockOf(cooId)) return null;
       const event = await this.events.append(this.roomId, {
         type: 'parlor.left',
         ts: now,

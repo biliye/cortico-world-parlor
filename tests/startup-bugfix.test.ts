@@ -71,6 +71,19 @@ describe('换服务器与启动时改名', () => {
     expect(secrets.PARLOR_CURRENT_ROOM).toBe('r-missing');
   });
 
+  it.each([
+    [400, '客厅已经归档，不能再进'],
+    [403, '客厅已经归档，不能再进'],
+    [409, '这个客厅已经归档'],
+  ])('归档的当前厅回大厅（HTTP %s）', async (status, message) => {
+    secrets.PARLOR_CURRENT_ROOM = 'r-archived';
+    const joinRequest = vi.spyOn(ParlorClient.prototype, 'join').mockRejectedValueOnce(new ParlorHttpError(status, message));
+    const host = await start();
+    expect(await currentRoom()).toBe('hall');
+    expect(joinRequest.mock.calls.map(([, , room]) => room)).toEqual(['r-archived', 'hall']);
+    expect(host.events.some(event => event.type === 'parlor.link' && event.text.includes('原客厅已归档，已回到大厅'))).toBe(true);
+  });
+
   it('404 回配置中的普通客厅，权限拒绝与错误邀请码不触发兜底', async () => {
     await start();
     const client = new ParlorClient(server.url);
@@ -107,6 +120,62 @@ describe('换服务器与启动时改名', () => {
     await start(ctx);
     expect(await currentRoom()).toBe(room.id);
     expect((await snapshot()).seat.id).toBe(before.seat.id);
+  });
+
+  it.each(['new-gateway', 'old-400', 'old-concurrent-409', 'mistaken-archive-id'])('凭身份找回原厅和席位（%s）', async (scenario) => {
+    const ctx = context();
+    await start(ctx);
+    const client = new ParlorClient(server.url);
+    const { room } = await client.createRoom({ name: '原来的厅', visibility: 'public' }, secrets.PARLOR_SEAT_TOKEN);
+    const tool = toolForOperation(world!, 'parlor_room_visit')!;
+    await tool.handler({ room: room.id }, {} as ToolCallContext);
+    const before = await snapshot();
+    const beforeToken = secrets.PARLOR_SEAT_TOKEN;
+    await world!.stop();
+    // 来自另一台网关的游标与旧厅不能决定本次的落点。
+    writeFileSync(join(ctx.dataDir, 'parlor-cursor.json'), JSON.stringify({ server: 'http://127.0.0.1:8790', current: 'foreign' }));
+    secrets.PARLOR_CURRENT_ROOM = 'foreign';
+    if (scenario === 'new-gateway') delete secrets.PARLOR_SEAT_TOKEN;
+    else secrets.PARLOR_SEAT_TOKEN = 'invalid-seat-token';
+    if (scenario === 'mistaken-archive-id') ctx.cfg.room = '08302eb2d95de0f989b59243';
+    if (scenario === 'old-400' || scenario === 'old-concurrent-409') {
+      const status = scenario === 'old-400' ? 400 : 409;
+      const error = scenario === 'old-400' ? '你已经在另一个客厅里；先离开或换房'
+        : `这个 Coo 已经在 ${room.id}/${before.seat.id} 坐着，先释放席位`;
+      const fetchActual = globalThis.fetch;
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => String(input).endsWith('/v1/rooms/hall/join')
+        ? Promise.resolve(Response.json({ error }, { status }))
+        : fetchActual(input, init));
+    }
+    const joined = vi.spyOn(ParlorClient.prototype, 'join');
+    const location = vi.spyOn(ParlorClient.prototype, 'location');
+    const host = await start(ctx);
+    expect(await currentRoom()).toBe(room.id);
+    expect(await snapshot()).toMatchObject({ seat: { id: before.seat.id, name: before.seat.name } });
+    expect(secrets.PARLOR_SEAT_TOKEN).not.toBe(beforeToken);
+    expect(location.mock.calls.at(-1)).toEqual([]);
+    expect(joined.mock.calls.map(([, request, target]) => [target, request.resumeSeatId]))
+      .toEqual([[ctx.cfg.room, undefined], [room.id, before.seat.id]]);
+    expect(host.events.some(event => event.type === 'parlor.link' && event.text.includes(room.id))).toBe(true);
+  });
+
+  it('恢复专用请求不会为已离席的身份创建新席位', async () => {
+    await start();
+    const current = await snapshot();
+    await world!.stop();
+    const identity = JSON.parse(readFileSync(join(context().dataDir, 'parlor-identity.json'), 'utf8'));
+    const client = new ParlorClient(server.url, identity);
+    await client.initializeIdentity(server.url, 'inv', current.seat.name);
+    await expect(client.join('inv', { name: current.seat.name, resumeSeatId: 'another-seat' }, 'hall'))
+      .rejects.toMatchObject({ status: 409 });
+    const leave = await fetch(server.url + '/v1/me/leave', {
+      method: 'POST', headers: { authorization: 'Bearer ' + secrets.PARLOR_SEAT_TOKEN, 'content-type': 'application/json' },
+      body: JSON.stringify({ seatId: current.seat.id }),
+    });
+    expect(await leave.json()).toEqual({ ok: true, left: true });
+    await expect(client.join('inv', { name: current.seat.name, resumeSeatId: current.seat.id }, 'hall'))
+      .rejects.toMatchObject({ status: 404 });
+    expect(await client.location()).toEqual({ room: null, seat: null });
   });
 
   it.each([false, true])('改席名后启动原席位立即改名，不换席位，令牌丢失=%s', async lostToken => {

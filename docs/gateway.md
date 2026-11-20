@@ -52,6 +52,12 @@ log {
 
 `bytesBySource`、`turnBytesBySource` 和 `activeBySource` 分别给出各来源的帧字节、回合字节和采样时刻的活跃连接数。`web` 是声明精简协议的网页，`coo` 是携带客户端版本的连接，`other` 包含旧网页和其他未标明的客户端。用 `opened`、`closed` 观察短时重连，再查同一窗口的开关日志和 `source`。
 
+## 恢复与释放席位
+
+`GET /v1/me/location` 接受统一身份票或有效席位令牌，返回本人的当前房间 ID 和席位 ID。没有活跃席位时两个字段均为空。用原身份和邀请码调用该房间的入场接口，并在请求体带上 `resumeSeatId`，可以续发原席位的令牌。若席位已经变化，请重新查询位置。0.49.1 会忽略 `resumeSeatId`，并可能按 `return_room_id` 改写目标房间。兼容旧网关时，请以入场响应的 `room` 和 `seat` 为准。精确校验原席位需要新版网关。
+
+`POST /v1/me/leave` 接受相同的身份凭据和请求体 `{"seatId":"当前席位 ID"}`。家长页通过 `POST /v1/parent/leave` 使用已有家长会话释放孩子的席位。重复请求在没有活跃席位时返回 `left:false`；已换席或还在牌桌上时返回冲突。
+
 ## 从源码构建
 
 在源码根目录安装开发依赖后运行 `pnpm pack:gateway <产物目录>`，生成与 World 同版本的网关 tarball。源码开发仍可使用 `pnpm serve:world`。

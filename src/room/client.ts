@@ -33,10 +33,12 @@ export const PARLOR_CLIENT_VERSION = '0.49.1';
 
 export class ParlorHttpError extends Error {
   readonly status: number;
+  readonly code: string | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
     this.name = 'ParlorHttpError';
   }
 }
@@ -344,8 +346,10 @@ export class ParlorClient {
     return this.parse(response);
   }
 
-  async location(token: string): Promise<{ room: string | null; seat: RoomSnapshot['seat'] | null }> {
-    const response = await fetchParlor(this.url('/v1/me/location'), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+  async location(token?: string): Promise<{ room: string | null; seat: RoomSnapshot['seat'] | null }> {
+    // 续用已有令牌时无需联系身份服务。丢失令牌时才凭本机身份查位置。
+    const headers = token ? { authorization: `Bearer ${token}` } : await this.headers({});
+    const response = await fetchParlor(this.url('/v1/me/location'), { headers, signal: AbortSignal.timeout(15_000) });
     return this.parse(response);
   }
   async accountHistory(token: string, query: Record<string, unknown>) {
@@ -686,7 +690,10 @@ export class ParlorClient {
   }
 
   private async parse<T>(response: Response): Promise<T> {
-    if (!response.ok) throw new ParlorHttpError(response.status, await errorText(response));
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string; code?: string } | null;
+      throw new ParlorHttpError(response.status, body?.error || `HTTP ${response.status}`, body?.code);
+    }
     return await response.json() as T;
   }
 }

@@ -2,6 +2,10 @@ const $ = id => document.getElementById(id);
 let cfg;
 try { cfg = JSON.parse(localStorage.getItem('parlor-play-v1') || 'null'); } catch {}
 let operatorKey = '';
+const parentOnly = new URLSearchParams(location.search).get('as') === 'parent';
+let feedbackMode;
+let refreshing;
+let sendingFeedback = false;
 let feedbackRequest = null;
 let announcementRequest = null;
 let newsRequest = null;
@@ -13,16 +17,20 @@ let editingNewsRevision = 1;
 let editingNewsTime = '';
 const status = text => { $('status').textContent = text; };
 const beijingToday = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
-async function api(path, body, operator = false, method) {
-  const token = operator ? operatorKey : cfg?.token;
-  if (!token) throw new Error('请先回会馆加入席位，再打开反馈与公告。');
+async function api(path, body, operator = false, method, mode = feedbackMode) {
+  const token = operator ? operatorKey : mode === 'seat' ? cfg?.token : '';
   const verb = method || (body ? 'POST' : 'GET');
-  const url = path.startsWith('/v1/web/operator/') ? path : `/v1/support/${path}`;
+  let url = path.startsWith('/v1/web/operator/') ? path : `/v1/support/${path}`;
+  if (!operator && (mode === 'parent' || mode === 'web')) url += `?as=${mode}`;
   const res = await fetch(url, { method: verb,
-    headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(25000) });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(data.error || `HTTP ${res.status}`);
+    error.status = res.status;
+    throw error;
+  }
   return data;
 }
 function node(tag, text) { const n = document.createElement(tag); n.textContent = text; return n; }
@@ -66,12 +74,36 @@ function feedbackList(target, items, operator = false) {
     target.append(box);
   }
 }
-async function refresh() {
-  const [news, mine] = await Promise.all([api('announcements'), api('feedback')]);
-  $('announcements').replaceChildren(...news.announcements.map(card));
-  if (!news.announcements.length) $('announcements').append(node('p', '暂时没有运营公告。'));
-  try { localStorage.setItem('parlor-announcements-seen', JSON.stringify(news.announcements.map(item => item.id))); } catch {}
-  feedbackList($('feedback'), mine.feedback);
+async function refreshSupport() {
+  const modes = parentOnly ? ['parent'] : [...(cfg?.token ? ['seat'] : []), 'web', 'parent'];
+  for (const mode of modes) {
+    let mine;
+    try { mine = await api('feedback', undefined, false, 'GET', mode); }
+    catch (error) { if (error.status === 401) continue; throw error; }
+    feedbackMode = mode;
+    $('feedback-status').textContent = { seat: '以当前网页席位提交。', web: '以已登录的会馆账号提交。', parent: '以家长会话对应的 Coo 身份提交。' }[mode];
+    $('feedback-submit').disabled = sendingFeedback;
+    feedbackList($('feedback'), mine.feedback);
+    try {
+      const news = await api('announcements', undefined, false, 'GET', mode);
+      $('announcements').replaceChildren(...news.announcements.map(card));
+      if (!news.announcements.length) $('announcements').append(node('p', '暂时没有运营公告。'));
+      try { localStorage.setItem('parlor-announcements-seen', JSON.stringify(news.announcements.map(item => item.id))); } catch {}
+    } catch (error) {
+      $('announcements').replaceChildren(node('p', error.message || '读不到运营公告。'));
+    }
+    return;
+  }
+  feedbackMode = undefined;
+  $('feedback-submit').disabled = true;
+  $('feedback-status').textContent = parentOnly ? '请先用当前会馆的家长链接登录，再点刷新。'
+    : '请先登录家长页或会馆账号，再点刷新。也可以通过 GitHub 或 QQ 群反馈。';
+  $('feedback').replaceChildren();
+  $('announcements').replaceChildren(node('p', '登录后可查看公告。'));
+}
+function refresh() {
+  refreshing ??= refreshSupport().finally(() => { refreshing = undefined; });
+  return refreshing;
 }
 async function inbox() {
   const data = await api('operator/feedback', undefined, true);
@@ -139,7 +171,7 @@ async function loadAnnouncementList() {
           await api('operator/announcements', {
             id: item.id, text: text.value.trim(), revision: Number(item.revision ?? 1), publishId: item.publishId,
           }, true, 'PATCH');
-          status('公告已更新。'); await loadAnnouncementList(); if (cfg?.token) await refresh();
+          status('公告已更新。'); await loadAnnouncementList(); if (feedbackMode) await refresh();
         });
       });
       const remove = node('button', '删除'); remove.type = 'button';
@@ -147,7 +179,7 @@ async function loadAnnouncementList() {
         if (!confirm(`删除这条公告？横幅和列表里都会消失，发了就找不回来（原文只在留痕里）。\n\n${item.text.slice(0, 100)}`)) return;
         void perform(remove, async () => {
           await api(`operator/announcements?id=${encodeURIComponent(item.id)}&revision=${encodeURIComponent(item.revision ?? 1)}&publishId=${encodeURIComponent(item.publishId)}`, undefined, true, 'DELETE');
-          status('公告已删除。'); await loadAnnouncementList(); if (cfg?.token) await refresh();
+          status('公告已删除。'); await loadAnnouncementList(); if (feedbackMode) await refresh();
         });
       });
       // 删除跟着表单放，两个按钮排在同一行，不用各占一行。
@@ -208,12 +240,28 @@ $('refresh').addEventListener('click', event => { void perform(event.target, asy
 }); });
 $('feedback-form').addEventListener('submit', event => {
   event.preventDefault();
-  void perform(event.submitter, async () => {
+  const mode = feedbackMode;
+  const button = event.submitter;
+  if (!mode || !button || sendingFeedback) return;
+  sendingFeedback = true;
+  void perform(button, async () => {
     const text = $('feedback-text').value.trim();
-    if (!feedbackRequest || feedbackRequest.text !== text) feedbackRequest = { text, requestId: crypto.randomUUID() };
-    const data = await api('feedback', feedbackRequest);
+    if (!feedbackRequest || feedbackRequest.mode !== mode || feedbackRequest.body.text !== text) {
+      feedbackRequest = { mode, body: { text, requestId: crypto.randomUUID() } };
+    }
+    let data;
+    try {
+      data = await api('feedback', feedbackRequest.body, false, 'POST', mode);
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      await refresh();
+      throw new Error(feedbackMode ? '登录状态已更新，请确认当前身份后再提交。' : '请先登录，再提交已填写的反馈。');
+    }
     $('feedback-text').value = ''; feedbackRequest = null;
     status(`反馈已保存，编号 ${data.feedback.id}。不代表运营者已读。`); await refresh();
+  }).finally(() => {
+    sendingFeedback = false;
+    button.disabled = !feedbackMode;
   });
 });
 $('operator-login').addEventListener('submit', event => {
@@ -242,7 +290,7 @@ $('announcement-form').addEventListener('submit', event => {
     if (!announcementRequest || announcementRequest.text !== text) announcementRequest = { text, requestId: crypto.randomUUID() };
     await api('operator/announcements', announcementRequest, true);
     $('announcement-text').value = ''; announcementRequest = null; status('公告已发布。');
-    if (cfg?.token) await refresh();
+    if (feedbackMode) await refresh();
   });
 });
 function resetNewsForm() {
@@ -329,4 +377,4 @@ $('news-form').addEventListener('submit', event => {
 });
 resetNewsForm();
 void refresh().catch(error => status(error.message));
-setInterval(() => { if (!document.hidden && cfg?.token) void refresh().catch(() => {}); }, 60000);
+setInterval(() => { if (!document.hidden && feedbackMode) void refresh().catch(() => {}); }, 60000);

@@ -627,7 +627,7 @@ JSON 单厅用于本机或局域网开厅，也可用于解包后验证网页和
 
 1. 控制台「扩展」页「手动安装」填这个包的绝对路径，重启进程。
 2. World 页启用「客厅」；`serverUrl` 留空。
-3. 首次启动会生成邀请码，写进部署 `.env` 的 `PARLOR_INVITE_CODE`，并在 World 页出现家长页链接。
+3. 未指定单厅邀请码时，World 会沿用已有的部署 `.env` 单厅码，或生成并保存 `PARLOR_LOCAL_INVITE_CODE`，并在 World 页出现家长页链接。
    单间服务器没有「大厅」这个概念，房间固定叫 `lobby`（配置里的 `room` 在这条路上没用）。
 
 默认只绑 `127.0.0.1:8790`；要让别的机器连进来，把 `host` 改成 `0.0.0.0`（记得防火墙/安全组只放行认识的人）。
@@ -674,7 +674,7 @@ Node 24 默认支持类型剥离，可以去掉 `--experimental-strip-types`。�
 
 房间服务器同时提供网页牌桌：`http://<房间地址>/play`（正式部署是 `https://parlor.com.cn/play`）。
 
-1. 打开页面，填**自己的名字**和部署里的 `PARLOR_INVITE_CODE`。服务器给这个家长发一份独立的
+1. 打开页面，填**自己的名字**和房主给的邀请码。服务器给这个家长发一份独立的
    `cooId` + `cooSecret`，所以战绩、筹码、信箱和 Coo 是分开的两份；令牌存在这台浏览器的
    localStorage 里，换浏览器要重新加入（同一个名字不能再占一次，换一个名字即可）。
 2. 大厅里可以开骰子桌、斗地主桌，或开大富翁报名（4/6 人、标准/试玩）。也可以等 Coo 开好桌，
@@ -711,8 +711,8 @@ Node 24 默认支持类型剥离，可以去掉 `--experimental-strip-types`。�
 | `worlds.parlor.maxSeats` | `8` | 自己开单间时的会说话席位上限（2–30）；观看者不计 |
 | `worlds.parlor.wakeTier` | `digest` | 默认挡位；改动会在下一分钟同步到服务器 |
 
-密钥（部署 `.env`）：`PARLOR_INVITE_CODE`、`PARLOR_SEAT_TOKEN`、`PARLOR_OWNER_TOKEN`。
-后两个由 World 自动写入，不要手填。账本身份在 World 的数据目录 `parlor-identity.json`（0600）：
+部署可以用 `PARLOR_INVITE_CODE` 指定邀请码。World 会自动写入 `PARLOR_LOCAL_INVITE_CODE`（新生成的单厅码）、
+`PARLOR_SEAT_TOKEN` 和 `PARLOR_OWNER_TOKEN`。账本身份在 World 的数据目录 `parlor-identity.json`（0600）：
 `cooId` 是跨房名字，`cooSecret` 只在本机，服务器只存它的哈希。
 
 ## 安全与边界（旧单厅历史）
