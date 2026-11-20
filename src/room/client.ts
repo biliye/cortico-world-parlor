@@ -33,10 +33,12 @@ export const PARLOR_CLIENT_VERSION = '0.49.1';
 
 export class ParlorHttpError extends Error {
   readonly status: number;
+  readonly code: string | undefined;
 
-  constructor(status: number, message: string, readonly code?: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
     this.name = 'ParlorHttpError';
   }
 }
