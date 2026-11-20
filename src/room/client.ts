@@ -57,7 +57,10 @@ export class ParlorClient {
   private async storyRequest<T>(token: string, path: string, body?: Record<string, unknown>): Promise<T> {
     const response = await fetchParlor(this.url(path), {
       method: body ? 'POST' : 'GET',
-      headers: await this.headers({ authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }),
+      headers: await this.headers({
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      }),
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(15_000),
     });
@@ -103,7 +106,10 @@ export class ParlorClient {
   async support(token: string, action: 'feedback' | 'announcements', body?: { text: string; requestId: string }): Promise<{ feedback?: Feedback[] | Feedback; announcements?: Announcement[] }> {
     const response = await fetchParlor(this.url(`/v1/support/${action}`), {
       method: body ? 'POST' : 'GET',
-      headers: await this.headers({ authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }),
+      headers: await this.headers({
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      }),
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(15_000),
     });

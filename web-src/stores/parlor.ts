@@ -549,7 +549,7 @@ export async function leaveRoom(): Promise<boolean> {
   const key = seatKey(cfg);
   disconnect();
   try {
-    const current = await api<{ seat: { id: string } | null }>('/v1/me/location');
+    const current = await api<{ room: string | null; seat: { id: string } | null }>('/v1/me/location');
     if (seatKey() !== key || seatKey(readStoredSeat()) !== key) {
       sharedSeatPending = true;
       return false;
@@ -571,7 +571,10 @@ export async function leaveRoom(): Promise<boolean> {
     }
     resetRoomState();
     roomTransition.value = null;
-    history.replaceState({ ...history.state, parlor: true }, '', '/play');
+    // 未列出的客厅不会出现在公开目录里，保留原厅供本人再次选择。
+    const room = current.room || cfg.room;
+    const url = room ? '/play?' + new URLSearchParams({ room }) : '/play';
+    history.replaceState({ ...history.state, parlor: true }, '', url);
     readView();
     clearSeat('已离开客厅。你可以重新选择要进入的客厅。');
     return true;

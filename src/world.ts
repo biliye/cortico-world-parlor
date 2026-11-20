@@ -1184,7 +1184,7 @@ export class ParlorWorld implements World {
   }
 
   private async checkStoryNotice(): Promise<number | undefined> {
-    if (!this.client || !this.history) return;
+    if (!this.client || !this.history || !this.token) return;
     const token = this.token;
     const notice = await this.client.storyNotice(token);
     if (this.stopped || this.token !== token) return;

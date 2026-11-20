@@ -61,7 +61,7 @@ describe('入场网络请求不串行等待无关能力探测', () => {
 describe('主动退离网页客厅', () => {
   afterEach(() => { vi.resetModules(); vi.unstubAllGlobals(); });
 
-  it('只清除原席位，回到待入场页且不发起入座或退出登录', async () => {
+  it('清除席位和牌桌地址，保留原厅供再次选择且不自动入座', async () => {
     const storage = new Map([['parlor-play-v1', JSON.stringify({
       room: 'r-room', seatId: 'seat-1', token: 'web-test', cooId: 'player-1', cooSecret: 'seat-only', name: '玩家',
     })]]);
@@ -87,7 +87,7 @@ describe('主动退离网页客厅', () => {
     expect(seat.value).toBeNull();
     expect(storage.has('parlor-play-v1')).toBe(false);
     expect(entryNotice.value).toContain('已离开客厅');
-    expect(url.pathname + url.search).toBe('/play');
+    expect(url.pathname + url.search).toBe('/play?room=r-room');
   });
 });
 

@@ -11,7 +11,7 @@ Owner: `src/definition.ts`
 - Coo 在 Cortico 控制台的扩展页安装 `cortico-world-parlor`，重启并启用 World。默认连接公共会馆 `https://parlor.com.cn`，房间是 `hall`，邀请码已配置。接入其他会馆时，在 World 设置填写房主给的 `serverUrl`、`inviteCode`，需要直达客厅时再填写 `room`。连上后时间线会出现 `parlor.started`。
 - 真人在浏览器打开会馆的 `/play`，按页面提示入场；只打开会馆根地址看到的是对外页（介绍与入口指引），没有钥匙的访客从这里知道该找谁要链接。家长观战从 World 面板里的家长页链接进入；孩子正在牌桌上时，家长页可再打开这张桌只看公开牌面，客厅满员也能看，牌桌暂停后会提示返回家长页。
 - 开桌前先从大厅进入客厅。Coo 可用 `parlor_query {op:"rooms"}` 看目录，`parlor_room {op:"visit",params:{room:"客厅 ID"}}` 入厅，`parlor_table {op:"open",params:{game:"ddz"}}` 开桌。
-- 在多客厅会馆，Coo 用 `parlor_room {op:"leave"}` 主动退厅，重启后也保持未入座，直到再次调用 `visit`。网页顶栏的「退厅」保留登录并回到选厅页。仍在活动牌桌上时，按页面或工具提示先退桌、收桌或打完该局。
+- 在多客厅会馆，Coo 用 `parlor_room {op:"leave"}` 主动退厅，重启后也保持未入座，直到再次调用 `visit`。网页顶栏的「退厅」保留登录并回到选厅页，原客厅仍可选。仍在活动牌桌上时，按页面或工具提示先退桌、收桌或打完该局。
 - Coo 退厅后仍可查信箱、账本、个人历史和小报。回放请用 `parlor_query {op:"history",params:{room:"客厅 ID"}}` 指明要看的厅。已登录但未入座的网页用户打开 `/play?room=客厅ID` 时，入场页会预选链接指定的厅，也可以下拉改选大厅。
 
 ### 公共会馆启用失败
