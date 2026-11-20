@@ -6,7 +6,7 @@ const operations: Record<string, [string, string]> = {
   parlor_mail: ['parlor_query', 'mail'], parlor_ledger: ['parlor_query', 'account'],
   parlor_replay: ['parlor_query', 'history'], parlor_announcements: ['parlor_query', 'announcements'],
   parlor_table_view: ['parlor_query', 'table'],
-  parlor_room_create: ['parlor_room', 'create'], parlor_room_visit: ['parlor_room', 'visit'],
+  parlor_room_create: ['parlor_room', 'create'], parlor_room_visit: ['parlor_room', 'visit'], parlor_room_leave: ['parlor_room', 'leave'],
   parlor_invite: ['parlor_room', 'invite'], parlor_invite_accept: ['parlor_room', 'accept'], parlor_invite_decline: ['parlor_room', 'decline'],
   parlor_table_open: ['parlor_table', 'open'], parlor_table_join: ['parlor_table', 'join'],
   parlor_table_start: ['parlor_table', 'start'], parlor_table_leave: ['parlor_table', 'leave'],

@@ -58,6 +58,39 @@ describe('入场网络请求不串行等待无关能力探测', () => {
   });
 });
 
+describe('主动退离网页客厅', () => {
+  afterEach(() => { vi.resetModules(); vi.unstubAllGlobals(); });
+
+  it('只清除原席位，回到待入场页且不发起入座或退出登录', async () => {
+    const storage = new Map([['parlor-play-v1', JSON.stringify({
+      room: 'r-room', seatId: 'seat-1', token: 'web-test', cooId: 'player-1', cooSecret: 'seat-only', name: '玩家',
+    })]]);
+    vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, removeItem: (key: string) => storage.delete(key) });
+    vi.stubGlobal('window', { clearTimeout, setTimeout });
+    const url = new URL('https://parlor.test/play?room=r-room&view=table&table=t-1');
+    vi.stubGlobal('location', url);
+    const replaceState = vi.fn((_state: object, _title: string, path: string) => { url.href = new URL(path, url).href; });
+    vi.stubGlobal('history', { replaceState });
+    const fetcher = vi.fn(async (path: string, _init: RequestInit) => Response.json(path === '/v1/me/location'
+      ? { room: 'r-room', seat: { id: 'seat-1' } } : path === '/healthz' ? { rooms: 1 } : { ok: true, left: true }));
+    vi.stubGlobal('fetch', fetcher);
+
+    const parlorPath = '../web-src/stores/parlor.ts';
+    const sessionPath = '../web-src/stores/session.ts';
+    const { leaveRoom } = await import(parlorPath);
+    const { seat, entryNotice } = await import(sessionPath);
+    expect(await leaveRoom()).toBe(true);
+    expect(fetcher.mock.calls.map(([path]) => path).filter(path => path !== '/healthz')).toEqual(['/v1/me/location', '/v1/me/leave']);
+    const request = fetcher.mock.calls.find(([path]) => path === '/v1/me/leave')?.[1];
+    expect(request).toMatchObject({ method: 'POST', body: JSON.stringify({ seatId: 'seat-1' }) });
+    expect(new Headers(request?.headers).get('authorization')).toBe('Bearer web-test');
+    expect(seat.value).toBeNull();
+    expect(storage.has('parlor-play-v1')).toBe(false);
+    expect(entryNotice.value).toContain('已离开客厅');
+    expect(url.pathname + url.search).toBe('/play');
+  });
+});
+
 describe('H2/H3席位跟随与私密内容恢复', () => {
   afterEach(() => { vi.doUnmock('../web-src/api/client.ts'); vi.resetModules(); vi.unstubAllGlobals(); });
 

@@ -169,6 +169,7 @@ export class ParlorWorld implements World {
   private baseUrl = '';
   private inviteCode = '';
   private token = '';
+  private voluntarilyLeft = false;
   private ownerToken = '';
   /** 这次启动已经确认本机那把钥匙失效（服务端回 401）；重连入座时别又从 .env 里把它捡回面板。 */
   private ownerKeyDead = false;
@@ -249,7 +250,7 @@ export class ParlorWorld implements World {
     const room = this.currentRoom || cfg.room || DEFAULT_ROOM_ID;
     const tier = this.seat?.tier;
     return {
-      'parlor.room': isRoomId(room) ? room : '请查询当前客厅',
+      'parlor.room': this.voluntarilyLeft ? '未入座' : isRoomId(room) ? room : '请查询当前客厅',
       // 服务器返回的实际显示名走外部事件或查询结果，不进 system 前缀。
       'parlor.seat': this.baseSeatName(),
       'parlor.tier': tier && WAKE_TIERS.includes(tier) ? tier : cfg.wakeTier,
@@ -339,6 +340,7 @@ export class ParlorWorld implements World {
       tool('parlor_rooms', (args) => args.recruitments === true ? this.tableRecruitments() : this.rooms()),
       tool('parlor_room_create', (args) => this.createRoom(args)),
       tool('parlor_room_visit', (args) => this.visitRoom(args)),
+      tool('parlor_room_leave', () => this.leaveRoom()),
       tool('parlor_invite', (args) => this.invite(args)),
       tool('parlor_invite_accept', (args) => this.answerInvite(args, 'accept')),
       tool('parlor_invite_decline', (args) => this.answerInvite(args, 'decline')),
@@ -431,13 +433,13 @@ export class ParlorWorld implements World {
     this.history = new LocalHistory(this.ctx.dataDir,
       this.ctx.cfg.serverUrl.trim().replace(/\/+$/, '') || 'self', this.identity!.cooId);
     if (this.seat) this.historySeats.add(this.seat.id);
-    this.historyRooms.add(this.currentRoom);
+    if (this.currentRoom) this.historyRooms.add(this.currentRoom);
     this.scheduleHistorySync();
     this.historyTimer = setInterval(() => this.scheduleHistorySync(), 60_000);
     this.historyTimer.unref?.();
     this.digestTimer = setInterval(() => { void this.flushDigest(); }, DIGEST_MS);
     this.digestTimer.unref?.();
-    this.streamTask = this.runStream();
+    if (this.token) this.streamTask = this.runStream();
     // 补钥匙放后台：复用席位时连上就能收消息，不该为一把钥匙多等一次轮换。
     this.queueOwnerKeyRepair();
     if (this.multiRoom) {
@@ -451,7 +453,8 @@ export class ParlorWorld implements World {
       source: this.id,
       origin: 'external',
       senderKey: this.id,
-      text: `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.seat?.handle ? ` #${this.seat.handle}` : ''}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_query {op:"mail"} 看。` : ''}`,
+      text: this.voluntarilyLeft ? '会馆已连接，当前没有入座。要进厅请用 parlor_room 的 visit 操作。'
+        : `客厅已连接。席位：${this.seat?.name ?? '未知'}${this.seat?.handle ? ` #${this.seat.handle}` : ''}${this.focused ? '（正在牌桌上：客厅闲聊只攒摘要）' : ''}。${this.mailUnread > 0 ? `信箱里有 ${this.mailUnread} 封未读，用 parlor_query {op:"mail"} 看。` : ''}`,
       meta: { room: this.currentRoom, seat: this.seat?.id, address: this.baseUrl },
     }, { trigger: 'flush' });
   }
@@ -548,6 +551,13 @@ export class ParlorWorld implements World {
     }
     this.loadCursors(this.server ? this.currentRoom : defaultRoom);
 
+    if (this.voluntarilyLeft) {
+      this.currentRoom = '';
+      this.token = '';
+      this.seat = undefined;
+      this.ownerToken = this.adoptStoredOwnerKey();
+      return;
+    }
     const stored = this.ctx.secret(SEAT_SECRET).trim();
     if (stored) {
       let snapshot;
@@ -581,14 +591,15 @@ export class ParlorWorld implements World {
   }
 
   /** 用现有身份入座，拿一枚新令牌；启动和「席位被释放后自动重连」共用。 */
-  private async joinRoom(client: ParlorClient): Promise<void> {
+  private async joinRoom(client: ParlorClient, target?: string): Promise<void> {
     const request = { name: this.baseSeatName(), kind: 'pet' as const, tier: this.ctx.cfg.wakeTier };
     let joined: JoinResponse;
     let recovered = false;
     try {
-      joined = await this.joinConfiguredRoom(client, request);
+      joined = target ? await client.join(this.inviteCode, { ...request, visit: true }, target)
+        : await this.joinConfiguredRoom(client, request);
     } catch (error) {
-      if (!this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
+      if (target || !this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
       const conflict = [400, 409].includes(error.status) && (error.code === 'already_seated'
         || error.message === '你已经在另一个客厅里；先离开或换房'
         || error.message === '你已经在这个客厅里了；用原来的席位令牌'
@@ -606,6 +617,7 @@ export class ParlorWorld implements World {
     }
     if (joined.room) this.currentRoom = joined.room;
     this.token = joined.token;
+    this.voluntarilyLeft = false;
     // 新网关首次建家长账户时给一次 ownerKey；旧服务器给的是每厅 ownerToken。
     // 已有账户再入座时，只使用已确认归属的钥匙。
     const issued = (joined.ownerKey ?? joined.ownerToken ?? '').trim();
@@ -615,6 +627,7 @@ export class ParlorWorld implements World {
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
     } catch { /* 假上下文或不可写 */ }
+    if (target) this.writeCursor();
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
     if (this.identity?.authority) saveIdentity(this.identityFile, this.identity);
     this.lastSeq = this.resumeFrom(snapshot.latest);
@@ -791,7 +804,7 @@ export class ParlorWorld implements World {
    */
   private async rejoinSeat(): Promise<boolean> {
     const client = this.client;
-    if (!client || !this.inviteCode) return false;
+    if (!client || !this.inviteCode || this.voluntarilyLeft) return false;
     try {
       await this.joinRoom(client);
       await this.reportLink('external', `已重新连上席位：${this.seat?.name ?? '未知'}。`);
@@ -810,10 +823,11 @@ export class ParlorWorld implements World {
   /** 游标文件按客厅分开；旧格式 {room, seq} 还能读。 */
   private loadCursors(defaultRoom: string): void {
     this.lastStoryHint = undefined;
+    this.voluntarilyLeft = false;
     try {
       const raw = JSON.parse(readFileSync(this.cursorFile, 'utf8')) as {
         room?: string; seq?: number; rooms?: Record<string, unknown>; current?:string; server?:string;
-        announcements?: string[];
+        announcements?: string[]; leftBy?: string;
         news?: { publishAt?: unknown; id?: unknown };
         storyHint?: { cooId?: unknown; roundId?: unknown };
       };
@@ -821,6 +835,8 @@ export class ParlorWorld implements World {
         this.currentRoom = defaultRoom;
         return;
       }
+      this.voluntarilyLeft = this.multiRoom && raw.server === this.baseUrl
+        && typeof raw.leftBy === 'string' && raw.leftBy === this.identity?.cooId;
       if (typeof raw.storyHint?.cooId === 'string' && typeof raw.storyHint.roundId === 'string') {
         this.lastStoryHint = { cooId: raw.storyHint.cooId, roundId: raw.storyHint.roundId };
       }
@@ -914,6 +930,7 @@ export class ParlorWorld implements World {
         this.cursorFile,
         JSON.stringify({
           version: 3, server: this.baseUrl, current: this.currentRoom,
+          leftBy: this.voluntarilyLeft ? this.identity?.cooId : undefined,
           rooms: this.cursors, announcements: this.seenAnnouncements, news: this.newsCursor,
           storyHint: this.lastStoryHint,
         }),
@@ -1051,7 +1068,7 @@ export class ParlorWorld implements World {
   }
 
   private scheduleHistorySync(): void {
-    if (!this.history || this.stopped || this.historyTask) return;
+    if (!this.history || !this.token || this.voluntarilyLeft || this.stopped || this.historyTask) return;
     this.historyTask = this.syncHistory().catch(error => {
       this.historyFailure(`本地消息补收失败：${messageOf(error)}`);
     }).finally(() => { this.historyTask = undefined; });
@@ -1682,7 +1699,7 @@ export class ParlorWorld implements World {
    * TS 会把类型收窄成不可能再是 off，这里单独取一次避开误判。
    */
   private get autoSilenced(): boolean {
-    return this.stopped || this.ctx.cfg.wakeTier === 'off';
+    return this.stopped || this.voluntarilyLeft || this.ctx.cfg.wakeTier === 'off';
   }
 
   /**
@@ -1834,9 +1851,9 @@ export class ParlorWorld implements World {
     if (blocked) return blocked;
     try {
       const me: MeView = await this.client.me(this.token || undefined);
-      const here = me.seat?.room ?? this.currentRoom;
+      const here = me.seat?.room;
       const lines = [
-        `我现在在：${this.roomLabel(here, me.rooms)}${me.seat ? `（席位 ${me.seat.name}）` : '（不在任何客厅）'}。`,
+        here && me.seat ? `我现在在：${this.roomLabel(here, me.rooms)}（席位 ${me.seat.name}）。` : '我不在任何客厅。',
         '返回大厅：parlor_room {op:"visit",params:{room:"hall"}}。',
         '能去的客厅：',
       ];
@@ -1858,15 +1875,96 @@ export class ParlorWorld implements World {
   }
 
   private async visitRoom(args: Record<string, unknown>): Promise<string | ToolOutcome> {
-    if (!this.client || !this.token) return this.failed('还没连上客厅');
+    if (!this.client) return this.failed('还没连上客厅');
     const target = String(args.room ?? '').trim();
     if (!target) return this.failed('要写去哪：客厅 id 或名字');
+    if (this.voluntarilyLeft) return this.visitFromOutside(this.client, target);
+    if (!this.token) return this.failed('还没连上客厅');
     if (target === 'hall') {
       if (this.currentRoom === 'hall') return '已经在大厅里了。';
       return this.switchToRoom(target, '到了大厅。成员资格保留，用 parlor_query {op:"rooms"} 查看客厅。');
     }
     if (target === this.currentRoom) return `已经在「${this.currentRoom}」里了。`;
     return this.switchToRoom(target, `到了「${target}」。`);
+  }
+
+  private async visitFromOutside(client: ParlorClient, target: string): Promise<string | ToolOutcome> {
+    if (this.switchingRoom || this.enteringTable) return this.failed('正在处理客厅或牌桌操作，请稍后重试');
+    if (!this.inviteCode) return this.failed('请先在扩展设置里填写该会馆的邀请码');
+    this.switchingRoom = true;
+    try {
+      let roomId = target;
+      if (target !== DEFAULT_ROOM_ID) {
+        const { rooms } = await client.me();
+        const room = rooms.find(room => room.id === target)
+          ?? rooms.find(room => room.name.toLowerCase() === target.toLowerCase());
+        if (!room) return this.failed('目标客厅不存在或没有进入权限');
+        roomId = room.id;
+      }
+      await this.joinRoom(client, roomId);
+      this.queueOwnerKeyRepair();
+      return `已进入${this.currentRoom === DEFAULT_ROOM_ID ? '大厅' : `「${this.currentRoom}」`}。`;
+    } catch (error) {
+      return this.failed(messageOf(error));
+    } finally {
+      this.switchingRoom = false;
+      if (!this.stopped && this.token) this.streamTask = this.runStream();
+    }
+  }
+
+  private async leaveRoom(): Promise<string | ToolOutcome> {
+    const client = this.client;
+    if (!client) return this.failed('还没连上客厅');
+    const blocked = this.needMultiRoom();
+    if (blocked) return blocked;
+    if (this.switchingRoom || this.enteringTable) return this.failed('正在处理客厅或牌桌操作，请稍后重试');
+    this.switchingRoom = true;
+    const previouslyLeft = this.voluntarilyLeft;
+    try {
+      // 释放会撤销令牌，先等旧流退出，免得它收到 401 后把席位领回来。
+      this.abort?.abort();
+      await this.streamTask?.catch(() => {});
+      this.streamTask = undefined;
+      const location = await client.location();
+      this.voluntarilyLeft = true;
+      this.writeCursor();
+      let left = false;
+      try {
+        if (location.seat) left = (await client.leaveSeat(location.seat.id)).left;
+      } catch (error) {
+        if (error instanceof ParlorHttpError && error.status >= 400 && error.status < 500) {
+          this.voluntarilyLeft = previouslyLeft;
+          this.writeCursor();
+          throw error;
+        }
+        this.clearLeftSeat();
+        return this.failed(`暂未确认是否退厅，已暂停自动入座。请重试离开客厅。${messageOf(error)}`);
+      }
+      this.clearLeftSeat();
+      return left ? '已离开客厅。下次可以用 parlor_room 的 visit 操作入厅。' : '你不在任何客厅。';
+    } catch (error) {
+      return this.failed(messageOf(error));
+    } finally {
+      this.switchingRoom = false;
+      if (!this.stopped && this.token && !this.voluntarilyLeft) this.streamTask = this.runStream();
+    }
+  }
+
+  private clearLeftSeat(): void {
+    if (this.currentRoom) this.cursors[this.currentRoom] = this.lastSeq;
+    this.currentRoom = '';
+    this.lastSeq = 0;
+    this.token = '';
+    this.seat = undefined;
+    this.focused = false;
+    this.myTableId = this.myTableGame = undefined;
+    this.myTableRevision = undefined;
+    this.tableStateCursor = undefined;
+    this.storyHintPending = undefined;
+    this.recruitHint = undefined;
+    this.clearPendingMessages();
+    this.writeCursor();
+    try { this.ctx.storeSecret(SEAT_SECRET, ''); } catch { /* 游标已记录主动退厅 */ }
   }
 
   private async createRoom(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -1995,6 +2093,7 @@ export class ParlorWorld implements World {
   }
 
   private async look(args: Record<string, unknown>): Promise<string | ToolOutcome> {
+    if (this.voluntarilyLeft) return '你不在任何客厅。用 parlor_room 的 visit 操作可以入厅。';
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     const explicitSince = args.since !== undefined && Number.isFinite(Number(args.since));
     const since = explicitSince ? Math.max(0, Number(args.since)) : 0;

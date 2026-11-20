@@ -43,6 +43,47 @@ async function family(name: string) {
   return played;
 }
 
+it('正式网页登录退厅时保留会话，牌桌锁阻止退厅，之后可以显式选择另一厅', async () => {
+  await start();
+  const original = await family('leave-room');
+  const credentials = { loginName: '退厅测试玩家', password: PASSWORD };
+  expect((await call('/v1/web/credentials', credentials, { cookie: original.cookie })).status).toBe(200);
+  const login = await call('/v1/web/login', credentials);
+  const auth = { cookie: login.cookie };
+  const playing = await call('/v1/web/play', { takeover: true }, auth);
+  const seatAuth = { authorization: 'Bearer ' + playing.body.token };
+  const destination = (await call('/v1/rooms', { name: '目的客厅' }, seatAuth)).body.room.id;
+  const entered = await call('/v1/rooms/hall/switch', { to: destination }, seatAuth);
+  const opening = await call(`/v1/rooms/${destination}/action`,
+    { type: 'table_open', game: 'gomoku', requestId: 'leave-room-open' }, seatAuth);
+  expect(opening.status).toBe(200);
+  expect((await call('/v1/me/leave', { seatId: entered.body.seat.id }, seatAuth)).status).toBe(409);
+  expect((await call(`/v1/rooms/${destination}/action`,
+    { type: 'table_leave', table: opening.body.tableId, requestId: 'leave-room-close' }, seatAuth)).status).toBe(200);
+  expect((await call('/v1/me/leave', { seatId: entered.body.seat.id }, seatAuth)).body).toEqual({ ok: true, left: true });
+  expect((await call('/v1/web/me', undefined, auth)).body.seated).toBe(false);
+  expect((await call('/v1/me/location', undefined, seatAuth)).status).toBe(401);
+  const joined = await call('/v1/web/play', { room: destination }, auth);
+  expect(joined.body).toMatchObject({ room: destination, identity: { cooId: playing.body.identity.cooId } });
+  expect(joined.body.seat.id).not.toBe(entered.body.seat.id);
+});
+
+it('游客可以主动退席并保留试玩资格，再入场仍只进获邀客厅', async () => {
+  await start();
+  const inviter = await family('invite-leave');
+  const invite = await call('/v1/web/invites', {}, { cookie: inviter.cookie });
+  const redeemed = await call('/v1/web/redeem', { code: invite.body.code, name: '试退厅' });
+  const auth = { cookie: redeemed.cookie };
+  const joined = await call('/v1/web/play', {}, auth);
+  const bearer = { authorization: 'Bearer ' + joined.body.token };
+  const position = await call('/v1/me/location', undefined, bearer);
+  expect(position.body.seat.id).toBe(joined.body.seat.id);
+  expect((await call('/v1/me/leave', { seatId: position.body.seat.id }, bearer)).body).toEqual({ ok: true, left: true });
+  expect((await call('/v1/web/me', undefined, auth)).body).toMatchObject({ guest: true, seated: false });
+  const rejoined = await call('/v1/web/play', { room: 'hall' }, auth);
+  expect(rejoined.body).toMatchObject({ guest: true, room: joined.body.room });
+});
+
 it('Coo 直进并保存原身份，网页两次登录只有明确接管才换令牌', async () => {
   await start();
   const original = await family('original');

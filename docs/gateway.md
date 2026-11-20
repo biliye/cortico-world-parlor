@@ -58,6 +58,8 @@ log {
 
 `POST /v1/me/leave` 接受相同的身份凭据和请求体 `{"seatId":"当前席位 ID"}`。家长页通过 `POST /v1/parent/leave` 使用已有家长会话释放孩子的席位。重复请求在没有活跃席位时返回 `left:false`；已换席或还在牌桌上时返回冲突。
 
+Coo 和网页的主动退厅使用 `/v1/me/leave`。旧的 `POST /v1/rooms/{room}/leave` 仍兼容有效席位令牌。网页退厅后可以用现有会话向 `POST /v1/web/play` 提供所选的 `room` 来重新入座。游客只能再进获邀客厅。
+
 ## 从源码构建
 
 在源码根目录安装开发依赖后运行 `pnpm pack:gateway <产物目录>`，生成与 World 同版本的网关 tarball。源码开发仍可使用 `pnpm serve:world`。

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { ApiError, beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay, timeoutSignal } from '../api/client.ts';
+import { api, ApiError, beginGlobalEntry, fetchHealth, joinPlayer, parentPlay as requestParentPlay, timeoutSignal } from '../api/client.ts';
 import { guestJoinEnabled } from '../lib/join.ts';
 import ThemePicker from '../components/ThemePicker.vue';
 import WebInvites from '../components/WebInvites.vue';
-import type { Health } from '../api/types.ts';
+import type { Directory, Health, RoomCard } from '../api/types.ts';
 import { logoutWebPlayer, takeWebSeat, uncertainWebResult, webPlayerRequest, type WebPlayer } from '../api/web-player.ts';
 import { seat } from '../stores/session.ts';
 import { detectGateway, gateway } from '../stores/server.ts';
@@ -29,6 +29,15 @@ const player = ref<WebPlayer | null>(null);
 const checkingPlayer = ref(false);
 const statusError = ref('');
 const redeemRecovery = ref<'unknown' | 'accepted' | null>(null);
+const linkedRoom = new URLSearchParams(location.search).get('room') || '';
+const selectedRoom = ref(linkedRoom || 'hall');
+const rooms = ref<RoomCard[]>([]);
+
+watch(gateway, async enabled => {
+  if (!enabled) return;
+  try { rooms.value = (await api<Directory>('/v1/rooms')).rooms?.filter(room => !room.archived) ?? []; }
+  catch { /* 目录暂不可用时仍支持大厅和链接指定的客厅 */ }
+}, { immediate: true });
 
 watch(() => props.inviteCode, inviteCode => {
   if (!inviteCode) return;
@@ -149,7 +158,8 @@ function useAnotherInvite(): void {
 
 async function play() {
   await webAction(async () => {
-    await takeWebSeat(player.value?.seated === true, player.value?.guest ? guestName.value : undefined);
+    await takeWebSeat(player.value?.seated === true, player.value?.guest ? guestName.value : undefined,
+      player.value?.guest ? undefined : selectedRoom.value);
     emit('entered');
   }, 'play');
 }
@@ -168,7 +178,7 @@ function removeEntryMode(): void {
 }
 
 function wantedRoom(): string {
-  return new URLSearchParams(location.search).get('room') || '';
+  return gateway.value ? selectedRoom.value : linkedRoom;
 }
 
 async function submit(): Promise<void> {
@@ -251,11 +261,19 @@ async function parentPlay(): Promise<void> {
         邀请已领取。{{ statusError ? '请重查本机的试玩会话。' : '本机未建立试玩会话。重查后仍无法恢复时，请向邀请人要新链接。' }}
       </p>
       <button v-if="statusError || redeemRecovery" class="btn ghost" type="button" :disabled="busy || checkingPlayer" @click="loadWebPlayer">重查登录状态</button>
+      <div v-if="gateway && !player?.guest && !player?.seated && !props.inviteCode" class="field">
+        <label for="join-room">选择客厅</label>
+        <select id="join-room" v-model="selectedRoom" :disabled="busy">
+          <option value="hall">大厅</option>
+          <option v-if="linkedRoom && linkedRoom !== 'hall' && !rooms.some(room => room.id === linkedRoom)" :value="linkedRoom">链接指定的客厅</option>
+          <option v-for="room in rooms" :key="room.id" :value="room.id">{{ room.name }}（{{ room.seats }}/{{ room.capacity }}）</option>
+        </select>
+      </div>
       <template v-if="player">
         <p class="sub">{{ player.name }}<template v-if="player.guest"> · 游客资格至 {{ new Date(player.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</template></p>
         <p v-if="props.inviteCode" class="note">要使用这张新邀请，请先退出当前会馆登录。</p>
         <div v-if="player.guest && !player.seated" class="field"><label for="resume-guest-name">游客昵称</label><input id="resume-guest-name" v-model="guestName" maxlength="24" autocomplete="nickname"></div>
-        <button class="btn primary" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="play">{{ player.seated ? (player.guest ? '继续试玩' : '接管席位') : (player.guest ? '进入试玩客厅' : '进入大厅') }}</button>
+        <button class="btn primary" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="play">{{ player.seated ? (player.guest ? '继续试玩' : '接管席位') : (player.guest ? '进入试玩客厅' : '进入所选客厅') }}</button>
         <button class="btn ghost" type="button" :disabled="busy || checkingPlayer || !!statusError" @click="logout">{{ player.guest ? '结束试玩' : '退出登录' }}</button>
         <WebInvites v-if="!player.guest" />
       </template>
@@ -308,6 +326,16 @@ async function parentPlay(): Promise<void> {
 <style scoped>
 .entry-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .entry-options [aria-pressed="true"] { border-color: currentColor; font-weight: 700; }
+.join .field select {
+  width: 100%;
+  height: 46px;
+  border: 1px solid var(--line-2);
+  border-radius: 13px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  padding-inline: 14px;
+}
 details { margin-block: 12px; }
 /* 品牌行现在是回首页的链接；触屏没有 hover，所以底部另留一条带下划线的文字链接。 */
 .brand:hover, .brand:focus-visible { text-decoration: underline; text-underline-offset: 4px; }

@@ -352,6 +352,16 @@ export class ParlorClient {
     const response = await fetchParlor(this.url('/v1/me/location'), { headers, signal: AbortSignal.timeout(15_000) });
     return this.parse(response);
   }
+
+  async leaveSeat(seatId: string): Promise<{ ok: true; left: boolean }> {
+    const response = await fetchParlor(this.url('/v1/me/leave'), {
+      method: 'POST',
+      headers: await this.headers({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ seatId }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return this.parse(response);
+  }
   async accountHistory(token: string, query: Record<string, unknown>) {
     const params = new URLSearchParams(Object.entries(query).filter(([,v]) => v !== undefined).map(([k,v]): [string,string] => [k,String(v)]));
     const response = await fetchParlor(this.url('/v1/me/history') + '?' + params, { headers: await this.headers({ authorization: `Bearer ${token}` }), signal: AbortSignal.timeout(15_000) });

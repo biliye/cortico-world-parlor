@@ -18,8 +18,9 @@ import { chatExpanded, chooseTab, closeSheet, setFloatingChatTable, sheetOpen, t
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { loadMail, setUnread, unread as mailUnread } from '../stores/mail.ts';
-import { activeTable, connection, goRoom, hallSeats, snapshot, tableIdOf } from '../stores/parlor.ts';
+import { activeTable, connection, goRoom, hallSeats, leaveRoom, snapshot, tableIdOf } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
+import { gateway } from '../stores/server.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
 import { backToRoom, enterStory, view } from '../stores/view.ts';
 
@@ -37,6 +38,7 @@ const switcherOpen = ref(false);
 const accountOpen = ref(false);
 const ratingsOpen = ref(false);
 const giftOpen = ref(false);
+const leavingRoom = ref(false);
 
 const sections = [
   { id: 'all', label: '发现', long: '发现客厅', icon: 'lamp' },
@@ -79,6 +81,13 @@ async function goSection(id: 'all' | 'mine' | 'favorites'): Promise<void> {
   if (view.value === 'story') backToRoom();
   selectHallSection(id);
   if (!inHall.value) await goRoom('hall');
+}
+
+async function confirmLeaveRoom(): Promise<void> {
+  if (leavingRoom.value || !window.confirm(`要离开「${roomLabel.value}」吗？`)) return;
+  leavingRoom.value = true;
+  try { await leaveRoom(); }
+  finally { leavingRoom.value = false; }
 }
 
 onMounted(() => {
@@ -137,6 +146,10 @@ onMounted(() => {
         </span>
         <span v-if="view !== 'story' && !connected" class="conn-chip">{{ connectionText }}</span>
         <div class="top-right">
+          <button v-if="gateway && seat" class="tool" type="button" title="离开客厅" aria-label="离开客厅"
+            :disabled="leavingRoom" @click="confirmLeaveRoom">
+            <Icon name="arrow" /><span class="tool-label">退厅</span>
+          </button>
           <button class="tool" type="button" @click="accountOpen = true" title="我的战绩、礼物流水与历史对局">
             <Icon name="users" /><span class="tool-label">账户</span>
           </button>

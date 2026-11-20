@@ -89,6 +89,8 @@ export interface JoinRequest {
   name: string;
   kind?: SeatKind;
   tier?: WakeTier;
+  /** 主动退厅后明确选厅，忽略先前后台迁厅的返回位置。 */
+  visit?: boolean;
   /** 只续发这个已有席位的令牌。席位已经变化时拒绝，避免恢复请求顺手创建席位。 */
   resumeSeatId?: string;
 }
