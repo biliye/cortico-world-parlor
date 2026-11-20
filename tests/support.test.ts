@@ -60,6 +60,39 @@ describe('私密反馈与运营广播', () => {
     for (const asset of ['support.js', 'support.css']) expect((await fetch(`${server.url}/play/assets/${asset}`)).status).toBe(200);
   });
 
+  it('家长只能退自己的 Coo 席位，退厅后仍能提交和查看私密反馈', async () => {
+    const { a, b } = await setup();
+    const call = async (path: string, body?: Record<string, unknown>, extra: Record<string, string> = {}) => {
+      const res = await fetch(server.url + path, {
+        method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', ...extra },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const result = await res.json() as { left?: boolean; seat?: { id: string } | null; feedback?: unknown[] };
+      return { status: res.status, cookie: res.headers.get('set-cookie')?.split(';')[0] ?? '', body: result };
+    };
+    const parent = await call('/v1/parent/session', { key: a.ownerKey });
+    expect(parent.status).toBe(200);
+    const auth = { cookie: parent.cookie };
+    const leave = '/v1/parent/leave';
+    const payload = { seatId: a.seat.id };
+    expect((await call(leave, payload)).status).toBe(401);
+    expect((await call(leave, payload, { ...auth, origin: 'https://other.example' })).status).toBe(403);
+    expect((await call(leave, { seatId: b.seat.id }, auth)).status).toBe(409);
+    const left = await Promise.all([call(leave, payload, auth), call(leave, payload, auth)]);
+    expect(left.map(result => result.body.left).sort()).toEqual([false, true]);
+    expect((await call('/v1/parent/me', undefined, auth)).body.seat).toBeNull();
+    expect((await call('/v1/me/location', undefined, { authorization: 'Bearer ' + a.token })).status).toBe(401);
+    expect((await call('/v1/me/location', undefined, { authorization: 'Bearer ' + b.token })).body.seat?.id).toBe(b.seat.id);
+    const feedback = '/v1/support/feedback?as=parent';
+    const report = { text: '退厅后仍能发反馈', requestId: 'after-leave' };
+    expect((await call(feedback, report)).status).toBe(401);
+    expect((await call(feedback, report, { ...auth, 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    expect((await call(feedback, report, auth)).status).toBe(200);
+    expect((await call(feedback, undefined, auth)).body.feedback).toHaveLength(1);
+    expect((await request('feedback', b.token)).body.feedback).toHaveLength(0);
+    expect((await call('/v1/support/announcements?as=parent', undefined, auth)).status).toBe(200);
+  });
+
   it('反馈和广播按请求号去重；限制正文与频率；普通用户不能广播', async () => {
     const { a } = await setup();
     const body = { text: '想多等一会儿', requestId: 'repeat-1' };

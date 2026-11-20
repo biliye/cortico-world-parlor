@@ -7,6 +7,7 @@ const targets = [
   ['../src/room/client.ts', /(?<=PARLOR_CLIENT_VERSION = ')[^']+/g],
   ['../src/web/play.html', /(?<=[?&]v=)[^"'&\s]+/g],
   ['../src/web/parent.html', /(?<=[?&]v=)[^"'&\s]+/g],
+  ['../src/web/support.html', /(?<=[?&]v=)[^"'&\s]+/g],
   ['../src/web/welcome.html', /(?<=[?&]v=)[^"'&\s]+/g],
 ];
 

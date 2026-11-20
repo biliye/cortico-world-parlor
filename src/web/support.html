@@ -6,8 +6,10 @@
 <p id="status" role="status" aria-live="polite"></p>
 <section><h2>运营公告</h2><button id="refresh" type="button">刷新</button><div id="announcements"></div></section>
 <section id="feedback-section"><h2>给运营者的反馈</h2><p>描述发生了什么、约几点、在哪个客厅。请勿填写密码或私人聊天内容。</p>
+<p id="feedback-status" role="status"></p>
+<p><a href="/parent">去家长页登录</a> · <a href="/play">去会馆登录</a> · <a href="https://github.com/biliye/cortico-world-parlor/issues">去 GitHub 反馈</a> · QQ 群 1061389211</p>
 <form id="feedback-form"><label for="feedback-text">反馈内容</label><textarea id="feedback-text" maxlength="2000" required rows="5"></textarea>
-<button type="submit">提交反馈</button></form><h3>我的反馈与回复</h3><div id="feedback"></div></section>
+<button id="feedback-submit" type="submit" disabled>提交反馈</button></form><h3>我的反馈与回复</h3><div id="feedback"></div></section>
 <details id="operator"><summary>运营者入口</summary><p>使用独立运营钥匙，普通房主钥匙无效。钥匙只在本页内存中使用。</p>
 <form id="operator-login"><label for="operator-key">运营钥匙</label><input id="operator-key" type="password" autocomplete="off" required>
 <button type="submit">打开工作台</button></form>
@@ -35,4 +37,4 @@
 <h3>新闻管理</h3><p>改一条已发出的新闻不会重新推送，但大厅小报下一次刷新就是新文本。删掉之后同一天可以重发一条。</p>
 <div id="operator-news-list"></div>
 <h3>反馈收件箱</h3><div id="operator-feedback"></div></div></details>
-</main><script type="module" src="/play/assets/support.js"></script></body></html>
+</main><script type="module" src="/play/assets/support.js?v=0.49.1"></script></body></html>

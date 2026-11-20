@@ -59,6 +59,9 @@ it('Coo 直进并保存原身份，网页两次登录只有明确接管才换令
   const logins = await Promise.all(Array.from({ length: 4 }, () => call('/v1/web/login', login)));
   expect(logins.map(result => result.status)).toEqual([200, 200, 200, 200]);
   const [desktop, phone] = [logins[0]!, logins[1]!];
+  const webFeedback = '/v1/support/feedback?as=web';
+  expect((await call(webFeedback, { text: '尚未领取网页席位', requestId: 'web-login-feedback' }, { cookie: phone.cookie })).status).toBe(200);
+  expect((await call(webFeedback, undefined, { cookie: desktop.cookie })).body.feedback).toHaveLength(1);
   expect(phone.cookie).not.toBe(desktop.cookie);
   expect((await call('/v1/rooms/hall/room', undefined, legacySeat)).status).toBe(200);
   expect((await call('/v1/parent/me', undefined, { cookie: phone.cookie })).status).toBe(401);

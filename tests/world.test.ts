@@ -1,5 +1,5 @@
 import { toolForOperation } from './helpers/tool-operations.ts';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,7 @@ afterEach(async () => {
   await world?.stop();
   world = undefined;
   await server?.close();
+  vi.restoreAllMocks();
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
@@ -408,6 +409,27 @@ describe('群友接入的默认值', () => {
     expect(PARLOR_DEFAULTS.inviteCode.length).toBeGreaterThan(8);
   });
 
+  it.each([
+    ['https://PARLOR.COM.CN:443/', DEFAULT_INVITE_CODE, DEFAULT_INVITE_CODE],
+    ['https://parlor.com.cn', '', DEFAULT_INVITE_CODE],
+    ['https://parlor.com.cn', '自填邀请码', '自填邀请码'],
+    ['https://private.example', '', '旧部署邀请码'],
+  ])('入场按服务器取邀请码（%s，配置 %s）', async (url, configured, expected) => {
+    const ctx = makeContext({ PARLOR_INVITE_CODE: '旧部署邀请码', PARLOR_LOCAL_INVITE_CODE: '新单厅邀请码' });
+    ctx.cfg.serverUrl = url;
+    ctx.cfg.identityUrl = url;
+    ctx.cfg.inviteCode = configured;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/healthz')) return Response.json({ protocol: 1 });
+      expect(String(input)).toMatch(/\/v1\/join$/);
+      expect((init?.headers as Record<string, string>)['x-parlor-invite']).toBe(expected);
+      return Response.json({ error: '测试结束' }, { status: 403 });
+    });
+    world = PARLOR.create(ctx);
+    await expect(world.start(new FakeHost())).rejects.toThrow('测试结束');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('默认房间是大厅；自己开客厅时换回 lobby', async () => {
     expect(PARLOR_DEFAULTS.room).toBe('hall');
     const secrets: Record<string, string> = {};
@@ -424,7 +446,7 @@ describe('群友接入的默认值', () => {
   });
 
   it('自己开客厅时不拿房主那份公开码当锁', async () => {
-    const secrets: Record<string, string> = {};
+    const secrets: Record<string, string> = { PARLOR_INVITE_CODE: DEFAULT_INVITE_CODE };
     const ctx = makeContext(secrets);
     ctx.cfg.serverUrl = '';
     ctx.cfg.inviteCode = DEFAULT_INVITE_CODE;
@@ -434,8 +456,14 @@ describe('群友接入的默认值', () => {
     const host = new FakeHost();
     await world.start(host);
     expect(host.events[0]?.type).toBe('parlor.started');
-    expect(secrets.PARLOR_INVITE_CODE).toBeTruthy();
-    expect(secrets.PARLOR_INVITE_CODE).not.toBe(DEFAULT_INVITE_CODE);
+    const localInvite = secrets.PARLOR_LOCAL_INVITE_CODE;
+    expect(localInvite).toBeTruthy();
+    expect(localInvite).not.toBe(DEFAULT_INVITE_CODE);
+    expect(secrets.PARLOR_INVITE_CODE).toBe(DEFAULT_INVITE_CODE);
+    await world.stop();
+    world = PARLOR.create(ctx);
+    await world.start(new FakeHost());
+    expect(secrets.PARLOR_LOCAL_INVITE_CODE).toBe(localInvite);
   });
 
   it('自开客厅续用本机席位时从该席位恢复家长链接', async () => {

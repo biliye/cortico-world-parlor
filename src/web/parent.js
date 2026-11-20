@@ -13,6 +13,7 @@ const ui = {
   consoleClock: document.getElementById('clock'),
   roomName: document.getElementById('room-name'),
   roomSeat: document.getElementById('room-seat'),
+  leaveSeat: document.getElementById('leave-child-seat'),
   roomLive: document.getElementById('room-live'),
   statMsgs: document.getElementById('stat-msgs'),
   statWins: document.getElementById('stat-wins'),
@@ -431,6 +432,28 @@ function loadView() {
   return viewRequest;
 }
 
+ui.leaveSeat?.addEventListener('click', async () => {
+  const seat = currentView?.seat;
+  const roomName = ui.roomName.textContent;
+  if (!seat || !confirm(`让孩子离开「${roomName}」？如果 World 仍在运行，它可能会重新入座。`)) return;
+  const generation = viewGeneration;
+  ui.leaveSeat.disabled = true;
+  try {
+    const result = await api('/v1/parent/leave', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seatId: seat.id }),
+    });
+    if (generation === viewGeneration) toast(result.left ? '已让孩子离开客厅。' : '孩子已经离开客厅。');
+  } catch (error) {
+    if (generation === viewGeneration) toast(error.message || '离开失败');
+  } finally {
+    await viewRequest;
+    if (generation === viewGeneration) await loadView();
+    ui.leaveSeat.disabled = false;
+  }
+});
+
 function render(view) {
   const seat = view.seat;
   const room = view.room;
@@ -444,6 +467,7 @@ function render(view) {
   ui.roomSeat.textContent = seat
     ? `席位 ${seat.name}${seat.handle ? ` #${seat.handle}` : ''} · ${KIND[seat.kind] || seat.kind}`
     : '孩子现在没有活跃席位。';
+  if (ui.leaveSeat) ui.leaveSeat.hidden = !seat;
   ui.roomLive.textContent = room ? `${events.length} 条可见` : '不在客厅';
   ui.latest.textContent = view.at ? `服务器 ${clock(view.now)}` : '';
 

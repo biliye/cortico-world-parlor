@@ -1,12 +1,15 @@
 import http from 'node:http';
 import { jsonValue } from '../src/room/storage/json.ts';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pgServerStorage } from './helpers/pg.ts';
 import { WorldServer } from '../src/room/world-server.ts';
+import { RoomHost } from '../src/room/room-host.ts';
+import { ParlorClient } from '../src/room/client.ts';
 
 let server: WorldServer | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await server?.close();
   server = undefined;
 });
@@ -93,6 +96,27 @@ describe('席位离线释放', () => {
 
     expect(await server!.releaseOfflineSeats(now)).toBe(0);
     expect(await releasedAt('s-pet-old')).toBeNull();
+  });
+
+  it('离线扫描之后找回的席位仍保留', async () => {
+    const url = await makeServer();
+    const client = new ParlorClient(url, { cooId: 'coo-offline-recover', cooSecret: 'offline-recover-secret-001' });
+    const name = '重新上线的 Coo';
+    const joined = await client.join('inv', { name, kind: 'pet' }, 'hall');
+    const now = Date.now();
+    await server!.dbHandle.prepare('UPDATE room_seats SET last_seen_at = ? WHERE room_id = ? AND id = ?')
+      .run(now - 2 * HOUR, 'hall', joined.seat.id);
+    const release = RoomHost.prototype.releaseOffline;
+    let renewed = '';
+    const scan = vi.spyOn(RoomHost.prototype, 'releaseOffline').mockImplementationOnce(async function (this: RoomHost, ...args) {
+      renewed = (await client.join('inv', { name, resumeSeatId: joined.seat.id }, 'hall')).token;
+      return release.apply(this, args);
+    });
+    expect(await server!.releaseOfflineSeats(now)).toBe(0);
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(renewed).not.toBe(joined.token);
+    expect(await releasedAt(joined.seat.id)).toBeNull();
+    expect((await client.snapshot(renewed, 0, 1, 'hall')).seat.id).toBe(joined.seat.id);
   });
 
   it('还有 SSE 连着的席位不释放', async () => {

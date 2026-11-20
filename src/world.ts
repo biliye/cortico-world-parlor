@@ -22,7 +22,7 @@ import { parseTableLink } from './room/table-discovery-protocol.ts';
 import { LocalHistory, type HistoryQuery } from './local-history.ts';
 import {
   WAKE_TIERS, WAKE_TIER_LABELS, decideWake, isAddressed, isRoomId,
-  type ActionRequest, type ActionResponse, type HallView, type InboxNews, type MeView,
+  type ActionRequest, type ActionResponse, type HallView, type InboxNews, type JoinRequest, type JoinResponse, type MeView,
   type RecruitTableHint, type RoomEvent, type RoomSnapshot, type RoomSummary, type Seat, type WakeTier,
 } from './room/protocol.ts';
 import { gameById, type GameDefinition } from './room/games/registry.ts';
@@ -37,6 +37,7 @@ export { PARLOR_TOOL_DECLS } from './tool-contract.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 const INVITE_SECRET = 'PARLOR_INVITE_CODE';
+const LOCAL_INVITE_SECRET = 'PARLOR_LOCAL_INVITE_CODE';
 const SEAT_SECRET = 'PARLOR_SEAT_TOKEN';
 const OWNER_SECRET = 'PARLOR_OWNER_TOKEN';
 /** 上次自动轮换家长钥匙的时间。只在「本机有钥匙但已失效」时用它退避，避免两台同身份的 Coo 来回作废。 */
@@ -500,25 +501,22 @@ export class ParlorWorld implements World {
     const defaultRoom = cfg.room || DEFAULT_ROOM_ID;
     this.currentRoom = this.ctx.secret(CURRENT_ROOM_SECRET).trim() || defaultRoom;
     let baseUrl = cfg.serverUrl.trim().replace(/\/+$/, '');
-    // 自己填的码永远优先。留空、或还是包里那份公开默认值时，先看 .env（老部署把码写在那儿），
-    // 再看公开默认值——装完不用动设置就能连上房主的客厅。
     const configured = cfg.inviteCode.trim();
     const fromEnv = this.ctx.secret(INVITE_SECRET).trim();
-    let invite = configured;
-    if (!configured || configured === DEFAULT_INVITE_CODE) {
-      invite = fromEnv || (baseUrl === DEFAULT_SERVER_URL ? DEFAULT_INVITE_CODE : configured);
-    }
+    const customInvite = configured === DEFAULT_INVITE_CODE ? '' : configured;
+    const publicGateway = URL.canParse(baseUrl) && new URL(baseUrl).href === `${DEFAULT_SERVER_URL}/`;
+    let invite = customInvite || (publicGateway ? DEFAULT_INVITE_CODE : fromEnv || configured);
 
     if (!baseUrl) {
       const dataFile = this.roomFile();
-      // 自己开客厅时不用包里那份公开码：人人都有，等于没锁。读 .env，没有就新生成一个。
-      if (invite === DEFAULT_INVITE_CODE) invite = this.ctx.secret(INVITE_SECRET).trim();
-      invite = invite || randomBytes(9).toString('base64url');
+      const localInvite = this.ctx.secret(LOCAL_INVITE_SECRET).trim();
+      const savedInvite = [fromEnv, localInvite].find(code => code && code !== DEFAULT_INVITE_CODE);
+      invite = customInvite || savedInvite || randomBytes(9).toString('base64url');
       // 单间服务器没有「大厅」这种东西（大厅是多客厅网关的目录，网页会按大厅画）；
       // 配置还是默认值时就叫 lobby，免得自己开的客厅在网页上显示成大厅。
       if (this.currentRoom === DEFAULT_ROOM_ID) this.currentRoom = 'lobby';
-      if (!this.ctx.secret(INVITE_SECRET)) {
-        try { this.ctx.storeSecret(INVITE_SECRET, invite); } catch { /* 假上下文或不可写 */ }
+      if (!customInvite && !savedInvite) {
+        try { this.ctx.storeSecret(LOCAL_INVITE_SECRET, invite); } catch { /* 假上下文或不可写 */ }
       }
       this.server = new ParlorServer({
         id: this.currentRoom,
@@ -548,7 +546,7 @@ export class ParlorWorld implements World {
       }
       throw error;
     }
-    this.loadCursors();
+    this.loadCursors(this.server ? this.currentRoom : defaultRoom);
 
     const stored = this.ctx.secret(SEAT_SECRET).trim();
     if (stored) {
@@ -585,24 +583,24 @@ export class ParlorWorld implements World {
   /** 用现有身份入座，拿一枚新令牌；启动和「席位被释放后自动重连」共用。 */
   private async joinRoom(client: ParlorClient): Promise<void> {
     const request = { name: this.baseSeatName(), kind: 'pet' as const, tier: this.ctx.cfg.wakeTier };
-    let joined;
+    let joined: JoinResponse;
+    let recovered = false;
     try {
-      joined = await client.join(this.inviteCode, request, this.roomArg());
+      joined = await this.joinConfiguredRoom(client, request);
     } catch (error) {
       if (!this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
-      const archived = error.status === 403 && error.message.includes('已经归档');
-      const defaultRoom = this.ctx.cfg.room || DEFAULT_ROOM_ID;
-      // 旧网关的准入检查把「不存在」也回成 403，兼容它但不吞权限/邀请码错误。
-      const missing = (error.status === 404 || (error.status === 403 && error.message === '目标客厅不存在'))
-        && this.currentRoom !== defaultRoom;
-      if (!archived && !missing) throw error;
-      const target = archived ? DEFAULT_ROOM_ID : defaultRoom;
-      joined = await client.join(this.inviteCode, request, target);
-      this.currentRoom = target;
+      const conflict = [400, 409].includes(error.status) && (error.code === 'already_seated'
+        || error.message === '你已经在另一个客厅里；先离开或换房'
+        || error.message === '你已经在这个客厅里了；用原来的席位令牌'
+        || error.message === '这个 Coo 已经有一个活跃席位');
+      const missing = [403, 404].includes(error.status) && error.message === '目标客厅不存在';
+      if (!conflict && !missing) throw error;
+      const location = await client.location().catch(() => null);
+      if (!location || !isRoomId(location.room) || !location.seat?.id) throw error;
+      joined = await client.join(this.inviteCode, { ...request, resumeSeatId: location.seat.id }, location.room);
+      recovered = true;
       this.clearPendingMessages();
       this.focused = false;
-      await this.reportLink('internal', archived ? '原客厅已被房主删除，已回到大厅。'
-        : `原客厅不存在，已回到${target === DEFAULT_ROOM_ID ? '大厅' : target}。`);
     }
     if (joined.room) this.currentRoom = joined.room;
     this.token = joined.token;
@@ -614,13 +612,37 @@ export class ParlorWorld implements World {
     if (issued) this.storeOwnerKey(issued, this.ownerKeyIssuer());
     try {
       this.ctx.storeSecret(SEAT_SECRET, joined.token);
-      this.saveCursor();
     } catch { /* 假上下文或不可写 */ }
     const snapshot = await client.snapshot(this.token, 0, 1, this.roomArg());
     if (this.identity?.authority) saveIdentity(this.identityFile, this.identity);
     this.lastSeq = this.resumeFrom(snapshot.latest);
+    this.saveCursor();
     this.applySnapshot(snapshot);
     await this.syncSeatName(client);
+    if (recovered) await this.reportLink('internal', `已找回原席位并回到${this.currentRoom === DEFAULT_ROOM_ID ? '大厅' : `客厅 ${this.currentRoom}`}。`);
+  }
+
+  private async joinConfiguredRoom(client: ParlorClient, request: JoinRequest): Promise<JoinResponse> {
+    try {
+      return await client.join(this.inviteCode, request, this.roomArg());
+    } catch (error) {
+      if (!this.multiRoom || !(error instanceof ParlorHttpError)) throw error;
+      const archived = error.status === 403 && error.message.includes('已经归档');
+      const defaultRoom = this.ctx.cfg.room || DEFAULT_ROOM_ID;
+      // 旧网关的准入检查把「不存在」也回成 403，兼容它但不吞权限/邀请码错误。
+      const missing = (error.status === 404 || (error.status === 403 && error.message === '目标客厅不存在'))
+        && this.currentRoom !== defaultRoom;
+      if (!archived && !missing) throw error;
+      const target = archived ? DEFAULT_ROOM_ID : defaultRoom;
+      if (this.currentRoom === target) throw error;
+      const joined = await client.join(this.inviteCode, request, target);
+      this.currentRoom = joined.room || target;
+      this.clearPendingMessages();
+      this.focused = false;
+      await this.reportLink('internal', archived ? '原客厅已被房主删除，已回到大厅。'
+        : `原客厅不存在，已回到${this.currentRoom === DEFAULT_ROOM_ID ? '大厅' : this.currentRoom}。`);
+      return joined;
+    }
   }
 
   /**
@@ -770,7 +792,7 @@ export class ParlorWorld implements World {
     if (!client || !this.inviteCode) return false;
     try {
       await this.joinRoom(client);
-      await this.reportLink('external', `席位被释放了，已重新入座：${this.seat?.name ?? '未知'}。`);
+      await this.reportLink('external', `已重新连上席位：${this.seat?.name ?? '未知'}。`);
       return true;
     } catch {
       return false;
@@ -784,7 +806,7 @@ export class ParlorWorld implements World {
   }
 
   /** 游标文件按客厅分开；旧格式 {room, seq} 还能读。 */
-  private loadCursors(): void {
+  private loadCursors(defaultRoom: string): void {
     this.lastStoryHint = undefined;
     try {
       const raw = JSON.parse(readFileSync(this.cursorFile, 'utf8')) as {
@@ -793,7 +815,10 @@ export class ParlorWorld implements World {
         news?: { publishAt?: unknown; id?: unknown };
         storyHint?: { cooId?: unknown; roundId?: unknown };
       };
-      if (raw.server && raw.server !== this.baseUrl) return;
+      if (raw.server && raw.server !== this.baseUrl) {
+        this.currentRoom = defaultRoom;
+        return;
+      }
       if (typeof raw.storyHint?.cooId === 'string' && typeof raw.storyHint.roundId === 'string') {
         this.lastStoryHint = { cooId: raw.storyHint.cooId, roundId: raw.storyHint.roundId };
       }

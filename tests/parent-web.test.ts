@@ -5,12 +5,13 @@ import { sourceFunction } from './helpers/game-component.ts';
 
 class TestNode {
   children: TestNode[] = [];
+  listeners = new Map<string, () => Promise<void>>();
   className = '';
   textContent = '';
   get firstChild() { return this.children[0]; }
   append(...nodes: TestNode[]) { this.children.push(...nodes); }
   removeChild(node: TestNode) { this.children.splice(this.children.indexOf(node), 1); }
-  addEventListener() {}
+  addEventListener(type: string, listener: () => Promise<void>) { this.listeners.set(type, listener); }
 }
 
 const mount = (responses: unknown[] = []) => {
@@ -34,7 +35,7 @@ const mount = (responses: unknown[] = []) => {
     .replace("import { beginGlobalEntry } from './identity-entry.js';", '')
     .replace('void boot();', '');
   const renderer = runInNewContext(source + '\nrender = captureRender; ({ renderMail, renderLog, loadView, playAsParent })', {
-    document, fetch, setTimeout, clearTimeout: vi.fn(), URLSearchParams, captureRender: render, beginGlobalEntry,
+    document, fetch, setTimeout, clearTimeout: vi.fn(), URLSearchParams, captureRender: render, beginGlobalEntry, confirm: () => true,
     location: { origin: 'https://parlor.test' },
   }) as { renderMail(view: unknown): void; renderLog(view: unknown): void; loadView(): Promise<boolean>;
     playAsParent(button: { disabled: boolean }): Promise<void> };
@@ -47,6 +48,60 @@ it('家长页从统一身份服务返回游玩页后自动领席位', async () =
   expect(beginGlobalEntry).toHaveBeenCalledWith('https://identity.test', { room: 'lobby', parent: true }, 'https://parlor.test/play');
 });
 
+it('家长退厅提交页面上确认的席位，成功后刷新位置', async () => {
+  const { loadView, nodes, fetch, render } = mount([
+    { room: { id: 'hall' }, seat: { id: 'seat-from-view' } },
+    { ok: true, left: true },
+    { room: null, seat: null },
+  ]);
+  await loadView();
+  await nodes.get('leave-child-seat')!.listeners.get('click')!();
+  expect(fetch.mock.calls[1]?.[0]).toBe('/v1/parent/leave');
+  expect(JSON.parse(fetch.mock.calls[1]?.[1].body)).toEqual({ seatId: 'seat-from-view' });
+  expect(render).toHaveBeenLastCalledWith({ room: null, seat: null });
+});
+
+it('反馈页遇到失效席位时可以凭家长会话提交', async () => {
+  class SupportNode extends TestNode {
+    disabled = false;
+    value = '';
+    replaceChildren(...nodes: TestNode[]) { this.children = nodes; }
+    removeAttribute() {}
+  }
+  const nodes = new Map<string, SupportNode>();
+  const get = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, new SupportNode());
+    return nodes.get(id)!;
+  };
+  const fetch = vi.fn(async (path: string, init: RequestInit) => {
+    if (path === '/v1/support/feedback?as=parent') {
+      return Response.json({ feedback: init.method === 'POST' ? { id: 'saved' } : [] });
+    }
+    if (path === '/v1/support/announcements?as=parent') return Response.json({ announcements: [] });
+    return Response.json({ error: '席位令牌已失效' }, { status: 401 });
+  });
+  const script = readFileSync(new URL('../src/web/support.js', import.meta.url), 'utf8')
+    .replace('void refresh().catch(error => status(error.message));', '');
+  const { refresh } = runInNewContext(script + '\n({ refresh })', {
+    document: { getElementById: get, createElement: () => new SupportNode() }, fetch, location: { search: '' },
+    URLSearchParams, AbortSignal, setInterval: vi.fn(), crypto: { randomUUID: () => 'sample-request' },
+    localStorage: { getItem: () => '{"token":"old-token"}', setItem: vi.fn() },
+  }) as { refresh(): Promise<void> };
+  await refresh();
+  expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+    '/v1/support/feedback', '/v1/support/feedback?as=web', '/v1/support/feedback?as=parent', '/v1/support/announcements?as=parent',
+  ]);
+  const button = get('feedback-submit');
+  expect(button.disabled).toBe(false);
+  get('feedback-text').value = '网页发来的反馈';
+  const submit = get('feedback-form').listeners.get('submit') as unknown as (event: object) => void;
+  submit({ preventDefault: vi.fn(), submitter: button });
+  await vi.waitFor(() => expect(get('status').textContent).toContain('反馈已保存'));
+  expect(fetch.mock.calls[4]).toMatchObject([
+    '/v1/support/feedback?as=parent',
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: '网页发来的反馈', requestId: 'sample-request' }) },
+  ]);
+});
 describe('家长页消息渲染', () => {
   it('合并版本响应、清空已失效的私牌与历史，并在后台降频', async () => {
     const versions = { state: 's1', events: 'e1', mail: 'm1' };

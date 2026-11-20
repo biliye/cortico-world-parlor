@@ -410,7 +410,8 @@ export class WorldServer {
           return;
         }
         if (statusOf(error) >= 500) console.error('parlor: 请求失败', { method: req.method, path: new URL(req.url ?? '/', 'http://localhost').pathname, error: messageOf(error) });
-        json(res, statusOf(error), { error: messageOf(error) });
+        const alreadySeated = (error instanceof HostError || error instanceof RoomSeatError) && error.code === 'already_seated';
+        json(res, statusOf(error), { error: messageOf(error), ...(alreadySeated ? { code: 'already_seated' } : {}) });
       });
     });
     const bind = (): Promise<number> => new Promise<number>((resolve, reject) => {
@@ -767,7 +768,7 @@ export class WorldServer {
         if (online.has(seat.cooId)) continue;
         if (seat.lastSeenAt > cutoff) continue;
         try {
-          if (await (await this.host(seat.roomId)).releaseOffline(seat.cooId, now)) released += 1;
+          if (await (await this.host(seat.roomId)).releaseOffline(seat.cooId, seat.id, cutoff, now)) released += 1;
         } catch { /* 这间房暂时有问题就跳过，下一轮再试 */ }
       }
     }
@@ -877,6 +878,37 @@ export class WorldServer {
     return seat.cooId;
   }
 
+  private async supportActor(req: IncomingMessage, url: URL): Promise<string> {
+    switch (url.searchParams.get('as')) {
+      case 'parent':
+        return (await this.parentSession(req)).account.cooId;
+      case 'web': {
+        const session = await this.webPlayers.session(cookieOf(req, 'parlor_web'));
+        if (!session) throw new HttpError(401, '会馆登录已失效，请重新登录');
+        return session.coo_id;
+      }
+      default:
+        return this.cooOrSeat(req);
+    }
+  }
+
+  private async leaveOwnSeat(cooId: string, body: Record<string, unknown>): Promise<{ ok: true; left: boolean }> {
+    const expectedSeatId = body.seatId;
+    if (typeof expectedSeatId !== 'string' || !expectedSeatId) throw new HttpError(400, '请先获取当前席位');
+    const seat = await activeSeatForCoo(this.db, cooId);
+    if (!seat) return { ok: true, left: false };
+    if (seat.id !== expectedSeatId) throw new HttpError(409, '席位已变化，请刷新后再离开');
+    try {
+      await (await this.host(seat.roomId)).leave(cooId, expectedSeatId);
+    } catch (error) {
+      if (!(error instanceof HostError) || error.code !== 'not_found') throw error;
+      if (await activeSeatForCoo(this.db, cooId)) throw new HttpError(409, '席位已变化，请刷新后再离开');
+      return { ok: true, left: false };
+    }
+    this.pokeClock();
+    return { ok: true, left: true };
+  }
+
   private async seatAuth(req: IncomingMessage, roomId: string, tokenOverride?: string) {
     const token = tokenOverride ?? bearer(req);
     if (!token) throw new HttpError(401, '缺少席位令牌');
@@ -921,16 +953,18 @@ export class WorldServer {
     return `parlor_web=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`;
   }
 
+  private requireWebPost(req: IncomingMessage): void {
+    const origin = headerValue(req, 'origin');
+    if ((origin && origin !== this.audienceUrl()) || headerValue(req, 'sec-fetch-site') === 'cross-site'
+      || !/^application\/json(?:\s*;|$)/i.test(headerValue(req, 'content-type'))) {
+      throw new HttpError(403, '请从会馆页面提交');
+    }
+  }
+
   private async webPlayerRoute(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
     const path = url.pathname.slice('/v1/web/'.length);
     res.setHeader('cache-control', 'no-store');
-    if (method === 'POST') {
-      const origin = headerValue(req, 'origin');
-      if ((origin && origin !== this.audienceUrl()) || headerValue(req, 'sec-fetch-site') === 'cross-site'
-        || !/^application\/json(?:\s*;|$)/i.test(headerValue(req, 'content-type'))) {
-        throw new HttpError(403, '请从会馆页面提交');
-      }
-    }
+    if (method === 'POST') this.requireWebPost(req);
     const cookie = cookieOf(req, 'parlor_web');
     if (path === 'credentials' && (method === 'GET' || method === 'POST')) {
       const { account } = await this.parentSession(req);
@@ -1131,7 +1165,7 @@ export class WorldServer {
       const support = new SupportDb(this.db, this.now);
       const path = url.pathname.slice('/v1/support/'.length);
       if (path === 'announcements' && method === 'GET') {
-        await this.cooOrSeat(req);
+        await this.supportActor(req, url);
         json(res, 200, { announcements: await support.announcements() }); return;
       }
       // 公告 / 新闻 / 招募共用一次请求：Coo 侧只有 60 秒一个定时器，
@@ -1175,7 +1209,8 @@ export class WorldServer {
         json(res, 200, { news: (await support.latestNews()) ?? null }); return;
       }
       if (path === 'feedback' && (method === 'GET' || method === 'POST')) {
-        const cooId = await this.cooOrSeat(req);
+        if (method === 'POST' && ['parent', 'web'].includes(url.searchParams.get('as') ?? '')) this.requireWebPost(req);
+        const cooId = await this.supportActor(req, url);
         if (method === 'GET') { json(res, 200, { feedback: await support.feedback(cooId) }); return; }
         const body = await readJson(req);
         const person = await this.personInfo(cooId);
@@ -1394,6 +1429,13 @@ export class WorldServer {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/v1/parent/leave') {
+      this.requireWebPost(req);
+      const { account } = await this.parentSession(req);
+      json(res, 200, await this.leaveOwnSeat(account.cooId, await readJson(req)));
+      return;
+    }
+
     if (method === 'POST' && url.pathname === '/v1/me/rename') {
       const token = bearer(req);
       const seat = token ? await seatByTokenHash(this.db, hashSeatToken(token)) : undefined;
@@ -1493,7 +1535,13 @@ export class WorldServer {
     if (method === 'GET' && url.pathname === '/v1/me/location') {
       const cooId = await this.cooOrSeat(req);
       const current = await activeSeatForCoo(this.db, cooId);
+      res.setHeader('cache-control', 'private, no-store');
       json(res, 200, { room: current?.roomId ?? null, seat: current ? await seatOfRow(this.db, current.roomId, current) : null });
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/v1/me/leave') {
+      const cooId = await this.cooOrSeat(req);
+      json(res, 200, await this.leaveOwnSeat(cooId, await readJson(req)));
       return;
     }
     if (method === 'GET' && url.pathname === '/v1/me/history') {
@@ -2329,11 +2377,14 @@ export class WorldServer {
       if (this.identityAuthority || await this.identify(req) === null) this.checkInvite(req, body);
       const cooId = await this.cooAuth(req, name);
       if (await this.webPlayers.isGuest(cooId)) throw new HttpError(403, '游客请从会馆试玩入口进入');
-      const relocation = await this.db.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(cooId) as { return_room_id:string|null } | undefined;
-      // Resolve the canonical target using the body already parsed above.
-      // IncomingMessage is one-shot: recursively re-entering join would await a
-      // second end event forever and lose body-based invite/name/kind/tier.
-      roomId = relocation?.return_room_id || roomId;
+      const resumeSeatId = body.resumeSeatId;
+      if (resumeSeatId !== undefined && (typeof resumeSeatId !== 'string' || !resumeSeatId)) {
+        throw new HttpError(400, '席位 ID 无效');
+      }
+      if (resumeSeatId === undefined) {
+        const relocation = await this.db.prepare('SELECT return_room_id FROM coo_sessions WHERE coo_id=?').get(cooId) as { return_room_id:string|null } | undefined;
+        roomId = relocation?.return_room_id || roomId;
+      }
       await this.assertRoomEntry(roomId, cooId);
       // 先建/取家长账户，再落座：账户表满时直接 503，**不留下一个没人认领的席位**
       // （老顺序是先落座后建账户，失败一次就多一排僵尸席位，客户端退避重连还会继续加）。
@@ -2341,12 +2392,12 @@ export class WorldServer {
       const account = await this.coo.ensureAccount(cooId, name ? parentAccountName(name) : undefined);
       const host = await this.host(roomId);
       // 同一身份丢了令牌时续用原席位；身份认证与房间准入已在上面核过。
-      const joined = await host.seatOf(cooId) ? await host.reissueSeatToken(cooId) : await host.join(cooId, {
+      const joined = resumeSeatId !== undefined || await host.seatOf(cooId) ? await host.reissueSeatToken(cooId, undefined, resumeSeatId) : await host.join(cooId, {
         name,
         ...(typeof body.kind === 'string' ? { kind: body.kind as SeatKind } : {}),
         ...(typeof body.tier === 'string' ? { tier: body.tier as WakeTier } : {}),
       });
-      await this.db.prepare('UPDATE coo_sessions SET return_room_id=NULL WHERE coo_id=?').run(cooId);
+      if (resumeSeatId === undefined) await this.db.prepare('UPDATE coo_sessions SET return_room_id=NULL WHERE coo_id=?').run(cooId);
       this.pokeClock();
       json(res, 200, {
         room: roomId,
@@ -2396,7 +2447,7 @@ export class WorldServer {
 
     if (action === 'leave' && method === 'POST') {
       const seat = await this.seatAuth(req, roomId);
-      const left = await (await this.host(roomId)).leave(seat.cooId);
+      const left = await (await this.host(roomId)).leave(seat.cooId, seat.id);
       json(res, 200, {
         ok: true,
         seq: left.event.seq,
