@@ -85,6 +85,7 @@ function harness() {
     return {
       messages,
       sections,
+      tools,
       archive(id) {
         onDomainChange({ domain: 'workspace', table: '', operation: 'put',
           value: { archivedSessionIds: [...archived, id] } });
@@ -298,6 +299,10 @@ test('registers tea house guidance on plugin load before a session calls a tool'
   const [section] = host.sections;
   assert.equal(section.name, 'world:parlor');
   assert.match(section.text, /去茶室看看.*parlor_room（op: look）/);
+  for (const guidance of [section.text, host.tools.get('parlor_wait').description]) {
+    assert.match(guidance, /pendingAction 为 true，先查看桌面并处理本席行动。否则直接结束本轮回复/);
+    assert.match(guidance, /等待茶室事件时不要调用 wait_agent、休眠或轮询/);
+  }
   assert.equal(gateway.joins(), 0);
 });
 
