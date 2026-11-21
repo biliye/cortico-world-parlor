@@ -1,6 +1,38 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { acceptsGzip } from './web-assets.ts';
+
+function canonicalIp(address: string): string | undefined {
+  if (address.includes('%')) return;
+  const version = isIP(address);
+  if (version === 4) return address;
+  if (version !== 6) return;
+  const ip = new URL(`http://[${address}]`).hostname.slice(1, -1);
+  const mapped = /^::ffff:([\da-f]+):([\da-f]+)$/.exec(ip);
+  if (!mapped) return ip;
+  const high = Number.parseInt(mapped[1]!, 16);
+  const low = Number.parseInt(mapped[2]!, 16);
+  return [high >> 8, high & 255, low >> 8, low & 255].join('.');
+}
+
+export const isLoopback = (address: string): boolean => {
+  const ip = canonicalIp(address);
+  return ip === '::1' || ip?.startsWith('127.') === true;
+};
+
+/** 仅接受同机可信反代追加的最后一个地址。 */
+export const clientIp = (req: Pick<IncomingMessage, 'headers'> & {
+  socket: Pick<IncomingMessage['socket'], 'remoteAddress'>;
+}, trustProxy: boolean): string => {
+  const peer = req.socket.remoteAddress ?? '';
+  if (trustProxy && isLoopback(peer)) {
+    const forwarded = headerValue(req, 'x-forwarded-for').split(',').at(-1)?.trim() ?? '';
+    const ip = canonicalIp(forwarded);
+    if (ip) return ip;
+  }
+  return canonicalIp(peer) ?? 'unknown';
+};
 
 export class HttpError extends Error {
   readonly status: number;
@@ -59,7 +91,7 @@ export const bearer = (req: IncomingMessage): string => {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 };
 
-export const headerValue = (req: IncomingMessage, name: string): string => {
+export const headerValue = (req: Pick<IncomingMessage, 'headers'>, name: string): string => {
   const value = req.headers[name];
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
 };

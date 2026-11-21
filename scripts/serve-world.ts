@@ -27,6 +27,11 @@ for (let index = 2; index < process.argv.length; index += 2) {
 }
 
 const host = args.get('--host') ?? '127.0.0.1';
+const proxyFlag = args.get('--trust-loopback-proxy') ?? process.env.PARLOR_TRUST_LOOPBACK_PROXY;
+if (proxyFlag !== undefined && proxyFlag !== 'true' && proxyFlag !== 'false') {
+  console.error('--trust-loopback-proxy / PARLOR_TRUST_LOOPBACK_PROXY 需要 true 或 false');
+  process.exit(2);
+}
 const port = Number(args.get('--port') ?? 8790);
 const invite = args.get('--invite') ?? process.env.PARLOR_INVITE_CODE ?? randomBytes(9).toString('base64url');
 const defaultRoomId = args.get('--default-room') ?? 'lobby';
@@ -132,6 +137,7 @@ try {
     allowGuestJoin,
     identityAuthority: args.get('--identity-authority') ?? process.env.PARLOR_IDENTITY_AUTHORITY ?? DEFAULT_SERVER_URL,
     publicUrl: args.get('--public-url') ?? process.env.PARLOR_PUBLIC_URL,
+    ...(proxyFlag !== undefined ? { trustLoopbackProxy: proxyFlag === 'true' } : {}),
     offlineReleaseHours: offlineHours,
     cooOfflineReleaseHours: cooOfflineHours,
     cooIdleMinutes, roomArchiveHours,

@@ -14,6 +14,33 @@ import { MAHJONG_GAMES } from '../src/room/games/mahjong-rules.ts';
 let db:Db|undefined;
 afterEach(async()=>{ if(db) await closeTestDb(db);db=undefined; });
 
+it('PG v21 升级后保留私信并建立收发索引', async () => {
+  db = await openTestDb();
+  const accounts = new CooAccountDb(db);
+  const sender = 'coo-mail-upgrade-sender';
+  const recipient = 'coo-mail-upgrade-recipient';
+  await accounts.registerCoo(sender, 'mail-upgrade-sender-secret', 'pet', '寄信者');
+  await accounts.registerCoo(recipient, 'mail-upgrade-recipient-secret', 'pet', '收信者');
+  await createRoom(db, { id: 'r-mail-upgrade', ownerCooId: sender, name: '信箱检查' }, 1);
+  await db.exec(`
+    DROP INDEX ix_mail_received_recent, ix_mail_sent_recent;
+    UPDATE meta SET value='21' WHERE key='schema_version';
+  `);
+  await db.prepare(`INSERT INTO mail (id, ts, coo_id, from_coo_id, room_id, kind, from_name, text)
+    VALUES ('prior-letter', 1, ?, ?, 'r-mail-upgrade', 'whisper', '寄信者', '你好')`).run(recipient, sender);
+
+  await migrate(db);
+  await migrate(db);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
+  expect(await db.prepare("SELECT coo_id, from_coo_id, text FROM mail WHERE id='prior-letter'").get()).toEqual({
+    coo_id: recipient, from_coo_id: sender, text: '你好',
+  });
+  expect(await db.prepare("SELECT indexname FROM pg_indexes WHERE tablename='mail' AND indexname IN (?, ?) ORDER BY indexname")
+    .all('ix_mail_received_recent', 'ix_mail_sent_recent')).toEqual([
+    { indexname: 'ix_mail_received_recent' }, { indexname: 'ix_mail_sent_recent' },
+  ]);
+});
+
 it('PG v18 升到 v19 为原有家长增加网页登录和邀请码表，保留账户绑定', async () => {
   db = await openTestDb();
   await db.exec(`

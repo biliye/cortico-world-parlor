@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withTransaction, type Db } from '../src/room/db.ts';
 import {
+  AccountCreationRateError,
   AccountLimitError,
   CooAccountDb,
   type CooKind,
@@ -250,6 +251,31 @@ describe('持久化、事务与上限', () => {
     await expect(limited.ensureAccount(COO_B)).rejects.toThrow(/上限 1 位家人.*扩容/);
     expect(await limited.count()).toBe(1);
     expect(await limited.findCoo(COO_B)).toBeUndefined();
+  });
+
+  it('并发开户共享容量，已有账户继续可用，创建窗口随时间恢复', async () => {
+    const warning = vi.fn();
+    const limited = new CooAccountDb(db, {
+      now: () => clock, limit: 2, creationLimitPerHour: 1, onCapacityWarning: warning,
+    });
+    const first = await limited.ensureAccount(COO);
+    const restarted = new CooAccountDb(db, {
+      now: () => clock, limit: 2, creationLimitPerHour: 1, onCapacityWarning: warning,
+    });
+    const admission = vi.fn();
+    await expect(restarted.ensureAccount(COO, undefined, admission)).resolves.toMatchObject({
+      created: false, account: { id: first.account.id },
+    });
+    expect(admission).not.toHaveBeenCalled();
+    await expect(restarted.ensureAccount(COO_B)).rejects.toBeInstanceOf(AccountCreationRateError);
+
+    clock += 3_600_000;
+    const results = await Promise.allSettled([limited.ensureAccount(COO_B), limited.ensureAccount(COO_C)]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({ reason: expect.any(AccountLimitError) });
+    expect(await limited.count()).toBe(2);
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(2, 2);
   });
 
   it('非法 cooId / secret / kind 拒绝', async () => {

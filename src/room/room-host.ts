@@ -36,6 +36,7 @@ import {
 import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt, type TableRematchResult } from './table-host.ts';
 import type { TableLogQuery, TablePrivateSummary, TableSummary } from './table-engine.ts';
 import type { DeliveryReceipt, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
+import { SlidingRateLimit } from './rate-limit.ts';
 
 export { HostError, type HostErrorCode } from './host-error.ts';
 
@@ -54,6 +55,8 @@ export interface RoomHostOptions {
    */
   randomSeat?: (max: number) => number;
   onTableResult?: (game: string) => void;
+  /** 由网关提供跨厅的公开发言额度。 */
+  checkPublicChatRate?: (cooId: string) => void;
 }
 
 export interface JoinResult {
@@ -157,8 +160,9 @@ export class RoomHost {
   private readonly tableHost: TableHost;
   private readonly now: () => number;
   private readonly makeToken: () => string;
+  private readonly checkPublicChatRate?: (cooId: string) => void;
   /** 客厅发言与桌内发言共用同一个间隔，防止交替发绕过限速。 */
-  private readonly lastSay = new Map<string, number>();
+  private readonly sayGap = new SlidingRateLimit(4_000, { ms: SAY_GAP_MS, limit: 1 });
   private readonly db: Db;
 
   private constructor(
@@ -171,6 +175,7 @@ export class RoomHost {
     this.roomId = roomId;
     this.events = new EventDb(db, options.onCommit ? () => options.onCommit!(roomId) : undefined);
     this.now = options.now ?? Date.now;
+    this.checkPublicChatRate = options.checkPublicChatRate;
     this.mail = parts.mail;
     this.ledger = parts.ledger;
     this.makeToken = options.token ?? makeToken;
@@ -479,6 +484,7 @@ export class RoomHost {
     }
     const body = cleanText(text);
     this.checkSayGap(cooId);
+    this.checkPublicChatRate?.(cooId);
     const mentions = await this.mentionsIn(body, seat);
     const event = await this.events.append(this.roomId, {
       type: 'parlor.say',
@@ -1036,10 +1042,7 @@ export class RoomHost {
   }
 
   private checkSayGap(cooId: string): void {
-    const last = this.lastSay.get(cooId) ?? 0;
-    const now = this.now();
-    if (now - last < SAY_GAP_MS) throw new HostError('invalid', '说得太快了，等一下再说');
-    this.lastSay.set(cooId, now);
+    if (!this.sayGap.take(cooId, this.now())) throw new HostError('invalid', '说得太快了，等一下再说');
   }
 
   private statusLabel(status: string | null): string {

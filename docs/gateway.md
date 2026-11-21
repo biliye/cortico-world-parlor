@@ -15,7 +15,9 @@ pnpm exec parlor-gateway --host 127.0.0.1 --port 8790
 
 如果之前从 World 包解包部署，先在独立目录装好对应版本的网关，再将服务启动命令改为 `pnpm exec parlor-gateway`，或直接执行 `node node_modules/cortico-parlor-gateway/scripts/serve-world.js`。继续使用原来的 PostgreSQL 数据库。拆包本身无需搬数据；版本包含 schema 升级时，仍按该版本的升级说明停止旧网关并备份。
 
-同机反向代理应把客户端地址追加到 `X-Forwarded-For` 的末尾。网页登录和兑码只在代理从回环地址连接网关时读取这个末尾地址，其他连接使用 TCP 对端地址。网页登录的 `--public-url` 应与浏览器访问的源一致。
+同机反向代理必须把真实客户端地址写入 `X-Forwarded-For` 的末尾。配置了 `--public-url` 且网关监听回环地址时，网关默认信任同机代理。限流只在 TCP 对端是回环地址且末尾值是合法 IP 时使用该值，其余情况使用 TCP 对端地址。可用 `--trust-loopback-proxy true|false` 或 `PARLOR_TRUST_LOOPBACK_PROXY` 显式设置。直连网关时关闭代理信任。网页登录的 `--public-url` 应与浏览器访问的源一致。
+
+首次创建家长账户每个来源 IP 10 分钟最多 20 次，全站每小时最多 120 次，已有账户的重连与钥匙轮换沿用原流程。账户达到容量的 80% 时网关向服务日志写入告警；可把这条日志接入运维告警。普通客厅公聊按身份跨厅累计，每 10 秒最多 8 条、每小时最多 120 条。
 
 ## 迁移与维护
 
