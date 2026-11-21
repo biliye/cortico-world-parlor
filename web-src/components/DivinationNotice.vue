@@ -80,6 +80,8 @@ onBeforeUnmount(() => {
       <p v-if="error" class="dv-alert" role="alert">{{ error }}</p>
       <footer>
         <span>茶余一乐，别当真</span>
+        <!-- 只有一个「收下」是刻意的：家长与自家 Coo 的对话留在他们自己的私信里，茶馆不设回复框。
+             2026-11-21 拍板（见 openM 提案第十一节「留白」），不要再加「回一句」输入框。 -->
         <button type="button" autofocus :disabled="saving" @click="acknowledge">{{ saving ? '正在收下…' : '收下' }}</button>
       </footer>
     </template>
