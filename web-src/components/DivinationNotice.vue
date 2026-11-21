@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { DivinationDraw } from '../../src/room/divination-protocol.ts';
 import { timeoutSignal } from '../api/client.ts';
+import { lotTone } from '../lib/divination.ts';
 
 const dialog = ref<HTMLDialogElement | null>(null);
 const draw = ref<DivinationDraw | null>(null);
@@ -64,25 +65,77 @@ onBeforeUnmount(() => {
 <template>
   <dialog ref="dialog" class="divination-notice" aria-labelledby="divination-notice-title" @cancel.prevent="acknowledge">
     <template v-if="draw">
-      <h2 id="divination-notice-title">你家 Coo 解了这一签</h2>
-      <p class="lot-ref">{{ draw.day }} · 第 {{ draw.lot.number }} 签 · {{ draw.head ? '头签' : draw.lot.grade }}</p>
-      <blockquote>{{ draw.lot.poem }}</blockquote>
-      <p class="interpretation">{{ draw.interpretation }}</p>
-      <p v-if="error" role="alert">{{ error }}</p>
-      <button type="button" autofocus :disabled="saving" @click="acknowledge">{{ saving ? '正在收下…' : '收下' }}</button>
+      <p class="dv-eyebrow"><i aria-hidden="true" />你家 Coo 解了这一签</p>
+      <header class="notice-head">
+        <h2 id="divination-notice-title">第 {{ draw.lot.number }} 签</h2>
+        <span class="dv-seal" :class="'tone-' + lotTone(draw.lot.grade)">{{ draw.lot.grade }}</span>
+      </header>
+      <p class="lot-ref">{{ draw.day }}<template v-if="draw.head"> · 今日头签</template></p>
+      <p class="dv-poem">{{ draw.lot.poem }}</p>
+      <p class="dv-advice">宜 · {{ draw.lot.advice }}<span>{{ draw.lot.note }}</span></p>
+      <section class="say">
+        <p class="say-label">自家 Coo 的解</p>
+        <p class="say-text">{{ draw.interpretation }}</p>
+      </section>
+      <p v-if="error" class="dv-alert" role="alert">{{ error }}</p>
+      <footer>
+        <span>茶余一乐，别当真</span>
+        <button type="button" autofocus :disabled="saving" @click="acknowledge">{{ saving ? '正在收下…' : '收下' }}</button>
+      </footer>
     </template>
   </dialog>
 </template>
 
 <style scoped>
-.divination-notice { width: min(31rem, calc(100% - 2rem)); max-height: 85vh; overflow-y: auto; padding: clamp(1rem, 5vw, 1.75rem); color: var(--text); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: .8rem; }
-.divination-notice[open] { animation: appear .24s ease-out; }
-.divination-notice::backdrop { background: rgb(0 0 0 / 52%); }
-.divination-notice h2 { margin: 0 0 .45rem; font-size: 1.25rem; }
-.lot-ref { color: var(--muted, var(--text)); margin: 0; }
-.divination-notice blockquote { margin: .9rem 0; padding-inline-start: .75rem; border-inline-start: 2px solid var(--line-2); white-space: pre-line; line-height: 1.55; }
-.interpretation { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
-.divination-notice button { font: inherit; padding: .45rem .85rem; color: var(--panel-2); background: var(--text); border: 1px solid var(--line-2); border-radius: .45rem; }
-@keyframes appear { from { opacity: 0; transform: translateY(.35rem); } to { opacity: 1; transform: translateY(0); } }
+.divination-notice {
+  width: min(30rem, calc(100% - 2rem));
+  max-height: 86vh;
+  margin: auto;
+  overflow-y: auto;
+  padding: 1.6rem 1.5rem 1.25rem;
+  color: var(--paper-ink);
+  border: 0;
+  border-radius: .3rem;
+  background:
+    repeating-linear-gradient(90deg, rgba(120, 84, 48, .035) 0 1px, transparent 1px 6px),
+    radial-gradient(120% 90% at 50% 0%, #fffaf0, var(--paper) 62%, #efe4cd);
+  box-shadow: 0 2.2rem 5rem rgba(0, 0, 0, .55), inset 0 .22rem 0 #9c2f22;
+}
+.divination-notice[open] { animation: dv-appear .3s cubic-bezier(.2, .9, .2, 1); }
+.divination-notice::backdrop { background: color-mix(in oklab, #140c07 58%, transparent); backdrop-filter: blur(4px); }
+.dv-eyebrow { display: flex; align-items: center; gap: .45rem; margin: 0 0 .5rem; color: #8a6b46; font-size: .76rem; letter-spacing: .16em; }
+.dv-eyebrow i { width: .34rem; height: .34rem; border-radius: 50%; background: #9c2f22; }
+.notice-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; }
+.notice-head h2 { margin: 0; font-size: 1.5rem; letter-spacing: .08em; color: #2a1a10; }
+.dv-seal {
+  display: grid; place-items: center; width: 2.5rem; height: 2.5rem;
+  color: #fff3e2; background: #9c2f22; font-size: .8rem; font-weight: 700; line-height: 1;
+  writing-mode: vertical-rl; letter-spacing: .1em; border-radius: .18rem;
+  box-shadow: inset 0 0 0 2px rgba(255, 240, 220, .32);
+  transform: rotate(-3deg);
+}
+.dv-seal.tone-low { background: #3f6b56; }
+.dv-seal.tone-mid { background: #4a3524; }
+.lot-ref { margin: .2rem 0 0; color: #8a6b46; font-size: .78rem; letter-spacing: .08em; }
+.dv-poem {
+  margin: 1rem 0 .4rem; padding-block: .9rem; border-block: 1px solid rgba(120, 84, 48, .2);
+  font-family: "Noto Serif SC", "Songti SC", SimSun, "Source Han Serif SC", serif;
+  font-size: 1rem; line-height: 1.9; letter-spacing: .12em; white-space: pre-line; text-align: center; color: #4a3520;
+}
+.dv-advice { margin: 0; color: #9c2f22; font-size: .88rem; font-weight: 700; letter-spacing: .08em; }
+.dv-advice span { margin-left: .6rem; color: #6b543a; font-weight: 400; letter-spacing: 0; }
+.say { margin-top: 1.1rem; padding-left: .9rem; border-left: 2px solid rgba(156, 47, 34, .5); }
+.say-label { margin: 0 0 .3rem; color: #8a6b46; font-size: .74rem; letter-spacing: .14em; }
+.say-text { margin: 0; font-size: .98rem; line-height: 1.95; overflow-wrap: anywhere; white-space: pre-wrap; color: #2a1a10; }
+.dv-alert { color: #9c2f22; font-size: .84rem; }
+footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.35rem; }
+footer span { color: #8a6b46; font-size: .74rem; }
+footer button {
+  padding: .52rem 1.5rem; border-radius: 999px; color: #fff3e2; background: #2a1a10;
+  font: inherit; font-size: .9rem; font-weight: 600; letter-spacing: .1em;
+}
+footer button:disabled { opacity: .6; }
+@keyframes dv-appear { from { opacity: 0; transform: translateY(.6rem) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (max-width: 480px) { .divination-notice { padding: 1.4rem 1.15rem 1.1rem; } .dv-poem { font-size: .95rem; } }
 @media (prefers-reduced-motion: reduce) { .divination-notice[open] { animation: none; } }
 </style>
