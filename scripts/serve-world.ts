@@ -6,6 +6,7 @@
  * --room-archive-hours 48 / PARLOR_ROOM_ARCHIVE_HOURS，0 关闭自动归档。
  * --pool-max 8 / PARLOR_PG_POOL_MAX；--statement-timeout-ms 30000。
  * --account-limit 5000 / PARLOR_ACCOUNT_LIMIT；家长账户（家人）容量上限，满了新的 Coo 进不来。
+ * --trust-loopback-proxy true|false / PARLOR_TRUST_LOOPBACK_PROXY；只接受回环对端的转发地址。
  * --offline-release-hours / --coo-offline-release-hours 仍是独立的离线回收策略。
  * Coo 本机消息档案继续使用 SQLite；本服务拒绝 --db/PARLOR_DB，不自动建库。
  */

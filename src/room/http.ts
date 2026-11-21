@@ -16,22 +16,31 @@ function canonicalIp(address: string): string | undefined {
   return [high >> 8, high & 255, low >> 8, low & 255].join('.');
 }
 
-export const isLoopback = (address: string): boolean => {
-  const ip = canonicalIp(address);
-  return ip === '::1' || ip?.startsWith('127.') === true;
+type ClientAddressRequest = Pick<IncomingMessage, 'headers'> & {
+  socket: Pick<IncomingMessage['socket'], 'remoteAddress'>;
 };
 
 /** 仅接受同机可信反代追加的最后一个地址。 */
-export const clientIp = (req: Pick<IncomingMessage, 'headers'> & {
-  socket: Pick<IncomingMessage['socket'], 'remoteAddress'>;
-}, trustProxy: boolean): string => {
-  const peer = req.socket.remoteAddress ?? '';
-  if (trustProxy && isLoopback(peer)) {
+export const clientIp = (req: ClientAddressRequest, trustProxy: boolean): string => {
+  const peer = canonicalIp(req.socket.remoteAddress ?? '') ?? 'unknown';
+  if (trustProxy && (peer === '::1' || peer.startsWith('127.'))) {
     const forwarded = headerValue(req, 'x-forwarded-for').split(',').at(-1)?.trim() ?? '';
     const ip = canonicalIp(forwarded);
     if (ip) return ip;
   }
-  return canonicalIp(peer) ?? 'unknown';
+  return peer;
+};
+
+/** IPv4 按地址计量，IPv6 将同一 /64 内的地址合用一个额度。 */
+export const clientIpRateKey = (req: ClientAddressRequest, trustProxy: boolean): string => {
+  const ip = clientIp(req, trustProxy);
+  if (!ip.includes(':')) return ip;
+  const [prefix, suffix] = ip.split('::');
+  const leading = prefix ? prefix.split(':') : [];
+  if (leading.length >= 4) return `${leading.slice(0, 4).join(':')}::/64`;
+  const trailing = suffix ? suffix.split(':') : [];
+  const parts = [...leading, ...Array<string>(8 - leading.length - trailing.length).fill('0'), ...trailing];
+  return `${parts.slice(0, 4).join(':')}::/64`;
 };
 
 export class HttpError extends Error {

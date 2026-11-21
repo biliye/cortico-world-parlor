@@ -28,7 +28,7 @@ import { isBlockedPort } from './ports.ts';
 import { IdentityRegistry, enableGlobalIdentity, registeredHandle } from './global-identity.ts';
 import { GLOBAL_HEADER, identityOrigin, identityRequest, type GlobalPerson } from './identity-protocol.ts';
 import { HostError, RoomHost } from './room-host.ts';
-import { bearer, clientIp, headerValue, HttpError, isLoopback, json, readJson } from './http.ts';
+import { bearer, clientIpRateKey, headerValue, HttpError, json, readJson } from './http.ts';
 import { SlidingRateLimit } from './rate-limit.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, archive, unarchive, createRoom, getRoom, hashSeatToken,
@@ -68,7 +68,7 @@ export interface WorldServerOptions {
   identityAuthority?: string;
   /** 反向代理后的公开源地址；临时通行证只能用于这个目标。 */
   publicUrl?: string;
-  /** 信任回环连接的反代地址。默认仅在配置公开源且监听回环时启用。 */
+  /** 信任回环连接的反代地址。默认在配置公开源时启用。 */
   trustLoopbackProxy?: boolean;
   host?: string;
   port?: number;
@@ -113,6 +113,7 @@ const PEOPLE_LIMIT = 20;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const RATE_KEY_CAPACITY = 4_000;
+const PUBLIC_RATE_OVERFLOW = { overflowBuckets: 1_024 };
 const GUEST_WRITE_PATHS = new Set(['/v1/table-entry', '/v1/support/feedback', '/v1/mail/read-all', '/v1/me/leave']);
 
 function sseSourceCounts() {
@@ -281,15 +282,19 @@ export class WorldServer {
   private readonly trustLoopbackProxy: boolean;
   private readonly registry: IdentityRegistry;
   private readonly verifiedPeople = new WeakMap<IncomingMessage, GlobalPerson>();
-  private readonly identityRates = new SlidingRateLimit(2_000, { ms: MINUTE_MS, limit: 120 });
-  private readonly newAccountIpRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: 10 * MINUTE_MS, limit: 20 });
-  private readonly publicChatRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 120 }, { ms: 10_000, limit: 8 });
+  private readonly identityRates = new SlidingRateLimit(2_000, { ms: MINUTE_MS, limit: 120 }, PUBLIC_RATE_OVERFLOW);
+  private readonly newAccountIpRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: 10 * MINUTE_MS, limit: 20 }, PUBLIC_RATE_OVERFLOW);
+  private readonly publicChatRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 120 }, { burst: { ms: 10_000, limit: 8 } });
   private readonly coo: CooAccountDb;
   private readonly webPlayers: WebPlayerDb;
   private readonly peopleConcurrency: number;
+  private readonly peopleRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: MINUTE_MS, limit: 60 }, PUBLIC_RATE_OVERFLOW);
   private peopleInFlight = 0;
-  private readonly webRates = new Map<string, { until: number; count: number }>();
-  private nextWebRateSweep = 0;
+  private readonly webLoginIpRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: MINUTE_MS, limit: 20 }, PUBLIC_RATE_OVERFLOW);
+  private readonly webRedeemIpRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: MINUTE_MS, limit: 20 }, PUBLIC_RATE_OVERFLOW);
+  private readonly webLoginNameRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: MINUTE_MS, limit: 10 }, PUBLIC_RATE_OVERFLOW);
+  private readonly webCredentialRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: MINUTE_MS, limit: 5 });
+  private readonly divinationChatRates = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: MINUTE_MS, limit: 12 });
   private readonly tableDiscovery: TableDiscovery;
   private readonly ratingBoards: RatingBoards;
   /** 招募快照按网关共享 30 秒：132 个 Coo 每分钟要的是同一份，不必各查一次。 */
@@ -322,13 +327,13 @@ export class WorldServer {
   /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
   private readonly inviteTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 20 });
   /** 家长链接试错限频：每个 IP 一小时最多 10 次。 */
-  private readonly parentKeyTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 10 });
+  private readonly parentKeyTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 10 }, PUBLIC_RATE_OVERFLOW);
   /**
    * 只读校验钥匙的限频：跟真实家长登录分开算。多个 Coo 在同一出口 IP 启动时
    * 不该把家长本人的 10 次额度吃掉，所以额度更宽（一小时 60 次）。
    */
-  private readonly ownerKeyVerifyTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 60 });
-  private readonly dmTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 200 }, { ms: MINUTE_MS, limit: 20 });
+  private readonly ownerKeyVerifyTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 60 }, PUBLIC_RATE_OVERFLOW);
+  private readonly dmTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 200 }, { burst: { ms: MINUTE_MS, limit: 20 } });
   /** 事件清理：每小时一次，超过 7 天且不在最后 500 条的删掉。 */
   private lastPrune = 0;
   /** 推送循环与客厅时钟改成异步后，上一轮没跑完就跳过这一轮（原来同步循环天然串行）。 */
@@ -377,7 +382,7 @@ export class WorldServer {
     this.cooOfflineReleaseMs = Math.max(0, options.cooOfflineReleaseHours ?? 6) * 3_600_000;
     this.tableTurnMs = options.tableTurnMs !== undefined && options.tableTurnMs > 0 ? options.tableTurnMs : undefined;
     this.hostName = options.host ?? '127.0.0.1';
-    this.trustLoopbackProxy = options.trustLoopbackProxy ?? (this.publicUrl !== undefined && isLoopback(this.hostName));
+    this.trustLoopbackProxy = options.trustLoopbackProxy ?? (this.publicUrl !== undefined);
     this.port = options.port ?? 0;
     // 启动恢复基准在 init() 里读；构造函数只落字段，不碰库。
     this.recovery = {};
@@ -830,7 +835,7 @@ export class WorldServer {
     if (method !== 'POST') throw new HttpError(405, '需要 POST');
     const body = await readJson(req);
     if (path === '/v1/identity/session') {
-      if (!this.identityRates.take(this.requestIp(req), this.now())) throw new HttpError(429, '身份请求太频繁，请稍后重试');
+      if (!this.identityRates.take(this.requestIpRateKey(req), this.now())) throw new HttpError(429, '身份请求太频繁，请稍后重试');
       try {
         const audience = identityOrigin(String(body.audience ?? ''));
         let cooId = String(body.cooId ?? ''), secret = String(body.cooSecret ?? ''), name = String(body.name ?? '');
@@ -973,28 +978,19 @@ export class WorldServer {
     if (!timingSafeEqual(hash, this.operatorHash)) throw new HttpError(403, '运营钥匙不对');
   }
 
-  private checkWebRate(key: string, limit: number): void {
-    const now = this.now();
-    if (now >= this.nextWebRateSweep) {
-      for (const [id, rate] of this.webRates) if (rate.until <= now) this.webRates.delete(id);
-      this.nextWebRateSweep = now + 1_000;
-    }
-    const current = this.webRates.get(key);
-    const rate = current && current.until > now ? current : { until: now + 60_000, count: 0 };
-    if (rate.count >= limit || (!this.webRates.has(key) && this.webRates.size >= 4000)) {
+  private checkWebRate(limiter: SlidingRateLimit, key: string): void {
+    if (!limiter.take(key, this.now())) {
       throw new HttpError(429, '请求太频繁，请稍后再试');
     }
-    rate.count++;
-    this.webRates.set(key, rate);
   }
 
-  private requestIp(req: IncomingMessage): string {
-    return clientIp(req, this.trustLoopbackProxy);
+  private requestIpRateKey(req: IncomingMessage): string {
+    return clientIpRateKey(req, this.trustLoopbackProxy);
   }
 
   private ensureAccount(req: IncomingMessage, cooId: string, displayName?: string) {
     return this.coo.ensureAccount(cooId, displayName, () => {
-      if (!this.newAccountIpRates.take(this.requestIp(req), this.now())) throw new AccountCreationRateError();
+      if (!this.newAccountIpRates.take(this.requestIpRateKey(req), this.now())) throw new AccountCreationRateError();
     });
   }
 
@@ -1025,7 +1021,7 @@ export class WorldServer {
         json(res, 200, { loginName, suggestedName: (player && await this.coo.cooDisplayName(player)) || account.displayName });
         return;
       }
-      this.checkWebRate('credentials:' + account.id, 5);
+      this.checkWebRate(this.webCredentialRates, account.id);
       const body = await readJson(req);
       const loginName = await this.webPlayers.setCredentials(account.id, body, async () => {
         await this.db.prepare('SELECT id FROM accounts WHERE id=? FOR UPDATE').get(account.id);
@@ -1045,11 +1041,11 @@ export class WorldServer {
     }
 
     if (method === 'POST' && (path === 'login' || path === 'redeem')) {
-      this.checkWebRate(path + ':' + this.requestIp(req), 20);
+      this.checkWebRate(path === 'login' ? this.webLoginIpRates : this.webRedeemIpRates, this.requestIpRateKey(req));
       const body = await readJson(req);
       if (path === 'login') {
         const name = typeof body.loginName === 'string' ? body.loginName.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 48) : '';
-        this.checkWebRate('login-name:' + name, 10);
+        this.checkWebRate(this.webLoginNameRates, name);
       } else if (await this.webPlayers.session(cookie)) {
         throw new HttpError(409, '请先退出当前会馆登录');
       }
@@ -1866,6 +1862,7 @@ export class WorldServer {
 
     if (method === 'GET' && url.pathname === '/v1/people') {
       const cooId = await this.cooOrSeat(req);
+      if (!this.peopleRates.take(cooId, this.now())) throw new HttpError(429, '搜人太频繁，请稍后再试');
       const q = (url.searchParams.get('q') ?? '').trim();
       json(res, 200, await this.searchPeople(cooId, q));
       return;
@@ -3034,12 +3031,12 @@ export class WorldServer {
   }
 
   private checkParentKeyRate(req: IncomingMessage): void {
-    if (!this.parentKeyTimes.take(this.requestIp(req), this.now())) throw new HttpError(429, '试得太多了，过一会儿再试');
+    if (!this.parentKeyTimes.take(this.requestIpRateKey(req), this.now())) throw new HttpError(429, '试得太多了，过一会儿再试');
   }
 
   /** 只读校验单独计数：额度比家长登录宽，正常启动的设备不会互相挤掉。 */
   private checkOwnerKeyVerifyRate(req: IncomingMessage): void {
-    if (!this.ownerKeyVerifyTimes.take(this.requestIp(req), this.now())) throw new HttpError(429, '试得太多了，过一会儿再试');
+    if (!this.ownerKeyVerifyTimes.take(this.requestIpRateKey(req), this.now())) throw new HttpError(429, '试得太多了，过一会儿再试');
   }
 
   private parentCookie(token: string, req: IncomingMessage): string {
@@ -3101,7 +3098,7 @@ export class WorldServer {
       if (seat && await (await this.host(seat.roomId)).chatLockedFor(seat.cooId)) {
         throw new HttpError(409, '狼人杀进行中，请等这局结束再来闲聊');
       }
-      this.checkWebRate('divination-chat:' + chatter.id, 12);
+      this.checkWebRate(this.divinationChatRates, chatter.id);
       await this.divination.say(chatter.name, (await readJson(req)).text);
       json(res, 200, { ok: true });
       return;
