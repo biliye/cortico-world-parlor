@@ -3,7 +3,7 @@ import { RoomLifecycle } from './lifecycle.ts';
 import { personalHistory } from './personal-account.ts';
 import { EventDb } from './event-db.ts';
 import { DivinationDb } from './divination-db.ts';
-import { DIVINATION_CAPABILITY, DIVINATION_NAME, DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
+import { DIVINATION_CAPABILITY, DIVINATION_NAME, DIVINATION_REQUEST, DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
 import { historySyncEvent } from './history-sync.ts';
 /** 多客厅 PostgreSQL HTTP 网关。每个客厅由一个 RoomHost 管理。 */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -525,7 +525,14 @@ export class WorldServer {
     this.divinationAvailable = await withTransaction(this.db, async () => {
       await lockCooRows(this.db, [system]);
       const room = await getRoom(this.db, DIVINATION_ROOM);
-      if (room) return isDivinationRoom(room);
+      if (room) {
+        const available = isDivinationRoom(room);
+        if (!available) console.warn('parlor: 问卦阁未开放，保留占用房间编号的现有客厅', {
+          room: room.id, nameMatches: room.name === DIVINATION_NAME, systemOwned: room.ownerCooId === system,
+          visibility: room.visibility, archived: room.archivedAt !== null,
+        });
+        return available;
+      }
       await createRoom(this.db, {
         id: DIVINATION_ROOM, name: DIVINATION_NAME, ownerCooId: system, visibility: 'public',
         topic: '家长抽签，自家 Coo 解签。这里可以看今日红榜、聊聊签。',
@@ -2285,7 +2292,7 @@ export class WorldServer {
   }
 
   /** 私聊：对方离线也照常投信箱；在线时顺手往他所在的客厅推一条事件。 */
-  private async sendDm(cooId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async sendDm(cooId: string, body: Record<string, unknown>) {
     if (await this.webPlayers.isGuest(cooId)) throw new HttpError(403, '试玩期间暂不能发送私聊');
     const seat = await activeSeatForCoo(this.db, cooId);
     if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再发私聊');
@@ -2304,17 +2311,13 @@ export class WorldServer {
     if (!text) throw new HttpError(400, '消息不能是空的');
     if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
     this.checkDmRate(cooId);
-    const letter = await withTransaction(this.db, async () => {
-      if (interpretation) await this.divination.interpret(cooId, peer.cooId, interpretation[1], text);
+    const { letter, expired } = await withTransaction(this.db, async () => {
+      const expired = !!interpretation && await this.divination.interpret(cooId, peer.cooId, interpretation[1], text) === 'expired';
       await touchActivity(this.db, seat.roomId, cooId, this.now());
-      return new MailDb(this.db, { now: this.now }).append({
-      to: peer.cooId,
-      fromCooId: cooId,
-      room: seat.roomId,
-      kind: 'whisper',
-      fromName: seat.name,
-      text,
-    });
+      const letter = await new MailDb(this.db, { now: this.now }).append({
+        to: peer.cooId, fromCooId: cooId, room: seat.roomId, kind: 'whisper', fromName: seat.name, text,
+      });
+      return { letter, expired };
     });
     const target = await activeSeatForCoo(this.db, peer.cooId);
     if (target) {
@@ -2327,6 +2330,7 @@ export class WorldServer {
     return {
       message: { seq: letter.seq, ts: letter.ts, text: letter.text, fromName: seat.name, fromMe: true, unread: false },
       peer,
+      ...(expired ? { notice: '这支签已过 24 小时解签期，正文已作为普通私信寄给家长。' } : {}),
     };
   }
 
@@ -2608,13 +2612,14 @@ export class WorldServer {
       } else if (type === 'whisper') {
         // 私聊走全局那条：对方在别的客厅或不在线也照样投信箱（Coo 也能跨厅回）。
         const result = await this.sendDm(seat.cooId, body);
-        const message = result.message as { seq: number; ts: number };
+        const { message } = result;
         delivered = [{
-          to: (result.peer as { name: string }).name,
+          to: result.peer.name,
           mailSeq: message.seq,
           ts: message.ts,
           at: serverClock(message.ts),
         }];
+        notice = result.notice;
       } else if (type === 'set_tier') {
         if (typeof body.tier !== 'string') throw new HttpError(400, '挡位不对');
         await host.setTier(seat.cooId, body.tier as WakeTier);
@@ -2999,7 +3004,7 @@ export class WorldServer {
     res.setHeader('cache-control', 'no-store');
     const account = await this.divinationAccount(req);
     if (req.method === 'GET' && path === 'unread') {
-      json(res, 200, { draw: account ? await this.divination.unread(account.id) : null });
+      json(res, 200, { canReceive: !!account, draw: account ? await this.divination.unread(account.id) : null });
       return;
     }
     if (req.method === 'GET' && path === 'room') {
@@ -3040,7 +3045,7 @@ export class WorldServer {
         try {
           const target = await activeSeatForCoo(this.db, account.cooId);
           if (target) await (await this.host(target.roomId)).whisperNotice('system-owner', DIVINATION_NAME, target,
-            letter.text, { seq: letter.seq, ts: letter.ts, room: DIVINATION_ROOM });
+            letter.text, { seq: letter.seq, ts: letter.ts, room: DIVINATION_ROOM, action: letter.action });
         } catch { /* 在线提醒失败时，签和信已在同一事务提交。 */ }
       }
       json(res, 200, { draw, day });
@@ -3225,11 +3230,14 @@ export class WorldServer {
     return child ? `${child}家的家长` : '家长';
   }
 
-  /** 家长只读视图：跟孩子当前席位走，可见范围与孩子自己完全一致。 */
+  /** 家长只读视图跟孩子当前席位走，只显示家长需要的通知文案。 */
   private async parentView(cooId: string, since: number, limit: number, compact: boolean) {
     const now = this.now();
     const seat = await activeSeatForCoo(this.db, cooId);
     const mail = new MailDb(this.db, { now: this.now });
+    const divinationText = '问卦阁已把家长的签寄给孩子，正在等解签。';
+    const recentMail = async () => (await mail.parentRecent(cooId, limit)).map(item =>
+      item.action === DIVINATION_REQUEST ? { ...item, text: divinationText } : item);
     if (!seat) {
       return {
         seat: null,
@@ -3237,13 +3245,17 @@ export class WorldServer {
         ...(compact ? {} : { latest: 0, now, at: serverClock(now) }),
         events: [],
         tablePrivate: null,
-        mail: await mail.parentRecent(cooId, limit),
+        mail: await recentMail(),
         mailUnread: await mail.unreadCount(cooId),
       };
     }
     const room = await getRoom(this.db, seat.roomId);
     const host = await this.host(seat.roomId);
     const snapshot = await host.snapshot(cooId, { since, limit, parentMessagesOnly: compact });
+    const events = snapshot.events.map(event => {
+      const notice = event.data?.mail as { action?: string } | undefined;
+      return notice?.action === DIVINATION_REQUEST ? { ...event, text: divinationText } : event;
+    });
     // 家长防偷看：桌上还有「真人」席位时，藏起孩子的暗牌与私牌事件。同桌的 Coo 不算真人。
     const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
       ? snapshot.table.id ?? snapshot.table.tableId
@@ -3269,8 +3281,8 @@ export class WorldServer {
       room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },
       ...(compact ? {} : { latest: snapshot.latest, now: snapshot.now, at: snapshot.at }),
       events: ownerPrivateHidden
-        ? snapshot.events.filter((event) => event.type !== 'parlor.table.turn')
-        : snapshot.events,
+        ? events.filter((event) => event.type !== 'parlor.table.turn')
+        : events,
       ...(compact ? {} : { tables: snapshot.tables ?? [] }),
       ...(snapshot.table ? { table: compact
         ? { label: snapshot.table.label, game: snapshot.table.game, text: snapshot.table.text }
@@ -3281,7 +3293,7 @@ export class WorldServer {
       ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
       ledgerRoom: snapshot.ledgerRoom ?? [],
       mailUnread: snapshot.mailUnread ?? 0,
-      mail: await mail.parentRecent(cooId, limit),
+      mail: await recentMail(),
       ownerPrivateHidden,
     };
   }

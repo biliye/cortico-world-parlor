@@ -298,7 +298,7 @@ export class RoomHost {
    * 不再写第二封信（否则信箱里会出现两条）。
    */
   async whisperNotice(fromCooId: string, fromName: string, target: { cooId: string; id: string; name: string }, text: string,
-    mail?: { seq: number; ts: number; room: string }): Promise<RoomEvent> {
+    mail?: { seq: number; ts: number; room: string; action?: string }): Promise<RoomEvent> {
     const now = this.now();
     const senderSeat = await activeSeatForCoo(this.db, fromCooId);
     return this.events.append(this.roomId, {

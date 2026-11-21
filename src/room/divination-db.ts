@@ -3,7 +3,8 @@ import type { ParentAccount } from './coo-account-db.ts';
 import { withTransaction, type Db } from './db.ts';
 import { DIVINATION_LOTS, divinationDay } from './divination-lots.ts';
 import {
-  DIVINATION_NAME, DIVINATION_ROOM, type DivinationBoardEntry, type DivinationChatMessage, type DivinationDraw, type LotGrade,
+  DIVINATION_BOARD_LIMIT, DIVINATION_NAME, DIVINATION_REQUEST, DIVINATION_ROOM,
+  type DivinationBoardEntry, type DivinationChatMessage, type DivinationDraw, type LotGrade,
 } from './divination-protocol.ts';
 import { EventDb } from './event-db.ts';
 import { HttpError } from './http.ts';
@@ -55,13 +56,18 @@ export class DivinationDb {
         .run(row.id, account.id, account.cooId, player.id, day.key, request, player.name, lot.number, lot.grade, row.is_head, now);
       const reply = JSON.stringify({ scope: 'private', to: player.id, text: `【解签 ${row.id}】你的解读` });
       const letter = await new MailDb(this.db, { now: () => now }).append({
-        to: account.cooId, room: DIVINATION_ROOM, kind: 'whisper', action: 'divination_request', fromName: DIVINATION_NAME,
+        to: account.cooId, room: DIVINATION_ROOM, kind: 'whisper', action: DIVINATION_REQUEST, fromName: DIVINATION_NAME,
         text: `家长「${player.name}」抽到了第 ${lot.number} 签（${lot.grade}）。\n${lot.poem}\n宜：${lot.advice}\n${lot.note}\n`
-          + `请用 parlor_message ${reply}回信，把「你的解读」替换成自己写的一两句。把它当作茶余一乐，别替家长做决定。`,
+          + `请在抽签后 24 小时内用 parlor_message ${reply}回信，把「你的解读」替换成自己写的一两句。超过时限，回信会作为普通私信送达。把它当作茶余一乐，别替家长做决定。`,
       });
       const draw = drawView(row);
       if (draw.head) {
-        await this.sayIn(hall, DIVINATION_NAME, `恭喜 ${player.name} 在问卦阁抽中了头签！`, now, true);
+        try {
+          // EventDb.append 用嵌套事务的保存点。播报语句失败时，已写入的签和信仍可提交。
+          await this.sayIn(hall, DIVINATION_NAME, `恭喜 ${player.name} 在问卦阁抽中了头签！`, now, true);
+        } catch {
+          console.warn('parlor: 问卦阁头签播报未写入', { drawId: row.id });
+        }
       }
       return { draw, day: day.key, letter };
     });
@@ -71,15 +77,16 @@ export class DivinationDb {
     return this.db.prepare('SELECT * FROM divination_draws WHERE account_id = ? AND day_key = ?').get<DrawRow>(account, day);
   }
 
-  async today(account?: string): Promise<{ draw: DivinationDraw | null; board: DivinationBoardEntry[] }> {
+  async today(account?: string): Promise<{ day: string; draw: DivinationDraw | null; board: DivinationBoardEntry[] }> {
     const day = divinationDay(this.now());
     const [row, board] = await Promise.all([
       account ? this.findToday(account, day.key) : undefined,
       this.db.prepare(`SELECT display_name, lot_number, lot_grade, is_head, drawn_at FROM divination_draws
-        WHERE day_key = ? AND lot_grade IN ('上上','上吉') ORDER BY drawn_at DESC, id DESC`)
-        .all<Pick<DrawRow, 'display_name' | 'lot_number' | 'lot_grade' | 'is_head' | 'drawn_at'>>(day.key),
+        WHERE day_key = ? AND lot_grade IN ('上上','上吉') ORDER BY drawn_at DESC, id DESC LIMIT ?`)
+        .all<Pick<DrawRow, 'display_name' | 'lot_number' | 'lot_grade' | 'is_head' | 'drawn_at'>>(day.key, DIVINATION_BOARD_LIMIT),
     ]);
     return {
+      day: day.key,
       draw: row ? drawView(row) : null,
       board: board.map(entry => ({
         name: entry.display_name, number: entry.lot_number, grade: entry.lot_grade,
@@ -101,13 +108,17 @@ export class DivinationDb {
       WHERE account_id = ? AND id = ? AND interpretation IS NOT NULL AND seen_at IS NULL`).run(this.now(), account, id);
   }
 
-  async interpret(coo: string, player: string, id: string, text: string): Promise<void> {
+  async interpret(coo: string, player: string, id: string, text: string): Promise<'recorded' | 'expired'> {
     const now = this.now();
+    const draw = await this.db.prepare(`SELECT drawn_at FROM divination_draws
+      WHERE id = ? AND coo_id = ? AND player_coo_id = ? AND interpretation IS NULL FOR UPDATE`)
+      .get<{ drawn_at: number }>(id, coo, player);
+    if (!draw) throw new HttpError(409, '这支签无法解读，可能已解过或收件人不对');
+    if (draw.drawn_at <= now - REPLY_TIME_MS) return 'expired';
     if ([...text].length < 1 || [...text].length > 600) throw new HttpError(400, '解签须为 1–600 字');
-    const result = await this.db.prepare(`UPDATE divination_draws SET interpretation = ?, interpreted_at = ?
-      WHERE id = ? AND coo_id = ? AND player_coo_id = ? AND drawn_at > ? AND interpretation IS NULL`)
-      .run(text, now, id, coo, player, now - REPLY_TIME_MS);
-    if (!result.changes) throw new HttpError(409, '这支签无法解读，可能已解过、已超过一天或收件人不对');
+    await this.db.prepare('UPDATE divination_draws SET interpretation = ?, interpreted_at = ? WHERE id = ?')
+      .run(text, now, id);
+    return 'recorded';
   }
 
   async chat(): Promise<DivinationChatMessage[]> {

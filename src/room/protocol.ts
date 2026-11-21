@@ -252,6 +252,8 @@ export interface ActionResponse {
   at: string;
   /** 私聊/礼物/承诺/回应：这些东西已经留进对方信箱。 */
   delivered?: DeliveryReceipt[];
+  /** 附带说明，如解签回信改为普通私信。 */
+  notice?: string;
   /** 开局那一刻现读的桌上席位名（含脚本陪练）。 */
   seats?: string[];
   /** 下一步的绝对截止时刻（服务器时钟）。 */

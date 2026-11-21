@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { DivinationDraw } from '../../src/room/divination-protocol.ts';
 import { timeoutSignal } from '../api/client.ts';
 import { lotTone } from '../lib/divination.ts';
+import { seat } from '../stores/session.ts';
 
 const dialog = ref<HTMLDialogElement | null>(null);
 const draw = ref<DivinationDraw | null>(null);
@@ -10,6 +11,7 @@ const saving = ref(false);
 const error = ref('');
 let active = true;
 let reading = false;
+let canReceive = true;
 let timer = 0;
 
 async function refresh(): Promise<void> {
@@ -18,8 +20,10 @@ async function refresh(): Promise<void> {
   try {
     const response = await fetch('/v1/divination/unread', { signal: timeoutSignal() });
     if (!response.ok) return;
-    const { draw: next } = await response.json() as { draw: DivinationDraw | null };
-    if (active && !saving.value && (!draw.value || !next)) draw.value = next;
+    const status = await response.json() as { canReceive: boolean; draw: DivinationDraw | null };
+    if (!active) return;
+    canReceive = status.canReceive;
+    if (!saving.value && (!draw.value || !status.draw)) draw.value = status.draw;
   } catch {
     // Recheck on the next poll or when the tab becomes visible again.
   } finally {
@@ -52,13 +56,16 @@ async function acknowledge(): Promise<void> {
 
 onMounted(() => {
   void refresh();
-  timer = window.setInterval(() => { void refresh(); }, 8_000);
+  timer = window.setInterval(() => { if (canReceive) void refresh(); }, 8_000);
   document.addEventListener('visibilitychange', refresh);
+  window.addEventListener('focus', refresh);
 });
+watch(() => seat.value?.cooId, refresh);
 onBeforeUnmount(() => {
   active = false;
   window.clearInterval(timer);
   document.removeEventListener('visibilitychange', refresh);
+  window.removeEventListener('focus', refresh);
 });
 </script>
 

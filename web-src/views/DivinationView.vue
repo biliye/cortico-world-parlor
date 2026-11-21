@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { DivinationDraw, DivinationView } from '../../src/room/divination-protocol.ts';
+import { DIVINATION_BOARD_LIMIT, type DivinationDraw, type DivinationView } from '../../src/room/divination-protocol.ts';
 import { api } from '../api/client.ts';
 import Icon from '../components/Icon.vue';
 import { newRequestId } from '../stores/parlor.ts';
@@ -19,8 +19,8 @@ const chatLog = ref<HTMLElement | null>(null);
 const reveal = ref(false);
 const draw = computed(() => state.value?.draw);
 const poem = computed(() => (draw.value?.lot.poem ?? '').split('\n').map(line => line.trim()).filter(Boolean));
-const dayLabel = computed(() => new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' }).format(new Date()));
-const todayKey = computed(() => new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Shanghai' }).format(new Date()));
+const dayFormat = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Shanghai' });
+const dayLabel = computed(() => state.value?.day ? dayFormat.format(new Date(state.value.day + 'T00:00:00+08:00')) : '');
 const clock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' });
 let requestId = '';
 let generation = 0;
@@ -48,9 +48,7 @@ async function refresh(): Promise<void> {
   try {
     const result = await api<DivinationView>('/v1/divination/room');
     if (run !== generation) return;
-    /* 刚抽完签的那一秒，轮询可能先于落库读回空状态；同一天的手上这张签不能被它盖掉。 */
-    const keep = result.draw ?? (draw.value?.day === todayKey.value ? draw.value : null);
-    state.value = { ...result, draw: keep };
+    state.value = result;
     error.value = '';
   } catch (cause) {
     if (run === generation) error.value = (cause as Error).message || '暂时读不到问卦阁';
@@ -71,9 +69,10 @@ async function shake(): Promise<void> {
     // 签筒至少要摇完一遍才把签递出来，别让网络快慢决定仪式长短。
     const rest = 640 - (performance.now() - started);
     if (rest > 0) await wait(rest);
+    // 作废抽签提交前发出的轮询，避免迟到的空结果盖掉刚抽到的签。
     generation++;
     if (state.value && result.draw.day === result.day) {
-      state.value = { ...state.value, draw: result.draw };
+      state.value = { ...state.value, day: result.day, draw: result.draw };
       reveal.value = true;
     }
     void refresh();
@@ -118,7 +117,7 @@ onBeforeUnmount(() => {
 
     <header class="div-head">
       <div>
-        <p class="dv-eyebrow"><i aria-hidden="true" />{{ dayLabel }} · 每日一签</p>
+        <p class="dv-eyebrow"><i aria-hidden="true" /><template v-if="dayLabel">{{ dayLabel }} · </template>每日一签</p>
         <h1 id="divination-heading">问卦阁</h1>
         <p class="lede">家长抽签，自家 Coo 解签。茶余一乐，别当真。</p>
       </div>
@@ -162,7 +161,7 @@ onBeforeUnmount(() => {
             </template>
             <template v-else>
               <p class="interpret-text waiting-text">签已收好，等孩子解这一签。</p>
-              <p class="interpret-hint">解完会在这里出现，也会弹一次提醒。今天没解，签也不会丢。</p>
+              <p class="interpret-hint">抽签后 24 小时内收到的解读会弹窗提醒。超过时限，回信会作为普通私信送达。</p>
               <span class="breath" aria-hidden="true" />
             </template>
           </div>
@@ -190,7 +189,8 @@ onBeforeUnmount(() => {
         <section class="dv-board" aria-labelledby="board-heading">
           <header>
             <h2 id="board-heading">今日红榜</h2>
-            <span>只记上上与上吉</span>
+            <span v-if="state.board.length === DIVINATION_BOARD_LIMIT">上上与上吉 · 最近 {{ DIVINATION_BOARD_LIMIT }} 条</span>
+            <span v-else>只记上上与上吉</span>
           </header>
           <p v-if="!state.board.length" class="empty">今日红榜还空着，等你来开张。</p>
           <ol v-else>

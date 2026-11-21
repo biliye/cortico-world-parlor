@@ -51,6 +51,8 @@ jobs:
             filter: tests/web-player.test.ts
           - suite: owner-key
             filter: tests/owner-key-recovery.test.ts
+          - suite: divination
+            filter: tests/divination.test.ts
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
