@@ -21,6 +21,7 @@ import {
 import { act, activeTable, goRoom, log, myTable, snapshot, tableIdOf } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 import { showToast } from '../stores/ui.ts';
+import { enterDivination } from '../stores/view.ts';
 
 interface Line {
   key: number;
@@ -29,6 +30,7 @@ interface Line {
   name: string;
   text: string;
   tag: string;
+  divination?: boolean;
 }
 
 const inHall = computed(() => snapshot.value?.id === 'hall');
@@ -61,7 +63,8 @@ const lines = computed<Line[]>(() => {
     const time = clockText(event.ts);
     if (event.from === 'system' || !event.from) {
       const tag = type.startsWith('parlor.table.') ? '牌桌' : type === 'parlor.ledger' ? '账本' : '';
-      out.push({ key: event.seq ?? out.length, kind: 'system', time, name: '', text: readable(event.text), tag });
+      out.push({ key: event.seq ?? out.length, kind: 'system', time, name: '', text: readable(event.text), tag,
+        divination: inHall.value && event.data?.divination === true });
       continue;
     }
     const tableTalk = type === 'parlor.table.say';
@@ -276,7 +279,8 @@ function closeDrawer(): void {
           <template v-for="line in lines" :key="line.key">
             <div v-if="line.kind === 'system'" class="system-line">
               <span v-if="line.tag" class="tag tag-table">{{ line.tag }}</span>
-              <span>{{ line.text }}</span>
+              <button v-if="line.divination" class="divination-link" type="button" @click="enterDivination">{{ line.text }}</button>
+              <span v-else>{{ line.text }}</span>
               <time>{{ line.time }}</time>
             </div>
             <article v-else class="msg">
@@ -359,3 +363,7 @@ function closeDrawer(): void {
     </section>
   </aside>
 </template>
+
+<style scoped>
+.divination-link { font: inherit; color: inherit; text-decoration: underline; text-underline-offset: .15em; border: 0; padding: 0; background: none; cursor: pointer; text-align: start; }
+</style>

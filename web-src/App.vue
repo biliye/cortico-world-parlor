@@ -10,12 +10,15 @@ import { startAnnouncementWatch } from './stores/announcements.ts';
 import { boot, snapshot, syncRouteRoom, syncLocation, connect, connection, scheduleRefresh, roomTransition, finishRoomTransition, onSeatStorage } from './stores/parlor.ts';
 import { fetchHealth, IdentityExpiredError } from './api/client.ts';
 import { entryNotice, seat } from './stores/session.ts';
-import { readView, view, wantHall } from './stores/view.ts';
+import { divinationAvailable, readView, view, wantHall } from './stores/view.ts';
 import JoinView from './views/JoinView.vue';
 import LobbyView from './views/LobbyView.vue';
 import RoomView from './views/RoomView.vue';
 import TableView from './views/TableView.vue';
 import StoryView from './views/StoryView.vue';
+import DivinationView from './views/DivinationView.vue';
+import DivinationNotice from './components/DivinationNotice.vue';
+import { DIVINATION_CAPABILITY, DIVINATION_ROOM } from '../src/room/divination-protocol.ts';
 import { parseGuestInvite, wantsWebEntry } from './lib/entry.ts';
 
 const ready = ref(false);
@@ -48,6 +51,8 @@ async function checkStoryAvailability(): Promise<void> {
     return;
   }
   storyAvailability.value = health.capabilities?.includes('storyteller-v1') ? 'available' : 'unsupported';
+  divinationAvailable.value = !!health.capabilities?.includes(DIVINATION_CAPABILITY);
+  if (divinationAvailable.value && seat.value?.room === DIVINATION_ROOM) readView();
 }
 
 async function retry(): Promise<void> {
@@ -139,11 +144,21 @@ watch(seat, (next) => {
     <button v-if="storyAvailability === 'unreachable'" type="button" @click="checkStoryAvailability">重试</button>
     <a href="/play">返回茶馆</a>
   </main>
+  <main v-else-if="view === 'divination' && !divinationAvailable" class="story-entry-status">
+    <h1>问卦阁</h1>
+    <p role="status">{{ storyAvailability === 'checking' ? '正在确认问卦阁是否开放…'
+      : storyAvailability === 'unreachable' ? '暂时无法确认问卦阁是否开放。' : '当前茶馆未开放问卦阁。' }}</p>
+    <button v-if="storyAvailability === 'unreachable'" type="button" @click="checkStoryAvailability">重试</button>
+    <a href="/play">返回茶馆</a>
+  </main>
+  <DivinationView v-else-if="!seat && view === 'divination'" standalone />
   <StoryView v-else-if="!seat && view === 'story' && !storyJoining()" />
   <JoinView v-else-if="entryPage || !seat" :initial-error="failed || entryNotice" :can-retry="!!failed && retryable"
     :invite-code="inviteCode" @redeemed="inviteCode = ''" @entered="enter" @retry="enter" />
-  <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available' || storyAvailability === 'unreachable'">
+  <AppShell v-else-if="ready && !roomTransition" :show-story="storyAvailability === 'available' || storyAvailability === 'unreachable'"
+    :show-divination="divinationAvailable">
     <StoryView v-if="view === 'story'" />
+    <DivinationView v-else-if="view === 'divination'" />
     <LobbyView v-else-if="snapshot && (snapshot.id === 'hall' || wantHall())" />
     <TableView v-else-if="view === 'table'" />
     <RoomView v-else />
@@ -156,6 +171,7 @@ watch(seat, (next) => {
     :error="roomTransition ? roomTransition.error : failed"
     @retry="retry"
   />
+  <DivinationNotice v-if="divinationAvailable" />
 </template>
 
 <style scoped>

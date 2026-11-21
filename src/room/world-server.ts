@@ -2,6 +2,8 @@ import { touchActivity } from './activity.ts';
 import { RoomLifecycle } from './lifecycle.ts';
 import { personalHistory } from './personal-account.ts';
 import { EventDb } from './event-db.ts';
+import { DivinationDb } from './divination-db.ts';
+import { DIVINATION_CAPABILITY, DIVINATION_NAME, DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
 import { historySyncEvent } from './history-sync.ts';
 /** 多客厅 PostgreSQL HTTP 网关。每个客厅由一个 RoomHost 管理。 */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -262,6 +264,7 @@ const roomSummary = async (db: Db, room: RoomRow) => {
 
 export class WorldServer {
   private readonly story: StoryDb;
+  private readonly divination: DivinationDb;
   private readonly storyPresence: StoryPresence;
   private readonly db: Db;
   private readonly operatorHash?: Buffer;
@@ -329,12 +332,14 @@ export class WorldServer {
   private sseTraffic = sseTrafficCounters();
   /** 大厅 id 的同步快照：init() 建完大厅后填上，供 hallId 这个同步属性读。 */
   private hallIdValue = '';
+  private divinationAvailable = false;
 
   private constructor(db: Db, options: WorldServerOptions = {}) {
     this.db = db;
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
     this.story = new StoryDb(db, this.now, () => this.hallId);
+    this.divination = new DivinationDb(db, this.now, id => this.markDirty(id));
     this.storyPresence = new StoryPresence(options.now);
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.ratingBoards = new RatingBoards(db, this.now);
@@ -517,6 +522,16 @@ export class WorldServer {
       }, this.now());
     }
     await this.ensureHall();
+    this.divinationAvailable = await withTransaction(this.db, async () => {
+      await lockCooRows(this.db, [system]);
+      const room = await getRoom(this.db, DIVINATION_ROOM);
+      if (room) return isDivinationRoom(room);
+      await createRoom(this.db, {
+        id: DIVINATION_ROOM, name: DIVINATION_NAME, ownerCooId: system, visibility: 'public',
+        topic: '家长抽签，自家 Coo 解签。这里可以看今日红榜、聊聊签。',
+      }, this.now());
+      return true;
+    });
   }
 
   /** 大厅是特殊客厅（kind = 'hall'）：有席位、能说话，但不进目录、没有牌桌。 */
@@ -1161,6 +1176,12 @@ export class WorldServer {
       });
     }
 
+    if (url.pathname.startsWith('/v1/divination/')) {
+      if (!this.divinationAvailable) throw new HttpError(404, '当前茶馆未开放问卦阁');
+      await this.divinationRoute(req, res, url.pathname.slice('/v1/divination/'.length));
+      return;
+    }
+
     if (url.pathname.startsWith('/v1/support/')) {
       res.setHeader('cache-control', 'no-store');
       const support = new SupportDb(this.db, this.now);
@@ -1304,7 +1325,8 @@ export class WorldServer {
         protocol: 2,
         storage: 'postgres',
         uptimeSeconds: Math.floor((performance.now() - this.startedAt) / 1000),
-        capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled','storyteller-v1'],
+        capabilities: ['seat-location-v1','personal-history-v1','room-lifecycle-v1','promises-disabled','storyteller-v1',
+          ...(this.divinationAvailable ? [DIVINATION_CAPABILITY] : [])],
         ...(this.identityAuthority ? { globalIdentity: { authority: this.authorityUrl(), audience: this.audienceUrl() } } : {}),
         guestJoin: this.allowGuestJoin,
         offlineReleaseHours: this.offlineReleaseMs / 3_600_000,
@@ -2276,11 +2298,14 @@ export class WorldServer {
     if (roomHost && await roomHost.chatLockedFor(cooId) && (await roomHost.lockedTablePeerCooIds(cooId)).has(peer.cooId)) {
       throw new HttpError(409, '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
     }
-    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    const raw = typeof body.text === 'string' ? body.text.trim() : '';
+    const interpretation = /^【解签 ([0-9a-f-]{36})】\s*([\s\S]*)$/i.exec(raw);
+    const text = interpretation ? interpretation[2].trim() : raw;
     if (!text) throw new HttpError(400, '消息不能是空的');
     if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
     this.checkDmRate(cooId);
     const letter = await withTransaction(this.db, async () => {
+      if (interpretation) await this.divination.interpret(cooId, peer.cooId, interpretation[1], text);
       await touchActivity(this.db, seat.roomId, cooId, this.now());
       return new MailDb(this.db, { now: this.now }).append({
       to: peer.cooId,
@@ -2947,6 +2972,81 @@ export class WorldServer {
     const session = token ? await this.coo.verifySession(token) : null;
     if (!session) throw new HttpError(401, '家长会话已失效，请重新打开家长链接');
     return session;
+  }
+
+  private async divinationAccount(req: IncomingMessage): Promise<ParentAccount | undefined> {
+    const web = cookieOf(req, 'parlor_web');
+    const session = web ? await this.webPlayers.session(web) : undefined;
+    if (session) return session.account_id ? this.coo.byId(session.account_id) : undefined;
+    const parent = cookieOf(req, 'parlor_parent');
+    return parent ? (await this.coo.verifySession(parent))?.account : undefined;
+  }
+
+  private async divinationChatter(req: IncomingMessage, account?: ParentAccount): Promise<{ id: string; name: string; cooId: string | null } | null> {
+    if (account) {
+      const cooId = await this.coo.playerCooOf(account.id);
+      const name = cooId ? await this.coo.cooDisplayName(cooId) : null;
+      return { id: account.id, name: name || account.displayName, cooId };
+    }
+    if (!bearer(req) && !headerValue(req, 'x-parlor-coo') && !headerValue(req, GLOBAL_HEADER)) return null;
+    const cooId = await this.cooOrSeat(req);
+    if (await this.webPlayers.isGuest(cooId)) return null;
+    const seat = await activeSeatForCoo(this.db, cooId);
+    return seat ? { id: cooId, name: seat.name, cooId } : null;
+  }
+
+  private async divinationRoute(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
+    res.setHeader('cache-control', 'no-store');
+    const account = await this.divinationAccount(req);
+    if (req.method === 'GET' && path === 'unread') {
+      json(res, 200, { draw: account ? await this.divination.unread(account.id) : null });
+      return;
+    }
+    if (req.method === 'GET' && path === 'room') {
+      const [today, chat, chatter] = await Promise.all([
+        this.divination.today(account?.id), this.divination.chat(), this.divinationChatter(req, account),
+      ]);
+      json(res, 200, { ...today, chat, canDraw: !!account, canChat: !!chatter });
+      return;
+    }
+    if (req.method === 'POST' && path === 'chat') {
+      const chatter = await this.divinationChatter(req, account);
+      if (!chatter) throw new HttpError(403, '请登录正式茶馆账号后发言');
+      const seat = chatter.cooId && await activeSeatForCoo(this.db, chatter.cooId);
+      if (seat && await (await this.host(seat.roomId)).chatLockedFor(seat.cooId)) {
+        throw new HttpError(409, '狼人杀进行中，请等这局结束再来闲聊');
+      }
+      this.checkWebRate('divination-chat:' + chatter.id, 12);
+      await this.divination.say(chatter.name, (await readJson(req)).text);
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'POST' && (path === 'draw' || path === 'seen')) {
+      if (!account) throw new HttpError(401, '请先用家长身份进入茶馆');
+      const body = await readJson(req);
+      if (path === 'seen') {
+        await this.divination.seen(account.id, body.id);
+        json(res, 200, { ok: true });
+        return;
+      }
+      const { draw, letter, day } = await this.divination.draw(account, body.requestId, this.hallId, async () => {
+        const existing = await this.coo.playerCooOf(account.id);
+        const name = account.displayName || '家长';
+        if (existing) return { id: existing, name: await this.coo.cooDisplayName(existing) || name };
+        const player = await this.ensurePlayerCoo(account, name);
+        return { id: player.cooId, name: player.name };
+      });
+      if (letter) {
+        try {
+          const target = await activeSeatForCoo(this.db, account.cooId);
+          if (target) await (await this.host(target.roomId)).whisperNotice('system-owner', DIVINATION_NAME, target,
+            letter.text, { seq: letter.seq, ts: letter.ts, room: DIVINATION_ROOM });
+        } catch { /* 在线提醒失败时，签和信已在同一事务提交。 */ }
+      }
+      json(res, 200, { draw, day });
+      return;
+    }
+    throw new HttpError(404, '没有这个问卦阁接口');
   }
 
   private async parentSeatView(cooId: string) {

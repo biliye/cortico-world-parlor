@@ -15,6 +15,7 @@ import { LUCK_WINDOW_MS, rollLuck, type LuckOutcome } from './gifts/luck.ts';
  */
 import { randomBytes } from 'node:crypto';
 import { withTransaction, type Db } from './db.ts';
+import { DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
 import { EventDb } from './event-db.ts';
 import { parseHandleQuery } from './handles.ts';
 import { registeredHandle } from './global-identity.ts';
@@ -678,6 +679,7 @@ export class RoomHost {
   }
 
   async openTable(cooId: string, input: Parameters<TableHost['open']>[1] = {}, requestId?: string): Promise<TableOpenResult> {
+    await this.assertTableRoom();
     if ((await this.requireRoom()).kind === 'hall') {
       throw new HostError('conflict', '大厅是进场和选房的地方，不能开桌；先走进一个客厅');
     }
@@ -692,8 +694,16 @@ export class RoomHost {
   }
 
   /** 「再来一局」：并入本厅同玩法的开放桌，没有就开一张新的。 */
-  rematchTable(cooId: string, input: Parameters<TableHost['rematch']>[1] = {}, requestId?: string): Promise<TableRematchResult> {
+  async rematchTable(cooId: string, input: Parameters<TableHost['rematch']>[1] = {}, requestId?: string): Promise<TableRematchResult> {
+    await this.assertTableRoom();
     return this.tableHost.rematch(cooId, input, requestId);
+  }
+
+  private async assertTableRoom(): Promise<void> {
+    if (this.roomId !== DIVINATION_ROOM) return;
+    if (isDivinationRoom(await this.requireRoom())) {
+      throw new HostError('conflict', '问卦阁只提供抽签和闲话，请到其他客厅开桌');
+    }
   }
 
   refreshClientVersion(cooId: string, version?: string): Promise<boolean> {

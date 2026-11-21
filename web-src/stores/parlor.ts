@@ -79,7 +79,10 @@ function seatKey(cfg: SeatConfig | null = seat.value): string {
 function replaceRoomUrl(room: string, resetView = true): void {
   const params = new URLSearchParams(location.search);
   params.set('room', room);
-  if (resetView && params.get('view') !== 'story') { params.delete('table'); params.delete('view'); }
+  if (resetView && !['story', 'divination'].includes(params.get('view') || '')) {
+    params.delete('table');
+    params.delete('view');
+  }
   history.replaceState({ ...history.state, parlor: true }, '', location.pathname + '?' + params);
 }
 

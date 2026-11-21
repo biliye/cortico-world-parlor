@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 20;
+export const PG_SCHEMA_VERSION = 21;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -590,5 +590,29 @@ export const PG_MIGRATIONS: PgMigration[] = [
     END;
     $migration$;
     ALTER TABLE rooms ADD CONSTRAINT rooms_capacity_check CHECK (capacity BETWEEN 2 AND 1000);
+  ` },
+  { version: 21, name: 'divination-draws', sql: `
+    CREATE TABLE IF NOT EXISTS divination_draws (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      coo_id TEXT NOT NULL REFERENCES coos(id),
+      player_coo_id TEXT NOT NULL REFERENCES coos(id),
+      day_key TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      lot_number SMALLINT NOT NULL CHECK (lot_number BETWEEN 1 AND 24),
+      lot_grade TEXT NOT NULL CHECK (lot_grade IN ('上上','上吉','中吉','中平','中下','下下')),
+      is_head SMALLINT NOT NULL CHECK (is_head IN (0, 1)),
+      drawn_at BIGINT NOT NULL,
+      interpretation TEXT,
+      interpreted_at BIGINT,
+      seen_at BIGINT,
+      UNIQUE (account_id, day_key),
+      UNIQUE (account_id, request_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_divination_board ON divination_draws(day_key, drawn_at DESC, id DESC)
+      WHERE lot_grade IN ('上上','上吉');
+    CREATE INDEX IF NOT EXISTS ix_divination_unread ON divination_draws(account_id, interpreted_at DESC)
+      WHERE interpretation IS NOT NULL AND seen_at IS NULL;
   ` },
 ];
