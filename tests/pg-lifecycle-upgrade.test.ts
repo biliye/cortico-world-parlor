@@ -59,7 +59,7 @@ it.each([
 
   await migrate(db);
   await migrate(db);
-  expect(await schemaVersion(db)).toBe(20);
+  expect(await schemaVersion(db)).toBe(PG_SCHEMA_VERSION);
   expect(await db.prepare('SELECT id, capacity FROM rooms ORDER BY id').all()).toEqual([
     { id: 'hall', capacity: 1000 }, { id: 'r-hall-upgrade', capacity: 30 },
   ]);

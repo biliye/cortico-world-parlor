@@ -22,13 +22,14 @@ import { activeTable, connection, goRoom, hallSeats, leaveRoom, snapshot, tableI
 import { seat } from '../stores/session.ts';
 import { gateway } from '../stores/server.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
-import { backToRoom, enterStory, view } from '../stores/view.ts';
+import { backToRoom, enterDivination, enterStory, view } from '../stores/view.ts';
 
-defineProps<{ showStory: boolean }>();
+defineProps<{ showStory: boolean; showDivination: boolean }>();
 
 const name = computed(() => seat.value?.name || '');
 const roomLabel = computed(() => (snapshot.value?.id === 'hall' ? '大厅' : snapshot.value?.name || '客厅'));
 const inHall = computed(() => snapshot.value?.id === 'hall');
+const specialView = computed(() => view.value === 'story' || view.value === 'divination');
 const onWerewolf = computed(() => view.value === 'table' && !inHall.value && activeTable.value?.game === 'werewolf');
 const onMahjong = computed(() => view.value === 'table'
   && MAHJONG_GAMES.some(game => game === activeTable.value?.game));
@@ -55,8 +56,8 @@ const presence = computed(() => {
 const connected = computed(() => connection.value === 'on');
 const connectionText = computed(() => (connection.value === 'off' ? '重连中…' : '连接中…'));
 
-watch([sheetOpen, view], ([open, selected]) => {
-  document.body.classList.toggle('sheet-open', open && selected !== 'story');
+watch([sheetOpen, specialView], ([open, special]) => {
+  document.body.classList.toggle('sheet-open', open && !special);
 }, { immediate: true });
 
 const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value
@@ -78,7 +79,7 @@ function openMail(): void {
 
 /** 门牌栏的三项只在大厅里换目录范围；不在大厅就先回大厅。 */
 async function goSection(id: 'all' | 'mine' | 'favorites'): Promise<void> {
-  if (view.value === 'story') backToRoom();
+  if (specialView.value) backToRoom();
   selectHallSection(id);
   if (!inHall.value) await goRoom('hall');
 }
@@ -96,7 +97,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="shell" :class="{ 'chat-open': view !== 'story' && chatExpanded(), 'in-hall': inHall, 'on-werewolf': onWerewolf }">
+  <div class="shell" :class="{ 'chat-open': !specialView && chatExpanded(), 'in-hall': inHall, 'on-werewolf': onWerewolf }">
     <aside class="rail" aria-label="会馆门牌">
       <a class="rail-mark" href="/play" aria-label="鲸语会馆">
         <Icon name="whale" />
@@ -107,7 +108,7 @@ onMounted(() => {
           :key="item.id"
           class="rail-btn"
           type="button"
-          :class="{ 'is-on': view !== 'story' && inHall && hallSection === item.id }"
+          :class="{ 'is-on': !specialView && inHall && hallSection === item.id }"
           :title="item.long"
           @click="goSection(item.id)"
         >
@@ -116,6 +117,9 @@ onMounted(() => {
         </button>
         <button v-if="showStory && !seat?.guest" class="rail-btn" type="button" :class="{ 'is-on': view === 'story' }" @click="enterStory">
           <Icon name="lamp" /><span>说书人</span>
+        </button>
+        <button v-if="showDivination && !seat?.guest" class="rail-btn" type="button" :class="{ 'is-on': view === 'divination' }" @click="enterDivination">
+          <Icon name="spark" /><span>问卦阁</span>
         </button>
         <a class="rail-btn rail-support" href="/support" target="_blank" rel="noopener" title="反馈与公告" aria-label="反馈与公告">
           <Icon name="chat" />
@@ -134,19 +138,20 @@ onMounted(() => {
     <main class="stage" aria-label="大厅、客厅与牌桌">
       <header class="topbar">
         <a class="brand" href="/play"><b>鲸语</b><span>PARLOR CLUB</span></a>
-        <span v-if="seat?.guest" class="room-pill"><span class="room-pill-name">{{ roomLabel }}</span></span>
+        <span v-if="view === 'divination'" class="room-pill"><span class="room-pill-name">问卦阁</span></span>
+        <span v-else-if="seat?.guest" class="room-pill"><span class="room-pill-name">{{ roomLabel }}</span></span>
         <button v-else class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
           <i class="live-dot" :class="{ off: !connected }" />
           <span class="room-pill-name">{{ roomLabel }}</span>
           <span class="room-pill-arrow">▾</span>
         </button>
-        <span v-if="view !== 'story'" class="presence">
+        <span v-if="!specialView" class="presence">
           <i class="pulse" :class="{ off: !connected }" />
           <b>{{ presence }}</b> 位朋友在这里
         </span>
-        <span v-if="view !== 'story' && !connected" class="conn-chip">{{ connectionText }}</span>
+        <span v-if="!specialView && !connected" class="conn-chip">{{ connectionText }}</span>
         <div class="top-right">
-          <button v-if="gateway && seat" class="tool" type="button" title="离开客厅" aria-label="离开客厅"
+          <button v-if="gateway && seat && view !== 'divination'" class="tool" type="button" title="离开客厅" aria-label="离开客厅"
             :disabled="leavingRoom" @click="confirmLeaveRoom">
             <Icon name="arrow" /><span class="tool-label">退厅</span>
           </button>
@@ -159,7 +164,7 @@ onMounted(() => {
           <button class="tool" type="button" @click="giftOpen = true" title="茶点：送一份茶或小零食，也可以喝掉/吃掉">
             <Icon name="tea" /><span class="tool-label">茶点</span>
           </button>
-          <button v-if="view !== 'story'" class="tool" type="button" @click="openMail">
+          <button v-if="!specialView" class="tool" type="button" @click="openMail">
             <Icon name="mail" /><span class="tool-label">信箱</span>
             <span v-if="mailUnread" class="tool-badge">{{ mailUnread }}</span>
           </button>
@@ -168,7 +173,7 @@ onMounted(() => {
             <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
           </button>
           <ThemePicker />
-          <button v-if="view !== 'story'" class="tool dock" :class="{ 'board-chat-tool': boardChatInToolbar }" type="button"
+          <button v-if="!specialView" class="tool dock" :class="{ 'board-chat-tool': boardChatInToolbar }" type="button"
             :aria-expanded="chatExpanded()" aria-label="有话慢慢聊" @click="toggleChat()">
             <Icon name="chat" /><span class="tool-label">{{ chatExpanded() ? '收起聊天' : '有话慢慢聊' }}</span>
           </button>
@@ -180,14 +185,14 @@ onMounted(() => {
       </div>
     </main>
 
-    <ChatPanel v-if="view !== 'story'" />
+    <ChatPanel v-if="!specialView" />
     <DmWindow v-if="!seat?.guest" />
     <RoomSwitcher v-model:open="switcherOpen" />
     <AccountPanel v-model:open="accountOpen" />
     <RatingsPanel v-model:open="ratingsOpen" />
     <GiftPanel v-model:open="giftOpen" />
-    <div v-if="view !== 'story'" class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
-    <button v-if="view !== 'story' && !chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleChat(true)">
+    <div v-if="!specialView" class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
+    <button v-if="!specialView && !chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleChat(true)">
       <Icon name="chat" />有话慢慢聊
     </button>
     <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>

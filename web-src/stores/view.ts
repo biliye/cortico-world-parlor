@@ -1,11 +1,13 @@
 /** 大厅 / 客厅 / 牌桌三层：当前在哪一层、看的是哪张桌。URL 与它保持同步。 */
 import { ref } from 'vue';
 import { seat } from './session.ts';
+import { DIVINATION_ROOM } from '../../src/room/divination-protocol.ts';
 
-export type ViewName = 'hall' | 'lobby' | 'table' | 'story';
+export type ViewName = 'hall' | 'lobby' | 'table' | 'story' | 'divination';
 
 export const view = ref<ViewName>('hall');
 export const watchTableId = ref('');
+export const divinationAvailable = ref(false);
 
 /**
  * `?viewhall=1`：本地单厅服务没有 /switch 接口，进不了大厅，
@@ -23,11 +25,12 @@ export function readView(): void {
   watchTableId.value = params.get('table') || '';
   /* `?viewhall=1` 强行看大厅：单厅本地服务没有 /switch 接口，进不去大厅，
      而大厅那半屏（茶馆 canvas）又最需要单独截图核对。只影响这一屏，不写回 URL。 */
-  view.value = params.get('view') === 'story' ? 'story' : params.get('viewhall') === '1'
+  const selected = params.get('view');
+  view.value = selected === 'story' || selected === 'divination' ? selected : params.get('viewhall') === '1'
     ? 'hall'
     : params.get('view') === 'table'
       ? 'table'
-      : (seat.value?.room === 'hall' ? 'hall' : 'lobby');
+      : (divinationAvailable.value && seat.value?.room === DIVINATION_ROOM ? 'divination' : seat.value?.room === 'hall' ? 'hall' : 'lobby');
 }
 
 export function writeView(replace = false): void {
@@ -36,8 +39,8 @@ export function writeView(replace = false): void {
     params.set('view', 'table');
     if (watchTableId.value) params.set('table', watchTableId.value);
     else params.delete('table');
-  } else if (view.value === 'story') {
-    params.set('view', 'story');
+  } else if (view.value === 'story' || view.value === 'divination') {
+    params.set('view', view.value);
     params.delete('table');
     params.delete('viewhall');
   } else {
@@ -50,6 +53,12 @@ export function writeView(replace = false): void {
 
 export function enterStory(): void {
   view.value = 'story';
+  writeView();
+}
+
+export function enterDivination(): void {
+  if (view.value === 'divination') return;
+  view.value = 'divination';
   writeView();
 }
 

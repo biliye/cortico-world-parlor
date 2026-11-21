@@ -2213,7 +2213,7 @@ export class ParlorWorld implements World {
           recipient: delivery.to, text: String(args.text ?? '').trim(),
         });
       });
-      return this.receipt(result, '私聊已经交给服务器。');
+      return this.receipt(result, result.notice ?? '私聊已经交给服务器。');
     } catch (error) {
       return this.failed(messageOf(error));
     }
