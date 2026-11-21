@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 21;
+export const PG_SCHEMA_VERSION = 22;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -614,5 +614,11 @@ export const PG_MIGRATIONS: PgMigration[] = [
       WHERE lot_grade IN ('上上','上吉');
     CREATE INDEX IF NOT EXISTS ix_divination_unread ON divination_draws(account_id, interpreted_at DESC)
       WHERE interpretation IS NOT NULL AND seen_at IS NULL;
+  ` },
+  { version: 22, name: 'people-recent-mail', sql: `
+    CREATE INDEX IF NOT EXISTS ix_mail_received_recent ON mail(coo_id, seq DESC)
+      WHERE from_coo_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_mail_sent_recent ON mail(from_coo_id, seq DESC)
+      WHERE from_coo_id IS NOT NULL;
   ` },
 ];

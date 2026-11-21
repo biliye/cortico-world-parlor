@@ -318,4 +318,25 @@ describe('网页私聊', () => {
     }
     expect(limited).toBeGreaterThan(0);
   });
+
+  it('搜人按观看者的房间授权显示私密厅位置', async () => {
+    const app = await start();
+    const viewer = 'coo-roomsearch01';
+    const owner = 'coo-roomsearch02';
+    await joinRoom(app, viewer, '访客');
+    const created = await post(app.url, '/v1/rooms', { name: '私密小厅', visibility: 'private' }, headers(owner));
+    expect(created.status).toBe(200);
+    const roomId = created.body.room.id as string;
+    const joined = await post(app.url, `/v1/rooms/${roomId}/join`, { name: '阿岚' }, headers(owner));
+    expect(joined.status).toBe(200);
+    expect((await post(app.url, '/v1/dm', { to: viewer, text: '晚上好' }, headers(owner))).status).toBe(200);
+
+    expect((await get(app.url, '/v1/people?q=阿', headers(viewer))).body.people).toEqual([
+      expect.objectContaining({ cooId: owner, name: '阿岚', room: null }),
+    ]);
+    expect((await post(app.url, `/v1/rooms/${roomId}/access`, { action: 'grant', cooId: viewer }, headers(owner))).status).toBe(200);
+    expect((await get(app.url, '/v1/people?q=阿', headers(viewer))).body.people).toEqual([
+      expect.objectContaining({ cooId: owner, name: '阿岚', room: roomId }),
+    ]);
+  });
 });

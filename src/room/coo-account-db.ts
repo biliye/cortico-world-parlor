@@ -37,6 +37,13 @@ export class AccountLimitError extends Error {
     this.limit = limit;
   }
 }
+
+export class AccountCreationRateError extends Error {
+  constructor() {
+    super('新家长账户创建过于频繁，请稍后重试');
+    this.name = 'AccountCreationRateError';
+  }
+}
 export const MAX_DISPLAY_NAME = 24;
 /** ownerKey 是 24 字节随机；SHA-256 足够，不拿它当低熵密码。 */
 export const OWNER_KEY_BYTES = 24;
@@ -94,6 +101,8 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 export interface CooAccountDbOptions {
   now?: () => number;
   limit?: number;
+  creationLimitPerHour?: number;
+  onCapacityWarning?: (count: number, limit: number) => void;
 }
 
 export interface EnsureAccountResult {
@@ -204,12 +213,17 @@ export class CooAccountDb {
   readonly db: Db;
   private readonly now: () => number;
   private readonly limit: number;
+  private readonly creationLimitPerHour?: number;
+  private readonly onCapacityWarning?: (count: number, limit: number) => void;
+  private capacityWarningIssued = false;
 
   constructor(db: Db, options: CooAccountDbOptions = {}) {
     this.db = db;
     this.now = options.now ?? Date.now;
     const limit = options.limit ?? DEFAULT_ACCOUNT_LIMIT;
     this.limit = Number.isSafeInteger(limit) && limit > 0 ? limit : DEFAULT_ACCOUNT_LIMIT;
+    this.creationLimitPerHour = options.creationLimitPerHour;
+    this.onCapacityWarning = options.onCapacityWarning;
   }
 
   get size(): Promise<number> {
@@ -219,6 +233,16 @@ export class CooAccountDb {
   async count(): Promise<number> {
     const row = await this.db.prepare('SELECT COUNT(*) AS n FROM accounts').get() as { n: number };
     return Number(row.n);
+  }
+
+  async checkCapacityWarning(): Promise<void> {
+    if (this.onCapacityWarning) this.warnIfNearCapacity(await this.count());
+  }
+
+  private warnIfNearCapacity(count: number): void {
+    if (!this.onCapacityWarning || this.capacityWarningIssued || count < Math.ceil(this.limit * 0.8)) return;
+    this.capacityWarningIssued = true;
+    this.onCapacityWarning(count, this.limit);
   }
 
   /**
@@ -357,15 +381,29 @@ export class CooAccountDb {
    * 新建时返回一次 ownerKey；之后只能从部署的 .env 拿，或轮换。
    * 若 coo 还没注册身份，会在 coos 里先建一个占位（没 secret），之后可由 registerCoo 认领。
    */
-  async ensureAccount(cooId: string, displayName?: string): Promise<EnsureAccountResult> {
+  async ensureAccount(cooId: string, displayName?: string, beforeCreate?: () => void): Promise<EnsureAccountResult> {
     if (!isCooId(cooId)) throw new Error('cooId 格式不对');
-    return await atomically(this.db, async () => {
+    const current = await this.byCooId(cooId);
+    if (current) return { account: current, created: false };
+
+    return withTransaction(this.db, async () => {
+      // 不同身份共享容量。串行核对并写入，以免并发创建超过上限。
+      if (this.db.kind === 'postgres') {
+        await this.db.prepare("SELECT pg_advisory_xact_lock(hashtext('cortico-parlor-account-capacity'))").get();
+      }
       const existing = await this.byCooId(cooId);
       if (existing) return { account: existing, created: false };
-      if (await this.count() >= this.limit) throw new AccountLimitError(this.limit);
+      const now = this.now();
+      const usage = (await this.db.prepare('SELECT COUNT(*) AS total, COUNT(CASE WHEN created_at > ? THEN 1 END) AS recent FROM accounts')
+        .get<{ total: number; recent: number }>(now - 3_600_000))!;
+      const count = Number(usage.total);
+      if (count >= this.limit) throw new AccountLimitError(this.limit);
+      if (this.creationLimitPerHour !== undefined && Number(usage.recent) >= this.creationLimitPerHour) {
+        throw new AccountCreationRateError();
+      }
+      beforeCreate?.();
 
       const name = cleanName(displayName) || (await this.defaultAccountName(cooId));
-      const now = this.now();
       if (!(await this.cooRow(cooId))) {
         await this.db.prepare(
           `INSERT INTO coos(id, kind, display_name, secret_hash, created_at, last_seen_at, status)
@@ -385,6 +423,7 @@ export class CooAccountDb {
         status: 'active',
       };
       await this.insertAccount(account);
+      this.db.afterCommit(() => this.warnIfNearCapacity(count + 1));
       return { account, ownerKey, created: true };
     });
   }

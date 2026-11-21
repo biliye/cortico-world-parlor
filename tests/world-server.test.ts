@@ -3,7 +3,9 @@ import { pgServerStorage } from './helpers/pg.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WorldServer } from '../src/room/world-server.ts';
+import { clientIp, clientIpRateKey } from '../src/room/http.ts';
+import { SlidingRateLimit } from '../src/room/rate-limit.ts';
+import { WorldServer, type WorldServerOptions } from '../src/room/world-server.ts';
 
 const A = 'coo-aaaaaaaa';
 const B = 'coo-bbbbbbbb';
@@ -21,13 +23,14 @@ afterEach(async () => {
   dir = undefined;
 });
 
-const start = async (): Promise<WorldServer> => {
+const start = async (options: Pick<WorldServerOptions, 'now' | 'poolMax' | 'host' | 'publicUrl'> = {}): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-world-'));
   server = await WorldServer.create({ allowGuestJoin: true,
     ...(await pgServerStorage(join(dir, 'parlor.db'))),
     port: 0,
     inviteCode: 'inv',
     defaultRoomId: 'lobby',
+    ...options,
   });
   await server.listen();
   return server;
@@ -64,6 +67,83 @@ const get = async (base: string, path: string, token: string) => {
 };
 
 describe('WorldServer 聊天网关', () => {
+  it('搜人按认证身份累计分钟额度，其他身份仍可查询', async () => {
+    let now = Date.now();
+    const app = await start({ now: () => now });
+    const first = await post(app.url, '/v1/join', { name: '阿岚' }, cooHeaders(A));
+    expect(first.status).toBe(200);
+    expect((await post(app.url, '/v1/join', { name: '小满' }, cooHeaders(B))).status).toBe(200);
+    const search = async (cooId: string) => {
+      const response = await fetch(`${app.url}/v1/people`, { headers: cooHeaders(cooId) });
+      await response.json();
+      return response.status;
+    };
+
+    for (let i = 0; i < 60; i++) expect(await search(A)).toBe(200);
+    expect((await get(app.url, '/v1/people', first.body.token as string)).status).toBe(429);
+    expect(await search(B)).toBe(200);
+    now += 60_000;
+    expect(await search(A)).toBe(200);
+  });
+
+  it('搜人并发名额用完时仍可读取大厅目录，完成后释放名额', async () => {
+    const app = await start({ poolMax: 2 });
+    expect((await post(app.url, '/v1/join', { name: '阿岚' }, cooHeaders(A))).status).toBe(200);
+    let started!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const paused = new Promise<void>(resolve => { release = resolve; });
+    const db = app.dbHandle;
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (sql.includes('WITH recent AS')) {
+        const all = statement.all.bind(statement);
+        statement.all = async (...params) => {
+          started();
+          await paused;
+          return all(...params);
+        };
+      }
+      return statement;
+    });
+    const search = () => fetch(`${app.url}/v1/people`, { headers: cooHeaders(A) });
+    const pending = search();
+    try {
+      await Promise.race([waiting, pending.then(result => { throw new Error(`搜人提前返回 ${result.status}`); })]);
+      expect((await search()).status).toBe(429);
+      expect((await fetch(`${app.url}/v1/rooms`)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+      release();
+      await pending;
+    }
+    expect((await pending).status).toBe(200);
+    expect((await search()).status).toBe(200);
+  });
+
+  it('公聊的短窗口按身份跨厅累计，窗口过后可以继续发言', async () => {
+    let now = Date.now();
+    const app = await start({ now: () => now });
+    const joined = await post(app.url, '/v1/join', { name: '阿岚' }, cooHeaders(A));
+    expect(joined.status).toBe(200);
+    const say = (room: string, token: unknown) => post(app.url, `/v1/rooms/${room}/action`, {
+      type: 'say', text: '大家好',
+    }, { authorization: `Bearer ${token}` });
+    for (let i = 0; i < 8; i++) {
+      now += 100;
+      expect((await say('lobby', joined.body.token)).status).toBe(200);
+    }
+
+    const moved = await post(app.url, '/v1/rooms/lobby/switch', { to: 'hall' }, {
+      authorization: `Bearer ${joined.body.token}`,
+    });
+    expect(moved.status).toBe(200);
+    expect((await say('hall', moved.body.token)).status).toBe(429);
+    now += 10_000;
+    expect((await say('hall', moved.body.token)).status).toBe(200);
+  });
+
   it('建房、进厅、说话、快照、历史；目录只列公开厅', async () => {
     const app = await start();
     const created = await post(app.url, '/v1/rooms', {
@@ -293,5 +373,54 @@ describe('WorldServer 聊天网关', () => {
     } finally {
       for (const controller of controllers) controller.abort();
     }
+  });
+});
+
+describe('网关频控', () => {
+  it('从可信回环代理获取规范化的末尾地址，直连使用 TCP 对端', () => {
+    const request = (remoteAddress: string, forwarded: string) => ({
+      socket: { remoteAddress }, headers: { 'x-forwarded-for': forwarded },
+    });
+    const proxied = request('::ffff:127.0.0.1', '198.51.100.7, 2001:0DB8:0000::1');
+    expect(clientIp(proxied, true)).toBe('2001:db8::1');
+    expect(clientIp(proxied, false)).toBe('127.0.0.1');
+    expect(clientIp(request('192.0.2.2', '198.51.100.7'), true)).toBe('192.0.2.2');
+    expect(clientIp(request('127.0.0.1', 'unknown'), true)).toBe('127.0.0.1');
+    expect(clientIpRateKey(proxied, true)).toBe('2001:db8:0:0::/64');
+    expect(clientIpRateKey(request('2001:db8::cafe:2', ''), false)).toBe('2001:db8:0:0::/64');
+    expect(clientIpRateKey(request('2001:db8:0:1::2', ''), false)).toBe('2001:db8:0:1::/64');
+    expect(clientIpRateKey(request('::ffff:192.0.2.2', ''), false)).toBe('192.0.2.2');
+  });
+
+  it('配置公开源后按回环对端识别代理，不要求监听地址写成数字回环', async () => {
+    const app = await start({ host: 'localhost', publicUrl: 'https://parlor.example' });
+    const joined = await post(app.url, '/v1/join', { name: '阿岚' }, cooHeaders(A));
+    expect(joined.status).toBe(200);
+    const login = (address: string) => post(app.url, '/v1/parent/session', { key: joined.body.ownerKey }, {
+      'x-forwarded-for': address,
+    });
+    for (let i = 0; i < 10; i++) expect((await login('192.0.2.1')).status).toBe(200);
+    expect((await login('192.0.2.1')).status).toBe(429);
+    expect((await login('192.0.2.2')).status).toBe(200);
+  });
+
+  it('表满时保留现有额度，窗口过期后回收键', () => {
+    const rates = new SlidingRateLimit(1, { ms: 3_600_000, limit: 2 }, { burst: { ms: 10_000, limit: 1 } });
+    expect(rates.take('existing', 0)).toBe(true);
+    expect(rates.take('existing', 1)).toBe(false);
+    expect(rates.take('existing', 10_000)).toBe(true);
+    expect(rates.take('existing', 20_000)).toBe(false);
+    expect(rates.take('next', 20_000)).toBe(false);
+    expect(rates.take('next', 3_610_000)).toBe(true);
+  });
+
+  it('常规表满时共享桶接纳新键，常规表腾出空位时保留未过期的额度', () => {
+    const rates = new SlidingRateLimit(1, { ms: 1_000, limit: 1 }, { overflowBuckets: 1 });
+    expect(rates.take('existing', 0)).toBe(true);
+    expect(rates.take('new', 100)).toBe(true);
+    expect(rates.take('existing', 101)).toBe(false);
+    expect(rates.take('another', 101)).toBe(false);
+    expect(rates.take('new', 1_000)).toBe(false);
+    expect(rates.take('new', 1_100)).toBe(true);
   });
 });
