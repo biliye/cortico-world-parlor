@@ -116,8 +116,10 @@ export class DivinationDb {
     if (!draw) throw new HttpError(409, '这支签无法解读，可能已解过或收件人不对');
     if (draw.drawn_at <= now - REPLY_TIME_MS) return 'expired';
     if ([...text].length < 1 || [...text].length > 600) throw new HttpError(400, '解签须为 1–600 字');
-    await this.db.prepare('UPDATE divination_draws SET interpretation = ?, interpreted_at = ? WHERE id = ?')
-      .run(text, now, id);
+    const updated = await this.db.prepare(`UPDATE divination_draws SET interpretation = ?, interpreted_at = ?
+      WHERE id = ? AND coo_id = ? AND player_coo_id = ? AND interpretation IS NULL`)
+      .run(text, now, id, coo, player);
+    if (!updated.changes) throw new HttpError(409, '这支签已解过');
     return 'recorded';
   }
 

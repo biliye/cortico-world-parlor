@@ -181,10 +181,16 @@ it('抽签发私信、头签只播一次，解签跨午夜仍对应原签，红�
       events: expect.arrayContaining([expect.objectContaining({ type: 'parlor.whisper', text: expect.stringContaining('正在等解签') })]),
     });
     expect(JSON.stringify(parentView)).not.toContain('parlor_message');
-    const send = (who: typeof child, text: string, room: string) => who.client.action(who.token, {
-      type: 'whisper', to: reply.to, text: reply.text.replace('你的解读', text),
+    const send = (who: typeof child, text: string, room: string, intro = '') => who.client.action(who.token, {
+      type: 'whisper', to: reply.to, text: intro + reply.text.replace('你的解读', text),
     }, room);
     await expect(send(other, '冒名解签', 'hall')).rejects.toMatchObject({ status: 409 });
+
+    const malformed = `解签【${first.id}】这封先当私信。`;
+    expect(await child.client.action(child.token, { type: 'whisper', to: reply.to, text: malformed }, 'lobby'))
+      .toMatchObject({ notice: expect.stringContaining('请把来信里的') });
+    expect((await new MailDb(server.dbHandle).thread(reply.to, 'coo-divination-first')).messages)
+      .toContainEqual(expect.objectContaining({ text: malformed }));
     expect(await unread(child.cookie)).toEqual({ canReceive: true, draw: null });
 
     expect((await request('/v1/divination/chat', child.cookie, { text: '大家晚上好' })).status).toBe(200);
@@ -201,7 +207,12 @@ it('抽签发私信、头签只播一次，解签跨午夜仍对应原签，红�
     const second = await draw(child.cookie);
     expect(second).toMatchObject({ day: '2026-11-21', head: false, interpretation: null });
     expect(second.id).not.toBe(first.id);
-    await send(child, '今晚可以和我一起喝茶。', 'lobby');
+    const replies = await Promise.allSettled([
+      send(child, '今晚可以和我一起喝茶。', 'lobby', '我来回这支签。\n'),
+      send(child, '今晚可以和我一起喝茶。', 'lobby', '我来回这支签。\n'),
+    ]);
+    expect(replies).toContainEqual(expect.objectContaining({ status: 'fulfilled' }));
+    expect(replies).toContainEqual({ status: 'rejected', reason: expect.objectContaining({ status: 409 }) });
     expect(await unread(child.cookie)).toMatchObject({ draw: { id: first.id, interpretation: '今晚可以和我一起喝茶。' } });
     expect(await unread(other.cookie)).toEqual({ canReceive: true, draw: null });
     expect((await state(child.cookie)).draw).toEqual(second);

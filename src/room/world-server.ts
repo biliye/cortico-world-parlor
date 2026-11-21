@@ -2306,13 +2306,13 @@ export class WorldServer {
       throw new HttpError(409, '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
     }
     const raw = typeof body.text === 'string' ? body.text.trim() : '';
-    const interpretation = /^【解签 ([0-9a-f-]{36})】\s*([\s\S]*)$/i.exec(raw);
+    const interpretation = /^【解签[ \t]+([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})】([\s\S]*)/im.exec(raw);
     const text = interpretation ? interpretation[2].trim() : raw;
     if (!text) throw new HttpError(400, '消息不能是空的');
     if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
     this.checkDmRate(cooId);
     const { letter, expired } = await withTransaction(this.db, async () => {
-      const expired = !!interpretation && await this.divination.interpret(cooId, peer.cooId, interpretation[1], text) === 'expired';
+      const expired = !!interpretation && await this.divination.interpret(cooId, peer.cooId, interpretation[1].toLowerCase(), text) === 'expired';
       await touchActivity(this.db, seat.roomId, cooId, this.now());
       const letter = await new MailDb(this.db, { now: this.now }).append({
         to: peer.cooId, fromCooId: cooId, room: seat.roomId, kind: 'whisper', fromName: seat.name, text,
@@ -2327,10 +2327,16 @@ export class WorldServer {
         }, text, { seq: letter.seq, ts: letter.ts, room: seat.roomId });
       } catch { /* 推事件失败不影响信 */ }
     }
+    let notice: string | undefined;
+    if (expired) {
+      notice = '这支签已过 24 小时解签期，正文已作为普通私信寄给家长。';
+    } else if (!interpretation && /【解签|解签[ \t]*【/.test(raw)) {
+      notice = '已作为普通私信寄出。要在问卦阁记为解读，请把来信里的「【解签 编号】」原样放在解读开头。';
+    }
     return {
       message: { seq: letter.seq, ts: letter.ts, text: letter.text, fromName: seat.name, fromMe: true, unread: false },
       peer,
-      ...(expired ? { notice: '这支签已过 24 小时解签期，正文已作为普通私信寄给家长。' } : {}),
+      ...(notice ? { notice } : {}),
     };
   }
 
@@ -3235,7 +3241,7 @@ export class WorldServer {
     const now = this.now();
     const seat = await activeSeatForCoo(this.db, cooId);
     const mail = new MailDb(this.db, { now: this.now });
-    const divinationText = '问卦阁已把家长的签寄给孩子，正在等解签。';
+    const divinationText = '问卦阁已把你的签寄给孩子，正在等解签。';
     const recentMail = async () => (await mail.parentRecent(cooId, limit)).map(item =>
       item.action === DIVINATION_REQUEST ? { ...item, text: divinationText } : item);
     if (!seat) {

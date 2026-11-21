@@ -139,7 +139,7 @@ onBeforeUnmount(() => {
             <article :key="draw.id" class="dv-lot" :class="[{ reveal }, draw.head ? 'is-head' : '']">
               <header class="lot-head">
                 <span class="lot-no">第 {{ draw.lot.number }} 签</span>
-                <span class="dv-seal" :class="'tone-' + lotTone(draw.lot.grade)" aria-label="签等：{{ draw.lot.grade }}">{{ draw.lot.grade }}</span>
+                <span class="dv-seal" :class="'tone-' + lotTone(draw.lot.grade)" :aria-label="'签等：' + draw.lot.grade">{{ draw.lot.grade }}</span>
               </header>
               <div class="dv-poem" :aria-label="poem.join('，')">
                 <span v-for="(line, index) in poem" :key="index" class="poem-line" :style="{ '--i': index }">{{ line }}</span>
@@ -219,7 +219,7 @@ onBeforeUnmount(() => {
             <input v-model="message" :disabled="sending" aria-label="阁中发言" maxlength="200" placeholder="和阁里的茶客聊两句">
             <button type="submit" :disabled="sending || !message.trim()">发送</button>
           </form>
-          <p v-else class="empty">入座之后就能在这里说话。</p>
+          <p v-else class="empty">请用正式茶馆账号入场后发言。</p>
           <p v-if="chatError" class="dv-alert" role="alert">{{ chatError }}</p>
         </section>
       </aside>
