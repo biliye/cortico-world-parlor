@@ -1,6 +1,6 @@
 import { touchActivity } from './activity.ts';
 import { RoomLifecycle } from './lifecycle.ts';
-import { personalHistory } from './personal-account.ts';
+import { personalHistory, type AccountHistoryQuery } from './personal-account.ts';
 import { EventDb } from './event-db.ts';
 import { DivinationDb } from './divination-db.ts';
 import { DIVINATION_CAPABILITY, DIVINATION_NAME, DIVINATION_REQUEST, DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
@@ -19,6 +19,7 @@ import { HALL_CAPACITY } from './schema.ts';
 import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { GAME_LIST, gameByActionType, gameById } from './games/registry.ts';
+import { GAME_LABELS, gameLabelOf } from './game-labels.ts';
 import { RatingBoards } from './ratings/board.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
 import { GAME_RESPONSE_MAX_BYTES, type TableLogQuery } from './table-engine.ts';
@@ -244,6 +245,16 @@ const CLOCK_IDLE_MS = 10_000;
 const messageOf = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
 );
+
+/** 个人历史的查询参数：会馆账号（/v1/me/history）与家长页（/v1/parent/history）共用一套解析。 */
+const historyQuery = (params: URLSearchParams): AccountHistoryQuery => {
+  const q = Object.fromEntries(params);
+  return {
+    kind: (q.kind ?? 'games') as 'games' | 'gifts', game: q.game, room: q.room,
+    ...Object.fromEntries(['from', 'until', 'before', 'limit']
+      .filter(k => q[k] !== undefined).map(k => [k, Number(q[k])])),
+  };
+};
 
 const seatOfRow = async (db: Db, roomId: string, seat: {
   id: string; name: string; kind: SeatKind; tier: WakeTier; joinedAt: number; cooId: string;
@@ -1412,6 +1423,37 @@ export class WorldServer {
       return;
     }
 
+    /**
+     * 家长自己的战绩：账户属于 owner，战绩属于他下场时用的玩家身份。
+     * 还没下过场（没有玩家身份）就回空账，不临时建一个——建身份要换 secret，不能因为看了一眼就换。
+     */
+    if (method === 'GET' && url.pathname === '/v1/parent/history') {
+      const { account } = await this.parentSession(req);
+      const playerCooId = await this.coo.playerCooOf(account.id);
+      let page: Awaited<ReturnType<typeof personalHistory>> = { items: [], next: null };
+      let ledger: { games: number; wins: number; losses: number; draws: number } | null = null;
+      if (playerCooId) {
+        try {
+          page = await personalHistory(this.db, playerCooId, historyQuery(url.searchParams));
+        } catch (error) { throw new HttpError(400, messageOf(error)); }
+        const summary = await new LedgerDb(this.db, { now: this.now }).summaryFor(playerCooId);
+        ledger = { games: summary.games, wins: summary.wins, losses: summary.losses, draws: summary.draws };
+      }
+      res.setHeader('cache-control', 'private, no-store');
+      json(res, 200, {
+        player: playerCooId !== null,
+        ledger,
+        // 玩法名由服务端给，家长页不必再抄一份会漂移的名称表。
+        games: Object.entries(GAME_LABELS).map(([id, label]) => ({ id, label })),
+        items: page.items.map((item) => ({
+          ...item,
+          gameLabel: item.game ? gameLabelOf(item.game) : '',
+        })),
+        next: page.next,
+      }, req);
+      return;
+    }
+
     if (method === 'GET' && url.pathname === '/v1/parent/view') {
       const session = await this.parentSession(req);
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
@@ -1613,12 +1655,7 @@ export class WorldServer {
     if (method === 'GET' && url.pathname === '/v1/me/history') {
       const cooId = await this.cooOrSeat(req);
       try {
-        const q = Object.fromEntries(url.searchParams);
-        const page = await personalHistory(this.db, cooId, {
-          kind: (q.kind ?? 'games') as 'games' | 'gifts', game: q.game, room: q.room,
-          ...Object.fromEntries(['from','until','before','limit'].filter(k => q[k] !== undefined).map(k => [k, Number(q[k])])),
-        });
-        json(res, 200, page);
+        json(res, 200, await personalHistory(this.db, cooId, historyQuery(url.searchParams)));
       } catch (error) { throw new HttpError(400, messageOf(error)); }
       return;
     }
