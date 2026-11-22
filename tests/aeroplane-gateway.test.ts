@@ -30,7 +30,7 @@ async function post(token: string, body: unknown) {
 }
 
 describe('飞行棋 HTTP 网关（真实 PG）', () => {
-  it('飞行棋两人开桌，掷骰与选飞机共用严格版本和幂等回执', async () => {
+  it('飞行棋两人开桌，掷骰、选飞机与认输共用严格版本和幂等回执', async () => {
     const create = vi.spyOn(gameById('aeroplane')!, 'create').mockImplementation(({ host, turnMs }) =>
       new AeroplaneTable({ host, turnMs, rollDie: () => 6, firstSeat: () => 0 }));
     try {
@@ -44,7 +44,7 @@ describe('飞行棋 HTTP 网关（真实 PG）', () => {
       const read = (player: typeof a) => player.client.games(player.token, { op: 'state', table }, 'lobby') as Promise<Record<string, any>>;
       const initial = await read(a);
       expect(initial.table).toMatchObject({ capacity: 4, phase: 'await_roll', seats: [{ planes: [-1, -1, -1, -1] }, { planes: [-1, -1, -1, -1] }] });
-      expect(initial.availableActions).toMatchObject([{ action: 'roll' }]);
+      expect(initial.availableActions).toMatchObject([{ action: 'roll' }, { action: 'resign' }]);
 
       const roll = { type: 'game_action', action: 'roll', params: {}, table, requestId: 'flight-roll', revision: initial.table.revision };
       expect((await post(spectator.token, roll)).status).toBe(403);
@@ -52,7 +52,7 @@ describe('飞行棋 HTTP 网关（真实 PG）', () => {
       expect(rolled.status).toBe(200);
       expect((await post(a.token, roll)).body).toEqual(rolled.body);
       const choice = await read(a);
-      expect(choice).toMatchObject({ table: { phase: 'await_move', die: 6 }, availableActions: [{ action: 'move' }] });
+      expect(choice).toMatchObject({ table: { phase: 'await_move', die: 6 }, availableActions: [{ action: 'move' }, { action: 'resign' }] });
       expect(choice.tablePrivate.moves.map((move: { plane: number }) => move.plane)).toEqual([1, 2, 3, 4]);
       expect(await read(spectator)).toMatchObject({ table: { die: 6 }, tablePrivate: null, availableActions: [] });
 
@@ -62,7 +62,20 @@ describe('飞行棋 HTTP 网关（真实 PG）', () => {
       const after = await read(a);
       expect(after.table).toMatchObject({ phase: 'await_roll', revision: choice.table.revision + 1 });
       expect(after.table.seats[0].planes).toEqual([-1, 0, -1, -1]);
-      expect(after.availableActions).toMatchObject([{ action: 'roll' }]);
+      expect(after.availableActions).toMatchObject([{ action: 'roll' }, { action: 'resign' }]);
+
+      const resign = { type: 'game_action', action: 'resign', params: {}, table, requestId: 'flight-resign', revision: after.table.revision };
+      expect((await post(a.token, { ...resign, revision: choice.table.revision })).status).toBe(409);
+      const ended = await post(a.token, resign);
+      expect(ended.status).toBe(200);
+      expect((await post(a.token, resign)).body).toEqual(ended.body);
+      expect(await read(b)).toMatchObject({
+        table: {
+          status: 'ended', endReason: 'resign', winners: [after.table.seats[1].id],
+          seats: [{ resigned: true, planes: [-1, -1, -1, -1] }, { id: after.table.seats[1].id }],
+        },
+        availableActions: [],
+      });
     } finally {
       create.mockRestore();
     }

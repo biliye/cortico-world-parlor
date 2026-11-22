@@ -171,7 +171,7 @@ export type ActionRequest =
     type: 'xiangqi_action'; table?: string; requestId?: string; revision?: number;
   } & ({ from: { row: number; col: number }; to: { row: number; col: number } } | { resign: true }))
   | ({ type: 'aeroplane_action'; table?: string; requestId?: string; revision?: number }
-    & ({ action: 'roll' } | { action: 'move'; plane: number }))
+    & ({ action: 'roll' | 'resign' } | { action: 'move'; plane: number }))
   | {
     type: 'mahjong-sichuan_action' | 'mahjong-guangdong_action'; table?: string; requestId?: string;
     action: 'exchange' | 'missing' | 'discard' | 'pung' | 'kong' | 'hu' | 'pass';

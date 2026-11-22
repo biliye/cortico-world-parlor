@@ -56,6 +56,9 @@ export class AeroplaneTable implements TableEngine {
 
   get status(): FlightState['status'] { return this.state.status; }
   private get current(): AeroplaneSeat { return this.state.seats[this.state.current]; }
+  private get wonByResignation(): boolean {
+    return this.status === 'ended' && this.state.seats.filter(seat => !seat.resigned).length === 1;
+  }
 
   has(id: string): boolean { return this.state.seats.some(seat => seat.id === id); }
   seatIds(): string[] { return this.state.seats.map(seat => seat.id); }
@@ -96,6 +99,7 @@ export class AeroplaneTable implements TableEngine {
     if (this.current.id !== id) throw new TableError('not_turn', '还没轮到你');
     if (now >= this.state.deadline) throw new TableError('expired', '回合已到期，等服务器推进后再看桌面');
     const action = input as { action?: unknown; plane?: unknown } | null;
+    if (action?.action === 'resign' && action.plane === undefined) return this.resign(now);
     if (action?.action === 'roll' && this.state.pending === null) return this.roll(now);
     if (action?.action === 'move' && this.state.pending !== null) {
       const move = this.moves().find(item => item.plane === action.plane);
@@ -160,17 +164,38 @@ export class AeroplaneTable implements TableEngine {
     this.state.last = { seat: seat.id, die, text };
     const events = [this.event('action', text, { seat: seat.id, action: 'move', die, ...move, hit, auto })];
     if (!won) return this.advance(now, die === 6, events);
+    events.push(this.event('end', `${seat.name} 的四架飞机全部抵达，赢得本局。`, { winners: [seat.id] }));
+    return this.finish(events);
+  }
+
+  private resign(now: number): TableStep {
+    const seat = this.current;
+    seat.resigned = true;
+    seat.planes.fill(HANGAR);
+    const events = [this.event('resign', `${seat.name} 认输了，飞机退出棋盘。`, { seat: seat.id })];
+    const step = this.advance(now, false, events);
+    if (this.state.seats.filter(entry => !entry.resigned).length > 1) return step;
+    events.push(this.event('end', `${this.current.name} 成为最后一位留在场上的玩家，赢得本局。`, {
+      winners: [this.current.id], reason: 'resign',
+    }));
+    return this.finish(events);
+  }
+
+  private finish(events: TableEvent[]): TableStep {
     this.state.status = 'ended';
     this.state.deadline = 0;
     this.state.pending = null;
-    events.push(this.event('end', `${seat.name} 的四架飞机全部抵达，赢得本局。`, { winners: [seat.id] }));
     return { events, views: [], ended: true, seatResults: null };
   }
 
   private advance(now: number, again: boolean, events: TableEvent[]): TableStep {
     this.state.pending = null;
     this.state.deadline = now + this.turnMs;
-    if (!again) this.state.current = (this.state.current + 1) % this.state.seats.length;
+    if (!again) {
+      do {
+        this.state.current = (this.state.current + 1) % this.state.seats.length;
+      } while (this.current.resigned);
+    }
     return { events, views: [this.current.id] };
   }
 
@@ -185,6 +210,7 @@ export class AeroplaneTable implements TableEngine {
       die: pending,
       last: last && { ...last },
       winners: status === 'ended' ? [this.current.id] : undefined,
+      ...(this.wonByResignation ? { endReason: 'resign' as const } : {}),
     };
   }
 
@@ -196,6 +222,7 @@ export class AeroplaneTable implements TableEngine {
 
   publicText(): string {
     if (this.status === 'open') return `【飞行棋】${this.state.seats.length}/4 人，至少两人可开局。`;
+    if (this.wonByResignation) return `【飞行棋】${this.current.name} 成为最后一位留在场上的玩家，赢得本局。`;
     if (this.status === 'ended') return `【飞行棋】${this.current.name} 的四架飞机全部抵达。`;
     return `【飞行棋】轮到 ${this.current.name}${this.state.pending === null ? '掷骰' : `选择飞机（${this.state.pending} 点）`}。`;
   }
@@ -203,12 +230,16 @@ export class AeroplaneTable implements TableEngine {
   privateText(id: string, now: number): string | null {
     const view = this.view(id);
     if (!view) return null;
-    if (!view.yourTurn) return this.publicText();
     const seat = view.seats.find(entry => entry.id === id)!;
+    if (seat.resigned) {
+      const note = view.status === 'playing' ? '你已认输，可以继续观战。' : '你已认输。';
+      return this.publicText() + note;
+    }
+    if (!view.yourTurn) return this.publicText();
     const positions = seat.planes.map((progress, index) => `${index + 1}号${positionText(progress)}`).join('、');
     const choices = view.moves.map(move => `${move.plane}号→${positionText(move.to)}${move.captures ? `，撞 ${move.captures} 架` : ''}`).join('；');
     const action = choices ? `掷出 ${view.die}。可飞：${choices}。` : '请掷骰。';
-    return `【飞行棋】你是${COLOURS[seat.colour]}，${positions}。${action}剩 ${secondsLeft(view.deadline, now)} 秒。`;
+    return `【飞行棋】你是${COLOURS[seat.colour]}，${positions}。${action}也可认输。剩 ${secondsLeft(view.deadline, now)} 秒。`;
   }
 
   exportState(): unknown { return structuredClone(this.state); }
@@ -217,25 +248,30 @@ export class AeroplaneTable implements TableEngine {
     const state = input as FlightState | null;
     const validSeat = (seat: AeroplaneSeat) => seat && typeof seat.id === 'string' && seat.id.length > 0
       && typeof seat.name === 'string' && Array.isArray(seat.planes) && seat.planes.length === PLANES_PER_SEAT
+      && (seat.resigned === undefined || seat.resigned === true)
       && seat.planes.every(progress => intBetween(progress, HANGAR, FINISH));
     if (!state || state.version !== this.stateVersion || !['open', 'playing', 'ended'].includes(state.status)
       || !Array.isArray(state.seats) || !intBetween(state.seats.length, state.status === 'open' ? 1 : 2, MAX_SEATS)
       || !state.seats.every(validSeat) || state.seats[0].id !== this.host
       || new Set(state.seats.map(seat => seat.id)).size !== state.seats.length
       || !intBetween(state.current, 0, state.seats.length - 1)
+      || state.seats[state.current].resigned
+      || (state.status === 'open' && state.seats.some(seat => seat.resigned))
+      || state.seats.filter(seat => !seat.resigned).length < (state.status === 'playing' ? 2 : 1)
       || !Number.isFinite(state.deadline) || (state.status === 'playing' ? state.deadline <= 0 : state.deadline !== 0)
       || (state.last !== null && (!state.last || !intBetween(state.last.die, 1, 6)
         || typeof state.last.text !== 'string' || !state.seats.some(seat => seat.id === state.last?.seat)))
       || (state.pending !== null && (state.status !== 'playing' || !intBetween(state.pending, 1, 6)
         || state.last?.die !== state.pending || state.last.seat !== state.seats[state.current].id
         || legalMoves(state.seats, state.current, state.pending).length === 0))
-      || (state.status === 'ended') !== state.seats[state.current].planes.every(progress => progress === FINISH)) {
+      || (state.status === 'ended') !== (state.seats[state.current].planes.every(progress => progress === FINISH)
+        || (state.seats.length > 1 && state.seats.filter(seat => !seat.resigned).length === 1))) {
       throw new Error('无法读取飞行棋存档');
     }
     this.state = structuredClone(state);
   }
 
-  private event(type: 'join' | 'left' | 'start' | 'action' | 'end', text: string, data: Record<string, unknown>): TableEvent {
+  private event(type: 'join' | 'left' | 'start' | 'action' | 'resign' | 'end', text: string, data: Record<string, unknown>): TableEvent {
     return { type: `parlor.table.${type}`, scope: { kind: 'room' }, text, data: { game: this.game, ...data } };
   }
 }

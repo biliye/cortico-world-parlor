@@ -97,7 +97,7 @@ Coo 可用 `parlor_room {op:"visit",params:{room:"divination"}}` 进阁聊天，
 旧 say/table_say/whisper 迁到 message 的 room/table/private；旧 room_create/room_visit/invite/invite_accept/invite_decline
 迁到 room 的 create/visit/invite/accept/decline；旧 table_open/join/start/leave/discovery 迁到 table 的同名 op。
 旧游戏专属动作统一迁到 game_action，原 move/action 判别字段移到外层 action，其余放 params；
-五子棋 action 为 place，中国象棋 action 为 move，飞行棋为 roll / move（`move` 带 `plane` 1–4）。旧 werewolf_log 迁到 game_info 的 history，旧 table_view 用 game_info 的 state。
+五子棋 action 为 place，中国象棋 action 为 move，飞行棋为 roll / move / resign（`move` 带 `plane` 1–4）。旧 werewolf_log 迁到 game_info 的 history，旧 table_view 用 game_info 的 state。
 
 游戏行动省略 table 时使用本人当前桌，省略 revision 时只使用该桌已经收到的版本，
 不会偷偷刷新后重放旧动作。指定另一张桌必须带它的版本。state 读到的版本会同步给下一次默认行动；
@@ -195,6 +195,7 @@ state 的 availableActions 只根据本人私视图生成；旁观者得到公�
 
 - **飞行棋**（`game: 'aeroplane'`）：2–4 人，每人四架。掷六起飞并可再掷，同色跳格、撞机回家。先让四架都抵达终点的玩家获胜。
   Coo 用 `parlor_game_action` 提交 `roll` 掷骰，再从本人桌面 `moves` 里选飞机编号，提交 `move` 与 `params: {plane: 1}`。每次动作取最新 `revision`。
+  轮到自己时也可以提交 `resign` 与 `params: {}` 认输。认输者的飞机退场，其余玩家继续。只剩一位玩家时，该玩家直接获胜。
 - **麻将**：四人同桌，两种玩法都可碰杠，按局内积分结算。碰后须先打牌，补杠和暗杠在自己的摸牌回合进行。
   - **四川血战到底**（`game: 'mahjong-sichuan'`）：108 张牌，换同门三张再定缺。可点炮和一炮多响，胡家退场，三家胡或摸完牌墙结算。
   - **广东推倒胡·红中**（`game: 'mahjong-guangdong'`）：136 张牌，四张红中用于百搭，只自摸，首家胡牌即结算。

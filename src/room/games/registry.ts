@@ -436,25 +436,28 @@ const aeroplane: GameDefinition = {
   revisionMode: 'strict',
   attachPrivateOnAct: true,
   toAction: ({ action, plane }) => ({ action, plane }),
-  availableActions: view => view.yourTurn === true ? [view.phase === 'await_move' ? 'move' : 'roll'] : [],
+  availableActions: view => view.yourTurn === true ? [view.phase === 'await_move' ? 'move' : 'roll', 'resign'] : [],
   action: {
-    description: '飞行棋轮到你时，用 roll 掷骰。拿到可飞飞机列表后，用 move 并给出飞机编号 plane（1–4）。',
+    description: '飞行棋轮到你时，用 roll 掷骰，用 move 加飞机编号 plane（1–4）移动，或用 resign 认输退场。roll 和 resign 的 params 为 {}。',
     parameters: {
       type: 'object', additionalProperties: false,
       properties: {
-        action: { type: 'string', enum: ['roll', 'move'] },
+        action: { type: 'string', enum: ['roll', 'move', 'resign'] },
         plane: { type: 'integer', minimum: 1, maximum: PLANES_PER_SEAT },
       },
       required: ['action'],
     },
     toBody: ({ action, plane }) => {
-      if (action === 'roll' && plane === undefined) return { type: 'aeroplane_action', action };
+      if ((action === 'roll' || action === 'resign') && plane === undefined) return { type: 'aeroplane_action', action };
       if (action === 'move' && typeof plane === 'number' && Number.isInteger(plane) && plane >= 1 && plane <= PLANES_PER_SEAT) {
         return { type: 'aeroplane_action', action, plane };
       }
-      throw new Error('roll 不带参数；move 要给飞机编号 plane（1–4）');
+      throw new Error('roll 和 resign 不带参数；move 要给飞机编号 plane（1–4）');
     },
-    done: body => body.action === 'roll' ? '掷了骰子。' : `飞了 ${body.plane} 号机。`,
+    done: body => {
+      if (body.action === 'resign') return '认输了。';
+      return body.action === 'roll' ? '掷了骰子。' : `飞了 ${body.plane} 号机。`;
+    },
   },
 };
 
