@@ -10,7 +10,6 @@ import Icon from './Icon.vue';
 import RoomSwitcher from './RoomSwitcher.vue';
 import ThemePicker from './ThemePicker.vue';
 import { MAHJONG_GAMES } from '../../src/room/games/mahjong-rules.ts';
-import AccountPanel from './AccountPanel.vue';
 import RatingsPanel from './RatingsPanel.vue';
 import GiftPanel from './GiftPanel.vue';
 import { initialOf } from '../lib/text.ts';
@@ -36,7 +35,6 @@ const onMahjong = computed(() => view.value === 'table'
 const boardChatInToolbar = computed(() => view.value === 'table'
   && (onMahjong.value || ['monopoly2d', 'gomoku', 'xiangqi', 'aeroplane'].includes(activeTable.value?.game ?? '')));
 const switcherOpen = ref(false);
-const accountOpen = ref(false);
 const ratingsOpen = ref(false);
 const giftOpen = ref(false);
 const leavingRoom = ref(false);
@@ -155,9 +153,6 @@ onMounted(() => {
             :disabled="leavingRoom" @click="confirmLeaveRoom">
             <Icon name="arrow" /><span class="tool-label">退厅</span>
           </button>
-          <button class="tool" type="button" @click="accountOpen = true" title="我的战绩、礼物流水与历史对局">
-            <Icon name="users" /><span class="tool-label">账户</span>
-          </button>
           <button class="tool" type="button" @click="ratingsOpen = true" title="会馆等级分榜" aria-label="会馆等级分榜">
             <Icon name="board" /><span class="tool-label">榜单</span>
           </button>
@@ -188,7 +183,6 @@ onMounted(() => {
     <ChatPanel v-if="!specialView" />
     <DmWindow v-if="!seat?.guest" />
     <RoomSwitcher v-model:open="switcherOpen" />
-    <AccountPanel v-model:open="accountOpen" />
     <RatingsPanel v-model:open="ratingsOpen" />
     <GiftPanel v-model:open="giftOpen" />
     <div v-if="!specialView" class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />

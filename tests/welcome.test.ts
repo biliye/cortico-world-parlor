@@ -365,7 +365,6 @@ const pages = {
   parent: read('parent.html'),
   support: read('support.html'),
   join: source('../web-src/views/JoinView.vue'),
-  account: source('../web-src/components/AccountPanel.vue'),
 };
 
 describe('子页都能回首页', () => {
@@ -387,9 +386,10 @@ describe('子页都能回首页', () => {
     expect(header).toContain('href="/play"');
   });
 
-  it('「我的账户」弹窗里也能回首页', () => {
-    expect(pages.account).toContain('href="/"');
-    expect(pages.account).toContain('会馆首页');
+  it('/play 顶栏不再挂账户入口，账户只在家长页', () => {
+    const shell = source('../web-src/components/AppShell.vue');
+    expect(shell).not.toContain('AccountPanel');
+    expect(shell).not.toContain('accountOpen');
   });
 
   it('一律用相对根路径，不写死实例域名', () => {
@@ -422,11 +422,6 @@ describe('回首页的入口只在多客厅网关出现', () => {
     expect(pages.join).toMatch(/<p v-if="gateway" class="note home-note"><a href="\/">/);
     // 判断来自 healthz，不是写死 true
     expect(pages.join).toContain('detectGateway');
-  });
-
-  it('账户弹窗的回首页同样收在判断里', () => {
-    expect(pages.account).toMatch(/<a v-if="gateway" class="btn ghost small" href="\/"/);
-    expect(pages.account).toContain('detectGateway');
   });
 
   it('家长页与反馈页只有网关会发，所以那两页不用加判断', () => {
