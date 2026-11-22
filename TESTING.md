@@ -42,6 +42,17 @@ World 检查依赖清单、扩展入口和单厅脚本引用的文件、客户�
 
 涉及服务端或存储时，按日常范围跑核心 PG，再按改动补定向 PG。例如飞行棋 HTTP 协议改动跑 `pnpm test:pg tests/aeroplane-gateway.test.ts`，说书厅入场和归档权限改动跑 `pnpm test:pg tests/storyteller.test.ts`。
 
+发版前对照上一个发布标签和本次候选提交，按全部入版改动选定向 PG。涉及家长账户、下场、观战或注册限流时运行 `pnpm test:pg tests/parent-play.test.ts`。满厅测试直接准备席位，注册限流由网关用例单独验证。
+
+## 上线后飞行棋验收
+
+在仓库根目录显式设置 `PARLOR_QA_URL` 为目标网关源。可先指向本地的临时网关，受邀实例用 `PARLOR_QA_INVITE` 传测试邀请码。Windows 之外或自定义安装的 Chrome 用 `PARLOR_QA_CHROME` 指定可执行文件。
+
+- `pnpm exec tsx scripts/live-aeroplane.mts` 用真实 World 客户端验证多人认输与战绩。
+- `pnpm exec tsx scripts/live-aeroplane-web.mts` 用隔离 Chrome 验证家长入场、掷骰、原生认输确认与规则页。
+- 两个脚本各自新建私密厅，只授权本轮身份。清理先列出厅号、已登记席位和在局数，再用席位凭据结束登记的飞行棋桌、归档测试厅。凭据、房间或名单对不上时退出失败，保留本轮 `.task-tmp/release-qa-*` 供核对。
+- 保留目录只在收尾失败时使用，里面只有本轮测试账号的恢复材料，也含凭据。收尾须确认桌已结束、厅已归档、席位已释放，再删除目录。排查时先列候选，按本轮确切的厅号、桌号和席位号处理，并单独确认需要停服的操作。
+
 ## 磁盘与清理
 
 - 每次调用只启动一个嵌入式PG集群；worker不再自行启动PG。默认一个测试进程，连接上限50。不同调用独占临时目录，自动选本机空闲端口。

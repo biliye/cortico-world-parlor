@@ -4,6 +4,7 @@ import { ParlorClient } from '../src/room/client.ts';
 import { AeroplaneTable } from '../src/room/games/aeroplane-table.ts';
 import { gameById } from '../src/room/games/registry.ts';
 import { pgServerStorage } from './helpers/pg.ts';
+import { qaRequest, ReleaseQaRoom } from '../scripts/release-qa-room.ts';
 
 let app: WorldServer | undefined;
 afterEach(async () => { await app?.close(); app = undefined; });
@@ -30,6 +31,37 @@ async function post(token: string, body: unknown) {
 }
 
 describe('飞行棋 HTTP 网关（真实 PG）', () => {
+  it('发布验收只清理本轮私密厅，能结束中断的飞行棋桌', async () => {
+    const [a, b, outside] = await start();
+    const base = app!.url;
+    let ownerToken = a.token;
+    const qa = await ReleaseQaRoom.create(base, () => ownerToken);
+    const roomPath = `/v1/rooms/${qa.id}`;
+    await qa.allow(b.token);
+    ownerToken = (await a.client.switchTo(a.token, 'lobby', qa.id)).token;
+    const guestToken = (await b.client.switchTo(b.token, 'lobby', qa.id)).token;
+    await qa.captureSeat(ownerToken);
+    await qa.captureSeat(guestToken);
+    const id = (await a.client.action(ownerToken, { type: 'table_open', game: 'aeroplane', requestId: 'qa-open' }, qa.id)).tableId!;
+    await b.client.action(guestToken, { type: 'table_join', table: id, requestId: 'qa-join' }, qa.id);
+    await a.client.action(ownerToken, { type: 'table_start', table: id, requestId: 'qa-start' }, qa.id);
+
+    await expect(qa.cleanup()).rejects.toThrow(/未登记的牌桌/);
+    qa.trackTable(id);
+    // 模拟测试过程中出现了不属于本轮的成员，即便没有入座也应拒绝清理。
+    const stranger = await qaRequest<{ cooId: string }>(base, outside.token, '/v1/me');
+    await qaRequest(base, ownerToken, roomPath + '/access', { action: 'grant', cooId: stranger.cooId });
+    await expect(qa.cleanup()).rejects.toThrow(/名单发生变化/);
+    expect(await qaRequest(base, ownerToken, roomPath + '/access')).toMatchObject({ room: { archived: false, tableCount: 1 } });
+    await qaRequest(base, ownerToken, roomPath + '/access', { action: 'revoke', cooId: stranger.cooId });
+
+    expect(await qa.plan()).toMatchObject({ room: qa.id, activeTables: 1 });
+    await qa.cleanup();
+    const released = await app!.dbHandle.prepare('SELECT count(*) AS n FROM room_seats WHERE room_id=? AND released_at IS NULL').get(qa.id);
+    expect(Number((released as { n: number }).n)).toBe(0);
+    expect(await outside.client.location(outside.token)).toMatchObject({ room: 'lobby' });
+  });
+
   it('飞行棋两人开桌，掷骰、选飞机与认输共用严格版本和幂等回执', async () => {
     const create = vi.spyOn(gameById('aeroplane')!, 'create').mockImplementation(({ host, turnMs }) =>
       new AeroplaneTable({ host, turnMs, rollDie: () => 6, firstSeat: () => 0 }));

@@ -15,6 +15,6 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts", "adapters/dsh/src/**/*.ts"],
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "scripts/**/*.mts", "tests/**/*.ts", "adapters/dsh/src/**/*.ts"],
   "exclude": ["node_modules", "dist", "src/webui"]
 }

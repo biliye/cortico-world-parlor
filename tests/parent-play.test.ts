@@ -61,15 +61,17 @@ const getWith = async (base: string, path: string, headers: Record<string, strin
 
 const cookieOf = (response: Response): string => (response.headers.get('set-cookie') || '').split(';')[0];
 
-/** 给孩子所在的默认客厅再填 29 个席位。 */
-const fillLobby = async (app: WorldServer): Promise<void> => {
-  await app.dbHandle.exec(`
+/** 直接准备满厅场景，不消耗批量注册的 IP 额度。 */
+const fillLobby = async (app: WorldServer, count = 29): Promise<void> => {
+  await app.dbHandle.prepare(`
     INSERT INTO coos(id, kind, display_name, created_at)
-      SELECT 'coo-fill-' || n, 'pet', '成员' || n, 1 FROM generate_series(1, 29) AS n;
+      SELECT 'coo-fill-' || n, 'pet', '成员' || n, 1 FROM generate_series(1, ?::int) AS n
+  `).run(count);
+  await app.dbHandle.prepare(`
     INSERT INTO room_seats(room_id, id, coo_id, kind, name, tier, token_hash, joined_at, visible_from_seq)
       SELECT 'lobby', 'fill-' || n, 'coo-fill-' || n, 'pet', '成员' || n, 'off', 'fill-token-' || n, 1, 0
-      FROM generate_series(1, 29) AS n;
-  `);
+      FROM generate_series(1, ?::int) AS n
+  `).run(count);
 };
 
 describe('家长下场', () => {
@@ -221,12 +223,7 @@ describe('家长下场', () => {
     expect((await act({ type: 'table_join', table, requestId: 'join-watch' }, secondSeat)).status).toBe(200);
     expect((await act({ type: 'table_start', table, requestId: 'start-watch' })).status).toBe(200);
     const capacity = child.body.maxSeats as number;
-    for (let i = 2; i < capacity; i++) {
-      const filler = await post(app.url, `/v1/rooms/${room}/join`, { name: `茶客 ${i}` }, {
-        ...cooHeaders(`coo-watchfiller${i}`), 'x-parlor-invite': 'inv',
-      });
-      expect(filler.status).toBe(200);
-    }
+    await fillLobby(app, capacity - 2);
     const session = await post(app.url, '/v1/parent/session', { key: child.body.ownerKey });
     expect(session.status).toBe(200);
     const auth = { cookie: (session.headers.get('set-cookie') ?? '').split(';')[0] };
