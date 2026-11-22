@@ -23,7 +23,7 @@ import { DEFAULT_BID_MS, DEFAULT_TURN_MS as DDZ_TURN_MS } from './games/doudizhu
 import { GOMOKU_SIZE, GOMOKU_TURN_MS } from './games/gomoku-table.ts';
 import { XIANGQI_COO_MS, XIANGQI_HUMAN_MS } from './games/xiangqi-table.ts';
 import { XIANGQI_COLS, XIANGQI_ROWS } from './games/xiangqi.ts';
-import { AEROPLANE_RULES, MAX_SEATS as AEROPLANE_MAX_SEATS, PLANES_PER_SEAT } from './games/aeroplane-rules.ts';
+import { AEROPLANE_RESIGN_RULE, AEROPLANE_RULES, MAX_SEATS as AEROPLANE_MAX_SEATS, PLANES_PER_SEAT } from './games/aeroplane-rules.ts';
 import { AEROPLANE_TURN_MS } from './games/aeroplane-table.ts';
 import {
   BUY_MS as MONOPOLY_BUY_MS,
@@ -249,6 +249,7 @@ export const RULE_PAGES: readonly RulePage[] = [
         items: [
           '四架飞机全部抵达终点的人获胜。',
           '被撞只回机库，不淘汰玩家，可以接着起飞。',
+          AEROPLANE_RESIGN_RULE,
         ],
       },
       {

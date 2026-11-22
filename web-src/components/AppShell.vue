@@ -32,6 +32,7 @@ const specialView = computed(() => view.value === 'story' || view.value === 'div
 const onWerewolf = computed(() => view.value === 'table' && !inHall.value && activeTable.value?.game === 'werewolf');
 const onMahjong = computed(() => view.value === 'table'
   && MAHJONG_GAMES.some(game => game === activeTable.value?.game));
+const onAeroplane = computed(() => view.value === 'table' && activeTable.value?.game === 'aeroplane');
 const boardChatInToolbar = computed(() => view.value === 'table'
   && (onMahjong.value || ['monopoly2d', 'gomoku', 'xiangqi', 'aeroplane'].includes(activeTable.value?.game ?? '')));
 const switcherOpen = ref(false);
@@ -58,7 +59,7 @@ watch([sheetOpen, specialView], ([open, special]) => {
   document.body.classList.toggle('sheet-open', open && !special);
 }, { immediate: true });
 
-const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value
+const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value || onAeroplane.value
   ? JSON.stringify([snapshot.value?.id, tableIdOf(activeTable.value)])
   : '');
 watch(floatingChatTable, setFloatingChatTable, { immediate: true });
@@ -95,7 +96,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="shell" :class="{ 'chat-open': !specialView && chatExpanded(), 'in-hall': inHall, 'on-werewolf': onWerewolf }">
+  <div class="shell" :class="{ 'chat-open': !specialView && chatExpanded(), 'in-hall': inHall, 'on-werewolf': onWerewolf, 'on-aeroplane': onAeroplane }">
     <aside class="rail" aria-label="会馆门牌">
       <a class="rail-mark" href="/play" aria-label="鲸语会馆">
         <Icon name="whale" />
@@ -200,5 +201,16 @@ onMounted(() => {
   background: var(--panel-2);
   color: var(--text);
   box-shadow: 0 4px 16px #0003;
+}
+@media (min-width: 1101px) {
+  .on-aeroplane.chat-open .stage-body :deep(.view-table) { padding-right: 380px; }
+}
+@media (max-width: 1100px) {
+  .on-aeroplane .top-right .tool.dock { display: inline-flex; }
+}
+@media (max-width: 430px) {
+  .on-aeroplane .topbar { padding-inline: 10px; }
+  .on-aeroplane .topbar .room-pill { min-width: 0; padding-inline: 8px; }
+  .on-aeroplane .top-right .tool { padding-inline: 4px; }
 }
 </style>

@@ -7,6 +7,7 @@ export const HOME_START = TRACK_LENGTH - 1;
 export const FINISH = HOME_START + 5;
 
 export const COLOURS = ['珊瑚红', '海天蓝', '松叶绿', '琥珀黄'] as const;
+export const AEROPLANE_RESIGN_RULE = '轮到自己时可以认输，飞机退场，其余玩家继续；只剩一人时直接获胜。';
 
 export const AEROPLANE_RULES = [
   '2–4 人，每人四架飞机。掷出 6 才能从机库起飞，走完后可以再掷一次。',
@@ -14,6 +15,7 @@ export const AEROPLANE_RULES = [
   '最后落点上的其他颜色飞机全部返回机库，同色飞机可以叠放。',
   '沿专属航道飞抵终点。点数超过终点时折返，先让四架飞机全部抵达的人获胜。',
   '掷骰或选飞机超时后，服务器会代走。',
+  AEROPLANE_RESIGN_RULE,
 ];
 
 export function colourFor(seatIndex: number, seats: number): number {
@@ -46,6 +48,7 @@ export interface AeroplaneSeat {
   id: string;
   name: string;
   planes: number[];
+  resigned?: true;
 }
 
 export function legalMoves(seats: readonly AeroplaneSeat[], current: number, die: number): AeroplaneMove[] {
@@ -67,7 +70,7 @@ export function visitCollisions(
   if (to >= HOME_START) return;
   const cell = trackIndex(colourFor(current, seats.length), to);
   seats.forEach((seat, index) => {
-    if (index === current) return;
+    if (index === current || seat.resigned) return;
     const colour = colourFor(index, seats.length);
     seat.planes.forEach((progress, plane) => {
       if (progress >= 0 && progress < HOME_START && trackIndex(colour, progress) === cell) visit(seat, plane);

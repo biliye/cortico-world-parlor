@@ -90,4 +90,48 @@ describe('经典飞行棋', () => {
     expect(resumed.tick(2500)?.events[0].data).toMatchObject({ action: 'move', die: 6, auto: true });
     expect(resumed.public()).toMatchObject({ turn: 'a', phase: 'await_roll', die: null });
   });
+
+  it('两人局可以在选飞机时认输，胜负和停表状态可恢复', () => {
+    const table = started();
+    expect(() => table.act('b', { action: 'resign' }, 1001)).toThrow(/轮到/);
+    expect(() => table.act('spectator', { action: 'resign' }, 1001)).toThrow(/不在桌/);
+    expect(() => table.act('a', { action: 'resign' }, 1100)).toThrow(/到期/);
+    table.act('a', { action: 'roll' }, 1001);
+    const result = table.act('a', { action: 'resign' }, 1002);
+    expect(result).toMatchObject({
+      ended: true, seatResults: null, views: [], events: [
+        { type: 'parlor.table.resign', data: { seat: 'a' } },
+        { type: 'parlor.table.end', data: { reason: 'resign', winners: ['b'] } },
+      ],
+    });
+    expect(table.public()).toMatchObject({ status: 'ended', endReason: 'resign', winners: ['b'], phase: null, die: null });
+    expect(table.nextWakeAt()).toBeUndefined();
+    expect(table.tick(2000)).toBeNull();
+    expect(() => table.act('a', { action: 'resign' }, 1003)).toThrow(/没在玩/);
+    const resumed = new AeroplaneTable(options);
+    resumed.restoreState(table.exportState());
+    expect(resumed.public()).toEqual(table.public());
+  });
+
+  it('多人局保留座次和颜色，跳过已认输的玩家及其飞机', () => {
+    const dice = [4, 3];
+    const table = new AeroplaneTable({ ...options, rollDie: () => dice.shift()! });
+    table.join(guest);
+    table.join({ id: 'c', name: '阿青' });
+    table.join({ id: 'd', name: '阿黄' });
+    table.start('a', 1000);
+    setPlanes(table, [21, -1, -1, -1], [0, -1, -1, -1]);
+    expect(table.act('a', { action: 'resign' }, 1001)).toMatchObject({ views: ['b'] });
+    table.restoreState(table.exportState());
+    expect(table.public()).toMatchObject({ status: 'playing', turn: 'b', deadline: 1101 });
+    expect(table.public().seats.map(seat => seat.colour)).toEqual([0, 1, 2, 3]);
+    expect(table.view('a')).toMatchObject({ yourTurn: false, moves: [], seats: [{ resigned: true }, {}, {}, {}] });
+    table.act('b', { action: 'roll' }, 1002);
+    expect(table.view('b')?.moves).toMatchObject([{ plane: 1, to: 8, captures: 0 }]);
+    table.act('b', { action: 'move', plane: 1 }, 1003);
+    expect(table.act('c', { action: 'resign' }, 1004).views).toEqual(['d']);
+    expect(table.act('d', { action: 'roll' }, 1005).views).toEqual(['b']);
+    expect(table.act('b', { action: 'resign' }, 1006).ended).toBe(true);
+    expect(table.public()).toMatchObject({ winners: ['d'], endReason: 'resign' });
+  });
 });
