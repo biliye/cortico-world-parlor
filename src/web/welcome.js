@@ -1,10 +1,11 @@
 /**
- * 对外页的脚本负责四件事：
+ * 对外页的脚本负责五件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
- * 3. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
+ * 3. 滚动驱动：封面会名随滚动上移淡出、门厅的实景回正、顶栏下沿一条线标读到哪儿了；
+ * 4. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
  *    屏里的列表再挂一层 data-stagger，编号与条目按 45ms 一个地排队浮现；
- * 4. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
+ * 5. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
  *    没脚本时不挂 ef-rules，八块规则平铺在页尾，仍然读得到。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
@@ -13,8 +14,8 @@
 (() => {
   const root = document.documentElement;
   const KEY = 'parlor-welcome-theme';
-  /** 需要「一条一条排队浮现」的列表：玩法八格、入场三步、首屏三栏。 */
-  const STAGGER_GROUPS = '.hero .what-cols, .enter .steps, .rule-grid';
+  /** 需要「一条一条排队浮现」的列表：玩法八格、入场三步、「这里是这样的地方」三栏。 */
+  const STAGGER_GROUPS = '.what-screen .what-cols, .enter .steps, .rule-grid';
 
   /** 系统开了「减少动态效果」就一律走静止分支：不扩散、不淡入、不收紧吸附。 */
   const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -129,27 +130,76 @@
     syncTheme();
   };
 
-  // ---------- 首屏画框的指针视差 ----------
+  // ---------- 封面会名的指针视差 ----------
 
-  // 只有这一个动效跟指针走；入场、悬停、跑马灯都是 welcome-kit.css 里的纯 CSS。
+  // 会名跟着指针走 5px：字太大，再多就成了抖。
   // 系统开了「减少动态效果」或粗指针设备就完全不注册，页面直接是静止的最终状态。
-  // 位移量写在 welcome.css 里（≤ 12px），这里只把指针位置换算成 -0.5 ~ 0.5。
+  // 位移量写在 welcome.css 里；这里只把指针位置换算成 -0.5 ~ 0.5。
   const bindParallax = () => {
     if (still() || !matchMedia('(hover: hover) and (pointer: fine)').matches) return;
-    const hero = document.querySelector('.hero');
-    if (!hero) return;
+    const cover = document.querySelector('.cover');
+    if (!cover) return;
 
     let queued = 0;
-    hero.addEventListener('pointermove', (event) => {
+    cover.addEventListener('pointermove', (event) => {
       if (queued) return;
       queued = requestAnimationFrame(() => {
         queued = 0;
-        const box = hero.getBoundingClientRect();
+        const box = cover.getBoundingClientRect();
         if (!box.width || !box.height) return;
-        hero.style.setProperty('--mx', ((event.clientX - box.left) / box.width - 0.5).toFixed(3));
-        hero.style.setProperty('--my', ((event.clientY - box.top) / box.height - 0.5).toFixed(3));
+        cover.style.setProperty('--mx', ((event.clientX - box.left) / box.width - 0.5).toFixed(3));
+        cover.style.setProperty('--my', ((event.clientY - box.top) / box.height - 0.5).toFixed(3));
       });
     });
+  };
+
+  // ---------- 滚动驱动：封面 / 门厅 / 顶栏进度线 ----------
+
+  /**
+   * 只往元素上写三个 CSS 变量，不碰布局：
+   *   .cover 的 --sc     这一屏滚出去多少（0 → 1）
+   *   .hall  的 --hall   那张实景走到眼前多少（0 → 1），图从 1.1 回正到 1.0
+   *   .top   的 --read   整页读到哪儿（0 → 1），顶栏下沿那条线按它伸长
+   * 和换屏进场不同：那套是进一次就完，这套只要还在滚就一直在算——省掉它，
+   * 页面滚到一半会像一张贴好的海报，现在会随滚动继续走。
+   * 要「减少动态效果」就一次都不注册，CSS 里的默认值 0 正好是静止的最终状态。
+   */
+  const bindScrollMotion = () => {
+    if (still()) return;
+    const cover = document.getElementById('top');
+    const hall = document.getElementById('hall');
+    const bar = document.querySelector('.top');
+    if (!cover && !hall && !bar) return;
+
+    let queued = 0;
+    const frame = () => {
+      queued = 0;
+      const vh = innerHeight || 1;
+      // 先读后写：三处都读完了再写变量，避免写一个变量就触发一次样式重算
+      const coverBox = cover ? cover.getBoundingClientRect() : null;
+      const hallBox = hall ? hall.getBoundingClientRect() : null;
+      const max = root.scrollHeight - vh;
+      const y = scrollY;
+      if (coverBox && cover) {
+        // 封面正好一屏高：顶边滚到 -一屏时算 1
+        cover.style.setProperty('--sc', Math.min(Math.max(-coverBox.top / (coverBox.height || vh), 0), 1).toFixed(3));
+      }
+      if (hallBox && hall) {
+        // 顶边刚探进视口下沿是 0，顶边贴住视口上沿是 1
+        hall.style.setProperty('--hall', Math.min(Math.max((vh - hallBox.top) / vh, 0), 1).toFixed(3));
+      }
+      if (bar) {
+        const p = max > 0 ? Math.min(y / max, 1) : 0;
+        bar.style.setProperty('--read', p.toFixed(4));
+      }
+    };
+    const onScroll = () => {
+      if (!queued) queued = requestAnimationFrame(frame);
+    };
+
+    frame();
+    addEventListener('scroll', onScroll, { passive: true });
+    addEventListener('resize', onScroll);
   };
 
   // ---------- 换屏进场 ----------
@@ -273,6 +323,7 @@
   onReady(() => {
     bindTheme();
     bindParallax();
+    bindScrollMotion();
     bindReveal();
     bindRules();
   });

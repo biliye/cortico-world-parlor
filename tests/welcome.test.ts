@@ -155,7 +155,7 @@ describe('对外页的静态契约', () => {
 
     // 屏序就是阅读顺序，改版式时这条会先炸
     const ids = [...markup.matchAll(/<section class="screen[^"]*" id="([^"]+)"/g)].map(([, id]) => id);
-    expect(ids).toEqual(['top', 'games', 'enter', 'parent']);
+    expect(ids).toEqual(['top', 'hall', 'what', 'games', 'enter', 'parent']);
 
     const css = read('welcome.css');
     expect(css).toMatch(/scroll-snap-type:\s*y proximity/);
@@ -170,14 +170,39 @@ describe('对外页的静态契约', () => {
   });
 
   /**
-   * 首屏主视觉从「俯视牌桌线稿」换成大厅实景图；「这里是这样的地方」并回首屏下半，
-   * 但不单独占屏、顶栏也不给它锚点（用户 2026-11-17 的口径）。
+   * 2026-11-22 改版：首屏只留会名，大厅实景与「这里是这样的地方」各占一屏。
+   * 首屏空下来的代价是内容多滚两屏，所以这里同时钉住两条：
+   * 1. 封面里不许再出现图、段落、按钮组——它是一块只印名字的牌子；
+   * 2. 实景图与三栏都还在，只是搬到了 02 / 03 屏。
    */
-  it('首屏主视觉是大厅实景图，不是内联线稿', () => {
-    const hero = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="games"'));
-    expect(hero).not.toContain('<svg');
-    const img = hero.match(/<img[^>]*welcome-lobby\.webp[^>]*>/);
-    expect(img, '首屏要引用大厅实景图').toBeTruthy();
+  it('封面只有会名，没有图、段落与按钮组', () => {
+    const cover = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="hall"'));
+    expect(cover).toContain('class="ef-wordmark"');
+    expect(cover).toContain('鲸语会馆');
+    expect(cover).toContain('PARLOR CLUB');
+    // 一屏只放字：这几样都不许出现在封面里
+    expect(cover).not.toContain('<img');
+    expect(cover).not.toContain('<figure');
+    expect(cover).not.toContain('class="lead"');
+    expect(cover).not.toContain('class="ef-actions"');
+    expect(cover).not.toContain('class="claim"');
+    // 会名逐字推出来：每个字一个 span，靠 nth-child 排延迟（CSP 不许内联 style）
+    const chars = [...cover.matchAll(/<span class="solid"[^>]*>([\s\S]*?)<\/span>\s*<span class="hollow"/g)];
+    expect(chars.length).toBe(1);
+    expect([...chars[0][1].matchAll(/<span>/g)].length).toBe(4);
+    // 屏幕阅读器读的是 h1 的 aria-label，不是四个拆开的字
+    expect(cover).toMatch(/<h1 class="ef-wordmark" aria-label="[^"]{4,}"/);
+    // 进客厅仍然在第一屏够得着，只是做成一条带下划线的字
+    expect(cover).toContain('class="cover-go" href="/play"');
+    // 跑马灯还在，当这一屏的页脚
+    expect(cover).toContain('class="ef-ticker"');
+  });
+
+  it('02 屏是大厅实景，不是内联线稿', () => {
+    const hall = markup.slice(markup.indexOf('id="hall"'), markup.indexOf('id="what"'));
+    expect(hall).not.toContain('<svg');
+    const img = hall.match(/<img[^>]*welcome-lobby\.webp[^>]*>/);
+    expect(img, '门厅那屏要引用大厅实景图').toBeTruthy();
     expect(img![0]).toMatch(/\salt="[^"]{10,}"/);
     expect(img![0]).toMatch(/\swidth="\d+"\s+height="\d+"/);
     // 图真的在包里，而且是 WebP（RIFF....WEBP）
@@ -188,17 +213,16 @@ describe('对外页的静态契约', () => {
     expect(isPublicAsset('welcome-lobby.webp')).toBe(true);
   });
 
-  it('「这里是这样的地方」在首屏里，三栏都在，且不占独立一屏', () => {
-    const hero = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="games"'));
-    expect(hero).toContain('这里是这样的地方');
-    expect(hero).toContain('Coo 也是同桌');
-    expect(hero).toContain('输赢记在自己名下');
-    expect(hero).toContain('可以在旁边看');
-    // 内容留着，但不新开一屏、也不给锚点
-    expect(markup).not.toContain('id="what"');
+  it('03 屏是「这里是这样的地方」，三栏都在，自己占一屏', () => {
+    const what = markup.slice(markup.indexOf('id="what"'), markup.indexOf('id="games"'));
+    expect(what).toContain('这里是这样的地方');
+    expect(what).toContain('Coo 也是同桌');
+    expect(what).toContain('输赢记在自己名下');
+    expect(what).toContain('可以在旁边看');
+    // 三栏都是这一屏的直接内容，没有被塞进首屏
+    expect(what).toContain('class="what-cols"');
+    // 顶栏仍然不给锚点：看哪一屏靠滚，不靠导航
     expect(markup).not.toContain('href="#what"');
-    // 三栏是首屏里的一个块，和跑马灯同级
-    expect(hero.indexOf('class="what"')).toBeGreaterThan(hero.indexOf('class="ef-ticker"'));
   });
 
   /**
@@ -246,16 +270,47 @@ describe('对外页的静态契约', () => {
   });
 
   /**
-   * 媒体查询不加权：矮窗口那档要写在三栏默认规则之后，否则同级的默认值会盖回去，
-   * 首屏底部就会比视口高一截、整页退回接近吸附（1000×640 实测过）。
+   * 矮窗口（1366×768 的笔记本、1080×675 的截图档）里首屏只剩会名，
+   * 但页脚那行与跑马灯仍然要落在第一屏内，所以那一档要单独把会名收小。
    */
-  it('矮窗口的三栏压缩排在默认规则之后，不会被同级默认值盖掉', () => {
+  it('矮窗口把封面会名收一档，页脚与跑马灯仍落在第一屏里', () => {
     const css = read('welcome.css');
-    const defaults = css.indexOf('.what-cols p {');
+    const defaults = css.indexOf('.cover .ef-wordmark {');
     expect(defaults).toBeGreaterThan(-1);
     const tight = css.indexOf('@media (max-height: 780px)', defaults);
     expect(tight).toBeGreaterThan(defaults);
-    expect(css.slice(tight, tight + 700)).toMatch(/\.what-cols p\s*\{[^}]*font-size:\s*0\.86rem/);
+    expect(css.slice(tight, tight + 700)).toMatch(/\.cover \.ef-wordmark\s*\{[^}]*--ef-wordmark:/);
+  });
+
+  /**
+   * 2026-11-22 加的这套和「换屏进场」是两回事：进场是进一次就完，
+   * 这套只要还在滚就一直在算。三个变量都由脚本按帧写，CSS 只读；
+   * 系统要「减少动态效果」时脚本一次都不注册，CSS 默认值 0 就是静止的最终状态。
+   */
+  it('封面、门厅与顶栏进度线都吃滚动进度，且能整段关掉', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    expect(js).toContain('bindScrollMotion');
+    expect(js).toContain("'--sc'");
+    expect(js).toContain("'--hall'");
+    expect(js).toContain("'--read'");
+    // 写变量走 rAF，scroll 用 passive，别在滚动里读布局再同步写
+    expect(js).toMatch(/requestAnimationFrame\(frame\)/);
+    expect(js).toMatch(/addEventListener\('scroll', onScroll, \{ passive: true \}\)/);
+
+    // CSS 只读不写：三个变量都有默认值，没有脚本时停在最终状态
+    expect(css).toMatch(/\.cover\s*\{[^}]*--sc:\s*0/);
+    expect(css).toMatch(/\.hall\s*\{[^}]*--hall:\s*0/);
+    expect(css).toMatch(/opacity:\s*calc\(1 - var\(--sc\)\)/);
+    expect(css).toMatch(/scale\(calc\(1\.1 - var\(--hall\) \* 0\.1\)\)/);
+    expect(css).toMatch(/scaleX\(var\(--read, 0\)\)/);
+    // 逐字推出：一个字一个延迟档，超过四个不再往后
+    expect(css).toMatch(/@keyframes ef-type-in/);
+    expect(css).toMatch(/animation-delay:\s*calc\(var\(--i, 0\) \* 70ms \+ 160ms\)/);
+
+    // 减少动态效果：整套不注册
+    expect(js).toMatch(/const bindScrollMotion = \(\) => \{\s*if \(still\(\)\) return;/);
   });
 
 

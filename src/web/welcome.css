@@ -131,180 +131,377 @@ html {
   display: block;
 }
 
-/* ---------- 首屏 ---------- */
-
-/* 五格：meta / 会名 / 正文 / 跑马灯 / 「这里是这样的地方」。
-   多出来的高度给正文那格（正文贴顶，空白落在按钮和跑马灯之间），
-   这样会名不会被顶到半空，跑马灯和三栏仍旧压在下边。 */
-.hero {
-  --mx: 0;
-  --my: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 40%);
-  grid-template-rows: auto auto auto auto auto;
-  align-content: space-between;
-  column-gap: clamp(1.25rem, 4vw, 3.5rem);
-  padding: 1.1rem 0 0;
-  border-bottom: 1px solid var(--ef-rule);
-  overflow: hidden;
+/* 顶栏下沿一条 2px 的线：读到哪儿了。脚本把 --read 写成 0 → 1；
+   没有脚本时它是 0，也就是不画——不拿一条不会动的线冒充进度。 */
+.top::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--ef-ink);
+  transform: scaleX(var(--read, 0));
+  transform-origin: left;
+  pointer-events: none;
 }
 
-.hero .meta {
-  grid-column: 1;
+/* ---------- 首屏 ---------- */
+
+/* ---------- 01 封面 ---------- */
+
+/* 一屏只放会名：上边两行小字，中间全是空，会名压在下沿，跑马灯当页脚。
+   五行是 小字 / 空 / 会名 / 页脚 / 跑马灯，中间那行吃掉所有多出来的高度。
+   --sc 是这一屏的滚动进度（0 → 1），由 welcome.js 按帧写；没有脚本时它一直是 0，
+   也就是停在最终位置，不会因为脚本没跑而错位。 */
+.cover {
+  --mx: 0;
+  --my: 0;
+  --sc: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  padding: 0;
+  border-bottom: 1px solid var(--ef-rule);
+}
+
+.cover-top {
   grid-row: 1;
-  padding-inline: var(--ef-pad);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1.5rem;
+  padding: 1.15rem var(--ef-pad) 0;
+  opacity: calc(1 - var(--sc) * 1.9);
+  will-change: opacity;
 }
 
 /* 第一格不要那条分隔竖线：它贴在纸边上像一道杂线 */
-.hero .meta > li:first-child {
+.cover .meta > li:first-child {
   border-left: 0;
   padding-left: 0;
   margin-left: 0;
 }
 
-.hero .ef-wordmark {
-  grid-column: 1;
-  grid-row: 2;
-  align-self: end;
-  margin: 1.75rem 0 0;
-  padding-left: var(--ef-pad);
-}
-
-.hero .copy {
-  grid-column: 1;
-  grid-row: 3;
-  padding: 1.35rem var(--ef-pad) 1.6rem;
-}
-
-.hero .claim {
+.cover-tag {
   margin: 0;
-  font-size: clamp(1.1rem, 2.1vw, 1.5rem);
-  font-weight: 700;
 }
 
-.hero .lead {
-  max-width: 32rem;
-  margin: 0.9rem 0 0;
-  color: var(--ef-ink-2);
-  font-family: var(--ef-font-text);
-  line-height: 1.85;
+/* 会名那一格：顶上一根通栏细线、线左端一小段黄标，像一块牌子挂在横杆上。
+   整块跟着滚动上移、淡出，鼠标横过时再跟 4px（--mx/--my）。 */
+.cover-name {
+  position: relative;
+  grid-row: 3;
+  align-self: end;
+  padding: 0 var(--ef-pad);
+  transform: translate3d(0, calc(var(--sc) * -5vh), 0);
+  opacity: calc(1 - var(--sc));
+  will-change: transform, opacity;
 }
 
-.hero .ef-actions {
-  margin-top: 1.5rem;
+.cover-name::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: var(--ef-pad);
+  left: var(--ef-pad);
+  height: 1px;
+  background: var(--ef-ink);
+  transform-origin: left;
+  animation: ef-draw 900ms var(--ef-mech) both;
+  animation-delay: 60ms;
 }
 
-/* 画框从「竖着的牌桌线稿」换成 4:3 的大厅实景：图铺满画框，视差只挪里面那张图。 */
-.hero .ef-frame {
-  grid-column: 2;
-  grid-row: 1 / 4;
-  align-self: stretch;
-  aspect-ratio: auto;
-  min-height: 0;
-  margin: 0 var(--ef-pad) 1.25rem 0;
+.cover-name::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: var(--ef-pad);
+  width: clamp(1.5rem, 4vw, 3rem);
+  height: 7px;
+  background: var(--ef-signal);
+  animation: ef-draw 520ms var(--ef-snap) both;
+  animation-delay: 760ms;
 }
 
-.hero .ef-frame .window > img {
-  object-fit: cover;
-  object-position: 50% 58%;
-  /* 放大一点点，视差挪动时不会露出画框底色 */
-  transform: translate(calc(var(--mx) * -9px), calc(var(--my) * -6px)) scale(1.04);
-  transition: transform 0.4s var(--ef-ease);
+/* 会名大小用一条线性式管到底：390 宽约 70px，1440 宽约 209px。
+   不用「窄屏一档、宽屏一档」，免得在断点上突变一截。 */
+.cover .ef-wordmark {
+  --ef-wordmark: clamp(2.6rem, 1.15rem + 13.24vw, 15rem);
+  margin: 0;
+  padding: clamp(0.9rem, 2.2vh, 1.6rem) 0 clamp(0.7rem, 1.8vh, 1.3rem);
+  transform: translate3d(calc(var(--mx) * -5px), calc(var(--my) * -4px), 0);
 }
 
-/* 指针视差：画框和它的斜线影子朝相反方向错开，总量不超过 12px */
-.hero .ef-frame::before {
-  transform: translate(calc(var(--mx) * 12px), calc(var(--my) * 10px));
+/* 空心那行离实心远一点：0.12em 的字距叠起来会让「馆」的收笔几乎碰到 P */
+.cover .ef-wordmark .hollow {
+  margin-top: 0.2em;
 }
 
-.hero .ef-ticker {
-  grid-column: 1 / -1;
+/* 逐字推出来：clip-path 自下往上擦，一个字 70ms，四个字 0.21s 走完；
+   空心那行慢半拍跟上，像牌子被推到位之后灯才亮。 */
+.cover .ef-wordmark .solid > span {
+  display: inline-block;
+  animation: ef-type-in 820ms var(--ef-mech) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 160ms);
+}
+
+.cover .ef-wordmark .solid > span:nth-child(1) { --i: 0; }
+.cover .ef-wordmark .solid > span:nth-child(2) { --i: 1; }
+.cover .ef-wordmark .solid > span:nth-child(3) { --i: 2; }
+.cover .ef-wordmark .solid > span:nth-child(4) { --i: 3; }
+
+.cover .ef-wordmark .hollow {
+  animation: ef-type-in 900ms var(--ef-mech) both;
+  animation-delay: 500ms;
+}
+
+.cover-foot {
   grid-row: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem 2rem;
+  padding: 0.7rem var(--ef-pad) clamp(1.1rem, 2.6vh, 1.6rem);
+  border-top: 1px solid var(--ef-rule);
+  transform: translate3d(0, calc(var(--sc) * -2.4vh), 0);
+  opacity: calc(1 - var(--sc) * 1.7);
+  will-change: transform, opacity;
 }
 
-.hero .what {
-  grid-column: 1 / -1;
+.cover-said {
+  margin: 0;
+}
+
+.cover-acts {
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 3vw, 2.25rem);
+  margin: 0;
+}
+
+/* 首屏唯一的按钮做成一条带下划线的字：这屏要空，不能摆一颗实心块 */
+.cover-go {
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--ef-ink);
+  color: var(--ef-ink);
+  font-family: var(--ef-font-ui);
+  font-size: var(--ef-t-field);
+  font-stretch: var(--ef-wider);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.cover-go:is(:hover, :focus-visible) {
+  border-color: var(--ef-signal);
+  background: var(--ef-signal);
+  color: var(--ef-on-signal);
+}
+
+/* 下滑提示：一条竖线里有一粒光往下走，2.4s 一轮，是首屏第二件一直在动的东西 */
+.cover-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.cover-cue .ef-field {
+  transition: color 160ms var(--ef-ease);
+}
+
+.cover-cue:is(:hover, :focus-visible) .ef-field {
+  color: var(--ef-ink);
+}
+
+.cover-cue i {
+  position: relative;
+  display: block;
+  width: 1px;
+  height: 2.15rem;
+  background: var(--ef-rule);
+  overflow: hidden;
+}
+
+.cover-cue i::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 45%;
+  background: var(--ef-ink);
+  animation: ef-cue 2.4s var(--ef-ease) infinite;
+}
+
+.cover .ef-ticker {
   grid-row: 5;
 }
 
-@media (max-width: 899px) {
-  .hero {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: repeat(5, auto);
-    align-content: start;
+.cover .ef-ticker a {
+  padding-block: 0.5rem;
+}
+
+@keyframes ef-type-in {
+  from {
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(0.18em);
   }
-  .hero .meta,
-  .hero .ef-wordmark,
-  .hero .copy,
-  .hero .ef-frame,
-  .hero .ef-ticker,
-  .hero .what {
-    grid-column: 1;
-    grid-row: auto;
-  }
-  .hero .ef-wordmark {
-    align-self: start;
-    margin-top: 1.5rem;
-  }
-  .hero .ef-frame {
-    aspect-ratio: auto;
-    height: auto;
-    margin: 0 calc(var(--ef-pad) + 1rem) 1.75rem var(--ef-pad);
-  }
-  /* 窄屏画框按 16:10 立起来，牌条不再叠在图上，挪到画框下面当一行标签 */
-  .hero .ef-frame .window {
-    position: relative;
-    inset: auto;
-    aspect-ratio: 16 / 10;
-  }
-  .hero .ef-plate {
-    position: static;
-    display: inline-block;
-    max-width: 100%;
-    margin: 0.7rem 0 0;
+  to {
+    clip-path: inset(-12% -8% -12% -8%);
+    transform: none;
   }
 }
 
-/* 矮窗口（1366×768 的笔记本、1080×675 的截图档）：首屏要塞下五块，
-   会名与内边距各收一点，免得「这里是这样的地方」被挤到下一屏去。
-   三栏那半截放在三栏默认规则之后（媒体查询不加权，写前面会被盖回去）。 */
-@media (max-height: 780px) {
-  .hero {
-    --ef-wordmark: clamp(2.5rem, 6.4vw, 6.5rem);
+@keyframes ef-draw {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes ef-cue {
+  0% {
+    transform: translateY(-105%);
+  }
+  70%,
+  100% {
+    transform: translateY(230%);
+  }
+}
+
+/* ---------- 02 门厅 ---------- */
+
+/* 左边三成说话，右边七成是那张实景；图右侧出血到视口边，切角只剩左边两个。
+   图从 1.1 慢慢回正到 1.0（--hall 由脚本按「这张图走到眼前多少」写），
+   所以这一屏是滚着显影出来的，不是一次性淡入。 */
+.hall {
+  --hall: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 33%) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(1.25rem, 3.5vw, 3rem);
+  border-bottom: 1px solid var(--ef-rule);
+}
+
+.hall-copy {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.7rem, 1.8vh, 1.2rem);
+  min-width: 0;
+}
+
+.hall-copy .ef-eyebrow {
+  margin: 0;
+}
+
+.hall-copy .claim {
+  margin: 0;
+  font-size: clamp(1.3rem, 2.5vw, 2rem);
+  font-weight: 800;
+  line-height: 1.24;
+  letter-spacing: -0.01em;
+}
+
+.hall-copy .lead {
+  max-width: 26rem;
+  margin: 0;
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-text);
+  line-height: 1.9;
+}
+
+.hall-copy .ef-actions {
+  margin: clamp(0.2rem, 1vh, 0.6rem) 0 0;
+}
+
+.hall .ef-frame {
+  align-self: center;
+  margin: 0 calc(var(--ef-pad) * -1) 1.25rem 0;
+  min-height: clamp(15rem, 58vh, 34rem);
+  aspect-ratio: 16 / 9;
+}
+
+.hall .ef-frame::before {
+  inset: 1.25rem -1rem -1.25rem 1.25rem;
+}
+
+.hall .ef-frame .window > img {
+  object-fit: cover;
+  object-position: 50% 58%;
+  /* 多留 10% 余量给 --hall 的缩放，滚到底正好贴住画框 */
+  transform: scale(calc(1.1 - var(--hall) * 0.1));
+  will-change: transform;
+}
+
+@media (max-width: 899px) {
+  /* 窄屏把图提到话前面：先看一眼馆子，再读那两段 */
+  .hall {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.15rem;
+    align-content: center;
+  }
+  .hall .ef-frame {
+    order: -1;
+    margin: 0 calc(var(--ef-pad) * -1) 1.1rem;
+    aspect-ratio: 16 / 10;
+    min-height: 0;
+  }
+  /* 出血到两边的画框没有地方放那道斜线影子，干脆不画 */
+  .hall .ef-frame::before {
+    display: none;
+  }
+  .hall .ef-plate {
+    left: 1rem;
+    bottom: 1rem;
+    max-width: 82%;
+  }
+  .hall-copy .lead {
+    max-width: none;
+  }
+}
+
+/* 矮窗口（1366×768 的笔记本、1080×675 的截图档）：会名再收一档，
+   让「下滑」和跑马灯仍然落在第一屏里。高度查询只在桌面宽度生效——
+   手机竖屏也矮，但不能跟着缩。 */
+@media (max-height: 780px) and (min-width: 900px) {
+  .cover .ef-wordmark {
+    --ef-wordmark: clamp(2.7rem, 1rem + 11vw, 9rem);
+    padding-top: 0.7rem;
+  }
+  .cover-top {
     padding-top: 0.85rem;
   }
-  .hero .ef-wordmark {
-    margin-top: 1.1rem;
+  .cover-foot {
+    padding-bottom: 0.9rem;
   }
-  .hero .copy {
-    padding-bottom: 1.05rem;
+  .hall .ef-frame {
+    min-height: clamp(12rem, 50vh, 21rem);
   }
 }
 
-/* ---------- 首屏下半：「这里是这样的地方」 ---------- */
+/* ---------- 03 这里是这样的地方 ---------- */
 
-/* 三句话讲清这地方是什么。不单独占一屏，顶栏也不给锚点——看就一路滚下去。 */
-.what {
-  padding: 0.85rem var(--ef-pad) 1.15rem;
-  border-top: 1px solid var(--ef-rule);
-}
-
-.what .ef-eyebrow {
-  margin: 0 0 0.35rem;
-}
-
-.what .ef-bar-title {
-  margin-bottom: 0.7rem;
+/* 三句话独立成一屏：标题贴顶，三栏做成一张规格表——栏号在上、话在下，
+   分隔线拉出足够的长度，下面留一段整块的空白。从前这三栏挂在首屏下半，
+   和会名、按钮、实景图挤在一屏里，最后一屏塞了五块东西。 */
+.what-screen .what-cols {
+  flex: none;
+  min-height: clamp(12rem, 40vh, 22rem);
+  margin-top: clamp(1.2rem, 3.5vh, 2.4rem);
 }
 
 .what-cols {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border-top: 1px solid var(--ef-rule);
+  border-bottom: 1px solid var(--ef-rule);
 }
 
 .what-cols > div {
-  padding: 0.85rem 1.4rem 0.2rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: clamp(1rem, 2.4vh, 1.7rem) 1.6rem 0.2rem 1.4rem;
   border-left: 1px solid var(--ef-rule);
 }
 
@@ -313,37 +510,30 @@ html {
   padding-left: 0;
 }
 
+/* 栏号：只做指示，不进阅读顺序（aria-hidden），和玩法八格的编号同一套语汇 */
+.what-cols .n {
+  color: var(--ef-ink-2);
+  font-family: var(--ef-font-ui);
+  font-size: 0.72rem;
+  font-stretch: var(--ef-wider);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.1em;
+  line-height: 1;
+}
+
 .what-cols h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.98rem;
+  margin: 0 0 0.1rem;
+  font-size: 1.02rem;
   font-weight: 800;
 }
 
 .what-cols p {
   margin: 0;
+  max-width: 26rem;
   color: var(--ef-ink-2);
   font-family: var(--ef-font-text);
-  font-size: 0.9rem;
-  line-height: 1.75;
-}
-
-/* 矮窗口里的三栏：字号、行高、上下边距一起收，首屏才塞得进 640–780 这一档。
-   必须写在上面几条默认规则之后 —— 媒体查询不加权，顺序反了就等于没写。 */
-@media (max-height: 780px) {
-  .what {
-    padding-top: 0.65rem;
-    padding-bottom: 0.85rem;
-  }
-  .what .ef-bar-title {
-    margin-bottom: 0.5rem;
-  }
-  .what-cols > div {
-    padding-top: 0.7rem;
-  }
-  .what-cols p {
-    font-size: 0.86rem;
-    line-height: 1.65;
-  }
+  font-size: 0.92rem;
+  line-height: 1.8;
 }
 
 @media (max-width: 719px) {
@@ -976,11 +1166,6 @@ html:not(.ef-rules) .rule + .rule {
   .top .mark {
     display: none;
   }
-}
-
-/* 会名两行前后脚推出来：实心那行先走，空心的 PARLOR CLUB 慢 140ms */
-.hero .ef-wordmark .hollow {
-  animation-delay: 140ms;
 }
 
 /* ---------- 换屏进场：滚到哪一屏，哪一屏的内容依次抬起来 ---------- */
