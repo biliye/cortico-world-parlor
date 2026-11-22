@@ -44,13 +44,25 @@ const mount = (responses: unknown[] = []) => {
     .replace("import { mountStoryArchive } from './story-archive.js';", '')
     .replace("import { beginGlobalEntry } from './identity-entry.js';", '')
     .replace('void boot();', '');
-  const renderer = runInNewContext(source + '\nrender = captureRender; ({ renderMail, renderLog, loadView, playAsParent, saveCredentials, loadHistory })', {
+  const renderer = runInNewContext(source + `
+    mountGuestInvites = () => {};
+    render = captureRender;
+    ({ renderMail, renderLog, loadView, playAsParent, showView, saveCredentials, saveRename, loadHistory })
+  `, {
     document, fetch, setTimeout, clearTimeout: vi.fn(), URLSearchParams, captureRender: render, beginGlobalEntry, confirm: () => true,
+    mountStoryArchive: vi.fn(),
     location: { origin: 'https://parlor.test' },
   }) as { renderMail(view: unknown): void; renderLog(view: unknown): void; loadView(): Promise<boolean>;
     playAsParent(button: { disabled: boolean }): Promise<void>;
-    saveCredentials(): Promise<void>; loadHistory(more?: boolean): Promise<void> };
+    showView(account: { displayName: string }): void;
+    saveCredentials(): Promise<void>; saveRename(): Promise<void>; loadHistory(more?: boolean): Promise<void> };
   return { ...renderer, nodes, document, fetch, render, setTimeout, beginGlobalEntry };
+};
+
+const deferredResponse = () => {
+  let resolve!: (response: Response) => void;
+  const response = new Promise<Response>(done => { resolve = done; });
+  return { response, resolve };
 };
 
 it('家长页从统一身份服务返回游玩页后自动领席位', async () => {
@@ -222,6 +234,12 @@ it('家长观战遇到暂停桌时停止轮询，暂时故障仍会重试', asyn
 });
 
 describe('家长账户弹窗', () => {
+  const mountAccount = (responses: unknown[] = []) => {
+    const page = mount(responses);
+    page.showView({ displayName: '小满' });
+    return page;
+  };
+
   const fill = (nodes: Map<string, TestNode>, password: string, confirm: string, login = 'xiaoman') => {
     nodes.get('cred-login')!.value = login;
     nodes.get('cred-password')!.value = password;
@@ -229,7 +247,7 @@ describe('家长账户弹窗', () => {
   };
 
   it('两次密码不一致时不发请求，只把红字写在面板里', async () => {
-    const { saveCredentials, nodes, fetch } = mount();
+    const { saveCredentials, nodes, fetch } = mountAccount();
     fill(nodes, 'twelve-chars-ok', 'twelve-chars-oK');
     await saveCredentials();
     expect(nodes.get('cred-error')!.textContent).toBe('两次输入的密码不一致，请重新确认。');
@@ -238,7 +256,7 @@ describe('家长账户弹窗', () => {
   });
 
   it('密码不足 12 个字符、没填登录名时同样拦在前端', async () => {
-    const { saveCredentials, nodes, fetch } = mount();
+    const { saveCredentials, nodes, fetch } = mountAccount();
     fill(nodes, 'short', 'short');
     await saveCredentials();
     expect(nodes.get('cred-error')!.textContent).toBe('密码至少 12 个字符。');
@@ -262,7 +280,7 @@ describe('家长账户弹窗', () => {
   });
 
   it('两次一致才把登录名和密码提交给服务端', async () => {
-    const { saveCredentials, nodes, fetch } = mount([{ loginName: 'xiaoman' }]);
+    const { saveCredentials, nodes, fetch } = mountAccount([{ loginName: 'xiaoman' }]);
     fill(nodes, 'twelve-chars-ok', 'twelve-chars-ok', '  xiaoman ');
     await saveCredentials();
     expect(fetch.mock.calls[0]?.[0]).toBe('/v1/web/credentials');
@@ -310,6 +328,53 @@ describe('家长账户弹窗', () => {
     expect(nodes.get('cred-error')!.textContent).toBe('');
   });
 
+  it.each([200, 409])('上一个会话的保存响应（%i）不影响新账号正在保存的表单', async (status) => {
+    const { nodes, fetch, showView, saveCredentials } = mountAccount();
+    const previous = deferredResponse();
+    fetch.mockReturnValueOnce(previous.response);
+    fill(nodes, 'first-password', 'first-password', 'first-login');
+    const firstSave = saveCredentials();
+
+    fetch.mockResolvedValueOnce(Response.json({ ok: true }));
+    await nodes.get('account-logout')!.listeners.get('click')!();
+    showView({ displayName: '新家长' });
+
+    const current = deferredResponse();
+    fetch.mockReturnValueOnce(current.response);
+    fill(nodes, 'second-password', 'second-password', 'second-login');
+    const secondSave = saveCredentials();
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    previous.resolve(Response.json({ loginName: 'first-login', error: '旧会话的提示' }, { status }));
+    await firstSave;
+    expect(nodes.get('fact-login')!.textContent).toBe('正在读取…');
+    expect(nodes.get('cred-error')!.textContent).toBe('');
+    expect(nodes.get('cred-password')!.value).toBe('second-password');
+    expect(nodes.get('cred-confirm')!.value).toBe('second-password');
+    expect(nodes.get('cred-save')!.disabled).toBe(true);
+
+    current.resolve(Response.json({ loginName: 'second-login' }));
+    await secondSave;
+    expect(nodes.get('fact-login')!.textContent).toBe('second-login');
+    expect(nodes.get('cred-save')!.disabled).toBe(false);
+  });
+
+  it('切换账号后忽略上一个会话的改名响应', async () => {
+    const { nodes, fetch, showView, saveRename } = mountAccount();
+    const previous = deferredResponse();
+    fetch.mockReturnValueOnce(previous.response);
+    nodes.get('rename-input')!.value = '旧账号的新名字';
+    const pending = saveRename();
+
+    showView({ displayName: '新家长' });
+    expect(nodes.get('rename-save')!.disabled).toBe(false);
+    previous.resolve(Response.json({ account: { displayName: '旧账号的新名字' } }));
+    await pending;
+
+    expect(nodes.get('fact-name')!.textContent).toBe('新家长');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('翻页沿用生成游标的那次筛选：改了玩法但没查询，也不把新条件混进来', async () => {
     const page = { player: true, ledger: { games: 1, wins: 1, losses: 0, draws: 0 }, games: [], items: [] };
     const { loadHistory, nodes, fetch } = mount([{ ...page, next: 900 }, { ...page, next: null }]);
@@ -331,6 +396,39 @@ describe('家长账户弹窗', () => {
     const fresh = fetch.mock.calls[2]?.[0] as string;
     expect(fresh).toContain('game=gomoku');
     expect(fresh).not.toContain('before=');
+  });
+
+  it('重新查询时隐藏旧翻页入口，翻页过程中也不会重复请求', async () => {
+    const page = { player: true, ledger: null, games: [], items: [] };
+    const { loadHistory, nodes, fetch } = mount([{ ...page, next: 900 }]);
+    nodes.get('history-kind')!.value = 'games';
+    nodes.get('history-game')!.value = 'ddz';
+    await loadHistory();
+    const more = nodes.get('history-more')!;
+    expect(more.hidden).toBe(false);
+
+    const refresh = deferredResponse();
+    fetch.mockReturnValueOnce(refresh.response);
+    nodes.get('history-game')!.value = 'gomoku';
+    const refreshing = loadHistory();
+    expect(more.hidden).toBe(true);
+    await loadHistory(true);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    refresh.resolve(Response.json({ ...page, next: 700 }));
+    await refreshing;
+    expect(more.hidden).toBe(false);
+
+    const next = deferredResponse();
+    fetch.mockReturnValueOnce(next.response);
+    const paging = loadHistory(true);
+    expect(more.disabled).toBe(true);
+    await loadHistory(true);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls[2]?.[0]).toContain('game=gomoku&before=700');
+    next.resolve(Response.json({ ...page, next: null }));
+    await paging;
+    expect(more.hidden).toBe(true);
+    expect(more.disabled).toBe(false);
   });
 
   it('点遮罩关窗，点盒子里面的东西不关', () => {

@@ -138,12 +138,16 @@ const api = async (path, init = {}) => {
 
 const KIND = { pet: 'Coo', human: '人', observer: '观看' };
 
-/** 多端登录的三个输入框只属于这次会话；退出或换账号后不能留给下一个人。 */
-function resetCredentialForm() {
+/** 切换家长会话时重置输入和提交状态。 */
+function resetAccountForms() {
+  ui.renameInput.value = '';
+  ui.renameError.textContent = '';
+  ui.renameSave.disabled = false;
   ui.credLogin.value = '';
   ui.credPassword.value = '';
   ui.credConfirm.value = '';
   ui.credError.textContent = '';
+  ui.credSave.disabled = false;
 }
 
 function showGate(message = '') {
@@ -164,8 +168,7 @@ function showGate(message = '') {
   ui.stories.replaceChildren();
   ui.invites.replaceChildren();
   ui.account.replaceChildren();
-  ui.renameError.textContent = '';
-  resetCredentialForm();
+  resetAccountForms();
   ui.historyError.textContent = '';
   ui.gateError.textContent = message;
   ui.gateKey.focus();
@@ -176,7 +179,7 @@ function showView(account) {
   ui.view.hidden = false;
   currentAccount = account;
   credential = undefined;
-  resetCredentialForm();
+  resetAccountForms();
   records = { ...records, loaded: false, items: [], next: null, filters: null, epoch: records.epoch + 1 };
   clear(ui.historyList);
   ui.historyEmpty.hidden = true;
@@ -338,6 +341,8 @@ function credentialProblem(loginName, password, confirm) {
 }
 
 async function saveCredentials() {
+  const account = currentAccount;
+  if (!account || ui.credSave.disabled) return;
   const loginName = ui.credLogin.value.trim();
   const password = ui.credPassword.value;
   const problem = credentialProblem(loginName, password, ui.credConfirm.value);
@@ -354,20 +359,24 @@ async function saveCredentials() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ loginName, password }),
     });
+    if (account !== currentAccount) return;
     credential = { ...(credential || {}), loginName };
     ui.credPassword.value = '';
     ui.credConfirm.value = '';
     renderAccountFacts();
     toast('已保存，可以从会馆首页登录了。');
   } catch (error) {
+    if (account !== currentAccount) return;
     ui.credError.textContent = error.message || '现在无法设置多端登录';
   } finally {
-    ui.credSave.disabled = false;
+    if (account === currentAccount) ui.credSave.disabled = false;
   }
 }
 
 /** 改名字：账户显示名、玩家身份名、当前席位名一起改（服务器一个接口）。 */
 async function saveRename() {
+  const account = currentAccount;
+  if (!account || ui.renameSave.disabled) return;
   const name = ui.renameInput.value.trim();
   if (!name) {
     ui.renameError.textContent = '名字不能为空。';
@@ -382,17 +391,17 @@ async function saveRename() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    if (currentAccount) {
-      currentAccount.displayName = result.account.displayName;
-      if (ui.who) ui.who.textContent = currentAccount.displayName;
-    }
+    if (account !== currentAccount) return;
+    account.displayName = result.account.displayName;
+    if (ui.who) ui.who.textContent = account.displayName;
     renderAccountFacts();
     toast('名字改好了');
     await loadView();
   } catch (error) {
+    if (account !== currentAccount) return;
     ui.renameError.textContent = error.message || '改不了名字';
   } finally {
-    ui.renameSave.disabled = false;
+    if (account === currentAccount) ui.renameSave.disabled = false;
   }
 }
 
@@ -408,7 +417,7 @@ function readHistoryFilters() {
 }
 
 /** 翻页要用生成游标的那一次筛选，不能跟着表单变——否则旧游标会配上新条件。 */
-function historyParams(filters, more) {
+function historyParams(filters, before) {
   const q = new URLSearchParams({ kind: filters.kind, limit: String(HISTORY_PAGE) });
   if (filters.kind === 'games' && filters.game) q.set('game', filters.game);
   if (filters.room) q.set('room', filters.room);
@@ -416,22 +425,28 @@ function historyParams(filters, more) {
   if (filters.until) {
     q.set('until', String(new Date(filters.until + 'T00:00:00+08:00').getTime() + 86400000));
   }
-  if (more && records.next) q.set('before', String(records.next));
+  if (before !== null) q.set('before', String(before));
   return q.toString();
 }
 
 async function loadHistory(more = false) {
+  const before = more ? records.next : null;
+  if (more && (before === null || ui.historyMore.disabled)) return;
   const epoch = ++records.epoch;
-  const filters = more && records.filters ? records.filters : readHistoryFilters();
+  const filters = more ? records.filters : readHistoryFilters();
   if (!more) {
     records.items = [];
     records.next = null;
     records.filters = filters;
+    clear(ui.historyList);
+    ui.historyEmpty.hidden = true;
+    ui.historyMore.hidden = true;
   }
+  ui.historyMore.disabled = true;
   ui.historyError.textContent = '';
   ui.historySummary.textContent = '正在读取…';
   try {
-    const page = await api('/v1/parent/history?' + historyParams(filters, more));
+    const page = await api('/v1/parent/history?' + historyParams(filters, before));
     if (epoch !== records.epoch) return;
     records.loaded = true;
     fillHistoryGames(page.games || []);
@@ -443,6 +458,8 @@ async function loadHistory(more = false) {
     records.loaded = true;
     ui.historySummary.textContent = '';
     ui.historyError.textContent = error.message || '读不到战绩';
+  } finally {
+    if (epoch === records.epoch) ui.historyMore.disabled = false;
   }
 }
 
