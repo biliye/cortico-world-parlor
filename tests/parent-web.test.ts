@@ -5,13 +5,22 @@ import { sourceFunction } from './helpers/game-component.ts';
 
 class TestNode {
   children: TestNode[] = [];
-  listeners = new Map<string, () => Promise<void>>();
+  listeners = new Map<string, (event?: unknown) => unknown>();
   className = '';
   textContent = '';
+  value = '';
+  hidden = false;
+  disabled = false;
+  open = false;
+  attrs = new Map<string, string>();
   get firstChild() { return this.children[0]; }
   append(...nodes: TestNode[]) { this.children.push(...nodes); }
   removeChild(node: TestNode) { this.children.splice(this.children.indexOf(node), 1); }
-  addEventListener(type: string, listener: () => Promise<void>) { this.listeners.set(type, listener); }
+  addEventListener(type: string, listener: (event?: unknown) => unknown) { this.listeners.set(type, listener); }
+  setAttribute(name: string, value: string) { this.attrs.set(name, value); }
+  focus() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; }
 }
 
 const mount = (responses: unknown[] = []) => {
@@ -34,11 +43,12 @@ const mount = (responses: unknown[] = []) => {
     .replace("import { mountStoryArchive } from './story-archive.js';", '')
     .replace("import { beginGlobalEntry } from './identity-entry.js';", '')
     .replace('void boot();', '');
-  const renderer = runInNewContext(source + '\nrender = captureRender; ({ renderMail, renderLog, loadView, playAsParent })', {
+  const renderer = runInNewContext(source + '\nrender = captureRender; ({ renderMail, renderLog, loadView, playAsParent, saveCredentials, loadHistory })', {
     document, fetch, setTimeout, clearTimeout: vi.fn(), URLSearchParams, captureRender: render, beginGlobalEntry, confirm: () => true,
     location: { origin: 'https://parlor.test' },
   }) as { renderMail(view: unknown): void; renderLog(view: unknown): void; loadView(): Promise<boolean>;
-    playAsParent(button: { disabled: boolean }): Promise<void> };
+    playAsParent(button: { disabled: boolean }): Promise<void>;
+    saveCredentials(): Promise<void>; loadHistory(more?: boolean): Promise<void> };
   return { ...renderer, nodes, document, fetch, render, setTimeout, beginGlobalEntry };
 };
 
@@ -66,6 +76,29 @@ it('家长页隐藏没有活跃席位时的退厅按钮', () => {
   const css = readFileSync(new URL('../src/web/parent.css', import.meta.url), 'utf8');
   expect(html).toMatch(/<button id="leave-child-seat"[^>]*\bboard-btn\b[^>]*\bhidden\b/);
   expect(css).toMatch(/\.board-btn\[hidden\]\s*\{\s*display:\s*none;/);
+});
+
+it('顶栏只留一个账户入口，「回到茶室」挨着「回会馆首页」', () => {
+  const html = readFileSync(new URL('../src/web/parent.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/web/parent.css', import.meta.url), 'utf8');
+  // 原来的「下场玩」挪到会馆首页旁边，并改名。
+  expect(html).not.toContain('下场玩');
+  expect(html).toMatch(/<div class="hud-links">\s*<a class="hud-home" href="\/">← 回会馆首页<\/a>\s*<button id="back-to-tea"[^>]*>回到茶室<\/button>/);
+  // 账户是右上角唯一的入口，四个分区都在同一个弹窗里。
+  expect(html).toMatch(/<dialog id="account-dialog"/);
+  for (const [tab, label] of [['account', '账户'], ['rename', '改名字'], ['credentials', '多端登录'], ['history', '账户历史战绩']] as const) {
+    expect(html).toMatch(new RegExp(`<button id="tab-${tab}"[^>]*>[^<]*(<svg[\\s\\S]*?</svg>)?${label}</button>`));
+    expect(html).toContain(`id="pane-${tab}"`);
+  }
+  // 多端登录要用户把密码输两次。
+  expect(html).toMatch(/<input id="cred-password" type="password"/);
+  expect(html).toMatch(/<input id="cred-confirm" type="password"/);
+  expect(html).toContain('再输一次密码');
+  // 分区切换靠 hidden，作者样式会盖掉它，必须显式写一条。
+  expect(css).toMatch(/\.sheet-pane\[hidden\]\s*\{\s*display:\s*none;/);
+  // 红字提示用现成的 .warn（--red），不另造一套颜色。
+  expect(css).toMatch(/--red:\s*#/);
+  expect(html).toMatch(/<p id="cred-error" class="warn" role="alert"><\/p>/);
 });
 
 it('反馈页遇到失效席位时可以凭家长会话提交', async () => {
@@ -185,4 +218,84 @@ it('家长观战遇到暂停桌时停止轮询，暂时故障仍会重试', asyn
   expect(live.value).toBeNull();
   expect(status.value).toBe('这张牌桌已暂停，暂时无法观看。');
   expect(setTimeout).not.toHaveBeenCalled();
+});
+
+describe('家长账户弹窗', () => {
+  const fill = (nodes: Map<string, TestNode>, password: string, confirm: string, login = 'xiaoman') => {
+    nodes.get('cred-login')!.value = login;
+    nodes.get('cred-password')!.value = password;
+    nodes.get('cred-confirm')!.value = confirm;
+  };
+
+  it('两次密码不一致时不发请求，只把红字写在面板里', async () => {
+    const { saveCredentials, nodes, fetch } = mount();
+    fill(nodes, 'twelve-chars-ok', 'twelve-chars-oK');
+    await saveCredentials();
+    expect(nodes.get('cred-error')!.textContent).toBe('两次输入的密码不一致，请重新确认。');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(nodes.get('cred-save')!.disabled).toBe(false);
+  });
+
+  it('密码不足 12 个字符、没填登录名时同样拦在前端', async () => {
+    const { saveCredentials, nodes, fetch } = mount();
+    fill(nodes, 'short', 'short');
+    await saveCredentials();
+    expect(nodes.get('cred-error')!.textContent).toBe('密码至少 12 个字符。');
+    fill(nodes, 'twelve-chars-ok', 'twelve-chars-ok', '  ');
+    await saveCredentials();
+    expect(nodes.get('cred-error')!.textContent).toBe('先填登录名。');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('两个密码一边输一边比：对不上就先提示，改对了提示消失', () => {
+    const { nodes } = mount();
+    const password = nodes.get('cred-password')!;
+    const confirm = nodes.get('cred-confirm')!;
+    password.value = 'twelve-chars-ok';
+    confirm.value = 'twelve-chars-oK';
+    confirm.listeners.get('input')!();
+    expect(nodes.get('cred-error')!.textContent).toBe('两次输入的密码不一致');
+    confirm.value = 'twelve-chars-ok';
+    confirm.listeners.get('input')!();
+    expect(nodes.get('cred-error')!.textContent).toBe('');
+  });
+
+  it('两次一致才把登录名和密码提交给服务端', async () => {
+    const { saveCredentials, nodes, fetch } = mount([{ loginName: 'xiaoman' }]);
+    fill(nodes, 'twelve-chars-ok', 'twelve-chars-ok', '  xiaoman ');
+    await saveCredentials();
+    expect(fetch.mock.calls[0]?.[0]).toBe('/v1/web/credentials');
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ loginName: 'xiaoman', password: 'twelve-chars-ok' }),
+    });
+    expect(nodes.get('cred-error')!.textContent).toBe('');
+    expect(nodes.get('cred-password')!.value).toBe('');
+    expect(nodes.get('cred-confirm')!.value).toBe('');
+  });
+
+  it('战绩面板用服务端给的玩法名和自己的局数', async () => {
+    const { loadHistory, nodes, fetch } = mount([{
+      player: true, ledger: { games: 2, wins: 1, losses: 1, draws: 0 },
+      games: [{ id: 'ddz', label: '斗地主' }],
+      items: [{ id: 'a', ts: 0, roomName: '客厅', kind: 'game', game: 'ddz', gameLabel: '斗地主', result: 'win', text: '地主胜' }],
+      next: null,
+    }]);
+    nodes.get('history-kind')!.value = 'games';
+    await loadHistory();
+    expect(fetch.mock.calls[0]?.[0]).toContain('/v1/parent/history?kind=games');
+    expect(nodes.get('history-summary')!.textContent).toBe('共 2 局 · 1 胜 1 负 0 平');
+    expect(nodes.get('history-list')!.children).toHaveLength(1);
+    expect(nodes.get('history-list')!.children[0]!.className).toBe('history-row is-win');
+    expect(nodes.get('history-game')!.children.map(option => option.textContent)).toContain('斗地主');
+    expect(nodes.get('history-empty')!.hidden).toBe(true);
+    expect(nodes.get('history-more')!.hidden).toBe(true);
+  });
+
+  it('还没下过场的人看到的是空账与一句怎么开始', async () => {
+    const { loadHistory, nodes } = mount([{ player: false, ledger: null, games: [], items: [], next: null }]);
+    await loadHistory();
+    expect(nodes.get('history-summary')!.textContent).toContain('回到茶室');
+    expect(nodes.get('history-empty')!.hidden).toBe(false);
+  });
 });

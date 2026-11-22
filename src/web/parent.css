@@ -120,9 +120,10 @@ svg { display: block; }
 
 .account { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
-/* 顶栏的退路：品牌块本身可点，旁边再给一条写着字的链接——触屏没有 hover，光靠「可点的 logo」不够。 */
+/* 顶栏的退路：品牌块本身可点，旁边再给两条写着字的链接——触屏没有 hover，光靠「可点的 logo」不够。
+   「回会馆首页」和「回到茶室」并排靠左，右侧整块留给账户。 */
+.hud-links { display: flex; align-items: center; gap: 8px; margin-right: auto; flex-wrap: wrap; }
 .hud-home {
-  margin-right: auto;
   flex: none;
   padding: 5px 9px;
   font: 400 12px/1 var(--font-pixel);
@@ -132,8 +133,19 @@ svg { display: block; }
   border: 2px solid var(--ink-soft);
   box-shadow: var(--shadow-sm);
   text-decoration: none;
+  appearance: none;
+  cursor: pointer;
 }
 .hud-home:hover, .hud-home:focus-visible { color: var(--ink); background: #fff; }
+
+/* 回茶室是这一页唯一「往外走」的动作，给一点强调色，别和两条退路混成一片。 */
+.hud-tea {
+  color: #fff7ee;
+  background: var(--accent);
+  border-color: var(--ink);
+}
+.hud-tea:hover, .hud-tea:focus-visible { color: #fff7ee; background: var(--accent-hi); }
+.hud-tea[hidden] { display: none; }
 .account .who {
   font: 400 12px var(--font-pixel);
   padding: 3px 8px;
@@ -557,23 +569,160 @@ svg { display: block; }
   color: var(--ink-dim);
 }
 
-/* ── 改名条（顶栏下方临时出现）────────────────── */
+/* ── 账户弹窗（左侧分区 / 右侧面板）─────────────── */
 
-.rename {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 8px clamp(12px, 3vw, 26px);
-  background: rgba(253, 247, 234, .72);
-  border-bottom: 2px dashed var(--ink-soft);
-}
-.rename input {
-  flex: 0 1 280px; min-width: 0;
-  padding: 6px 8px;
-  background: var(--paper);
+.sheet {
+  width: min(860px, 94vw);
+  max-width: min(860px, 94vw);
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--ink);
+}
+.sheet::backdrop { background: rgba(29, 23, 16, .58); }
+
+.sheet-box {
+  display: flex;
+  flex-direction: column;
+  max-height: min(84vh, 720px);
+  background: var(--paper);
   border: 2px solid var(--ink);
+  box-shadow: 0 0 0 3px #8a6a4a, 0 0 0 5px var(--ink), 8px 9px 0 rgba(42, 29, 21, .34);
+}
+
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px 8px 12px;
+  background: var(--crt); color: #f7e6c6;
+  border-bottom: 2px solid var(--ink);
+  font: 400 12px var(--font-pixel);
+  letter-spacing: .12em;
+}
+.sheet-head h2 {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0; font: 400 12px/1.4 var(--font-pixel); color: inherit;
+}
+.sheet-head h2 svg { color: #e8b06a; }
+.sheet-head .board-btn {
+  background: var(--crt-2); color: var(--crt-text);
+  border-color: var(--crt-line); box-shadow: 2px 2px 0 rgba(0, 0, 0, .5);
+}
+.sheet-head .board-btn:hover { background: #342918; color: #fff3d8; }
+
+.sheet-main {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.sheet-nav {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 8px;
+  background: var(--panel);
+  border-right: 2px solid var(--ink);
+  overflow: auto;
+}
+.sheet-tab {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%;
+  padding: 7px 8px;
+  font: 400 12px/1.35 var(--font-pixel);
+  text-align: left;
+  color: var(--ink-soft); background: transparent;
+  border: 2px solid transparent;
+  appearance: none;
+  cursor: pointer;
+}
+.sheet-tab svg { flex: none; color: var(--ink-dim); }
+.sheet-tab:hover { background: rgba(255, 250, 240, .6); color: var(--ink); }
+.sheet-tab.is-on {
+  background: var(--paper); color: var(--ink);
+  border-color: var(--ink); box-shadow: var(--shadow-sm);
+}
+.sheet-tab.is-on svg { color: var(--accent); }
+
+.sheet-panes { min-width: 0; padding: 14px 16px 18px; overflow: auto; }
+/* [hidden] 会被作者样式的 display 同特异性盖掉，这里显式写一条。 */
+.sheet-pane[hidden] { display: none; }
+
+.facts { display: grid; gap: 8px; margin: 0 0 12px; }
+.fact {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  background: var(--paper-2);
+  border: 1px solid rgba(42, 29, 21, .28);
+  border-left-width: 3px;
+}
+.fact dt { font: 400 12px var(--font-pixel); color: var(--ink-dim); letter-spacing: .06em; }
+.fact dd {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  margin: 0; min-width: 0;
+  font: 400 13px var(--font-read); color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.link-btn {
+  padding: 0; background: none; border: 0;
+  font: 400 12px var(--font-pixel); color: var(--accent);
+  text-decoration: underline; text-underline-offset: 2px;
+  appearance: none; cursor: pointer;
+}
+.link-btn:hover { color: var(--accent-hi); }
+
+.hint { margin: 0 0 10px; font: 400 12px/1.7 var(--font-pixel); color: var(--ink-dim); }
+
+.sheet-form { display: grid; gap: 6px; }
+.sheet-form > label {
+  margin-top: 4px;
+  font: 400 12px var(--font-pixel); color: var(--ink-soft); letter-spacing: .06em;
+}
+.sheet-form input {
+  padding: 7px 9px;
+  background: var(--panel); color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: inset 2px 2px 0 rgba(42, 29, 21, .12);
   font: 400 13px var(--font-mono);
 }
-.rename input:focus { outline: 3px solid var(--accent); outline-offset: 1px; }
+.sheet-form input:focus { outline: 3px solid var(--accent); outline-offset: 1px; }
+.sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+/* 空的红字提示不占位，也不留一条空行。 */
+.sheet .warn:empty { display: none; }
+
+.sheet-filters {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  margin: 10px 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(42, 29, 21, .25);
+}
+.sheet-filters .field { display: grid; gap: 4px; min-width: 0; }
+.sheet-filters .field span { font: 400 12px var(--font-pixel); color: var(--ink-dim); }
+.sheet-filters input, .sheet-filters select {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  padding: 5px 6px;
+  background: var(--paper); color: var(--ink);
+  border: 2px solid var(--ink-soft);
+  font: 400 12px var(--font-mono);
+}
+.sheet-filters input:focus, .sheet-filters select:focus { outline: 3px solid var(--accent); outline-offset: 1px; }
+.sheet-filters button { align-self: end; justify-self: start; }
+
+.history { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.history-row {
+  padding: 7px 9px;
+  background: var(--paper-2);
+  border: 1px solid rgba(42, 29, 21, .28);
+  border-left-width: 3px;
+}
+.history-row.is-win { border-left-color: var(--green); }
+.history-row.is-loss { border-left-color: var(--red); }
+.history-row.is-draw { border-left-color: var(--amber); }
+.history-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0 0 2px; }
+.history-result { font: 400 12px var(--font-pixel); color: var(--ink); }
+.history-meta { font: 400 12px var(--font-pixel); color: var(--ink-dim); }
+.history-text { margin: 0; font: 400 13px/1.6 var(--font-read); color: var(--ink-soft); overflow-wrap: anywhere; }
 
 .guest-invites { margin-bottom: 14px; padding: 12px 16px; }
 .guest-invites summary { cursor: pointer; font-weight: 700; }
@@ -695,8 +844,24 @@ svg { display: block; }
 
 @media (max-width: 640px) {
   .hud { flex-wrap: wrap; align-items: flex-start; }
+  .hud-links { margin-right: 0; }
   .account { width: 100%; justify-content: flex-start; }
   .account .who { max-width: 100%; }
+
+  /* 窄屏把分区横过来当一排页签，面板留在下面整幅可用。 */
+  .sheet { width: 96vw; max-width: 96vw; }
+  .sheet-box { max-height: 90vh; }
+  .sheet-main { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .sheet-nav {
+    flex-direction: row;
+    gap: 4px;
+    padding: 6px;
+    border-right: 0;
+    border-bottom: 2px solid var(--ink);
+    overflow-x: auto;
+  }
+  .sheet-tab { width: auto; white-space: nowrap; }
+  .sheet-panes { padding: 12px 12px 16px; }
 
   .console-main { grid-template-columns: 1fr; }
   .stats { border-left: 0; border-top: 1px solid var(--crt-line); }
