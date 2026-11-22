@@ -70,7 +70,11 @@ describe('飞行棋 HTTP 网关（真实 PG）', () => {
       expect(ended.status).toBe(200);
       expect((await post(a.token, resign)).body).toEqual(ended.body);
       expect(await read(b)).toMatchObject({
-        table: { status: 'ended', endReason: 'resign', winners: [after.table.seats[1].id] }, availableActions: [],
+        table: {
+          status: 'ended', endReason: 'resign', winners: [after.table.seats[1].id],
+          seats: [{ resigned: true, planes: [-1, -1, -1, -1] }, { id: after.table.seats[1].id }],
+        },
+        availableActions: [],
       });
     } finally {
       create.mockRestore();

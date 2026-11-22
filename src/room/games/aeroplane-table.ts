@@ -171,6 +171,7 @@ export class AeroplaneTable implements TableEngine {
   private resign(now: number): TableStep {
     const seat = this.current;
     seat.resigned = true;
+    seat.planes.fill(HANGAR);
     const events = [this.event('resign', `${seat.name} 认输了，飞机退出棋盘。`, { seat: seat.id })];
     const step = this.advance(now, false, events);
     if (this.state.seats.filter(entry => !entry.resigned).length > 1) return step;
@@ -229,8 +230,12 @@ export class AeroplaneTable implements TableEngine {
   privateText(id: string, now: number): string | null {
     const view = this.view(id);
     if (!view) return null;
-    if (!view.yourTurn) return this.publicText();
     const seat = view.seats.find(entry => entry.id === id)!;
+    if (seat.resigned) {
+      const note = view.status === 'playing' ? '你已认输，可以继续观战。' : '你已认输。';
+      return this.publicText() + note;
+    }
+    if (!view.yourTurn) return this.publicText();
     const positions = seat.planes.map((progress, index) => `${index + 1}号${positionText(progress)}`).join('、');
     const choices = view.moves.map(move => `${move.plane}号→${positionText(move.to)}${move.captures ? `，撞 ${move.captures} 架` : ''}`).join('；');
     const action = choices ? `掷出 ${view.die}。可飞：${choices}。` : '请掷骰。';

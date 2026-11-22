@@ -202,9 +202,6 @@ onMounted(() => {
   color: var(--text);
   box-shadow: 0 4px 16px #0003;
 }
-@media (min-width: 1101px) {
-  .on-aeroplane.chat-open .stage-body :deep(.view-table) { padding-right: 380px; }
-}
 @media (max-width: 1100px) {
   .on-aeroplane .top-right .tool.dock { display: inline-flex; }
 }

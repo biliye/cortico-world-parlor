@@ -105,6 +105,7 @@ describe('经典飞行棋', () => {
       ],
     });
     expect(table.public()).toMatchObject({ status: 'ended', endReason: 'resign', winners: ['b'], phase: null, die: null });
+    expect(table.privateText('a', 1002)).toMatch(/阿绿.*赢得本局。你已认输。/);
     expect(table.nextWakeAt()).toBeUndefined();
     expect(table.tick(2000)).toBeNull();
     expect(() => table.act('a', { action: 'resign' }, 1003)).toThrow(/没在玩/);
@@ -120,12 +121,16 @@ describe('经典飞行棋', () => {
     table.join({ id: 'c', name: '阿青' });
     table.join({ id: 'd', name: '阿黄' });
     table.start('a', 1000);
-    setPlanes(table, [21, -1, -1, -1], [0, -1, -1, -1]);
+    setPlanes(table, [21, HOME_START, FINISH, HANGAR], [0, HANGAR, HANGAR, HANGAR]);
     expect(table.act('a', { action: 'resign' }, 1001)).toMatchObject({ views: ['b'] });
     table.restoreState(table.exportState());
     expect(table.public()).toMatchObject({ status: 'playing', turn: 'b', deadline: 1101 });
     expect(table.public().seats.map(seat => seat.colour)).toEqual([0, 1, 2, 3]);
-    expect(table.view('a')).toMatchObject({ yourTurn: false, moves: [], seats: [{ resigned: true }, {}, {}, {}] });
+    expect(table.view('a')).toMatchObject({
+      yourTurn: false, moves: [], seats: [{ resigned: true, planes: [HANGAR, HANGAR, HANGAR, HANGAR] }, {}, {}, {}],
+    });
+    expect(table.privateText('a', 1001)).toContain('你已认输，可以继续观战。');
+    expect(table.privateText('c', 1001)).toBe(table.publicText());
     table.act('b', { action: 'roll' }, 1002);
     expect(table.view('b')?.moves).toMatchObject([{ plane: 1, to: 8, captures: 0 }]);
     table.act('b', { action: 'move', plane: 1 }, 1003);
