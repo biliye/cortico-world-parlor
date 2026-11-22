@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { WorldServer } from '../src/room/world-server.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { EventDb } from '../src/room/event-db.ts';
+import { LedgerDb } from '../src/room/ledger-db.ts';
 
 const COO = 'coo-parenttest1';
 
@@ -394,6 +395,56 @@ describe('家长下场', () => {
     expect((await post(app.url, '/v1/parent/rename', { name: '一'.repeat(25) }, { cookie })).status).toBe(400);
     // 没有会话不行。
     expect((await post(app.url, '/v1/parent/rename', { name: '谁' })).status).toBe(401);
+  });
+
+  it('家长账户的战绩只算自己下场那份，玩法名跟服务端走', async () => {
+    const app = await start();
+    const joined = await post(app.url, '/v1/rooms/lobby/join', { name: '小满' }, { ...cooHeaders(COO), 'x-parlor-invite': 'inv' });
+    const session = await fetch(`${app.url}/v1/parent/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: joined.body.ownerKey }),
+    });
+    const cookie = cookieOf(session);
+
+    // 没有家长会话不给看。
+    expect((await getWith(app.url, '/v1/parent/history', {})).status).toBe(401);
+
+    // 还没下场：不临时建玩家身份，回空账 + 玩法名表。
+    const me = await getWith(app.url, '/v1/parent/me', { cookie });
+    const accountId = (me.body.account as { id: string }).id;
+    const playerOf = async () => (await app.dbHandle
+      .prepare('SELECT player_coo_id FROM accounts WHERE id=?').get(accountId) as { player_coo_id: string | null })
+      .player_coo_id;
+    const before = await getWith(app.url, '/v1/parent/history', { cookie });
+    expect(before.status).toBe(200);
+    expect(before.body).toMatchObject({ player: false, ledger: null, items: [], next: null });
+    expect(before.body.games).toContainEqual({ id: 'ddz', label: '斗地主' });
+    expect(await playerOf()).toBeNull();
+
+    // 下场拿到自己的玩家身份，再给他和孩子各记一局。
+    const played = await post(app.url, '/v1/parent/play', {}, { cookie });
+    const playerCooId = (played.body.identity as { cooId: string }).cooId;
+    expect(await playerOf()).toBe(playerCooId);
+    const ledger = new LedgerDb(app.dbHandle, { now: () => Date.now() });
+    await ledger.record({
+      kind: 'game', game: 'ddz', room: 'lobby', from: 'room', participants: [playerCooId], winners: [playerCooId],
+      effectId: 'parent-history-win', data: { tableId: 't-parent' }, text: '地主胜', visibility: 'room',
+    });
+    await ledger.record({
+      kind: 'game', game: 'gomoku', room: 'lobby', from: 'room', participants: [COO], winners: [COO],
+      effectId: 'child-history-win', data: { tableId: 't-child' }, text: '孩子赢了', visibility: 'room',
+    });
+
+    const after = await getWith(app.url, '/v1/parent/history?limit=10', { cookie });
+    expect(after.status).toBe(200);
+    expect(after.body).toMatchObject({ player: true, ledger: { games: 1, wins: 1, losses: 0, draws: 0 } });
+    const items = after.body.items as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'game', game: 'ddz', gameLabel: '斗地主', result: 'win', text: '地主胜' });
+    // 玩法筛选与非法时间窗。
+    expect(((await getWith(app.url, '/v1/parent/history?game=gomoku', { cookie })).body.items as unknown[])).toHaveLength(0);
+    expect((await getWith(app.url, '/v1/parent/history?from=200&until=100', { cookie })).status).toBe(400);
   });
 
   it('房间 join 不再能绕过邀请码：新身份要码，已有身份不用', async () => {

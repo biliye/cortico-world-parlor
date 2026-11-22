@@ -41,6 +41,48 @@ const ui = {
   stories: document.getElementById('parent-stories'),
   invites: document.getElementById('guest-invites'),
   toast: document.getElementById('toast'),
+  backToTea: document.getElementById('back-to-tea'),
+  dialog: document.getElementById('account-dialog'),
+  closeAccount: document.getElementById('account-close'),
+  tabs: {
+    account: document.getElementById('tab-account'),
+    rename: document.getElementById('tab-rename'),
+    credentials: document.getElementById('tab-credentials'),
+    history: document.getElementById('tab-history'),
+  },
+  panes: {
+    account: document.getElementById('pane-account'),
+    rename: document.getElementById('pane-rename'),
+    credentials: document.getElementById('pane-credentials'),
+    history: document.getElementById('pane-history'),
+  },
+  factName: document.getElementById('fact-name'),
+  factLogin: document.getElementById('fact-login'),
+  gotoRename: document.getElementById('goto-rename'),
+  gotoCredentials: document.getElementById('goto-credentials'),
+  logoutAccount: document.getElementById('account-logout'),
+  renameForm: document.getElementById('rename-form'),
+  renameInput: document.getElementById('rename-input'),
+  renameError: document.getElementById('rename-error'),
+  renameSave: document.getElementById('rename-save'),
+  credentialsForm: document.getElementById('credentials-form'),
+  credLogin: document.getElementById('cred-login'),
+  credPassword: document.getElementById('cred-password'),
+  credConfirm: document.getElementById('cred-confirm'),
+  credHint: document.getElementById('cred-hint'),
+  credError: document.getElementById('cred-error'),
+  credSave: document.getElementById('cred-save'),
+  historyForm: document.getElementById('history-filters'),
+  historyKind: document.getElementById('history-kind'),
+  historyGame: document.getElementById('history-game'),
+  historyFrom: document.getElementById('history-from'),
+  historyUntil: document.getElementById('history-until'),
+  historyRoom: document.getElementById('history-room'),
+  historySummary: document.getElementById('history-summary'),
+  historyError: document.getElementById('history-error'),
+  historyList: document.getElementById('history-list'),
+  historyEmpty: document.getElementById('history-empty'),
+  historyMore: document.getElementById('history-more'),
 };
 
 let timer = 0;
@@ -51,6 +93,16 @@ let viewRequest;
 let viewGeneration = 0;
 let viewVersions;
 let currentView;
+
+/** 账户弹窗的状态：当前账户、选中的分区、登录名缓存、战绩分页。 */
+const ACCOUNT_TABS = ['account', 'rename', 'credentials', 'history'];
+const HISTORY_PAGE = 20;
+let currentAccount = null;
+let accountTab = 'account';
+/** undefined=还没读过；null=读失败；否则是服务端给的登录名与建议名。 */
+let credential;
+/** 战绩分页。别叫 history —— 会把 window.history 遮住（boot 里要用 replaceState）。 */
+let records = { loaded: false, items: [], next: null, filters: null, epoch: 0, games: false };
 
 const el = (tag, cls = '', text = '') => {
   const node = document.createElement(tag);
@@ -86,19 +138,38 @@ const api = async (path, init = {}) => {
 
 const KIND = { pet: 'Coo', human: '人', observer: '观看' };
 
+/** 切换家长会话时重置输入和提交状态。 */
+function resetAccountForms() {
+  ui.renameInput.value = '';
+  ui.renameError.textContent = '';
+  ui.renameSave.disabled = false;
+  ui.credLogin.value = '';
+  ui.credPassword.value = '';
+  ui.credConfirm.value = '';
+  ui.credError.textContent = '';
+  ui.credSave.disabled = false;
+}
+
 function showGate(message = '') {
-  document.getElementById('web-credentials')?.remove();
   clearTimeout(timer);
+  if (ui.dialog.open) ui.dialog.close();
   viewGeneration += 1;
   viewRequest = undefined;
   viewVersions = undefined;
   currentView = undefined;
+  currentAccount = null;
+  ui.who = null;
+  credential = undefined;
+  records = { ...records, loaded: false, items: [], next: null, filters: null, epoch: records.epoch + 1 };
   lastSignature = '';
+  ui.backToTea.hidden = true;
   ui.gate.hidden = false;
   ui.view.hidden = true;
   ui.stories.replaceChildren();
   ui.invites.replaceChildren();
   ui.account.replaceChildren();
+  resetAccountForms();
+  ui.historyError.textContent = '';
   ui.gateError.textContent = message;
   ui.gateKey.focus();
 }
@@ -106,6 +177,13 @@ function showGate(message = '') {
 function showView(account) {
   ui.gate.hidden = true;
   ui.view.hidden = false;
+  currentAccount = account;
+  credential = undefined;
+  resetAccountForms();
+  records = { ...records, loaded: false, items: [], next: null, filters: null, epoch: records.epoch + 1 };
+  clear(ui.historyList);
+  ui.historyEmpty.hidden = true;
+  ui.historyMore.hidden = true;
   mountGuestInvites();
   ui.stories.replaceChildren();
   const stories = el('div');
@@ -119,27 +197,15 @@ function showView(account) {
   });
   clear(ui.account);
   const who = el('span', 'who', account.displayName || '家长');
+  ui.who = who;
   ui.account.append(who);
-  const play = el('button', 'board-btn primary small', '下场玩');
-  play.type = 'button';
-  play.title = '以家长身份进客厅；和孩子的账本分开';
-  play.addEventListener('click', () => { void playAsParent(play); });
-  ui.account.append(play);
-  const rename = el('button', 'board-btn ghost small', '改名字');
-  rename.type = 'button';
-  rename.addEventListener('click', () => openRename(account, who));
-  ui.account.append(rename);
-  const credentials = el('button', 'board-btn ghost small', '多端登录');
-  credentials.type = 'button';
-  credentials.addEventListener('click', () => { void openCredentials(credentials); });
-  ui.account.append(credentials);
-  const logout = el('button', 'board-btn ghost small', '退出');
-  logout.type = 'button';
-  logout.addEventListener('click', async () => {
-    try { await api('/v1/parent/logout', { method: 'POST' }); } catch { /* 已经失效 */ }
-    showGate('已经退出。');
-  });
-  ui.account.append(logout);
+  const open = el('button', 'board-btn primary small', '账户');
+  open.type = 'button';
+  open.title = '改名字、多端登录、账户历史战绩';
+  open.addEventListener('click', () => openAccount('account'));
+  ui.account.append(open);
+  ui.backToTea.hidden = false;
+  renderAccountFacts();
 }
 
 function mountGuestInvites() {
@@ -212,108 +278,225 @@ function mountGuestInvites() {
   });
 }
 
-async function openCredentials(button) {
-  const current = document.getElementById('web-credentials');
-  if (current) {
-    current.remove();
-    return;
+/* ── 账户弹窗：账户 / 改名字 / 多端登录 / 账户历史战绩 ───────────── */
+
+const stamp = ts => new Date(ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+const RESULT_LABEL = { win: '胜', loss: '负', draw: '平' };
+const DIRECTION_LABEL = { in: '收到', out: '送出', used: '喝掉/吃掉' };
+
+function openAccount(tab = 'account') {
+  if (!currentAccount) return;
+  ui.renameInput.value = currentAccount.displayName || '';
+  ui.renameError.textContent = '';
+  ui.credError.textContent = '';
+  showAccountTab(tab);
+  renderAccountFacts();
+  if (!ui.dialog.open) ui.dialog.showModal();
+  ui.tabs[accountTab].focus();
+  void loadCredentials();
+  if (accountTab === 'history' && !records.loaded) void loadHistory();
+}
+
+function showAccountTab(tab) {
+  accountTab = ACCOUNT_TABS.includes(tab) ? tab : 'account';
+  for (const name of ACCOUNT_TABS) {
+    ui.tabs[name].className = name === accountTab ? 'sheet-tab is-on' : 'sheet-tab';
+    ui.tabs[name].setAttribute('aria-current', name === accountTab ? 'true' : 'false');
+    ui.panes[name].hidden = name !== accountTab;
   }
-  button.disabled = true;
+}
+
+function renderAccountFacts() {
+  const loginName = credential ? credential.loginName : '';
+  ui.factName.textContent = currentAccount?.displayName || '家长';
+  ui.factLogin.textContent = credential === undefined ? '正在读取…'
+    : credential ? (loginName || '未开通') : '读不到，稍后再试';
+  ui.credSave.textContent = loginName ? '更新登录名和密码' : '开通多端登录';
+  ui.credHint.textContent = loginName
+    ? '密码至少 12 个字符。更新后，其他设备需要用新密码重新登录。'
+    : '密码至少 12 个字符。开通后可以在会馆首页用登录名和密码从别的设备进来。';
+  if (!ui.credLogin.value) ui.credLogin.value = credential?.suggestedName || currentAccount?.displayName || '';
+}
+
+async function loadCredentials() {
+  const account = currentAccount;
   try {
     const info = await api('/v1/web/credentials');
-    if (!button.isConnected) return;
-    const form = el('form', 'rename');
-    form.id = 'web-credentials';
-    const name = el('input');
-    name.value = info.loginName || info.suggestedName;
-    name.autocomplete = 'username';
-    name.maxLength = 48;
-    name.required = true;
-    const nameLabel = el('label', '', '登录名 ');
-    nameLabel.append(name);
-    const password = el('input');
-    password.type = 'password';
-    password.autocomplete = 'new-password';
-    password.required = true;
-    const passwordLabel = el('label', '', info.loginName ? '新密码 ' : '密码 ');
-    passwordLabel.append(password);
-    const save = el('button', 'board-btn primary small', info.loginName ? '更新登录名和密码' : '开通多端登录');
-    save.type = 'submit';
-    const hint = el('p', '', '密码至少 12 个字符。更新后，其他设备需要重新网页登录。');
-    const message = el('p');
-    message.setAttribute('role', 'alert');
-    form.append(nameLabel, passwordLabel, save, hint, message);
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      save.disabled = true;
-      message.textContent = '';
-      try {
-        await api('/v1/web/credentials', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ loginName: name.value, password: password.value }),
-        });
-        form.remove();
-        toast('已保存，可以从会馆门面登录。');
-        button.focus();
-      } catch (error) {
-        message.textContent = error.message || '现在无法设置多端登录';
-      } finally {
-        save.disabled = false;
-      }
+    if (account !== currentAccount) return;
+    credential = { loginName: info.loginName || '', suggestedName: info.suggestedName || '' };
+    if (credential.loginName) ui.credLogin.value = credential.loginName;
+  } catch {
+    if (account !== currentAccount) return;
+    credential = null;
+  }
+  renderAccountFacts();
+}
+
+/** 两次密码不一致、太短、没填登录名：都在面板里用红字说清楚，一个请求都不发。 */
+function credentialProblem(loginName, password, confirm) {
+  if (!loginName) return { message: '先填登录名。', field: ui.credLogin };
+  if (Array.from(password).length < 12) return { message: '密码至少 12 个字符。', field: ui.credPassword };
+  if (password !== confirm) return { message: '两次输入的密码不一致，请重新确认。', field: ui.credConfirm };
+  return null;
+}
+
+async function saveCredentials() {
+  const account = currentAccount;
+  if (!account || ui.credSave.disabled) return;
+  const loginName = ui.credLogin.value.trim();
+  const password = ui.credPassword.value;
+  const problem = credentialProblem(loginName, password, ui.credConfirm.value);
+  if (problem) {
+    ui.credError.textContent = problem.message;
+    problem.field.focus();
+    return;
+  }
+  ui.credError.textContent = '';
+  ui.credSave.disabled = true;
+  try {
+    await api('/v1/web/credentials', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ loginName, password }),
     });
-    ui.account.parentElement.after(form);
-    name.focus();
+    if (account !== currentAccount) return;
+    credential = { ...(credential || {}), loginName };
+    ui.credPassword.value = '';
+    ui.credConfirm.value = '';
+    renderAccountFacts();
+    toast('已保存，可以从会馆首页登录了。');
   } catch (error) {
-    toast(error.message || '现在无法设置多端登录');
+    if (account !== currentAccount) return;
+    ui.credError.textContent = error.message || '现在无法设置多端登录';
   } finally {
-    button.disabled = false;
+    if (account === currentAccount) ui.credSave.disabled = false;
   }
 }
 
 /** 改名字：账户显示名、玩家身份名、当前席位名一起改（服务器一个接口）。 */
-function openRename(account, who) {
-  const open = document.getElementById('rename-box');
-  if (open) {
-    open.remove();
+async function saveRename() {
+  const account = currentAccount;
+  if (!account || ui.renameSave.disabled) return;
+  const name = ui.renameInput.value.trim();
+  if (!name) {
+    ui.renameError.textContent = '名字不能为空。';
+    ui.renameInput.focus();
     return;
   }
-  const box = el('form', 'rename');
-  box.id = 'rename-box';
-  const input = el('input');
-  input.value = account.displayName || '';
-  input.maxLength = 24;
-  input.placeholder = '比如：塞斯普瑞家的家长';
-  input.setAttribute('aria-label', '新名字');
-  const save = el('button', 'board-btn primary small', '保存');
-  save.type = 'submit';
-  const cancel = el('button', 'board-btn ghost small', '取消');
-  cancel.type = 'button';
-  cancel.addEventListener('click', () => box.remove());
-  box.append(input, save, cancel);
-  box.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    save.disabled = true;
-    try {
-      const result = await api('/v1/parent/rename', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: input.value }),
-      });
-      account.displayName = result.account.displayName;
-      who.textContent = account.displayName;
-      box.remove();
-      toast('名字改好了');
-      await loadView();
-    } catch (error) {
-      toast(error.message || '改不了名字');
-    } finally {
-      save.disabled = false;
-    }
-  });
-  ui.account.parentElement.after(box);
-  input.focus();
-  input.select();
+  ui.renameError.textContent = '';
+  ui.renameSave.disabled = true;
+  try {
+    const result = await api('/v1/parent/rename', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (account !== currentAccount) return;
+    account.displayName = result.account.displayName;
+    if (ui.who) ui.who.textContent = account.displayName;
+    renderAccountFacts();
+    toast('名字改好了');
+    await loadView();
+  } catch (error) {
+    if (account !== currentAccount) return;
+    ui.renameError.textContent = error.message || '改不了名字';
+  } finally {
+    if (account === currentAccount) ui.renameSave.disabled = false;
+  }
+}
+
+/** 表单这一刻的筛选条件。 */
+function readHistoryFilters() {
+  return {
+    kind: ui.historyKind.value,
+    game: ui.historyGame.value,
+    from: ui.historyFrom.value,
+    until: ui.historyUntil.value,
+    room: ui.historyRoom.value.trim(),
+  };
+}
+
+/** 翻页要用生成游标的那一次筛选，不能跟着表单变——否则旧游标会配上新条件。 */
+function historyParams(filters, before) {
+  const q = new URLSearchParams({ kind: filters.kind, limit: String(HISTORY_PAGE) });
+  if (filters.kind === 'games' && filters.game) q.set('game', filters.game);
+  if (filters.room) q.set('room', filters.room);
+  if (filters.from) q.set('from', String(new Date(filters.from + 'T00:00:00+08:00').getTime()));
+  if (filters.until) {
+    q.set('until', String(new Date(filters.until + 'T00:00:00+08:00').getTime() + 86400000));
+  }
+  if (before !== null) q.set('before', String(before));
+  return q.toString();
+}
+
+async function loadHistory(more = false) {
+  const before = more ? records.next : null;
+  if (more && (before === null || ui.historyMore.disabled)) return;
+  const epoch = ++records.epoch;
+  const filters = more ? records.filters : readHistoryFilters();
+  if (!more) {
+    records.items = [];
+    records.next = null;
+    records.filters = filters;
+    clear(ui.historyList);
+    ui.historyEmpty.hidden = true;
+    ui.historyMore.hidden = true;
+  }
+  ui.historyMore.disabled = true;
+  ui.historyError.textContent = '';
+  ui.historySummary.textContent = '正在读取…';
+  try {
+    const page = await api('/v1/parent/history?' + historyParams(filters, before));
+    if (epoch !== records.epoch) return;
+    records.loaded = true;
+    fillHistoryGames(page.games || []);
+    records.items = more ? [...records.items, ...page.items] : page.items;
+    records.next = page.next;
+    renderHistory(page);
+  } catch (error) {
+    if (epoch !== records.epoch) return;
+    records.loaded = true;
+    ui.historySummary.textContent = '';
+    ui.historyError.textContent = error.message || '读不到战绩';
+  } finally {
+    if (epoch === records.epoch) ui.historyMore.disabled = false;
+  }
+}
+
+/** 玩法名由服务端给，网页不另抄一份会漂移的名称表。 */
+function fillHistoryGames(games) {
+  if (records.games || games.length === 0) return;
+  records.games = true;
+  for (const game of games) {
+    const option = el('option', '', game.label);
+    option.value = game.id;
+    ui.historyGame.append(option);
+  }
+}
+
+function renderHistory(page) {
+  const ledger = page.ledger;
+  ui.historySummary.textContent = !page.player
+    ? '还没下场玩过。点右上角「回到茶室」打一局，这里就有自己的战绩了。'
+    : ledger && ledger.games
+      ? `共 ${ledger.games} 局 · ${ledger.wins} 胜 ${ledger.losses} 负 ${ledger.draws} 平`
+      : '还没有战绩。';
+  clear(ui.historyList);
+  for (const item of records.items) {
+    // item.kind 是账本条目类型（game / gift / gift_used），只有对局才带 result。
+    const games = item.result !== undefined;
+    const row = el('li', 'history-row' + (games ? ' is-' + (item.result || 'loss') : ''));
+    const head = el('p', 'history-head');
+    head.append(el('strong', 'history-result', games
+      ? (RESULT_LABEL[item.result || ''] || '对局')
+      : (DIRECTION_LABEL[item.direction || ''] || '礼物') + ' · ' + (item.itemName || '礼物')));
+    head.append(el('span', 'history-meta',
+      stamp(item.ts) + ' · ' + item.roomName + (item.gameLabel ? ' · ' + item.gameLabel : '')));
+    row.append(head, el('p', 'history-text', item.text));
+    ui.historyList.append(row);
+  }
+  ui.historyEmpty.hidden = records.items.length > 0;
+  ui.historyMore.hidden = !records.next;
 }
 
 /** 家长下场：领席位或完成统一身份跳转，然后去 /play。 */
@@ -688,6 +871,52 @@ function renderMail(view) {
     ui.mail.append(row);
   }
 }
+
+/* 顶栏：回到茶室（原来的「下场玩」）与那一个账户入口。 */
+ui.backToTea.addEventListener('click', () => { void playAsParent(ui.backToTea); });
+
+for (const name of ACCOUNT_TABS) {
+  ui.tabs[name].addEventListener('click', () => {
+    showAccountTab(name);
+    if (name === 'history' && !records.loaded) void loadHistory();
+  });
+}
+ui.closeAccount.addEventListener('click', () => { if (ui.dialog.open) ui.dialog.close(); });
+// 点遮罩关窗：backdrop 上的点击 target 就是 dialog 自己，盒子里面的点击都落在子元素上。
+ui.dialog.addEventListener('click', (event) => { if (event.target === ui.dialog) ui.dialog.close(); });
+ui.gotoRename.addEventListener('click', () => showAccountTab('rename'));
+ui.gotoCredentials.addEventListener('click', () => showAccountTab('credentials'));
+ui.logoutAccount.addEventListener('click', async () => {
+  ui.logoutAccount.disabled = true;
+  try { await api('/v1/parent/logout', { method: 'POST' }); } catch { /* 已经失效 */ }
+  ui.logoutAccount.disabled = false;
+  showGate('已经退出。');
+});
+ui.renameForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void saveRename();
+});
+ui.credentialsForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void saveCredentials();
+});
+/** 两个密码框一边输一边比：已经不一致就先红字说清楚，不必等按保存。 */
+function checkPasswordMatch() {
+  const mismatch = ui.credConfirm.value !== '' && ui.credConfirm.value !== ui.credPassword.value;
+  ui.credError.textContent = mismatch ? '两次输入的密码不一致' : '';
+}
+ui.credPassword.addEventListener('input', checkPasswordMatch);
+ui.credConfirm.addEventListener('input', checkPasswordMatch);
+ui.credLogin.addEventListener('input', () => { ui.credError.textContent = ''; });
+ui.historyForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void loadHistory();
+});
+ui.historyMore.addEventListener('click', () => { void loadHistory(true); });
+ui.historyKind.addEventListener('change', () => {
+  ui.historyGame.disabled = ui.historyKind.value !== 'games';
+  void loadHistory();
+});
 
 ui.gateForm.addEventListener('submit', (event) => {
   event.preventDefault();
