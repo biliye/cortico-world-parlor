@@ -102,7 +102,7 @@ let accountTab = 'account';
 /** undefined=还没读过；null=读失败；否则是服务端给的登录名与建议名。 */
 let credential;
 /** 战绩分页。别叫 history —— 会把 window.history 遮住（boot 里要用 replaceState）。 */
-let records = { loaded: false, items: [], next: null, epoch: 0, games: false };
+let records = { loaded: false, items: [], next: null, filters: null, epoch: 0, games: false };
 
 const el = (tag, cls = '', text = '') => {
   const node = document.createElement(tag);
@@ -138,6 +138,14 @@ const api = async (path, init = {}) => {
 
 const KIND = { pet: 'Coo', human: '人', observer: '观看' };
 
+/** 多端登录的三个输入框只属于这次会话；退出或换账号后不能留给下一个人。 */
+function resetCredentialForm() {
+  ui.credLogin.value = '';
+  ui.credPassword.value = '';
+  ui.credConfirm.value = '';
+  ui.credError.textContent = '';
+}
+
 function showGate(message = '') {
   clearTimeout(timer);
   if (ui.dialog.open) ui.dialog.close();
@@ -148,7 +156,7 @@ function showGate(message = '') {
   currentAccount = null;
   ui.who = null;
   credential = undefined;
-  records = { ...records, loaded: false, items: [], next: null, epoch: records.epoch + 1 };
+  records = { ...records, loaded: false, items: [], next: null, filters: null, epoch: records.epoch + 1 };
   lastSignature = '';
   ui.backToTea.hidden = true;
   ui.gate.hidden = false;
@@ -157,7 +165,7 @@ function showGate(message = '') {
   ui.invites.replaceChildren();
   ui.account.replaceChildren();
   ui.renameError.textContent = '';
-  ui.credError.textContent = '';
+  resetCredentialForm();
   ui.historyError.textContent = '';
   ui.gateError.textContent = message;
   ui.gateKey.focus();
@@ -168,7 +176,8 @@ function showView(account) {
   ui.view.hidden = false;
   currentAccount = account;
   credential = undefined;
-  records = { ...records, loaded: false, items: [], next: null, epoch: records.epoch + 1 };
+  resetCredentialForm();
+  records = { ...records, loaded: false, items: [], next: null, filters: null, epoch: records.epoch + 1 };
   clear(ui.historyList);
   ui.historyEmpty.hidden = true;
   ui.historyMore.hidden = true;
@@ -387,14 +396,25 @@ async function saveRename() {
   }
 }
 
-function historyParams(more) {
-  const q = new URLSearchParams({ kind: ui.historyKind.value, limit: String(HISTORY_PAGE) });
-  if (ui.historyKind.value === 'games' && ui.historyGame.value) q.set('game', ui.historyGame.value);
-  const room = ui.historyRoom.value.trim();
-  if (room) q.set('room', room);
-  if (ui.historyFrom.value) q.set('from', String(new Date(ui.historyFrom.value + 'T00:00:00+08:00').getTime()));
-  if (ui.historyUntil.value) {
-    q.set('until', String(new Date(ui.historyUntil.value + 'T00:00:00+08:00').getTime() + 86400000));
+/** 表单这一刻的筛选条件。 */
+function readHistoryFilters() {
+  return {
+    kind: ui.historyKind.value,
+    game: ui.historyGame.value,
+    from: ui.historyFrom.value,
+    until: ui.historyUntil.value,
+    room: ui.historyRoom.value.trim(),
+  };
+}
+
+/** 翻页要用生成游标的那一次筛选，不能跟着表单变——否则旧游标会配上新条件。 */
+function historyParams(filters, more) {
+  const q = new URLSearchParams({ kind: filters.kind, limit: String(HISTORY_PAGE) });
+  if (filters.kind === 'games' && filters.game) q.set('game', filters.game);
+  if (filters.room) q.set('room', filters.room);
+  if (filters.from) q.set('from', String(new Date(filters.from + 'T00:00:00+08:00').getTime()));
+  if (filters.until) {
+    q.set('until', String(new Date(filters.until + 'T00:00:00+08:00').getTime() + 86400000));
   }
   if (more && records.next) q.set('before', String(records.next));
   return q.toString();
@@ -402,14 +422,16 @@ function historyParams(more) {
 
 async function loadHistory(more = false) {
   const epoch = ++records.epoch;
+  const filters = more && records.filters ? records.filters : readHistoryFilters();
   if (!more) {
     records.items = [];
     records.next = null;
+    records.filters = filters;
   }
   ui.historyError.textContent = '';
   ui.historySummary.textContent = '正在读取…';
   try {
-    const page = await api('/v1/parent/history?' + historyParams(more));
+    const page = await api('/v1/parent/history?' + historyParams(filters, more));
     if (epoch !== records.epoch) return;
     records.loaded = true;
     fillHistoryGames(page.games || []);
@@ -843,6 +865,8 @@ for (const name of ACCOUNT_TABS) {
   });
 }
 ui.closeAccount.addEventListener('click', () => { if (ui.dialog.open) ui.dialog.close(); });
+// 点遮罩关窗：backdrop 上的点击 target 就是 dialog 自己，盒子里面的点击都落在子元素上。
+ui.dialog.addEventListener('click', (event) => { if (event.target === ui.dialog) ui.dialog.close(); });
 ui.gotoRename.addEventListener('click', () => showAccountTab('rename'));
 ui.gotoCredentials.addEventListener('click', () => showAccountTab('credentials'));
 ui.logoutAccount.addEventListener('click', async () => {

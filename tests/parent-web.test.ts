@@ -15,6 +15,7 @@ class TestNode {
   attrs = new Map<string, string>();
   get firstChild() { return this.children[0]; }
   append(...nodes: TestNode[]) { this.children.push(...nodes); }
+  replaceChildren(...nodes: TestNode[]) { this.children = [...nodes]; }
   removeChild(node: TestNode) { this.children.splice(this.children.indexOf(node), 1); }
   addEventListener(type: string, listener: (event?: unknown) => unknown) { this.listeners.set(type, listener); }
   setAttribute(name: string, value: string) { this.attrs.set(name, value); }
@@ -297,5 +298,50 @@ describe('家长账户弹窗', () => {
     await loadHistory();
     expect(nodes.get('history-summary')!.textContent).toContain('回到茶室');
     expect(nodes.get('history-empty')!.hidden).toBe(false);
+  });
+
+  it('退出时清空多端登录的三个输入框，不留给下一个账号', async () => {
+    const { nodes } = mount([{ ok: true }]);
+    fill(nodes, 'twelve-chars-ok', 'twelve-chars-ok', 'alice');
+    await nodes.get('account-logout')!.listeners.get('click')!();
+    expect(nodes.get('cred-login')!.value).toBe('');
+    expect(nodes.get('cred-password')!.value).toBe('');
+    expect(nodes.get('cred-confirm')!.value).toBe('');
+    expect(nodes.get('cred-error')!.textContent).toBe('');
+  });
+
+  it('翻页沿用生成游标的那次筛选：改了玩法但没查询，也不把新条件混进来', async () => {
+    const page = { player: true, ledger: { games: 1, wins: 1, losses: 0, draws: 0 }, games: [], items: [] };
+    const { loadHistory, nodes, fetch } = mount([{ ...page, next: 900 }, { ...page, next: null }]);
+    nodes.get('history-kind')!.value = 'games';
+    nodes.get('history-game')!.value = 'ddz';
+    await loadHistory();
+    expect(fetch.mock.calls[0]?.[0]).toContain('game=ddz');
+
+    // 只改表单、不点查询：翻页仍然按斗地主的条件走。
+    nodes.get('history-game')!.value = 'gomoku';
+    await loadHistory(true);
+    const next = fetch.mock.calls[1]?.[0] as string;
+    expect(next).toContain('game=ddz');
+    expect(next).toContain('before=900');
+    expect(next).not.toContain('gomoku');
+
+    // 重新查询后才换成新条件，且旧游标不带过去。
+    await loadHistory();
+    const fresh = fetch.mock.calls[2]?.[0] as string;
+    expect(fresh).toContain('game=gomoku');
+    expect(fresh).not.toContain('before=');
+  });
+
+  it('点遮罩关窗，点盒子里面的东西不关', () => {
+    const { nodes } = mount();
+    const dialog = nodes.get('account-dialog')!;
+    dialog.open = true;
+    dialog.listeners.get('click')!({ target: dialog });
+    expect(dialog.open).toBe(false);
+
+    dialog.open = true;
+    dialog.listeners.get('click')!({ target: nodes.get('account-close')! });
+    expect(dialog.open).toBe(true);
   });
 });
