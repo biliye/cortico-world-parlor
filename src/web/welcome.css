@@ -7,7 +7,8 @@
  *   页面类型：展示（落地页）；牌桌本体仍是另一套深色界面，两边不共用样式。
  *
  * 版式是竖向滚动翻页：每屏一个 .screen，高度正好是一屏减去顶栏，
- * 由 html 上的 scroll-snap 吸附（只到 proximity 一档，滚快一点可以连着走）。
+ * 由 html 上的 scroll-snap 吸附（只到 proximity 一档，滚快一点可以连着走），那是触屏的走法。
+ * 桌面的滚轮另由 welcome.js 接管：逐帧追 + 软吸附，那时这一段会被 is-smooth 关掉。
  * 第 2 屏的规则不占版面：点一格从弹层里长出来，弹层正文自己滚。
  */
 
@@ -41,6 +42,15 @@ html {
   scroll-snap-type: y proximity;
   scroll-padding-top: var(--top-h);
   scroll-behavior: smooth;
+}
+
+/* 桌面上脚本接管滚轮（见 welcome.js 的 bindSmoothScroll）。
+   那时候滚动位置是逐帧被程序改写的，原生 snap 会跟在后面抢一次、
+   把页面硬拽到吸附点——两套吸附打架正是「僵硬」的来源，所以整段关掉，
+   吸附改由脚本在一段缓动里完成。触屏没有这个类，仍走上面那条。 */
+html.is-smooth {
+  scroll-snap-type: none;
+  scroll-behavior: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -194,7 +204,7 @@ html {
   grid-row: 3;
   align-self: end;
   padding: 0 var(--ef-pad);
-  transform: translate3d(0, calc(var(--sc) * -5vh), 0);
+  transform: translate3d(0, calc(var(--sc) * -12vh), 0);
   opacity: calc(1 - var(--sc));
   will-change: transform, opacity;
 }
@@ -1165,6 +1175,25 @@ html:not(.ef-rules) .rule + .rule {
 @media (max-width: 379px) {
   .top .mark {
     display: none;
+  }
+}
+
+/* ---------- 离场：上一屏的内容跟着走 ---------- */
+
+/* 翻页时屏框被滚动带着走，里面的内容却一直钉在框里，看起来像两张纸在平移，
+   上一页的东西一动不动。--out 是这一屏滚出去的比例（0 → 1，welcome.js 按帧写），
+   内容按它上移并淡下去，比屏框早一点离场。
+
+   用独立的 translate / filter，不是 transform / opacity：屏里的块自带 transform
+   与入场动画（ef-rise 的 fill-mode 会一直占着 opacity 与 transform），
+   translate、filter 是另外两条属性，与它们叠加而不是互相覆盖。
+
+   只在真的开始离场时挂 is-out：filter 一旦不是 none 就会让整块进合成层，
+   全页文字会掉成灰度抗锯齿——静止时不能带这个。 */
+@media (prefers-reduced-motion: no-preference) {
+  .screen:not(.cover).is-out > * {
+    translate: 0 calc(var(--out, 0) * -14vh);
+    filter: opacity(calc(1 - var(--out, 0) * 0.6));
   }
 }
 

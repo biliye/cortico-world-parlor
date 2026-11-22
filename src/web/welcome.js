@@ -2,14 +2,18 @@
  * 对外页的脚本负责五件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
- * 3. 滚动驱动：封面会名随滚动上移淡出、门厅的实景回正、顶栏下沿一条线标读到哪儿了；
- * 4. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
+ * 3. 滚轮：桌面上接管竖直滚轮，先推目标再逐帧追（有减速尾巴）；停手 200ms 后
+ *    离屏边够近、或一口气滚过 0.9 屏，就把目标改到那一屏，减速直接接上吸附。
+ *    键盘、滚动条、触屏仍由浏览器自己滚（之后同样接一段软吸附）；页内锚点走缓动；
+ * 4. 滚动驱动：封面会名随滚动上移淡出、门厅的实景回正、上一屏内容提前离场、
+ *    顶栏下沿一条线标读到哪儿了；
+ * 5. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
  *    屏里的列表再挂一层 data-stagger，编号与条目按 45ms 一个地排队浮现；
- * 5. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
+ * 6. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
  *    没脚本时不挂 ef-rules，八块规则平铺在页尾，仍然读得到。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
- * 所以只有这一段外链脚本。滚动翻页本身仍是纯 CSS（html 上的 scroll-snap）。
+ * 所以只有这一段外链脚本。触屏上的滚动翻页仍是纯 CSS（html 上的 scroll-snap）。
  */
 (() => {
   const root = document.documentElement;
@@ -153,13 +157,241 @@
     });
   };
 
-  // ---------- 滚动驱动：封面 / 门厅 / 顶栏进度线 ----------
+  // ---------- 滚轮：逐帧追 + 软吸附 ----------
 
   /**
-   * 只往元素上写三个 CSS 变量，不碰布局：
+   * 桌面上的竖直滚轮改成「先推目标、再逐帧追」：一次滚轮只把目标推远一点，
+   * 画面用十几帧追上去，手停下来之后还有一小段减速尾巴；手停 200ms 后若落点
+   * 离某屏边界不到 38% 视口，或一口气滚过 0.9 屏，就把目标改到那一屏——
+   * 减速直接接上吸附，中间没有「停死 → 等 → 再起步」，这就是软吸附。
+   *
+   * 只接管竖直滚轮：Ctrl+滚轮（缩放）、横向滚动、规则弹层打开时都不拦。
+   * 键盘、滚动条、地址栏带 # 的落点统一交给浏览器——scroll 事件里发现位置
+   * 不是这一帧写下去的，就把目标对齐过去，「键盘翻过页、下一格滚轮又把页面
+   * 拽回原处」不会发生；松手之后照样接一段同样的软吸附。
+   *
+   * 触屏设备整个不注册：原生滚动本来就有惯性，接管只会更差；
+   * 那些设备上的翻页吸附仍由 CSS 的 scroll-snap 负责（见 welcome.css 的 is-smooth）。
+   */
+  const bindSmoothScroll = () => {
+    if (still()) return;
+    if (!matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    if (!('scrollBehavior' in root.style)) return;
+
+    const FOLLOW = 0.12; // 每帧追掉差距的比例：约 16 帧贴住，尾巴看得见但不拖沓
+    const REACH = 0.38; // 停手时离屏边多近才吸过去（占视口高度，原生 proximity 同档）
+    const FLING = 0.9; //  一口气滚过这么多屏，算「想翻页」，顺势推到前面那一屏
+    // 停手多久之后看落点。不能太短：鼠标一格约 100px、慢速连滚的间隔可以到 150ms，
+    // 140ms 会在两格之间就把页面往回吸，慢速滚轮永远推不过第一屏（实测 134ms 间隔必现）。
+    const SETTLE = 200;
+    const bar = document.querySelector('.top');
+
+    let target = scrollY;
+    let applied = scrollY;
+    let frame = 0;
+    let mode = 'idle'; // idle | follow | glide
+    let glideFrom = 0;
+    let glideTo = 0;
+    let glideAt = 0;
+    let glideDur = 0;
+    let settleTimer = 0;
+    let last = 0;
+    let lastWheelAt = 0;
+    let burstFrom = scrollY; // 这一口气滚轮的起点（目标是滚到哪儿，不是现在在哪儿）
+
+    const maxY = () => Math.max(0, root.scrollHeight - innerHeight);
+    const clamp = (y) => Math.min(Math.max(y, 0), maxY());
+    const headH = () => (bar ? bar.offsetHeight : 0);
+    const locked = () => root.classList.contains('ef-rule-open');
+
+    /** 落点：每屏的顶对齐到顶栏下沿；最后再补一个文档底。 */
+    const stops = () => {
+      const list = [...document.querySelectorAll('.screen')].map((el) =>
+        Math.round(el.getBoundingClientRect().top + scrollY - headH()),
+      );
+      // 第一屏的落点就是页顶。scroll-padding 会把它算成 3px（顶上那条三色带），
+      // 吸过去等于一进站就先滚掉一条色带，不合适。
+      list[0] = 0;
+      list.push(maxY());
+      return list;
+    };
+
+    /* 写位置时把浏览器取整后的真值记下来：scroll 事件里靠它分清
+       「这一帧是我写的」还是「别人挪的」，差两三个像素不算别人。 */
+    const paint = (y) => {
+      window.scrollTo(0, y);
+      applied = scrollY;
+    };
+
+    /** 定长缓动：吸附与锚点跳转都走它，收尾比指数逼近干净。
+     *  曲线是 ease-in-out：两头速度都归零。用 ease-out 的话起点就是最大速度，
+     *  刚静止下来的画面会被「拽」一下——僵硬感有一半来自这里。 */
+    const glide = (to) => {
+      glideFrom = scrollY;
+      glideTo = clamp(to);
+      const dist = glideTo - glideFrom;
+      if (Math.abs(dist) < 1) return;
+      glideAt = performance.now();
+      glideDur = Math.min(680, 240 + Math.abs(dist) * 0.55);
+      target = glideTo;
+      mode = 'glide';
+      if (!frame) frame = requestAnimationFrame(step);
+    };
+
+    /**
+     * 手停下 200ms 之后看落点，两种情形会吸：
+     *
+     * a. 离某屏边界不到 38% 视口 —— 推一两格会滑回屏顶，推五六格会落到屏顶，
+     *    和原生 proximity 的范围一致（实测 36%–47%，取靠里那一端）。
+     * b. 一口气滚过 0.9 屏、又正好落在两屏中间的空档里 —— 明显是想翻页，
+     *    顺着方向推到前面那一屏，不然会停在一个谁也不挨着的位置。
+     *
+     * 关键在于「还在走的时候就改目标」，而不是等停稳了再起步：先停死、等 200ms、
+     * 再动一段，那 200ms 的静止 + 起步的加速度正是「僵硬」的来源。
+     * 这里只把 target 挪到吸附点，追帧的循环照旧跑着，减速会直接接上吸附。
+     * 判断距离用的是 target（要停在哪），不是 scrollY（现在在哪）。
+     */
+    const retarget = () => {
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        if (mode === 'glide' || locked()) return;
+        const list = stops();
+        let pick = null;
+        let near = innerHeight * REACH;
+        for (const at of list) {
+          const d = Math.abs(at - target);
+          if (d < near) {
+            near = d;
+            pick = at;
+          }
+        }
+        if (pick === null) {
+          const fling = target - burstFrom;
+          if (Math.abs(fling) >= innerHeight * FLING) {
+            const ahead = list.filter((at) => (fling > 0 ? at > target : at < target));
+            pick = ahead.length ? ahead[fling > 0 ? 0 : ahead.length - 1] : null;
+          }
+        }
+        if (pick === null) return;
+        target = clamp(pick);
+        if (!frame) {
+          last = 0;
+          frame = requestAnimationFrame(step);
+        }
+      }, SETTLE);
+    };
+
+    const step = (now) => {
+      frame = 0;
+      if (mode === 'glide') {
+        const p = Math.min((now - glideAt) / glideDur, 1);
+        const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+        paint(glideFrom + (glideTo - glideFrom) * e);
+        if (p < 1) {
+          frame = requestAnimationFrame(step);
+          return;
+        }
+        mode = 'idle';
+        paint(glideTo);
+        return;
+      }
+      const gap = clamp(target) - scrollY;
+      if (Math.abs(gap) < 0.4) {
+        mode = 'idle';
+        paint(clamp(target));
+        return;
+      }
+      /* 按「过去了几个 60Hz 帧」折算，120Hz 屏不会比 60Hz 快一倍；
+         切标签页回来那一大跳也夹住，别一下冲过去。 */
+      const dt = last ? Math.min((now - last) / 16.667, 4) : 1;
+      last = now;
+      const next = gap * (1 - Math.pow(1 - FOLLOW, dt));
+      // 尾巴收得干脆一点：最后几像素按固定步长走完，
+      // 不然指数逼近会一直「爬」——手早就停了，画面还在动 5px
+      paint(scrollY + (Math.abs(next) < 0.75 ? Math.sign(gap) * 0.75 : next));
+      frame = requestAnimationFrame(step);
+    };
+
+    addEventListener(
+      'wheel',
+      (event) => {
+        if (event.ctrlKey || locked()) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
+        const delta = event.deltaY * unit;
+        if (!delta) return;
+        // 已经在两端还往外滚：不拦，留给系统的回弹
+        if ((scrollY <= 0 && delta < 0) || (scrollY >= maxY() - 0.5 && delta > 0)) return;
+        event.preventDefault();
+        if (mode === 'glide') {
+          // 吸附途中又滚了：从当前位置接过来，不和那段缓动抢
+          // （目标是缓动的终点，直接加位移会一下冲出去）
+          mode = 'follow';
+          target = scrollY;
+          cancelAnimationFrame(frame);
+          frame = 0;
+        }
+        // 停手超过 220ms 再滚，算新的一口气：翻页判定从这儿重新量
+        const now = performance.now();
+        if (now - lastWheelAt > 220) burstFrom = clamp(target);
+        lastWheelAt = now;
+        target = clamp(target + delta);
+        if (!frame) {
+          last = 0;
+          frame = requestAnimationFrame(step);
+        }
+        retarget();
+      },
+      { passive: false },
+    );
+
+    // 别人挪的（键盘、滚动条、浏览器恢复上次位置）：把目标对齐过去，不要拽回来；
+    // 正在跑的吸附缓动也要停，否则它会把位置又推回原来的落点。
+    //
+    // 这里刻意不 cancelAnimationFrame：scroll 事件可能比滚轮晚一拍送进来，
+    // 取消掉刚排上的那一帧，整段滚轮就会毫无反应（实测向上连滚六格画面不动）。
+    // 只把 mode 退回 idle、目标对齐到现位置，等下一帧自己收住就够了。
+    addEventListener(
+      'scroll',
+      () => {
+        if (Math.abs(scrollY - applied) <= 2) return;
+        // 滚轮刚动过：这一下多半是上一帧写位置的余波，别抢正在进行的手势
+        if (performance.now() - lastWheelAt < SETTLE + 60) return;
+        target = scrollY;
+        burstFrom = scrollY; // 别人挪的不算「一口气」，别拿它当翻页手势
+        mode = 'idle';
+        // 键盘、拖滚动条也是「松手就吸」：松手之后同一条减速接上吸附
+        retarget();
+      },
+      { passive: true },
+    );
+
+    // 页内锚点也走同一段缓动：滚轮是缓的、点一下「下滑」瞬移，会是两种语言
+    document.addEventListener('click', (event) => {
+      const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+      if (!link) return;
+      const id = link.getAttribute('href').slice(1);
+      const box = id ? document.getElementById(id) : null;
+      if (!box) return;
+      event.preventDefault();
+      glide(box.getBoundingClientRect().top + scrollY - (box.classList.contains('screen') ? headH() : 0));
+    });
+
+    addEventListener('resize', () => {
+      target = clamp(target);
+    });
+
+    root.classList.add('is-smooth');
+  };
+
+  // ---------- 滚动驱动：封面 / 门厅 / 顶栏进度线 / 上一屏离场 ----------
+
+  /**
+   * 只往元素上写四个 CSS 变量，不碰布局：
    *   .cover 的 --sc     这一屏滚出去多少（0 → 1）
    *   .hall  的 --hall   那张实景走到眼前多少（0 → 1），图从 1.1 回正到 1.0
    *   .top   的 --read   整页读到哪儿（0 → 1），顶栏下沿那条线按它伸长
+   *   其余各屏的 --out  这一屏滚出去多少（0 → 1），内容按它上移并淡下去
    * 和换屏进场不同：那套是进一次就完，这套只要还在滚就一直在算——省掉它，
    * 页面滚到一半会像一张贴好的海报，现在会随滚动继续走。
    * 要「减少动态效果」就一次都不注册，CSS 里的默认值 0 正好是静止的最终状态。
@@ -169,15 +401,19 @@
     const cover = document.getElementById('top');
     const hall = document.getElementById('hall');
     const bar = document.querySelector('.top');
+    const leaves = [...document.querySelectorAll('.screen')].filter(
+      (screen) => screen !== cover,
+    );
     if (!cover && !hall && !bar) return;
 
     let queued = 0;
     const frame = () => {
       queued = 0;
       const vh = innerHeight || 1;
-      // 先读后写：三处都读完了再写变量，避免写一个变量就触发一次样式重算
+      // 先读后写：都读完了再写变量，避免写一个变量就触发一次样式重算
       const coverBox = cover ? cover.getBoundingClientRect() : null;
       const hallBox = hall ? hall.getBoundingClientRect() : null;
+      const leaveBoxes = leaves.map((el) => [el, el.getBoundingClientRect()]);
       const max = root.scrollHeight - vh;
       const y = scrollY;
       if (coverBox && cover) {
@@ -187,6 +423,12 @@
       if (hallBox && hall) {
         // 顶边刚探进视口下沿是 0，顶边贴住视口上沿是 1
         hall.style.setProperty('--hall', Math.min(Math.max((vh - hallBox.top) / vh, 0), 1).toFixed(3));
+      }
+      for (const [el, box] of leaveBoxes) {
+        // 顶边贴住视口上沿是 0，整屏滚出去（顶边到 -一屏）是 1
+        const out = Math.min(Math.max(-box.top / (box.height || vh), 0), 1);
+        el.style.setProperty('--out', out.toFixed(3));
+        el.classList.toggle('is-out', out > 0.002);
       }
       if (bar) {
         const p = max > 0 ? Math.min(y / max, 1) : 0;
@@ -323,6 +565,7 @@
   onReady(() => {
     bindTheme();
     bindParallax();
+    bindSmoothScroll();
     bindScrollMotion();
     bindReveal();
     bindRules();

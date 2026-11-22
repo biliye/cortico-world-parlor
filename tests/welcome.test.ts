@@ -313,6 +313,54 @@ describe('对外页的静态契约', () => {
     expect(js).toMatch(/const bindScrollMotion = \(\) => \{\s*if \(still\(\)\) return;/);
   });
 
+  /**
+   * 2026-11-22 第二轮（用户：「吸附很僵硬」「上一页的内容没有动」「滚轮停了页面也一并停」）：
+   * 桌面滚轮改成受控的逐帧追，吸附在「还在走」的时候改目标，上一屏内容比屏框先离场。
+   */
+  it('桌面滚轮是逐帧追的受控滚动，吸附中途改目标而不是停死再起步', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    // 接管只在细指针 + 没开减少动效时发生；触屏走原生滚动
+    expect(js).toMatch(/const bindSmoothScroll = \(\) => \{\s*if \(still\(\)\) return;/);
+    expect(js).toMatch(/\(hover: hover\) and \(pointer: fine\)/);
+    // 接管之后必须把原生吸附关掉，否则两套吸附互相抢，正是「僵硬」的来源
+    expect(css).toMatch(/html\.is-smooth\s*\{[^}]*scroll-snap-type:\s*none/);
+    expect(js).toContain("root.classList.add('is-smooth')");
+
+    // 逐帧追：手停下之后还有一小段减速尾巴（指数逼近，按过去了几个 60Hz 帧折算）
+    expect(js).toMatch(/const FOLLOW = 0\.1\d/);
+    expect(js).toMatch(/Math\.pow\(1 - FOLLOW, dt\)/);
+
+    // 吸附：手停 140ms 后按「要停在哪」重定目标，循环照旧跑着，减速直接接上吸附；
+    // 不是等停稳（mode === 'idle'）再起步——那 140ms 的静止加起步加速度就是僵硬感
+    expect(js).toMatch(/const retarget = \(\) =>/);
+    expect(js).toMatch(/Math\.abs\(at - target\)/);
+    expect(js).toMatch(/target = clamp\(pick\);\s*\n\s*if \(!frame\) \{/);
+    expect(js).not.toContain('settle();');
+    // 缓动两头速度都归零：ease-in-out，不是起点就最大速度的 ease-out
+    expect(js).toMatch(/p < 0\.5 \? 4 \* p \* p \* p/);
+  });
+
+  /**
+   * 上一屏离场：屏框被滚动带着走，里面的内容要跟着先走一步。
+   * 用独立的 translate / filter，避开入场动画占着的 transform / opacity。
+   */
+  it('上一屏的内容比屏框先离场，且静止时不挂合成层', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    expect(js).toContain("el.style.setProperty('--out'");
+    expect(js).toContain("classList.toggle('is-out', out > 0.002)");
+    // 位移与淡化都挂在 --out 上，默认值 0 就是静止的最终状态
+    expect(css).toMatch(/\.screen:not\(\.cover\)\.is-out\s*>\s*\* \{[^}]*translate: 0 calc\(var\(--out, 0\) \* -[\d.]+vh\)/);
+    expect(css).toMatch(/\.screen:not\(\.cover\)\.is-out\s*>\s*\* \{[^}]*filter: opacity\(/);
+    // filter 一旦不是 none 就会让整块进合成层、正文掉成灰度抗锯齿，
+    // 所以只在 is-out 挂上时才加，静止时这条规则不命中
+    expect(css).not.toMatch(/\.screen\s*>\s*\* \{[^}]*filter:\s*opacity/);
+    expect(css).toContain('prefers-reduced-motion: no-preference');
+  });
+
 
   it('明暗偏好可以保存，登录与试玩通过普通链接导航', () => {
     expect(markup).not.toContain('data-act="account"');
