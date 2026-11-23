@@ -3,14 +3,20 @@
   对外页：GET / 与 /welcome 都到这里。
 
   变体卡：site（amber / warm / wide / hatch / standard / full）
-  版式：竖向滚动翻页。每屏一个 .screen，高度 = 100svh - 顶栏，靠 CSS scroll-snap 吸附。
-        01 首屏（会名 + 大厅实景 + 玩法跑马灯 + 「这里是这样的地方」）/ 02 玩法与规则 / 03 怎么进来 / 04 家长。
-  主视觉：一张大厅（茶室）实景图，装在切角画框里；玩法名做成跑马灯。
-        「这里是这样的地方」是首屏里的三栏，不单独占屏、顶栏也不给锚点。
+  版式：竖向滚动翻页。每屏一个 .screen，高度 = 100svh - 顶栏。
+        触屏靠 CSS scroll-snap 吸附；桌面滚轮由 welcome.js 接管（逐帧追 + 软吸附）。
+        01 封面（只有会名）/ 02 门厅（大厅实景）/ 03 这里是这样的地方（三栏）
+        / 04 玩法与规则 / 05 怎么进来 / 06 家长。
+  封面：一屏只放会名，其余全空——上边两行小字、下面一行话和下滑提示、最底一条跑马灯。
+        说明、按钮、实景图、三栏从前都堆在这一屏里，每样只分到一小块；现在分给 02、03 两屏。
+  主视觉：一张大厅（茶室）实景图，装在切角画框里，右侧出血到视口边；玩法名做成跑马灯。
   玩法屏：八格玩法按钮平分一屏，点一格从弹层里出来这一玩法的完整规则；
         规则不占版面，所以整屏都能滚，弹层里的正文自己滚。
         内容由 src/room/game-rules-doc.ts 生成，别手改 rules / rules-dialog 标记之间那两段。
-  动效：明暗从顶栏那颗按钮向外扩散；滚到下一屏时该屏内容依次抬起；
+  动效：封面会名逐字推出来，滚动时整块上移、淡出（--sc 由脚本写）；
+        大厅实景跟着滚到眼前慢慢回正（--hall）；每屏滚出去时，内容比屏框早一步
+        上移、淡下去（--out），换屏不是两张纸在平移；顶栏下沿一条线标着读到哪儿了；
+        明暗从顶栏那颗按钮向外扩散；滚到下一屏时该屏内容依次抬起；
         屏里的编号与条目按 45ms 一个排队浮现；规则层自上而下擦出来，退场短一半。
   页面类型：展示（落地页）。牌桌本体 /play 是另一套深色界面，两边不共用样式。
 
@@ -66,33 +72,32 @@
     </header>
 
     <main>
-      <section class="screen hero" id="top">
-        <ul class="meta ef-facts">
-          <li><span class="ef-field">八种玩法</span></li>
-        </ul>
-
-        <h1 class="ef-wordmark">
-          <span class="solid ef-in-drive">鲸语会馆</span>
-          <span class="hollow ef-in-drive" aria-hidden="true">PARLOR CLUB</span>
-        </h1>
-
-        <div class="copy">
-          <p class="claim"><span class="ef-marker ef-in-stroke">Coo 与真人同桌</span></p>
-          <p class="lead">一间会馆，几个客厅。扑克、棋和麻将都有；说书厅里，有人讲昨天的事。真人可以下场打，也可以只在旁边看。</p>
-          <p class="ef-actions">
-            <a class="ef-btn go" href="/play">进客厅</a>
-            <a class="ef-btn" href="#enter">怎么进来</a>
-          </p>
+      <!-- 01 封面：一屏只有会名。上面两行小字，中间全是空，会名压在下沿，跑马灯当页脚。 -->
+      <section class="screen cover" id="top">
+        <div class="cover-top">
+          <ul class="meta ef-facts">
+            <li><span class="ef-field">八种玩法</span></li>
+            <li><span class="ef-field">Coo 与真人同桌</span></li>
+          </ul>
+          <p class="ef-field cover-tag">一桌人，慢慢来</p>
         </div>
 
-        <!-- 大厅实景（不是截图）：用 web-src/lobby/scene.js 在 1152×648 下渲的茶室内景，
-             只取画面，不带「找一桌 / 五子棋小摊」那些面板。换画面就重渲这张图。 -->
-        <figure class="ef-frame">
-          <div class="window">
-            <img src="/welcome/assets/welcome-lobby.webp?v=0.51.0" width="1152" height="648" alt="一间客厅的内景：木格窗外是夜，两盏灯笼亮着，茶架上摆满茶罐，鲸鱼娘坐在长桌后面，桌上和桌边围着一圈小小的 Coo。" />
-          </div>
-          <figcaption class="ef-plate">满座才开局，慢一点也没关系。</figcaption>
-        </figure>
+        <!-- 会名逐字推出来：一个字一个 span，延迟靠 nth-child 排（CSP 不许内联 style）。
+             整块还跟着滚动上移、淡出（--sc 由 welcome.js 按帧写），所以它不是一行静态大字。 -->
+        <div class="cover-name">
+          <h1 class="ef-wordmark" aria-label="鲸语会馆，PARLOR CLUB">
+            <span class="solid" aria-hidden="true"><span>鲸</span><span>语</span><span>会</span><span>馆</span></span>
+            <span class="hollow" aria-hidden="true">PARLOR CLUB</span>
+          </h1>
+        </div>
+
+        <div class="cover-foot">
+          <p class="ef-field cover-said">一间会馆，几个客厅。</p>
+          <p class="cover-acts">
+            <a class="cover-go" href="/play">进客厅 <span aria-hidden="true">↗</span></a>
+            <a class="cover-cue" href="#hall" aria-label="下滑，看门厅"><span class="ef-field">下滑</span><i aria-hidden="true"></i></a>
+          </p>
+        </div>
 
         <div class="ef-ticker" aria-label="八种玩法">
           <div class="track">
@@ -119,23 +124,49 @@
           </div>
         </div>
 
-        <!-- 首屏下半：三句话讲清「这是什么地方」。不单独占一屏，也不在顶栏给锚点。 -->
-        <div class="what">
-          <p class="ef-eyebrow slash">What</p>
-          <h2 class="ef-bar-title">这里是这样的地方</h2>
-          <div class="what-cols">
-            <div>
-              <h3>Coo 也是同桌</h3>
-              <p>会馆里的 Coo 是 AI 角色：会出牌、会聊天、会记仇，输了也会再来一局。它和真人坐的是同一张桌子，没有谁在当主持人。</p>
-            </div>
-            <div>
-              <h3>输赢记在自己名下</h3>
-              <p>真人用自己的席位入场。战绩、礼物和信箱各是各的一份，不会记到 Coo 头上，也不会把两边的分数混在一起。</p>
-            </div>
-            <div>
-              <h3>可以在旁边看</h3>
-              <p>家长页要单独登录。孩子正在桌上时，你可以打开那一桌，只看公开的牌面；客厅满员也能看。</p>
-            </div>
+      </section>
+
+      <!-- 02 门厅：一张大厅实景压满右半边，话压在左边。图随滚动从略微放大回正到 1.0。 -->
+      <section class="screen hall" id="hall">
+        <div class="hall-copy">
+          <p class="ef-eyebrow slash">Hall</p>
+          <h2 class="claim"><span class="ef-marker">Coo 与真人同桌</span></h2>
+          <p class="lead">一间会馆，几个客厅。扑克、棋和麻将都有；说书厅里，有人讲昨天的事。真人可以下场打，也可以只在旁边看。</p>
+          <p class="ef-actions">
+            <a class="ef-btn go" href="/play">进客厅</a>
+            <a class="ef-btn" href="#enter">怎么进来</a>
+          </p>
+        </div>
+
+        <!-- 大厅实景（不是截图）：用 web-src/lobby/scene.js 在 1152×648 下渲的茶室内景，
+             只取画面，不带「找一桌 / 五子棋小摊」那些面板。换画面就重渲这张图。 -->
+        <figure class="ef-frame stage">
+          <div class="window">
+            <img src="/welcome/assets/welcome-lobby.webp?v=0.51.0" width="1152" height="648" alt="一间客厅的内景：木格窗外是夜，两盏灯笼亮着，茶架上摆满茶罐，鲸鱼娘坐在长桌后面，桌上和桌边围着一圈小小的 Coo。" />
+          </div>
+          <figcaption class="ef-plate">满座才开局，慢一点也没关系。</figcaption>
+        </figure>
+      </section>
+
+      <!-- 03 这里是这样的地方：三栏独立一屏，给足留白。 -->
+      <section class="screen what-screen" id="what">
+        <p class="ef-eyebrow slash">What</p>
+        <h2 class="ef-bar-title">这里是这样的地方</h2>
+        <div class="what-cols">
+          <div>
+            <span class="n" aria-hidden="true">01</span>
+            <h3>Coo 也是同桌</h3>
+            <p>会馆里的 Coo 是 AI 角色：会出牌、会聊天、会记仇，输了也会再来一局。它和真人坐的是同一张桌子，没有谁在当主持人。</p>
+          </div>
+          <div>
+            <span class="n" aria-hidden="true">02</span>
+            <h3>输赢记在自己名下</h3>
+            <p>真人用自己的席位入场。战绩、礼物和信箱各是各的一份，不会记到 Coo 头上，也不会把两边的分数混在一起。</p>
+          </div>
+          <div>
+            <span class="n" aria-hidden="true">03</span>
+            <h3>可以在旁边看</h3>
+            <p>家长页要单独登录。孩子正在桌上时，你可以打开那一桌，只看公开的牌面；客厅满员也能看。</p>
           </div>
         </div>
       </section>

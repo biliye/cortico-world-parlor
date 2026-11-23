@@ -1,20 +1,25 @@
 /**
- * 对外页的脚本负责四件事：
+ * 对外页的脚本负责六件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
- * 3. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
+ * 3. 滚轮：桌面上接管竖直滚轮，先推目标再逐帧追（有减速尾巴）；停手 200ms 后
+ *    把落点收进最近的屏边，高屏里可以持续滚动。键盘、滚动条和锚点先由浏览器处理，
+ *    翻页或拖动滚动条结束后也会吸附；
+ * 4. 滚动驱动：封面会名随滚动上移淡出、门厅的实景回正、上一屏内容提前离场、
+ *    顶栏下沿一条线标读到哪儿了；
+ * 5. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
  *    屏里的列表再挂一层 data-stagger，编号与条目按 45ms 一个地排队浮现；
- * 4. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
+ * 6. 玩法规则：点一格弹出规则层（<dialog>），Esc / 点遮罩 / 右上角都能关；
  *    没脚本时不挂 ef-rules，八块规则平铺在页尾，仍然读得到。
  *
  * 页面 CSP 是 default-src 'none'; script-src 'self'，不能写内联 onclick，
- * 所以只有这一段外链脚本。滚动翻页本身仍是纯 CSS（html 上的 scroll-snap）。
+ * 所以只有这一段外链脚本。触屏上的滚动翻页仍是纯 CSS（html 上的 scroll-snap）。
  */
 (() => {
   const root = document.documentElement;
   const KEY = 'parlor-welcome-theme';
-  /** 需要「一条一条排队浮现」的列表：玩法八格、入场三步、首屏三栏。 */
-  const STAGGER_GROUPS = '.hero .what-cols, .enter .steps, .rule-grid';
+  /** 需要「一条一条排队浮现」的列表：玩法八格、入场三步、「这里是这样的地方」三栏。 */
+  const STAGGER_GROUPS = '.what-screen .what-cols, .enter .steps, .rule-grid';
 
   /** 系统开了「减少动态效果」就一律走静止分支：不扩散、不淡入、不收紧吸附。 */
   const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -129,27 +134,318 @@
     syncTheme();
   };
 
-  // ---------- 首屏画框的指针视差 ----------
+  // ---------- 封面会名的指针视差 ----------
 
-  // 只有这一个动效跟指针走；入场、悬停、跑马灯都是 welcome-kit.css 里的纯 CSS。
+  // 会名跟着指针走 5px：字太大，再多就成了抖。
   // 系统开了「减少动态效果」或粗指针设备就完全不注册，页面直接是静止的最终状态。
-  // 位移量写在 welcome.css 里（≤ 12px），这里只把指针位置换算成 -0.5 ~ 0.5。
+  // 位移量写在 welcome.css 里；这里只把指针位置换算成 -0.5 ~ 0.5。
   const bindParallax = () => {
     if (still() || !matchMedia('(hover: hover) and (pointer: fine)').matches) return;
-    const hero = document.querySelector('.hero');
-    if (!hero) return;
+    const cover = document.querySelector('.cover');
+    if (!cover) return;
 
     let queued = 0;
-    hero.addEventListener('pointermove', (event) => {
+    cover.addEventListener('pointermove', (event) => {
       if (queued) return;
       queued = requestAnimationFrame(() => {
         queued = 0;
-        const box = hero.getBoundingClientRect();
+        const box = cover.getBoundingClientRect();
         if (!box.width || !box.height) return;
-        hero.style.setProperty('--mx', ((event.clientX - box.left) / box.width - 0.5).toFixed(3));
-        hero.style.setProperty('--my', ((event.clientY - box.top) / box.height - 0.5).toFixed(3));
+        cover.style.setProperty('--mx', ((event.clientX - box.left) / box.width - 0.5).toFixed(3));
+        cover.style.setProperty('--my', ((event.clientY - box.top) / box.height - 0.5).toFixed(3));
       });
     });
+  };
+
+  // ---------- 滚轮：逐帧追 + 软吸附 ----------
+
+  /**
+   * 桌面上的竖直滚轮改成「先推目标、再逐帧追」：一次滚轮只把目标推远一点，
+   * 画面用十几帧追上去。手停 200ms 后把目标改到最近的屏边，
+   * 还在进行的减速直接接上吸附。比视口高的屏可以停在内容中间。
+   *
+   * 只接管竖直滚轮：Ctrl+滚轮（缩放）、横向滚动、规则弹层打开时都不拦。
+   * 键盘、滚动条和页内锚点保留浏览器的默认滚动。翻页或拖动滚动条停下后吸附，
+   * 方向键的小幅滚动、焦点移动、锚点跳转和历史恢复则保留原生落点。
+   *
+   * 触屏设备整个不注册：原生滚动本来就有惯性，接管只会更差；
+   * 那些设备上的翻页吸附仍由 CSS 的 scroll-snap 负责（见 welcome.css 的 is-smooth）。
+   */
+  const bindSmoothScroll = () => {
+    if (still()) return;
+    if (!matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    if (!('scrollBehavior' in root.style)) return;
+
+    const FOLLOW = 0.12; // 每帧追掉差距的比例：约 16 帧贴住，尾巴看得见但不拖沓
+    // 停手多久之后看落点。不能太短：鼠标一格约 100px、慢速连滚的间隔可以到 150ms，
+    // 140ms 会在两格之间就把页面往回吸，慢速滚轮永远推不过第一屏（实测 134ms 间隔必现）。
+    const SETTLE = 200;
+    const bar = document.querySelector('.top');
+
+    let target = scrollY;
+    let applied = scrollY;
+    let frame = 0;
+    let settleTimer = 0;
+    let last = 0;
+    let preserveNativePosition = false;
+
+    const maxY = () => Math.max(0, root.scrollHeight - innerHeight);
+    const clamp = (y) => Math.min(Math.max(y, 0), maxY());
+    const headH = () => (bar ? bar.offsetHeight : 0);
+    const locked = () => root.classList.contains('ef-rule-open');
+
+    /**
+     * 落点：每屏的顶对齐到顶栏下沿；最后再补一个文档底。
+     * 比视口高的屏（.is-tall）不算落点——它本来就要连续读，把它当吸附点等于
+     * 把读到一半的内容拽回屏顶（375×667 的家长屏踩过）。
+     */
+    const stops = () => {
+      const list = [...document.querySelectorAll('.screen')]
+        .filter((el) => !el.classList.contains('is-tall'))
+        .map((el) => Math.round(el.getBoundingClientRect().top + scrollY - headH()));
+      // 第一屏的落点就是页顶。scroll-padding 会把它算成 3px（顶上那条三色带），
+      // 吸过去等于一进站就先滚掉一条色带，不合适。
+      list[0] = 0;
+      list.push(maxY());
+      return list;
+    };
+
+    /** 落点在某张高屏里：那截要连续读，别吸。 */
+    const inTall = (y) => {
+      for (const el of document.querySelectorAll('.screen.is-tall')) {
+        const top = el.getBoundingClientRect().top + scrollY - headH();
+        if (y > top + 1 && y < top + el.offsetHeight - 2) return true;
+      }
+      return false;
+    };
+
+    // 逐帧更新直接写位置，页内锚点的缓动仍由 CSS 的 scroll-behavior 提供。
+    const paint = (y) => {
+      window.scrollTo({ top: y, behavior: 'instant' });
+      applied = scrollY;
+    };
+
+    const stopWheel = () => {
+      clearTimeout(settleTimer);
+      cancelAnimationFrame(frame);
+      frame = 0;
+      target = applied = scrollY;
+    };
+
+    /**
+     * 滚轮、翻页或拖动滚动条停下 200ms 后，把落点收进最近的屏边界。
+     *
+     * 取最近的落点：滚过半屏就翻到下一屏，没过半屏就退回上一屏。原来是
+     * 「离屏边不到 38% 才吸」，剩下的空档靠「一口气滚过 0.9 屏」去猜，
+     * 滚四五格停手就卡在两屏之间，上一屏下面露出一块白。
+     *
+     * 落点在某张比视口高的屏里（.is-tall）时，那截要连续读，不吸。
+     *
+     * 关键在于「还在走的时候就改目标」，而不是等停稳了再起步：先停死、等 200ms、
+     * 再动一段，那 200ms 的静止 + 起步的加速度正是「僵硬」的来源。
+     * 这里只把 target 挪到吸附点，追帧的循环照旧跑着，减速会直接接上吸附。
+     * 判断距离用的是 target（要停在哪），不是 scrollY（现在在哪）。
+     */
+    const retarget = () => {
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        const preservePosition = preserveNativePosition;
+        preserveNativePosition = false;
+        if (preservePosition || locked() || inTall(target)) return;
+        const list = stops();
+        let pick = list[0];
+        for (const at of list) {
+          if (Math.abs(at - target) < Math.abs(pick - target)) pick = at;
+        }
+        target = clamp(pick);
+        if (!frame) {
+          if (target === scrollY) return;
+          last = 0;
+          frame = requestAnimationFrame(step);
+        }
+      }, SETTLE);
+    };
+
+    const syncNativeScroll = () => {
+      if (scrollY === applied) return;
+      stopWheel();
+      retarget();
+    };
+
+    // 保留当前原生手势的落点，滚动进行时由 syncNativeScroll 延后计时。
+    const preserveNative = () => {
+      stopWheel();
+      preserveNativePosition = true;
+      retarget();
+    };
+
+    const step = (now) => {
+      frame = 0;
+      if (locked()) {
+        stopWheel();
+        return;
+      }
+      if (scrollY !== applied) {
+        syncNativeScroll();
+        return;
+      }
+      const destination = clamp(target);
+      const gap = destination - scrollY;
+      // 浏览器可能把滚动位置取整。最后一次交给浏览器取整，避免在相邻像素之间反复来回。
+      if (Math.abs(gap) <= 1) {
+        paint(destination);
+        return;
+      }
+      /* 按「过去了几个 60Hz 帧」折算，120Hz 屏不会比 60Hz 快一倍；
+         切标签页回来那一大跳也夹住，别一下冲过去。 */
+      const dt = last ? Math.min((now - last) / 16.667, 4) : 1;
+      last = now;
+      const next = gap * (1 - Math.pow(1 - FOLLOW, dt));
+      // 尾巴收得干脆一点：最后几像素按固定步长走完，
+      // 不然指数逼近会一直「爬」——手早就停了，画面还在动 5px
+      paint(scrollY + (Math.abs(next) < 0.75 ? Math.sign(gap) * 0.75 : next));
+      frame = requestAnimationFrame(step);
+    };
+
+    addEventListener(
+      'wheel',
+      (event) => {
+        if (event.ctrlKey || locked()) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
+        const delta = event.deltaY * unit;
+        if (!delta) return;
+        // 已经在两端还往外滚：不拦，留给系统的回弹
+        if ((scrollY <= 0 && delta < 0) || (scrollY >= maxY() - 0.5 && delta > 0)) return;
+        event.preventDefault();
+        // 原生滚动可能已经改了位置，scroll 事件还没派发。
+        if (scrollY !== applied) stopWheel();
+        preserveNativePosition = false;
+        target = clamp(target + delta);
+        if (!frame) {
+          last = 0;
+          frame = requestAnimationFrame(step);
+        }
+        retarget();
+      },
+      { passive: false },
+    );
+
+    addEventListener('scroll', syncNativeScroll, { passive: true });
+    addEventListener('keydown', (event) => {
+      if (event.defaultPrevented || locked()) return;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        preserveNative();
+      } else if (event.key === 'PageUp' || event.key === 'PageDown' || event.key === ' ') {
+        stopWheel();
+        preserveNativePosition = false;
+      }
+    });
+
+    // 浏览器决定焦点、锚点和历史位置，软吸附无需再校正。
+    document.addEventListener('focusin', preserveNative);
+    document.addEventListener('click', (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+      if (link) preserveNative();
+    });
+    addEventListener('popstate', preserveNative);
+
+    addEventListener('resize', () => {
+      target = clamp(target);
+    });
+
+    root.classList.add('is-smooth');
+  };
+
+  // ---------- 滚动驱动：封面 / 门厅 / 顶栏进度线 / 上一屏离场 ----------
+
+  /**
+   * 只往元素上写四个 CSS 变量，不碰布局：
+   *   .cover 的 --sc     这一屏滚出去多少（0 → 1）
+   *   .hall  的 --hall   那张实景走到眼前多少（0 → 1），图从 1.1 回正到 1.0
+   *   .top   的 --read   整页读到哪儿（0 → 1），顶栏下沿那条线按它伸长
+   *   其余各屏的 --out  这一屏滚出去多少（0 → 1），内容按它上移并淡下去
+   * 和换屏进场不同：那套是进一次就完，这套只要还在滚就一直在算——省掉它，
+   * 页面滚到一半会像一张贴好的海报，现在会随滚动继续走。
+   * 要「减少动态效果」就一次都不注册，CSS 里的默认值 0 正好是静止的最终状态。
+   */
+  const bindScrollMotion = () => {
+    if (still()) return;
+    const cover = document.getElementById('top');
+    const hall = document.getElementById('hall');
+    const bar = document.querySelector('.top');
+    const leaves = [...document.querySelectorAll('.screen')].filter(
+      (screen) => screen !== cover,
+    );
+    if (!cover && !hall && !bar) return;
+
+    let queued = 0;
+    const frame = () => {
+      queued = 0;
+      const vh = innerHeight || 1;
+      // 先读后写：都读完了再写变量，避免写一个变量就触发一次样式重算
+      const coverBox = cover ? cover.getBoundingClientRect() : null;
+      const hallBox = hall ? hall.getBoundingClientRect() : null;
+      const leaveBoxes = leaves.map((el) => [el, el.getBoundingClientRect()]);
+      const max = root.scrollHeight - vh;
+      const y = scrollY;
+      if (coverBox && cover) {
+        // 封面正好一屏高：顶边滚到 -一屏时算 1
+        cover.style.setProperty('--sc', Math.min(Math.max(-coverBox.top / (coverBox.height || vh), 0), 1).toFixed(3));
+      }
+      if (hallBox && hall) {
+        // 顶边刚探进视口下沿是 0，顶边贴住视口上沿是 1
+        hall.style.setProperty('--hall', Math.min(Math.max((vh - hallBox.top) / vh, 0), 1).toFixed(3));
+      }
+      for (const [el, box] of leaveBoxes) {
+        // 顶边贴住视口上沿是 0，整屏滚出去（顶边到 -一屏）是 1
+        const out = Math.min(Math.max(-box.top / (box.height || vh), 0), 1);
+        el.style.setProperty('--out', out.toFixed(3));
+        el.classList.toggle('is-out', out > 0.002);
+      }
+      if (bar) {
+        const p = max > 0 ? Math.min(y / max, 1) : 0;
+        bar.style.setProperty('--read', p.toFixed(4));
+      }
+    };
+    const onScroll = () => {
+      if (!queued) queued = requestAnimationFrame(frame);
+    };
+
+    frame();
+    addEventListener('scroll', onScroll, { passive: true });
+    addEventListener('resize', onScroll);
+  };
+
+  // ---------- 屏比视口高：这一屏不参与吸附 ----------
+
+  /**
+   * 一屏一页靠 CSS 的 proximity 吸附。屏比视口还高的时候（320 宽的旧机、
+   * 横屏、系统字号调大），proximity 会把滚到一半的页面拽回屏顶——屏幕上看得见
+   * 的那截永远只是屏开头，页脚与反馈入口读不到（375×667 的家长屏实测被拽回 115px）。
+   *
+   * 这类屏摘掉吸附点，整页继续连续滚；装得下的屏照旧一页一屏。
+   * 用 clientHeight 而不是 innerHeight：移动浏览器的地址栏收起时 innerHeight 会变，
+   * 按它算会把「其实装得下」的屏也判成高屏。
+   */
+  const bindTallScreens = () => {
+    const bar = document.querySelector('.top');
+    const screens = [...document.querySelectorAll('.screen')];
+    if (!screens.length) return;
+
+    const sync = () => {
+      const room = (root.clientHeight || innerHeight) - (bar ? bar.offsetHeight : 0);
+      for (const screen of screens) {
+        screen.classList.toggle('is-tall', screen.offsetHeight > room + 1);
+      }
+    };
+
+    sync();
+    addEventListener('resize', sync);
+    addEventListener('load', sync);
+    // 自托管字体换上来之后行高会动一截，装不装得下要重新量
+    document.fonts?.ready.then(sync).catch(() => {});
   };
 
   // ---------- 换屏进场 ----------
@@ -273,6 +569,9 @@
   onReady(() => {
     bindTheme();
     bindParallax();
+    bindSmoothScroll();
+    bindScrollMotion();
+    bindTallScreens();
     bindReveal();
     bindRules();
   });

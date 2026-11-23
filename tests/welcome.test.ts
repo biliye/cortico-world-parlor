@@ -8,7 +8,8 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
 import { RULE_PAGES, renderRuleDialog, renderRulesMarkup } from '../src/room/game-rules-doc.ts';
 import { WEREWOLF_MAX_DAYS } from '../src/room/games/werewolf.ts';
@@ -25,6 +26,128 @@ const page = read('welcome.html');
 /** 注释里会提到 <style>、CSP 这类字样，和 check-release 一样先剥掉注释再判。 */
 const markup = page.replace(/<!--[\s\S]*?-->/g, '');
 const assetRefs = [...page.matchAll(/(?:src|href)="(\/welcome\/assets\/[^"]*)"/g)].map(([, url]) => url);
+
+function welcomeScroll(start: number, tall = false) {
+  const events = new EventTarget();
+  let y = start;
+  const screens = [0, 844, 1685, 2526].map((top) => {
+    const isTall = tall && top === 844;
+    return {
+      offsetHeight: isTall ? 1000 : 841,
+      getBoundingClientRect: () => ({ top: top - y }),
+      classList: { contains: () => isTall, toggle: () => {} },
+    };
+  });
+  const nativeScroll = (top: number) => {
+    y = top;
+    events.dispatchEvent(new Event('scroll'));
+  };
+  const scrollTo = vi.fn(({ top }: { top: number }) => {
+    y = Math.round(top);
+  });
+  runInNewContext(read('welcome.js'), {
+    document: {
+      documentElement: {
+        style: { scrollBehavior: '' },
+        scrollHeight: 3600,
+        classList: { add: () => {}, contains: () => false },
+      },
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: (selector: string) => {
+        if (selector === '.screen') return screens;
+        if (selector === '.screen.is-tall') return screens.filter((screen) => screen.classList.contains());
+        return [];
+      },
+      addEventListener: () => {},
+    },
+    window: { scrollTo },
+    innerHeight: 900,
+    get scrollY() { return y; },
+    matchMedia: (query: string) => ({ matches: query.includes('pointer: fine') }),
+    addEventListener: events.addEventListener.bind(events),
+    requestAnimationFrame: (callback: (now: number) => void) => setTimeout(() => callback(Date.now()), 16),
+    cancelAnimationFrame: clearTimeout,
+    setTimeout,
+    clearTimeout,
+  });
+  return {
+    nativeScroll,
+    scrollTo,
+    position: () => y,
+    dispatch: (type: string) => events.dispatchEvent(new Event(type)),
+    key: (key: string) => events.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key })),
+    wheel: (deltaY: number) => events.dispatchEvent(
+      Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode: 0 }),
+    ),
+  };
+}
+
+describe('对外页的桌面滚动', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('方向键保留小幅位移，并取消上一段滚轮追帧与吸附', () => {
+    const { key, nativeScroll, scrollTo, position, wheel } = welcomeScroll(0);
+    key('ArrowDown');
+    nativeScroll(40);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(40);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    wheel(200);
+    vi.advanceTimersByTime(64);
+    expect(position()).toBeGreaterThan(40);
+    key('ArrowDown');
+    nativeScroll(140);
+    scrollTo.mockClear();
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(140);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('翻页或拖动滚动条停在普通屏中间时，收进最近的屏边', () => {
+    const { key, nativeScroll, position } = welcomeScroll(0);
+    key('ArrowDown');
+    nativeScroll(40);
+    key('PageDown');
+    nativeScroll(738);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(844);
+
+    nativeScroll(1325);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(1685);
+
+    key('PageUp');
+    nativeScroll(947);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(844);
+  });
+
+  it('浏览器恢复历史位置或在高屏内原生滚动时，保留实际位置', () => {
+    const history = welcomeScroll(0);
+    history.dispatch('popstate');
+    history.nativeScroll(1325);
+    vi.advanceTimersByTime(1000);
+    expect(history.position()).toBe(1325);
+
+    const tall = welcomeScroll(844, true);
+    tall.nativeScroll(1150);
+    vi.advanceTimersByTime(1000);
+    expect(tall.position()).toBe(1150);
+  });
+
+  it('高屏内的小数滚轮位移取整后结束追帧', () => {
+    const { scrollTo, position, wheel } = welcomeScroll(1000, true);
+    wheel(12.5);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(1013);
+    scrollTo.mockClear();
+    vi.advanceTimersByTime(1000);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
 
 describe('对外页的静态契约', () => {
   it('页头写明变体与语言，标题和描述不是空的', () => {
@@ -155,7 +278,7 @@ describe('对外页的静态契约', () => {
 
     // 屏序就是阅读顺序，改版式时这条会先炸
     const ids = [...markup.matchAll(/<section class="screen[^"]*" id="([^"]+)"/g)].map(([, id]) => id);
-    expect(ids).toEqual(['top', 'games', 'enter', 'parent']);
+    expect(ids).toEqual(['top', 'hall', 'what', 'games', 'enter', 'parent']);
 
     const css = read('welcome.css');
     expect(css).toMatch(/scroll-snap-type:\s*y proximity/);
@@ -170,14 +293,39 @@ describe('对外页的静态契约', () => {
   });
 
   /**
-   * 首屏主视觉从「俯视牌桌线稿」换成大厅实景图；「这里是这样的地方」并回首屏下半，
-   * 但不单独占屏、顶栏也不给它锚点（用户 2026-11-17 的口径）。
+   * 2026-11-22 改版：首屏只留会名，大厅实景与「这里是这样的地方」各占一屏。
+   * 首屏空下来的代价是内容多滚两屏，所以这里同时钉住两条：
+   * 1. 封面里不许再出现图、段落、按钮组——它是一块只印名字的牌子；
+   * 2. 实景图与三栏都还在，只是搬到了 02 / 03 屏。
    */
-  it('首屏主视觉是大厅实景图，不是内联线稿', () => {
-    const hero = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="games"'));
-    expect(hero).not.toContain('<svg');
-    const img = hero.match(/<img[^>]*welcome-lobby\.webp[^>]*>/);
-    expect(img, '首屏要引用大厅实景图').toBeTruthy();
+  it('封面只有会名，没有图、段落与按钮组', () => {
+    const cover = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="hall"'));
+    expect(cover).toContain('class="ef-wordmark"');
+    expect(cover).toContain('鲸语会馆');
+    expect(cover).toContain('PARLOR CLUB');
+    // 一屏只放字：这几样都不许出现在封面里
+    expect(cover).not.toContain('<img');
+    expect(cover).not.toContain('<figure');
+    expect(cover).not.toContain('class="lead"');
+    expect(cover).not.toContain('class="ef-actions"');
+    expect(cover).not.toContain('class="claim"');
+    // 会名逐字推出来：每个字一个 span，靠 nth-child 排延迟（CSP 不许内联 style）
+    const chars = [...cover.matchAll(/<span class="solid"[^>]*>([\s\S]*?)<\/span>\s*<span class="hollow"/g)];
+    expect(chars.length).toBe(1);
+    expect([...chars[0][1].matchAll(/<span>/g)].length).toBe(4);
+    // 屏幕阅读器读的是 h1 的 aria-label，不是四个拆开的字
+    expect(cover).toMatch(/<h1 class="ef-wordmark" aria-label="[^"]{4,}"/);
+    // 进客厅仍然在第一屏够得着，只是做成一条带下划线的字
+    expect(cover).toContain('class="cover-go" href="/play"');
+    // 跑马灯还在，当这一屏的页脚
+    expect(cover).toContain('class="ef-ticker"');
+  });
+
+  it('02 屏是大厅实景，不是内联线稿', () => {
+    const hall = markup.slice(markup.indexOf('id="hall"'), markup.indexOf('id="what"'));
+    expect(hall).not.toContain('<svg');
+    const img = hall.match(/<img[^>]*welcome-lobby\.webp[^>]*>/);
+    expect(img, '门厅那屏要引用大厅实景图').toBeTruthy();
     expect(img![0]).toMatch(/\salt="[^"]{10,}"/);
     expect(img![0]).toMatch(/\swidth="\d+"\s+height="\d+"/);
     // 图真的在包里，而且是 WebP（RIFF....WEBP）
@@ -188,17 +336,16 @@ describe('对外页的静态契约', () => {
     expect(isPublicAsset('welcome-lobby.webp')).toBe(true);
   });
 
-  it('「这里是这样的地方」在首屏里，三栏都在，且不占独立一屏', () => {
-    const hero = markup.slice(markup.indexOf('id="top"'), markup.indexOf('id="games"'));
-    expect(hero).toContain('这里是这样的地方');
-    expect(hero).toContain('Coo 也是同桌');
-    expect(hero).toContain('输赢记在自己名下');
-    expect(hero).toContain('可以在旁边看');
-    // 内容留着，但不新开一屏、也不给锚点
-    expect(markup).not.toContain('id="what"');
+  it('03 屏是「这里是这样的地方」，三栏都在，自己占一屏', () => {
+    const what = markup.slice(markup.indexOf('id="what"'), markup.indexOf('id="games"'));
+    expect(what).toContain('这里是这样的地方');
+    expect(what).toContain('Coo 也是同桌');
+    expect(what).toContain('输赢记在自己名下');
+    expect(what).toContain('可以在旁边看');
+    // 三栏都是这一屏的直接内容，没有被塞进首屏
+    expect(what).toContain('class="what-cols"');
+    // 顶栏仍然不给锚点：看哪一屏靠滚，不靠导航
     expect(markup).not.toContain('href="#what"');
-    // 三栏是首屏里的一个块，和跑马灯同级
-    expect(hero.indexOf('class="what"')).toBeGreaterThan(hero.indexOf('class="ef-ticker"'));
   });
 
   /**
@@ -213,7 +360,8 @@ describe('对外页的静态契约', () => {
     expect(css).toMatch(/html\s*\{[^}]*scroll-snap-type:\s*y proximity/);
     expect(css).not.toMatch(/scroll-snap-type:\s*y mandatory/);
     expect(css).not.toMatch(/scroll-snap-stop:\s*always/);
-    // 既然没有强制吸附，就不需要脚本量「每屏装不装得下」再切档
+    // 既然没有强制吸附，就不需要脚本量「每屏装不装得下」再切档；
+    // 只有比视口还高的屏要摘掉吸附点（见下面手机档那条），量的是越界，不是切档
     expect(js).not.toContain('measureSnap');
     expect(js).not.toContain('dataset.snap');
 
@@ -246,18 +394,151 @@ describe('对外页的静态契约', () => {
   });
 
   /**
-   * 媒体查询不加权：矮窗口那档要写在三栏默认规则之后，否则同级的默认值会盖回去，
-   * 首屏底部就会比视口高一截、整页退回接近吸附（1000×640 实测过）。
+   * 矮窗口（1366×768 的笔记本、1080×675 的截图档）里首屏只剩会名，
+   * 但页脚那行与跑马灯仍然要落在第一屏内，所以那一档要单独把会名收小。
    */
-  it('矮窗口的三栏压缩排在默认规则之后，不会被同级默认值盖掉', () => {
+  it('矮窗口把封面会名收一档，页脚与跑马灯仍落在第一屏里', () => {
     const css = read('welcome.css');
-    const defaults = css.indexOf('.what-cols p {');
+    const defaults = css.indexOf('.cover .ef-wordmark {');
     expect(defaults).toBeGreaterThan(-1);
     const tight = css.indexOf('@media (max-height: 780px)', defaults);
     expect(tight).toBeGreaterThan(defaults);
-    expect(css.slice(tight, tight + 700)).toMatch(/\.what-cols p\s*\{[^}]*font-size:\s*0\.86rem/);
+    expect(css.slice(tight, tight + 700)).toMatch(/\.cover \.ef-wordmark\s*\{[^}]*--ef-wordmark:/);
   });
 
+  /**
+   * 2026-11-22 加的这套和「换屏进场」是两回事：进场是进一次就完，
+   * 这套只要还在滚就一直在算。三个变量都由脚本按帧写，CSS 只读；
+   * 系统要「减少动态效果」时脚本一次都不注册，CSS 默认值 0 就是静止的最终状态。
+   */
+  it('封面、门厅与顶栏进度线都吃滚动进度，且能整段关掉', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    expect(js).toContain('bindScrollMotion');
+    expect(js).toContain("'--sc'");
+    expect(js).toContain("'--hall'");
+    expect(js).toContain("'--read'");
+    // 写变量走 rAF，scroll 用 passive，别在滚动里读布局再同步写
+    expect(js).toMatch(/requestAnimationFrame\(frame\)/);
+    expect(js).toMatch(/addEventListener\('scroll', onScroll, \{ passive: true \}\)/);
+
+    // CSS 只读不写：三个变量都有默认值，没有脚本时停在最终状态
+    expect(css).toMatch(/\.cover\s*\{[^}]*--sc:\s*0/);
+    expect(css).toMatch(/\.hall\s*\{[^}]*--hall:\s*0/);
+    expect(css).toMatch(/opacity:\s*calc\(1 - var\(--sc\)\)/);
+    expect(css).toMatch(/scale\(calc\(1\.1 - var\(--hall\) \* 0\.1\)\)/);
+    expect(css).toMatch(/scaleX\(var\(--read, 0\)\)/);
+    // 逐字推出：一个字一个延迟档，超过四个不再往后
+    expect(css).toMatch(/@keyframes ef-type-in/);
+    expect(css).toMatch(/animation-delay:\s*calc\(var\(--i, 0\) \* 70ms \+ 160ms\)/);
+
+    // 减少动态效果：整套不注册
+    expect(js).toMatch(/const bindScrollMotion = \(\) => \{\s*if \(still\(\)\) return;/);
+  });
+
+  /**
+   * 2026-11-22 第二轮（用户：「吸附很僵硬」「上一页的内容没有动」「滚轮停了页面也一并停」）：
+   * 桌面滚轮改成受控的逐帧追，吸附在「还在走」的时候改目标，上一屏内容比屏框先离场。
+   */
+  it('桌面滚轮是逐帧追的受控滚动，吸附中途改目标而不是停死再起步', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    // 接管只在细指针 + 没开减少动效时发生；触屏走原生滚动
+    expect(js).toMatch(/const bindSmoothScroll = \(\) => \{\s*if \(still\(\)\) return;/);
+    expect(js).toMatch(/\(hover: hover\) and \(pointer: fine\)/);
+    // 接管之后必须把原生吸附关掉，否则两套吸附互相抢，正是「僵硬」的来源
+    expect(css).toMatch(/html\.is-smooth\s*\{[^}]*scroll-snap-type:\s*none/);
+    expect(js).toContain("root.classList.add('is-smooth')");
+
+    // 逐帧追：手停下之后还有一小段减速尾巴（指数逼近，按过去了几个 60Hz 帧折算）
+    expect(js).toMatch(/const FOLLOW = 0\.1\d/);
+    expect(js).toMatch(/Math\.pow\(1 - FOLLOW, dt\)/);
+
+    // 吸附：手停 200ms 后把落点收进最近的屏边界，循环照旧跑着，减速直接接上吸附；
+    // 不是等停稳（mode === 'idle'）再起步——那段静止加起步加速度就是僵硬感
+    expect(js).toMatch(/const retarget = \(\) =>/);
+    expect(js).toMatch(/Math\.abs\(at - target\)/);
+    expect(js).toMatch(/target = clamp\(pick\);\s*\n\s*if \(!frame\) \{/);
+    expect(js).not.toContain('settle();');
+    // 2026-11-23：滚四五格停手不再卡在两屏之间，取最近落点，空档不留
+    expect(js).not.toContain('REACH');
+    expect(js).not.toContain('FLING');
+    expect(js).toMatch(/let pick = list\[0\];\s*\n\s*for \(const at of list\)/);
+    // 比视口高的屏不当落点，落进去也不吸（那截要连续读）
+    expect(js).toMatch(/filter\(\(el\) => !el\.classList\.contains\('is-tall'\)\)/);
+    expect(js).toContain('inTall(target)) return;');
+    // 追帧即时写位置，锚点可以沿用浏览器的平滑滚动和历史记录。
+    expect(js).toContain("window.scrollTo({ top: y, behavior: 'instant' })");
+    expect(css).toMatch(/html\s*\{[^}]*scroll-behavior:\s*smooth/);
+    expect(css).not.toMatch(/html\.is-smooth\s*\{[^}]*scroll-behavior:/);
+  });
+
+  /**
+   * 上一屏离场：屏框被滚动带着走，里面的内容要跟着先走一步。
+   * 用独立的 translate / filter，避开入场动画占着的 transform / opacity。
+   */
+  it('上一屏的内容比屏框先离场，且静止时不挂合成层', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    expect(js).toContain("el.style.setProperty('--out'");
+    expect(js).toContain("classList.toggle('is-out', out > 0.002)");
+    // 位移与淡化都挂在 --out 上，默认值 0 就是静止的最终状态
+    expect(css).toMatch(/\.screen:not\(\.cover\)\.is-out\s*>\s*\* \{[^}]*translate: 0 calc\(var\(--out, 0\) \* -[\d.]+vh\)/);
+    expect(css).toMatch(/\.screen:not\(\.cover\)\.is-out\s*>\s*\* \{[^}]*filter: opacity\(/);
+    // filter 一旦不是 none 就会让整块进合成层、正文掉成灰度抗锯齿，
+    // 所以只在 is-out 挂上时才加，静止时这条规则不命中
+    expect(css).not.toMatch(/\.screen\s*>\s*\* \{[^}]*filter:\s*opacity/);
+    expect(css).toContain('prefers-reduced-motion: no-preference');
+  });
+
+
+  /**
+   * 2026-11-23（用户：「切到手机显示有问题」）：
+   * 一屏一页在手机上得真的装得下 —— 装不下的屏不许吸附，否则滚到屏中间会被
+   * 拽回屏顶，屏底那截永远读不到（375×667 的家长屏实测被拽回 115px）；
+   * 横屏另排一遍；窄机不许把会名藏掉留半条空顶栏。
+   */
+  it('手机档：装不下的屏不吸附，横屏重排，窄机不藏会名', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    // 逐屏量高，超出视口的那一屏摘掉吸附点
+    expect(js).toContain('bindTallScreens');
+    expect(js).toContain("classList.toggle('is-tall'");
+    expect(js).toContain('root.clientHeight');
+    // 字体换上来之后行高会动，装不装得下要重新量
+    expect(js).toContain('document.fonts');
+    expect(css).toMatch(/\.screen\.is-tall\s*\{[^}]*scroll-snap-align:\s*none/);
+    // 连续滚过去的屏不参与「翻页离场」，否则读到一半自己淡下去
+    expect(css).toMatch(/\.screen\.is-tall\.is-out > \* \{[^}]*filter:\s*none/);
+
+    // 玩法屏不再用死高度 + overflow:hidden 把最后一行悄悄裁掉
+    expect(css).toMatch(/\.games-screen\s*\{[^}]*min-height:\s*max\(calc\(100svh/);
+    expect(css).not.toMatch(/\.games-screen\s*\{[^}]*[^-]height:\s*calc\(100svh/);
+    // 网格被压到比内容还矮，说明会溢到下一格
+    expect(css).toMatch(/\.rule-grid\s*\{[^}]*min-height:\s*min-content/);
+
+    // 375×667 那一档整页收一档字号与块间距，家长屏才装得下页脚
+    expect(css).toMatch(/@media \(max-width: 599px\) and \(max-height: 720px\)/);
+
+    // 横屏手机（844×390）：连续滚 + 图回右侧 + 三栏与八格重排 + 刘海让位
+    const land = css.indexOf('@media (orientation: landscape) and (max-height: 560px)');
+    expect(land).toBeGreaterThan(-1);
+    const block = css.slice(land, land + 2200);
+    expect(block).toMatch(/scroll-snap-type:\s*none/);
+    expect(block).toMatch(/\.hall\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.02fr\)/);
+    expect(block).toMatch(/\.rule-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4/);
+    expect(block).toContain('env(safe-area-inset-left)');
+
+    // 窄机（320–375）把会名收一档字号，不再 display:none
+    const narrow = css.indexOf('@media (max-width: 379px)');
+    expect(narrow).toBeGreaterThan(-1);
+    expect(css.slice(narrow, narrow + 300)).toMatch(/\.top \.mark\s*\{[^}]*font-size:/);
+    expect(css).not.toMatch(/\.top \.mark\s*\{[^}]*display:\s*none/);
+  });
 
   it('明暗偏好可以保存，登录与试玩通过普通链接导航', () => {
     expect(markup).not.toContain('data-act="account"');
