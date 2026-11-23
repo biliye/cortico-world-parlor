@@ -564,10 +564,11 @@ html.is-smooth {
 
 /* 八格玩法平分一屏，规则不在这一屏里占地：点一格才从弹层长出来。
    整屏因此都能滚，滚轮不会被规则面板吃掉。 */
+/* 高度只给「至少一屏」，不给「正好一屏」：手机上字号、系统字号、横屏都会把
+   八格撑高，写死高度再配 overflow:hidden 等于把最后一行悄悄裁掉。 */
 .games-screen {
-  height: calc(100svh - var(--top-h) - var(--tri-h));
-  min-height: 32rem;
-  overflow: hidden;
+  min-height: calc(100svh - var(--top-h) - var(--tri-h));
+  min-height: max(calc(100svh - var(--top-h) - var(--tri-h)), 32rem);
 }
 
 .games-screen > .lead {
@@ -579,9 +580,11 @@ html.is-smooth {
 .rule-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(min-content, 1fr);
   flex: 1;
-  min-height: 0;
+  /* 不写 min-height: 0：那一行会让网格被压到比内容还矮，说明文字溢到下一格。
+     留 min-content，八格撑高时把整屏一起撑高（屏高已改成 min-height）。 */
+  min-height: min-content;
   gap: 1px;
   margin: 0;
   padding: 0;
@@ -978,11 +981,20 @@ html:not(.ef-rules) .rule + .rule {
 @media (max-width: 719px) {
   .rule-card {
     padding: 0.7rem 0.75rem;
+    /* 手机上格子矮，说明贴在标题下面读起来才是一句话；
+       上下分开摆会在格子中间留一个空荡荡的洞（水印还已经撤了）。 */
+    grid-template-rows: auto auto;
+    align-content: start;
+    gap: 0.3rem 0.5rem;
   }
 
-  /* 手机上格子窄、字号也小，水印会顶到说明文字上，直接不画 */
+  /* 水印不画会显得格子里漏了东西，挪到右下角那点空白里，小一号 */
   .rule-card::before {
-    display: none;
+    top: auto;
+    right: 0.55rem;
+    bottom: 0.3rem;
+    transform: none;
+    font-size: 1.45rem;
   }
 
   .rule-card .d {
@@ -1172,9 +1184,18 @@ html:not(.ef-rules) .rule + .rule {
   }
 }
 
+/* 320–375 的窄机：会名不藏。藏掉之后顶栏左半边整段是空的，第一眼像页面没加载完；
+   只把字号与字距收一档，三个控件仍挤得进一行（最小 320 宽实测量过）。 */
 @media (max-width: 379px) {
   .top .mark {
-    display: none;
+    font-size: 0.84rem;
+    letter-spacing: 0;
+  }
+  .top-acts {
+    gap: 0.3rem;
+  }
+  .top .mark a {
+    padding-block: 0.2rem;
   }
 }
 
@@ -1289,5 +1310,192 @@ html.ef-theme-fade *::after {
     border-color 0.34s var(--ef-ease),
     fill 0.34s var(--ef-ease),
     stroke 0.34s var(--ef-ease) !important;
+}
+
+/* ---------- 手机：一屏一页得真的装得下 ---------- */
+
+/* 屏比视口还高（320 宽的旧机、横屏、系统字号调大）时，这一屏不参与吸附。
+   否则滚到屏中间，proximity 会把页面拽回屏顶：375×667 的家长屏实测被拽回 115px，
+   屏底那截（页脚、反馈入口）永远读不到。类由 welcome.js 逐屏量过再加。 */
+.screen.is-tall {
+  scroll-snap-align: none;
+}
+
+/* 高屏是连续滚过去的，没有「翻页」这回事：离场那套上移 + 淡出只给正好一屏的屏，
+   否则读到一半的那屏会自己淡下去。 */
+.screen.is-tall.is-out > * {
+  translate: 0 0;
+  filter: none;
+}
+
+/* 375×667 / iPhone SE 这一档：整页按 15px 起排，块间距各收一点。
+   这一档的高度刚好卡在「家长屏多出 66px」上，不收拾的话页脚会被屏底切掉。 */
+@media (max-width: 599px) and (max-height: 720px) {
+  html {
+    font-size: 15px;
+  }
+
+  .screen {
+    padding-block: 1rem;
+  }
+
+  .screen .ef-bar-title {
+    margin-bottom: 0.85rem;
+  }
+
+  .screen .lead {
+    margin-bottom: 0.9rem;
+    line-height: 1.75;
+  }
+
+  .gate {
+    margin-bottom: 0.85rem;
+    padding: 0.75rem 0.85rem 0.85rem;
+  }
+
+  .gate .note {
+    margin-top: 0.3rem;
+    line-height: 1.6;
+  }
+
+  .parents .gate + .ef-actions {
+    margin-top: 0.85rem;
+  }
+
+  .parents .also,
+  .foot {
+    padding-top: 0.8rem;
+  }
+
+  .parents .also .lead {
+    margin-bottom: 0.8rem;
+  }
+}
+
+/* ---------- 横屏手机：不再端着「一页一屏」 ---------- */
+
+/* 740×360 / 844×390 这种横屏，视口只有三百来像素高，任何一屏都装不下；
+   再按一屏一页排，屏内内容会被折在下面，图还会占满全屏（实测门厅只剩一张图）。
+   这一档整页连续滚，版式改回横向两条：图在右、话在左，玩法四列、三步三列。 */
+@media (orientation: landscape) and (max-height: 560px) {
+  html {
+    scroll-snap-type: none;
+  }
+
+  /* viewport-fit=cover：横屏时刘海在左边或右边，内容别钻到它下面 */
+  .screen {
+    min-height: 0;
+    padding-block: clamp(1.1rem, 5vh, 1.9rem);
+    padding-left: max(var(--ef-pad), env(safe-area-inset-left));
+    padding-right: max(var(--ef-pad), env(safe-area-inset-right));
+  }
+
+  .cover {
+    min-height: calc(100svh - var(--top-h) - var(--tri-h));
+  }
+
+  .cover-top {
+    padding-top: 0.8rem;
+  }
+
+  /* 会名照 vw 走会把两行推到 250px 高，横屏只给一档小的；但也不能太小，
+     844 宽上一行只剩 50px 会像标题掉了字号 */
+  .cover .ef-wordmark {
+    --ef-wordmark: clamp(2.4rem, 8vw, 5.6rem);
+    padding-block: 0.6rem 0.5rem;
+  }
+
+  /* 跑马灯是首屏最底下那条，横屏这点高度先让它 */
+  .cover .ef-ticker {
+    display: none;
+  }
+
+  .cover-foot {
+    padding-bottom: 0.9rem;
+  }
+
+  /* 门厅回到左右两条：图在右，不再出血到视口边 */
+  .hall {
+    grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
+    align-content: center;
+    gap: clamp(1rem, 3vw, 2rem);
+  }
+
+  .hall .ef-frame {
+    order: 0;
+    margin: 0;
+    aspect-ratio: 4 / 3;
+    min-height: 0;
+  }
+
+  .hall .ef-plate {
+    left: 0.8rem;
+    bottom: 0.8rem;
+    max-width: 88%;
+  }
+
+  .hall-copy .lead {
+    line-height: 1.75;
+  }
+
+  .what-screen .what-cols {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    min-height: 0;
+  }
+
+  .what-cols > div {
+    padding: 0.85rem 1.1rem 0 0;
+    border-top: 0;
+    border-left: 1px solid var(--ef-rule);
+  }
+
+  .what-cols > div:first-child {
+    border-left: 0;
+  }
+
+  /* 八格回到四列，行高按内容走——横屏没有「正好一屏」这回事 */
+  .games-screen {
+    min-height: 0;
+  }
+
+  .rule-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .rule-card {
+    padding: 0.6rem 0.7rem;
+  }
+
+  /* 横屏格子只有一行高，中间没有放水印的地方，02 会直接压在「夜里动手」上 */
+  .rule-card::before {
+    display: none;
+  }
+
+  .rule-card .d {
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+
+  /* 三步回到三列 */
+  .steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .steps > li {
+    padding: 1rem 1.2rem 0.3rem 1.1rem;
+    border-top: 0;
+    border-left: 1px solid var(--ef-rule);
+  }
+
+  .steps > li:first-child {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  /* min-height 归零后 auto margin 没有余量可分，页脚与「也在这里」自己留一段 */
+  .parents .also,
+  .foot {
+    margin-top: 1.1rem;
+  }
 }
 

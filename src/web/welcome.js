@@ -444,6 +444,36 @@
     addEventListener('resize', onScroll);
   };
 
+  // ---------- 屏比视口高：这一屏不参与吸附 ----------
+
+  /**
+   * 一屏一页靠 CSS 的 proximity 吸附。屏比视口还高的时候（320 宽的旧机、
+   * 横屏、系统字号调大），proximity 会把滚到一半的页面拽回屏顶——屏幕上看得见
+   * 的那截永远只是屏开头，页脚与反馈入口读不到（375×667 的家长屏实测被拽回 115px）。
+   *
+   * 这类屏摘掉吸附点，整页继续连续滚；装得下的屏照旧一页一屏。
+   * 用 clientHeight 而不是 innerHeight：移动浏览器的地址栏收起时 innerHeight 会变，
+   * 按它算会把「其实装得下」的屏也判成高屏。
+   */
+  const bindTallScreens = () => {
+    const bar = document.querySelector('.top');
+    const screens = [...document.querySelectorAll('.screen')];
+    if (!screens.length) return;
+
+    const sync = () => {
+      const room = (root.clientHeight || innerHeight) - (bar ? bar.offsetHeight : 0);
+      for (const screen of screens) {
+        screen.classList.toggle('is-tall', screen.offsetHeight > room + 1);
+      }
+    };
+
+    sync();
+    addEventListener('resize', sync);
+    addEventListener('load', sync);
+    // 自托管字体换上来之后行高会动一截，装不装得下要重新量
+    document.fonts?.ready.then(sync).catch(() => {});
+  };
+
   // ---------- 换屏进场 ----------
 
   /**
@@ -567,6 +597,7 @@
     bindParallax();
     bindSmoothScroll();
     bindScrollMotion();
+    bindTallScreens();
     bindReveal();
     bindRules();
   });

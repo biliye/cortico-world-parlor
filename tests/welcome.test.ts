@@ -237,7 +237,8 @@ describe('对外页的静态契约', () => {
     expect(css).toMatch(/html\s*\{[^}]*scroll-snap-type:\s*y proximity/);
     expect(css).not.toMatch(/scroll-snap-type:\s*y mandatory/);
     expect(css).not.toMatch(/scroll-snap-stop:\s*always/);
-    // 既然没有强制吸附，就不需要脚本量「每屏装不装得下」再切档
+    // 既然没有强制吸附，就不需要脚本量「每屏装不装得下」再切档；
+    // 只有比视口还高的屏要摘掉吸附点（见下面手机档那条），量的是越界，不是切档
     expect(js).not.toContain('measureSnap');
     expect(js).not.toContain('dataset.snap');
 
@@ -361,6 +362,51 @@ describe('对外页的静态契约', () => {
     expect(css).toContain('prefers-reduced-motion: no-preference');
   });
 
+
+  /**
+   * 2026-11-23（用户：「切到手机显示有问题」）：
+   * 一屏一页在手机上得真的装得下 —— 装不下的屏不许吸附，否则滚到屏中间会被
+   * 拽回屏顶，屏底那截永远读不到（375×667 的家长屏实测被拽回 115px）；
+   * 横屏另排一遍；窄机不许把会名藏掉留半条空顶栏。
+   */
+  it('手机档：装不下的屏不吸附，横屏重排，窄机不藏会名', () => {
+    const css = read('welcome.css');
+    const js = read('welcome.js');
+
+    // 逐屏量高，超出视口的那一屏摘掉吸附点
+    expect(js).toContain('bindTallScreens');
+    expect(js).toContain("classList.toggle('is-tall'");
+    expect(js).toContain('root.clientHeight');
+    // 字体换上来之后行高会动，装不装得下要重新量
+    expect(js).toContain('document.fonts');
+    expect(css).toMatch(/\.screen\.is-tall\s*\{[^}]*scroll-snap-align:\s*none/);
+    // 连续滚过去的屏不参与「翻页离场」，否则读到一半自己淡下去
+    expect(css).toMatch(/\.screen\.is-tall\.is-out > \* \{[^}]*filter:\s*none/);
+
+    // 玩法屏不再用死高度 + overflow:hidden 把最后一行悄悄裁掉
+    expect(css).toMatch(/\.games-screen\s*\{[^}]*min-height:\s*max\(calc\(100svh/);
+    expect(css).not.toMatch(/\.games-screen\s*\{[^}]*[^-]height:\s*calc\(100svh/);
+    // 网格被压到比内容还矮，说明会溢到下一格
+    expect(css).toMatch(/\.rule-grid\s*\{[^}]*min-height:\s*min-content/);
+
+    // 375×667 那一档整页收一档字号与块间距，家长屏才装得下页脚
+    expect(css).toMatch(/@media \(max-width: 599px\) and \(max-height: 720px\)/);
+
+    // 横屏手机（844×390）：连续滚 + 图回右侧 + 三栏与八格重排 + 刘海让位
+    const land = css.indexOf('@media (orientation: landscape) and (max-height: 560px)');
+    expect(land).toBeGreaterThan(-1);
+    const block = css.slice(land, land + 2200);
+    expect(block).toMatch(/scroll-snap-type:\s*none/);
+    expect(block).toMatch(/\.hall\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.02fr\)/);
+    expect(block).toMatch(/\.rule-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4/);
+    expect(block).toContain('env(safe-area-inset-left)');
+
+    // 窄机（320–375）把会名收一档字号，不再 display:none
+    const narrow = css.indexOf('@media (max-width: 379px)');
+    expect(narrow).toBeGreaterThan(-1);
+    expect(css.slice(narrow, narrow + 300)).toMatch(/\.top \.mark\s*\{[^}]*font-size:/);
+    expect(css).not.toMatch(/\.top \.mark\s*\{[^}]*display:\s*none/);
+  });
 
   it('明暗偏好可以保存，登录与试玩通过普通链接导航', () => {
     expect(markup).not.toContain('data-act="account"');
