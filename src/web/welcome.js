@@ -3,7 +3,8 @@
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
  * 3. 滚轮：桌面上接管竖直滚轮，先推目标再逐帧追（有减速尾巴）；停手 200ms 后
- *    把落点收进最近的屏边，高屏里可以持续滚动。键盘、滚动条、触屏和页内锚点由浏览器处理；
+ *    把落点收进最近的屏边，高屏里可以持续滚动。键盘、滚动条和锚点先由浏览器处理，
+ *    翻页或拖动滚动条结束后也会吸附；
  * 4. 滚动驱动：封面会名随滚动上移淡出、门厅的实景回正、上一屏内容提前离场、
  *    顶栏下沿一条线标读到哪儿了；
  * 5. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
@@ -164,8 +165,8 @@
    * 还在进行的减速直接接上吸附。比视口高的屏可以停在内容中间。
    *
    * 只接管竖直滚轮：Ctrl+滚轮（缩放）、横向滚动、规则弹层打开时都不拦。
-   * 键盘、滚动条和页内锚点保留浏览器的默认滚动。
-   * 它们挪动页面时，结束上一段滚轮追帧与吸附，把下次滚轮的起点对齐到当前位置。
+   * 键盘、滚动条和页内锚点保留浏览器的默认滚动。翻页或拖动滚动条停下后吸附，
+   * 方向键的小幅滚动、焦点移动、锚点跳转和历史恢复则保留原生落点。
    *
    * 触屏设备整个不注册：原生滚动本来就有惯性，接管只会更差；
    * 那些设备上的翻页吸附仍由 CSS 的 scroll-snap 负责（见 welcome.css 的 is-smooth）。
@@ -186,6 +187,7 @@
     let frame = 0;
     let settleTimer = 0;
     let last = 0;
+    let preserveNativePosition = false;
 
     const maxY = () => Math.max(0, root.scrollHeight - innerHeight);
     const clamp = (y) => Math.min(Math.max(y, 0), maxY());
@@ -231,13 +233,13 @@
     };
 
     /**
-     * 手停下 200ms 之后把落点收进屏边界，中间态一律不留（2026-11-23：不要留白）。
+     * 滚轮、翻页或拖动滚动条停下 200ms 后，把落点收进最近的屏边界。
      *
      * 取最近的落点：滚过半屏就翻到下一屏，没过半屏就退回上一屏。原来是
      * 「离屏边不到 38% 才吸」，剩下的空档靠「一口气滚过 0.9 屏」去猜，
      * 滚四五格停手就卡在两屏之间，上一屏下面露出一块白。
      *
-     * 唯一的例外是落点在某张比视口高的屏里（.is-tall）：那截要连续读，不吸。
+     * 落点在某张比视口高的屏里（.is-tall）时，那截要连续读，不吸。
      *
      * 关键在于「还在走的时候就改目标」，而不是等停稳了再起步：先停死、等 200ms、
      * 再动一段，那 200ms 的静止 + 起步的加速度正是「僵硬」的来源。
@@ -247,7 +249,9 @@
     const retarget = () => {
       clearTimeout(settleTimer);
       settleTimer = setTimeout(() => {
-        if (locked() || inTall(target)) return;
+        const preservePosition = preserveNativePosition;
+        preserveNativePosition = false;
+        if (preservePosition || locked() || inTall(target)) return;
         const list = stops();
         let pick = list[0];
         for (const at of list) {
@@ -255,16 +259,34 @@
         }
         target = clamp(pick);
         if (!frame) {
+          if (target === scrollY) return;
           last = 0;
           frame = requestAnimationFrame(step);
         }
       }, SETTLE);
     };
 
+    const syncNativeScroll = () => {
+      if (scrollY === applied) return;
+      stopWheel();
+      retarget();
+    };
+
+    // 保留当前原生手势的落点，滚动进行时由 syncNativeScroll 延后计时。
+    const preserveNative = () => {
+      stopWheel();
+      preserveNativePosition = true;
+      retarget();
+    };
+
     const step = (now) => {
       frame = 0;
-      if (locked() || scrollY !== applied) {
+      if (locked()) {
         stopWheel();
+        return;
+      }
+      if (scrollY !== applied) {
+        syncNativeScroll();
         return;
       }
       const destination = clamp(target);
@@ -298,6 +320,7 @@
         event.preventDefault();
         // 原生滚动可能已经改了位置，scroll 事件还没派发。
         if (scrollY !== applied) stopWheel();
+        preserveNativePosition = false;
         target = clamp(target + delta);
         if (!frame) {
           last = 0;
@@ -308,21 +331,25 @@
       { passive: false },
     );
 
-    addEventListener(
-      'scroll',
-      () => {
-        if (scrollY !== applied) stopWheel();
-      },
-      { passive: true },
-    );
+    addEventListener('scroll', syncNativeScroll, { passive: true });
+    addEventListener('keydown', (event) => {
+      if (event.defaultPrevented || locked()) return;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        preserveNative();
+      } else if (event.key === 'PageUp' || event.key === 'PageDown' || event.key === ' ') {
+        stopWheel();
+        preserveNativePosition = false;
+      }
+    });
 
-    // 在浏览器开始滚向锚点之前停下追帧，保留链接的焦点、地址和历史行为。
+    // 浏览器决定焦点、锚点和历史位置，软吸附无需再校正。
+    document.addEventListener('focusin', preserveNative);
     document.addEventListener('click', (event) => {
       if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
-      if (link) stopWheel();
+      if (link) preserveNative();
     });
-    addEventListener('popstate', stopWheel);
+    addEventListener('popstate', preserveNative);
 
     addEventListener('resize', () => {
       target = clamp(target);

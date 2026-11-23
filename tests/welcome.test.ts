@@ -30,10 +30,14 @@ const assetRefs = [...page.matchAll(/(?:src|href)="(\/welcome\/assets\/[^"]*)"/g
 function welcomeScroll(start: number, tall = false) {
   const events = new EventTarget();
   let y = start;
-  const tallScreen = {
-    offsetHeight: 800,
-    getBoundingClientRect: () => ({ top: 600 - y }),
-  };
+  const screens = [0, 844, 1685, 2526].map((top) => {
+    const isTall = tall && top === 844;
+    return {
+      offsetHeight: isTall ? 1000 : 841,
+      getBoundingClientRect: () => ({ top: top - y }),
+      classList: { contains: () => isTall, toggle: () => {} },
+    };
+  });
   const nativeScroll = (top: number) => {
     y = top;
     events.dispatchEvent(new Event('scroll'));
@@ -45,16 +49,20 @@ function welcomeScroll(start: number, tall = false) {
     document: {
       documentElement: {
         style: { scrollBehavior: '' },
-        scrollHeight: 2000,
+        scrollHeight: 3600,
         classList: { add: () => {}, contains: () => false },
       },
       getElementById: () => null,
       querySelector: () => null,
-      querySelectorAll: (selector: string) => tall && selector === '.screen.is-tall' ? [tallScreen] : [],
+      querySelectorAll: (selector: string) => {
+        if (selector === '.screen') return screens;
+        if (selector === '.screen.is-tall') return screens.filter((screen) => screen.classList.contains());
+        return [];
+      },
       addEventListener: () => {},
     },
     window: { scrollTo },
-    innerHeight: 600,
+    innerHeight: 900,
     get scrollY() { return y; },
     matchMedia: (query: string) => ({ matches: query.includes('pointer: fine') }),
     addEventListener: events.addEventListener.bind(events),
@@ -67,6 +75,8 @@ function welcomeScroll(start: number, tall = false) {
     nativeScroll,
     scrollTo,
     position: () => y,
+    dispatch: (type: string) => events.dispatchEvent(new Event(type)),
+    key: (key: string) => events.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key })),
     wheel: (deltaY: number) => events.dispatchEvent(
       Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode: 0 }),
     ),
@@ -77,8 +87,9 @@ describe('对外页的桌面滚动', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('原生滚动保留小幅位移，并取消上一段滚轮追帧与吸附', () => {
-    const { nativeScroll, scrollTo, position, wheel } = welcomeScroll(0);
+  it('方向键保留小幅位移，并取消上一段滚轮追帧与吸附', () => {
+    const { key, nativeScroll, scrollTo, position, wheel } = welcomeScroll(0);
+    key('ArrowDown');
     nativeScroll(40);
     vi.advanceTimersByTime(1000);
     expect(position()).toBe(40);
@@ -87,6 +98,7 @@ describe('对外页的桌面滚动', () => {
     wheel(200);
     vi.advanceTimersByTime(64);
     expect(position()).toBeGreaterThan(40);
+    key('ArrowDown');
     nativeScroll(140);
     scrollTo.mockClear();
     vi.advanceTimersByTime(1000);
@@ -94,11 +106,43 @@ describe('对外页的桌面滚动', () => {
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
+  it('翻页或拖动滚动条停在普通屏中间时，收进最近的屏边', () => {
+    const { key, nativeScroll, position } = welcomeScroll(0);
+    key('ArrowDown');
+    nativeScroll(40);
+    key('PageDown');
+    nativeScroll(738);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(844);
+
+    nativeScroll(1325);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(1685);
+
+    key('PageUp');
+    nativeScroll(947);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(844);
+  });
+
+  it('浏览器恢复历史位置或在高屏内原生滚动时，保留实际位置', () => {
+    const history = welcomeScroll(0);
+    history.dispatch('popstate');
+    history.nativeScroll(1325);
+    vi.advanceTimersByTime(1000);
+    expect(history.position()).toBe(1325);
+
+    const tall = welcomeScroll(844, true);
+    tall.nativeScroll(1150);
+    vi.advanceTimersByTime(1000);
+    expect(tall.position()).toBe(1150);
+  });
+
   it('高屏内的小数滚轮位移取整后结束追帧', () => {
-    const { scrollTo, position, wheel } = welcomeScroll(700, true);
+    const { scrollTo, position, wheel } = welcomeScroll(1000, true);
     wheel(12.5);
     vi.advanceTimersByTime(1000);
-    expect(position()).toBe(713);
+    expect(position()).toBe(1013);
     scrollTo.mockClear();
     vi.advanceTimersByTime(1000);
     expect(scrollTo).not.toHaveBeenCalled();
