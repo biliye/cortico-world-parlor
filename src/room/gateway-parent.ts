@@ -333,6 +333,9 @@ export async function serveParentRoute(
   return false;
 }
 
+/** 旧单厅 `/v1/owner` 跳转的弃用生效时间（RFC 9745 §2.1 结构化日期 `@<Unix 秒>`，2026-11-23T00:00:00Z）。 */
+const LEGACY_OWNER_DEPRECATION = '@1795392000';
+
 export async function serveLegacyOwnerRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -356,7 +359,7 @@ export async function serveLegacyOwnerRoute(
     location: '/parent',
     'cache-control': 'no-store',
     'referrer-policy': 'no-referrer',
-    deprecation: 'true',
+    deprecation: LEGACY_OWNER_DEPRECATION,
   });
   res.end();
 }

@@ -201,6 +201,10 @@ describe('迁移后的旧家长链接', () => {
     const opened = await fetch(`${server.url}/v1/owner?token=old-owner-token`, { redirect: 'manual' });
     expect(opened.status).toBe(302);
     expect(opened.headers.get('location')).toBe('/parent');
+    expect(opened.headers.get('cache-control')).toBe('no-store');
+    expect(opened.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(opened.headers.get('deprecation')).toMatch(/^@\d+$/);
+    expect(opened.headers.get('deprecation')).toBe('@1795392000');
     const cookie = (opened.headers.get('set-cookie') ?? '').split(';')[0];
     expect(cookie).toContain('parlor_parent=');
 

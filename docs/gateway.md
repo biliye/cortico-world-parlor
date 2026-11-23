@@ -15,6 +15,8 @@ pnpm exec parlor-gateway --host 127.0.0.1 --port 8790
 
 如果之前从 World 包解包部署，先在独立目录装好对应版本的网关，再将服务启动命令改为 `pnpm exec parlor-gateway`，或直接执行 `node node_modules/cortico-parlor-gateway/scripts/serve-world.js`。继续使用原来的 PostgreSQL 数据库。拆包本身无需搬数据；版本包含 schema 升级时，仍按该版本的升级说明停止旧网关并备份。
 
+SSE 订阅（`/stream` 与 `/v1/rooms/:room/stream`）要求通过 `Authorization: Bearer <token>` 请求头鉴权，不再接受 URL 查询参数 `?token=`。从早期版本（如 `v0.43.0`）升级网关后，尚未刷新的旧版网页标签页在断线重连时会持续收到 401，刷新页面即可恢复；自建客户端需改用 `Authorization: Bearer` 请求头。
+
 同机反向代理必须把真实客户端地址写入 `X-Forwarded-For` 的末尾。配置 `--public-url` 后默认启用回环代理信任，监听 `0.0.0.0` 时规则相同。网关只对来自回环地址的 TCP 连接读取末尾的合法 IP。代理经容器网桥或远端负载均衡器连接时，网关使用 TCP 对端地址计算限流额度，即使显式设置 `--trust-loopback-proxy true`。可用 `--trust-loopback-proxy true|false` 或 `PARLOR_TRUST_LOOPBACK_PROXY` 覆盖默认值，直连网关时关闭这项信任。网页登录的 `--public-url` 应与浏览器访问的源一致。
 
 按 IP 限流时，同一 IPv6 `/64` 网段共用额度。公开接口的限流表达到容量后，新键分配到固定数量的共享桶，原有计数继续生效。
