@@ -1,9 +1,8 @@
-import { touchActivity } from './activity.ts';
 import { RoomLifecycle } from './lifecycle.ts';
 import { personalHistory, type AccountHistoryQuery } from './personal-account.ts';
 import { EventDb } from './event-db.ts';
 import { DivinationDb } from './divination-db.ts';
-import { DIVINATION_CAPABILITY, DIVINATION_NAME, DIVINATION_REQUEST, DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
+import { DIVINATION_CAPABILITY, DIVINATION_NAME, DIVINATION_ROOM, isDivinationRoom } from './divination-protocol.ts';
 import { historySyncEvent } from './history-sync.ts';
 /** 多客厅 PostgreSQL HTTP 网关。每个客厅由一个 RoomHost 管理。 */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -24,7 +23,7 @@ import { RatingBoards } from './ratings/board.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
 import { GAME_RESPONSE_MAX_BYTES, secondsLeft, type TableLogQuery } from './table-engine.ts';
 import { TABLE_REPLAY_LIMIT, readTableReplay, type TableReplayQuery } from './table-replay.ts';
-import { likePrefix, parseHandleQuery } from './handles.ts';
+import { parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
 import { IdentityRegistry, enableGlobalIdentity, registeredHandle } from './global-identity.ts';
 import { GLOBAL_HEADER, identityOrigin, identityRequest, type GlobalPerson } from './identity-protocol.ts';
@@ -34,7 +33,7 @@ import { SlidingRateLimit } from './rate-limit.ts';
 import {
   RoomSeatError, activeSeatForCoo, activeSeats, archive, unarchive, createRoom, getRoom, hashSeatToken,
   listRooms, memberOf, renameSeat, resolveRoom, seatByTokenHash, seatsForOfflineRelease,
-  touchSeatSeen, type RoomRow,
+  type RoomRow,
 } from './room-seat-db.ts';
 import { lockCooRows } from './storage/locks.ts';
 import {
@@ -43,14 +42,19 @@ import {
   listRoomAccess, pendingInvitationsForCoo, pendingInvitationsForRoom, revokeInvitationsFor,
   revokeRoomAccessTx, roomEntryRefusal,
 } from './room-access-db.ts';
-import type { InboxView, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
+import type { RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 import { fillOrigin, isPublicAsset, sendWebAsset } from './web-assets.ts';
-import { SupportDb } from './support-db.ts';
 import { TableDiscovery } from './table-discovery.ts';
 import { RecruitSnapshot } from './recruit-snapshot.ts';
 import { StoryDb, StoryError } from './story-db.ts';
 import { isStoryPath, serveStoryRoute, StoryPresence } from './story-routes.ts';
 import { WebPlayerDb, isWebSeatToken } from './web-player-db.ts';
+import { SseHub } from './gateway-sse.ts';
+import { serveSupportRoute } from './gateway-support.ts';
+import { serveDivinationRoute } from './gateway-divination.ts';
+import { serveWebPlayerRoute } from './gateway-web-player.ts';
+import { serveLegacyOwnerRoute, serveParentRoute, type ParentRouteContext } from './gateway-parent.ts';
+import { GatewayDm } from './gateway-dm.ts';
 
 export interface WorldServerOptions {
   /** 独立运营钥匙；不是房主的 ownerKey，不配置则关闭运营写入口。 */
@@ -92,60 +96,11 @@ export interface WorldServerOptions {
   now?: () => number;
 }
 
-interface SseClient {
-  locationCapable: boolean;
-  compactTableEvents: boolean;
-  source: 'web' | 'coo' | 'other';
-  cooId: string;
-  seatId: string;
-  tokenHash: string;
-  webSeat: boolean;
-  seatName: string;
-  since: number;
-  lastPing: number;
-  openedAt: number;
-  /** 谁先关的：服务端主动收（席位没了/写失败）时写原因，客户端断则留空。 */
-  closeReason?: string;
-  closed: boolean;
-  blockedAt?: number;
-  res: ServerResponse;
-}
-
-const SSE_TRAFFIC_INTERVAL_MS = 60_000;
-const PEOPLE_LIMIT = 20;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const RATE_KEY_CAPACITY = 4_000;
 const PUBLIC_RATE_OVERFLOW = { overflowBuckets: 1_024 };
 const GUEST_WRITE_PATHS = new Set(['/v1/table-entry', '/v1/support/feedback', '/v1/mail/read-all', '/v1/me/leave']);
-
-function sseSourceCounts() {
-  return { web: 0, coo: 0, other: 0 };
-}
-
-function sseTrafficCounters() {
-  return {
-    bytes: 0,
-    bytesBySource: sseSourceCounts(),
-    // 补发与回合都是 bytes 的子集，同一帧可以同时计入两项。
-    initialReplayBytes: 0,
-    turnBytes: 0,
-    turnBytesBySource: sseSourceCounts(),
-    opened: 0,
-    closed: 0,
-  };
-}
-
-function payloadVersion(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 22);
-}
-
-function compactParentEvent(event: RoomEvent) {
-  return {
-    seq: event.seq, ts: event.ts, type: event.type, from: event.from, text: event.text,
-    data: { name: event.data?.name, presenceWeb: event.data?.presenceWeb },
-  };
-}
 
 const PACKAGE_VERSION = ((): string => {
   try {
@@ -328,7 +283,8 @@ export class WorldServer {
   private readonly port: number;
   private server?: Server;
   private baseUrl = '';
-  private readonly sse = new Map<string, Set<SseClient>>();
+  private readonly sseHub: SseHub;
+  private readonly dm: GatewayDm;
   private pumpTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
   private janitorTimer?: NodeJS.Timeout;
@@ -354,19 +310,12 @@ export class WorldServer {
   private readonly dmTimes = new SlidingRateLimit(RATE_KEY_CAPACITY, { ms: HOUR_MS, limit: 200 }, { burst: { ms: MINUTE_MS, limit: 20 } });
   /** 事件清理：每小时一次，超过 7 天且不在最后 500 条的删掉。 */
   private lastPrune = 0;
-  /** 推送循环与客厅时钟改成异步后，上一轮没跑完就跳过这一轮（原来同步循环天然串行）。 */
-  private pumping = false;
+  /** 客厅时钟改成异步后，上一轮没跑完就跳过这一轮。 */
   private clocking = false;
   private closing = false;
   /** 时钟是「睡到下一次要推进的时刻」的自调度定时器，不是每秒 setInterval。 */
   private clockTimer?: NodeJS.Timeout;
   private clockAt = 0;
-  /** 有新事件的客厅：提交后立刻推，不等节拍。 */
-  private readonly dirtyRooms = new Set<string>();
-  private pumpScheduled = false;
-  private lastSweepAt = 0;
-  private sseTrafficSince = Date.now();
-  private sseTraffic = sseTrafficCounters();
   /** 大厅 id 的同步快照：init() 建完大厅后填上，供 hallId 这个同步属性读。 */
   private hallIdValue = '';
   private divinationAvailable = false;
@@ -375,13 +324,14 @@ export class WorldServer {
     this.db = db;
     if (options.operatorKey) this.operatorHash = createHash('sha256').update(options.operatorKey).digest();
     this.now = options.now ?? Date.now;
+    this.webPlayers = new WebPlayerDb(this.db, this.now);
+    this.sseHub = new SseHub(this.db, this.webPlayers, this.now);
     this.story = new StoryDb(db, this.now, () => this.hallId);
-    this.divination = new DivinationDb(db, this.now, id => this.markDirty(id));
+    this.divination = new DivinationDb(db, this.now, id => this.sseHub.markDirty(id));
     this.storyPresence = new StoryPresence(options.now);
     this.tableDiscovery = new TableDiscovery(db, (room) => this.host(room), this.now);
     this.ratingBoards = new RatingBoards(db, this.now);
     this.recruitSnapshot = new RecruitSnapshot(db, this.now);
-    this.webPlayers = new WebPlayerDb(this.db, this.now);
     this.peopleConcurrency = Math.max(1, Math.min(4, Math.floor((options.poolMax ?? 8) / 2)));
     this.coo = new CooAccountDb(this.db, {
       now: this.now,
@@ -403,11 +353,23 @@ export class WorldServer {
     this.hostName = options.host ?? '127.0.0.1';
     this.trustLoopbackProxy = options.trustLoopbackProxy ?? (this.publicUrl !== undefined);
     this.port = options.port ?? 0;
+    this.dm = new GatewayDm({
+      db: this.db,
+      now: this.now,
+      webPlayers: this.webPlayers,
+      divination: this.divination,
+      identityAuthority: this.identityAuthority,
+      isOnline: cooId => this.sseHub.isOnline(cooId),
+      onlineCooIds: () => this.sseHub.onlineCooIds(),
+      existingHost: async roomId => this.hosts.get(roomId) ?? await this.hostPending.get(roomId),
+      host: roomId => this.host(roomId),
+      checkDmRate: cooId => this.checkDmRate(cooId),
+    });
     // 启动恢复基准在 init() 里读；构造函数只落字段，不碰库。
     this.recovery = {};
     this.lifecycle = new RoomLifecycle(db, room => this.host(room), () => this.hallIdValue, this.defaultRoomId,
       (options.cooIdleMinutes ?? 300) * 60_000, (options.roomArchiveHours ?? 48) * 3_600_000,
-      cooId => [...this.sse.values()].every(clients => [...clients].every(client => client.cooId !== cooId || client.closed || client.locationCapable)));
+      cooId => this.sseHub.allowIdleMove(cooId));
   }
 
   /**
@@ -486,7 +448,7 @@ export class WorldServer {
     this.baseUrl = `http://${host}:${address.port}`;
     // 定时器回调是异步的：统一吞掉拒绝并打日志，别让一次库错误变成 unhandled rejection。
     this.pumpTimer = setInterval(() => {
-      void this.pump().catch((error) => { console.error('parlor: 推送循环出错', error); });
+      void this.sseHub.pump().catch((error) => { console.error('parlor: 推送循环出错', error); });
     }, 400);
     this.pumpTimer.unref?.();
     // 时钟不再每秒空转：睡到「下一次要推进的时刻」。动作提交后会 poke 一次，
@@ -515,6 +477,7 @@ export class WorldServer {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.sseHub.beginClose();
     if (this.pumpTimer) clearInterval(this.pumpTimer);
     this.pumpTimer = undefined;
     if (this.clockTimer) clearTimeout(this.clockTimer);
@@ -524,7 +487,7 @@ export class WorldServer {
     this.heartbeatTimer = undefined;
     // 等正在跑的推送/时钟收尾：它们的 await 还挂在库上，直接关池会报
     // 「Cannot use a pool after calling end on the pool」。
-    for (let wait = 0; wait < 100 && (this.pumping || this.clocking); wait += 1) {
+    for (let wait = 0; wait < 100 && (this.sseHub.isPumping || this.clocking); wait += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     // 正常退出：把准确停止时刻记下来，下次启动算停机时长才有意义。
@@ -536,12 +499,7 @@ export class WorldServer {
     this.hosts.clear();
     this.hostTouchedAt.clear();
     this.hostPending.clear();
-    for (const clients of this.sse.values()) {
-      for (const client of clients) {
-        try { client.res.end(); } catch { /* 已断开 */ }
-      }
-    }
-    this.sse.clear();
+    this.sseHub.closeAll();
     const server = this.server;
     if (server) {
       server.closeAllConnections?.();
@@ -642,7 +600,7 @@ export class WorldServer {
       now: this.now,
       ...(this.tableTurnMs !== undefined ? { turnMs: this.tableTurnMs } : {}),
       recovery: this.recovery,
-      onCommit: (id: string) => this.markDirty(id),
+      onCommit: (id: string) => this.sseHub.markDirty(id),
       onTableResult: game => this.ratingBoards.invalidate(game),
       checkPublicChatRate: cooId => {
         if (!this.publicChatRates.take(cooId, this.now())) {
@@ -678,7 +636,7 @@ export class WorldServer {
     }
     let evicted = 0;
     for (const id of [...this.hosts.keys()]) {
-      if (active.has(id) || this.sse.has(id) || this.hostPending.has(id)) continue;
+      if (active.has(id) || this.sseHub.hasRoom(id) || this.hostPending.has(id)) continue;
       const touched = this.hostTouchedAt.get(id) ?? 0;
       if (now - touched < this.hostIdleEvictMs) continue;
       this.hosts.delete(id);
@@ -797,7 +755,7 @@ export class WorldServer {
       for (const row of [...occupied, ...tables]) await this.host(row.room_id);
       const needed = new Set([...occupied, ...tables].map(row => row.room_id));
       for (const [id, host] of this.hosts) {
-        if (!needed.has(id) && !this.sse.has(id)) continue;
+        if (!needed.has(id) && !this.sseHub.hasRoom(id)) continue;
         try { await host.tickClock(); } catch (error) {
           console.error('parlor: 客厅时钟出错', error);
         }
@@ -864,10 +822,7 @@ export class WorldServer {
       { kind: 'pet' as const, ms: this.cooOfflineReleaseMs },
     ].filter((sweep) => sweep.ms > 0);
     if (sweeps.length === 0) return 0;
-    const online = new Set<string>();
-    for (const clients of this.sse.values()) {
-      for (const client of clients) online.add(client.cooId);
-    }
+    const online = this.sseHub.onlineCooIds();
     let released = 0;
     for (const sweep of sweeps) {
       const cutoff = now - sweep.ms;
@@ -1064,159 +1019,59 @@ export class WorldServer {
     }
   }
 
-  private async webPlayerRoute(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
-    const path = url.pathname.slice('/v1/web/'.length);
-    res.setHeader('cache-control', 'no-store');
-    if (method === 'POST') this.requireWebPost(req);
-    const cookie = cookieOf(req, 'parlor_web');
-    if (path === 'credentials' && (method === 'GET' || method === 'POST')) {
-      const { account } = await this.parentSession(req);
-      if (method === 'GET') {
-        const loginName = await this.webPlayers.credentialName(account.id);
-        const player = await this.coo.playerCooOf(account.id);
-        json(res, 200, { loginName, suggestedName: (player && await this.coo.cooDisplayName(player)) || account.displayName });
-        return;
-      }
-      this.checkWebRate(this.webCredentialRates, account.id);
-      const body = await readJson(req);
-      const loginName = await this.webPlayers.setCredentials(account.id, body, async () => {
-        await this.db.prepare('SELECT id FROM accounts WHERE id=? FOR UPDATE').get(account.id);
-        const parent = (await this.parentSession(req)).account;
-        const existing = await this.coo.playerCooOf(parent.id);
-        if (existing) return existing;
-        if (this.identityAuthority && this.identityAuthority !== 'self') {
-          throw new HttpError(409, '请先从 Coo 面板下场一次，再设置登录名和密码');
-        }
-        const player = await this.ensurePlayerCoo(parent);
-        if (this.identityAuthority === 'self') await this.registry.enroll(player.cooId, player.secret, player.name, 'human');
-        return player.cooId;
-      });
-      this.pokeClock();
-      json(res, 200, { loginName });
-      return;
-    }
-
-    if (method === 'POST' && (path === 'login' || path === 'redeem')) {
-      this.checkWebRate(path === 'login' ? this.webLoginIpRates : this.webRedeemIpRates, this.requestIpRateKey(req));
-      const body = await readJson(req);
-      if (path === 'login') {
-        const name = typeof body.loginName === 'string' ? body.loginName.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 48) : '';
-        this.checkWebRate(this.webLoginNameRates, name);
-      } else if (await this.webPlayers.session(cookie)) {
-        throw new HttpError(409, '请先退出当前会馆登录');
-      }
-      const session = path === 'login' ? await this.webPlayers.login(body) : await this.webPlayers.redeem(body, async (id, name) => {
-        const secret = randomBytes(32).toString('base64url');
-        if (this.identityAuthority === 'self') await this.registry.enroll(id, secret, name, 'human');
-        else if (await this.coo.registerCoo(id, secret, 'human', name) !== 'ok') throw new HttpError(500, '无法建立游客身份');
-      });
-      await this.logoutWebPlayer(cookie);
-      res.setHeader('set-cookie', this.webCookie(req, session.token, session.expiresAt));
-      json(res, 200, { ok: true });
-      return;
-    }
-    if (path === 'logout' && method === 'POST') {
-      await this.logoutWebPlayer(cookie);
-      res.setHeader('set-cookie', this.webCookie(req, ''));
-      json(res, 200, { ok: true });
-      return;
-    }
-
-    if (path.startsWith('operator/invites')) {
-      this.checkOperator(req);
-      if (path === 'operator/invites' && method === 'GET') {
-        json(res, 200, { invites: await this.webPlayers.invitations(undefined, (url.searchParams.get('q') ?? '').trim().slice(0, 100)) });
-        return;
-      }
-      const id = /^operator\/invites\/([a-f0-9-]{36})\/revoke$/.exec(path)?.[1];
-      if (id && method === 'POST') {
-        await this.webPlayers.revoke(id);
-        this.pokeClock();
-        json(res, 200, { ok: true });
-        return;
-      }
-    }
-    const invites = /^(parent\/)?invites(?:\/([a-f0-9-]{36})\/revoke)?$/.exec(path);
-    if (invites && (method === 'POST' || (method === 'GET' && !invites[2]))) {
-      const issuer = invites[1] ? (await this.parentSession(req)).account.id : await this.webInviteIssuer(req, cookie);
-      if (method === 'GET') {
-        json(res, 200, { invites: await this.webPlayers.invitations(issuer) });
-      } else if (invites[2]) {
-        await this.webPlayers.revoke(invites[2], issuer);
-        this.pokeClock();
-        json(res, 200, { ok: true });
-      } else {
-        const issued = await this.webPlayers.issue(issuer, (await this.guestRoom()).id);
-        const link = new URL('/play?entry=guest', this.audienceUrl());
-        link.hash = new URLSearchParams({ invite: issued.code }).toString();
-        json(res, 200, { ...issued, link: link.href });
-      }
-      return;
-    }
-
-    if (path === 'me' && method === 'GET') {
-      const session = await this.webPlayers.session(cookie);
-      if (!session) throw new HttpError(401, '请登录会馆');
-      json(res, 200, {
-        name: await this.coo.cooDisplayName(session.coo_id),
-        guest: !session.account_id,
-        expiresAt: Number(session.expires_at),
-        seated: !!await activeSeatForCoo(this.db, session.coo_id),
-      });
-      return;
-    }
-    if (path === 'play' && method === 'POST') {
-      const body = await readJson(req);
-      const hall = await this.ensureHall();
-      const result = await withTransaction(this.db, async () => {
-        const session = await this.webPlayers.session(cookie, true);
-        if (!session) throw new HttpError(401, '网页会话已失效，请重新登录或领取邀请');
-        const player = session.coo_id;
-        await lockCooRows(this.db, [player]);
-        const current = await activeSeatForCoo(this.db, player);
-        if (current && body.takeover !== true) throw new HttpError(409, '已有席位，请点「接管席位」继续');
-        const wanted = typeof body.room === 'string' ? body.room.trim() : '';
-        const roomId = current?.roomId ?? session.guest_room_id ?? (wanted || hall.id);
-        if (session.guest_room_id && roomId !== session.guest_room_id) throw new HttpError(403, '游客仅可进入获邀客厅');
-        await this.assertRoomEntry(roomId, player);
-        const host = await this.host(roomId);
-        const token = 'web_' + randomBytes(32).toString('base64url');
-        let name = await this.coo.cooDisplayName(player);
-        if (!current && !session.account_id && body.name !== undefined) {
-          name = this.webPlayers.guestName(body.name);
-          await this.coo.renameCooDisplay(player, name);
-        }
-        const joined = current ? await host.reissueSeatToken(player, token)
-          : await host.join(player, { token, name, kind: 'human', tier: 'off' });
-        await this.webPlayers.bindSeat(session, token);
-        return { room: roomId, token, guest: !session.account_id, tableId: (await host.tableLock(player))?.tableId,
-          seat: await seatOfRow(this.db, roomId, joined.seat),
-          identity: { cooId: player, cooSecret: 'seat-only' } };
-      });
-      this.markDirty(result.room);
-      json(res, 200, result);
-      return;
-    }
-    throw new HttpError(404, '没有这个会馆登录接口');
+  private parentRouteContext(): ParentRouteContext {
+    return {
+      db: this.db,
+      coo: this.coo,
+      registry: this.registry,
+      now: this.now,
+      defaultRoomId: this.defaultRoomId,
+      identityAuthority: this.identityAuthority,
+      authorityUrl: () => this.authorityUrl(),
+      cookieOf,
+      parentCookie: (token, req) => this.parentCookie(token, req),
+      clearParentCookie: (req) => this.clearParentCookie(req),
+      parentSession: (req) => this.parentSession(req),
+      checkParentKeyRate: (req) => this.checkParentKeyRate(req),
+      requireWebPost: (req) => this.requireWebPost(req),
+      ensureAccount: (req, cooId, displayName) => this.ensureAccount(req, cooId, displayName),
+      ensurePlayerCoo: (account, requested) => this.ensurePlayerCoo(account, requested),
+      enterPlayerRoom: (target, player, allowHallFallback) => this.enterPlayerRoom(target, player, allowHallFallback),
+      leaveOwnSeat: (cooId, body) => this.leaveOwnSeat(cooId, body),
+      host: (roomId) => this.host(roomId),
+      onlineSeatIds: (roomId) => this.sseHub.onlineSeatIds(roomId),
+      seatOfRow: (roomId, seat) => seatOfRow(this.db, roomId, seat),
+      historyQuery,
+    };
   }
 
-  private async webInviteIssuer(req: IncomingMessage, cookie: string): Promise<string> {
-    const session = await this.webPlayers.session(cookie);
-    const parentCookie = cookieOf(req, 'parlor_parent');
-    const parent = parentCookie ? await this.coo.verifySession(parentCookie) : null;
-    const token = bearer(req);
-    if (!token) {
-      const issuer = session ? session.account_id : parent?.account.id;
-      if (issuer) return issuer;
-    } else {
-      const played = await seatByTokenHash(this.db, hashSeatToken(token));
-      if (played && isWebSeatToken(token) && session?.account_id && session.coo_id === played.cooId) {
-        if ((await this.webPlayers.seatSession(played.tokenHash))?.token_hash === session.token_hash) return session.account_id;
-      } else if (played && !isWebSeatToken(token) && parent && played.cooId === await this.coo.playerCooOf(parent.account.id)) {
-        return parent.account.id;
-      }
-    }
-    throw new HttpError(403, '请用正式会馆账号或家长钥匙登录后发码');
+  private async webPlayerRoute(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
+    await serveWebPlayerRoute(req, res, url, method, {
+      db: this.db,
+      coo: this.coo,
+      webPlayers: this.webPlayers,
+      registry: this.registry,
+      identityAuthority: this.identityAuthority,
+      audienceUrl: () => this.audienceUrl(),
+      cookieOf,
+      webCookie: (r, token, expiresAt) => this.webCookie(r, token, expiresAt),
+      requireWebPost: (r) => this.requireWebPost(r),
+      checkOperator: (r) => this.checkOperator(r),
+      checkLoginIpRate: (r) => this.checkWebRate(this.webLoginIpRates, this.requestIpRateKey(r)),
+      checkRedeemIpRate: (r) => this.checkWebRate(this.webRedeemIpRates, this.requestIpRateKey(r)),
+      checkLoginNameRate: (name) => this.checkWebRate(this.webLoginNameRates, name),
+      checkCredentialRate: (accountId) => this.checkWebRate(this.webCredentialRates, accountId),
+      parentSession: (r) => this.parentSession(r),
+      ensurePlayerCoo: (account, requested) => this.ensurePlayerCoo(account, requested),
+      logoutWebPlayer: (cookie) => this.logoutWebPlayer(cookie),
+      guestRoom: () => this.guestRoom(),
+      ensureHall: () => this.ensureHall(),
+      assertRoomEntry: (roomId, cooId) => this.assertRoomEntry(roomId, cooId),
+      host: (roomId) => this.host(roomId),
+      seatOfRow: (roomId, seat) => seatOfRow(this.db, roomId, seat),
+      markDirty: (roomId) => this.sseHub.markDirty(roomId),
+      pokeClock: () => this.pokeClock(),
+    });
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1277,142 +1132,34 @@ export class WorldServer {
 
     if (url.pathname.startsWith('/v1/divination/')) {
       if (!this.divinationAvailable) throw new HttpError(404, '当前茶馆未开放问卦阁');
-      await this.divinationRoute(req, res, url.pathname.slice('/v1/divination/'.length));
+      await serveDivinationRoute(req, res, url.pathname.slice('/v1/divination/'.length), {
+        db: this.db,
+        coo: this.coo,
+        webPlayers: this.webPlayers,
+        divination: this.divination,
+        hallId: this.hallId,
+        cookieOf,
+        cooOrSeat: (r) => this.cooOrSeat(r),
+        host: (roomId) => this.host(roomId),
+        checkChatRate: (key) => this.checkWebRate(this.divinationChatRates, key),
+        ensurePlayerCoo: (account, requested) => this.ensurePlayerCoo(account, requested),
+      });
       return;
     }
 
     if (url.pathname.startsWith('/v1/support/')) {
-      res.setHeader('cache-control', 'no-store');
-      const support = new SupportDb(this.db, this.now);
-      const path = url.pathname.slice('/v1/support/'.length);
-      if (path === 'announcements' && method === 'GET') {
-        await this.supportActor(req, url);
-        json(res, 200, { announcements: await support.announcements() }); return;
-      }
-      // 公告 / 新闻 / 招募共用一次请求：Coo 侧只有 60 秒一个定时器，
-      // 分成三条路由会让每个 Coo 每分钟发三次请求。
-      if (path === 'inbox' && method === 'GET') {
-        const actor = await this.cooOrSeat(req);
-        const topics = new Set((url.searchParams.get('topics') ?? 'announcements,news,recruit')
-          .split(',').map((item) => item.trim()).filter(Boolean));
-        const afterPublish = Number(url.searchParams.get('after_publish') ?? 0) || 0;
-        const afterId = url.searchParams.get('after_id') ?? '';
-        // 同厅的桌已经走 SSE 即时通知；这里排掉，别让两条通路说同一桌、也别白占前三的名额。
-        const here = (url.searchParams.get('room') ?? '').trim();
-        const announcement: Pick<InboxView, 'announcements' | 'announcementVersion'> = {};
-        if (topics.has('announcements')) {
-          const items = await support.announcements();
-          if (url.searchParams.has('announcement_version')) {
-            announcement.announcementVersion = payloadVersion(items);
-          }
-          if (!announcement.announcementVersion || announcement.announcementVersion !== url.searchParams.get('announcement_version')) {
-            announcement.announcements = items;
-          }
-        }
-        json(res, 200, {
-          ...announcement,
-          ...(topics.has('news') ? { news: await support.newsFeed(afterPublish, afterId) } : {}),
-          ...(topics.has('recruit') ? { recruit: { tables: await this.recruitSnapshot.take(3, here) } } : {}),
-          ...(topics.has('story') ? { story: await this.story.liveHint(actor) } : {}),
-        }, req);
-        return;
-      }
-      // 主动查：一律 200，找不到就是 news:null。旧服务器没有这条路由才是 404，
-      // Coo 侧据此区分「本版没有新闻板块」和「这条还没发」。
-      if (path === 'news' && method === 'GET') {
-        await this.cooOrSeat(req);
-        const id = url.searchParams.get('id') ?? '';
-        // 没有就是 news:null——不能留 undefined，否则序列化成 {}，客户端判不出「这条还没发」。
-        if (id) { json(res, 200, { news: (await support.newsById(id)) ?? null }); return; }
-        if (url.searchParams.get('list') === '1') {
-          json(res, 200, { news: await support.newsList(Number(url.searchParams.get('limit') ?? 5)) }); return;
-        }
-        json(res, 200, { news: (await support.latestNews()) ?? null }); return;
-      }
-      if (path === 'feedback' && (method === 'GET' || method === 'POST')) {
-        if (method === 'POST' && ['parent', 'web'].includes(url.searchParams.get('as') ?? '')) this.requireWebPost(req);
-        const cooId = await this.supportActor(req, url);
-        if (method === 'GET') { json(res, 200, { feedback: await support.feedback(cooId) }); return; }
-        const body = await readJson(req);
-        const person = await this.personInfo(cooId);
-        json(res, 200, { feedback: await support.submit(cooId, person.name, body.text, body.requestId) }); return;
-      }
-      if (path.startsWith('operator/')) {
-        this.checkOperator(req);
-        if (path === 'operator/feedback' && method === 'GET') {
-          json(res, 200, { feedback: await support.feedback() }); return;
-        }
-        if (path === 'operator/reply' && method === 'POST') {
-          const body = await readJson(req);
-          await support.reply(String(body.id ?? ''), body.text, body.status);
-          json(res, 200, { ok: true }); return;
-        }
-        if (path === 'operator/announcements' && method === 'POST') {
-          const body = await readJson(req);
-          json(res, 200, { announcement: await support.announce(body.text, body.requestId) }); return;
-        }
-        // 运营列表：玩家那条 `announcements` 走 Coo / 席位鉴权，运营钥匙调不动，
-        // 所以工作台要自己有一条读法，否则改与删都没有入口。
-        if (path === 'operator/announcements' && method === 'GET') {
-          json(res, 200, { announcements: await support.announcementAdminList(Number(url.searchParams.get('limit') ?? 20)) }); return;
-        }
-        if (path === 'operator/announcements' && method === 'PATCH') {
-          const body = await readJson(req);
-          const id = String(body.id ?? '').trim();
-          if (!id) throw new HttpError(400, '需要公告 id');
-          // revision 必须是运营页面看到的那一版：服务端读到的版本不能当并发条件。
-          // publishId 认「这一条发布」：删掉后用同一个 requestId 重发，版本又从 1 开始。
-          json(res, 200, {
-            announcement: (await support.editAnnouncement(id, body.text, body.revision, body.publishId)).item,
-          }); return;
-        }
-        if (path === 'operator/announcements' && method === 'DELETE') {
-          const id = (url.searchParams.get('id') ?? '').trim();
-          if (!id) throw new HttpError(400, '需要公告 id');
-          // 旧标签页拿着过期版本不能删掉别人刚改出来的新版；
-          // publishId 再挡一层：不能删掉用同一个 requestId 重发的下一条。
-          json(res, 200, {
-            ok: true,
-            deleted: await support.deleteAnnouncement(
-              id, url.searchParams.get('revision') ?? '', url.searchParams.get('publishId') ?? '',
-            ),
-          }); return;
-        }
-        if (path === 'operator/news' && method === 'GET') {
-          const id = (url.searchParams.get('id') ?? '').trim();
-          if (id) {
-            const item = await support.newsAdminById(id);
-            if (!item) throw new HttpError(404, '没有这条新闻');
-            json(res, 200, { news: item }); return;
-          }
-          // 运营列表含还没到可见时刻的预录条目：这条走运营钥匙，不走席位鉴权。
-          json(res, 200, { news: await support.newsAdminList(Number(url.searchParams.get('limit') ?? 10)) }); return;
-        }
-        if (path === 'operator/news' && method === 'POST') {
-          const body = await readJson(req);
-          json(res, 200, { news: await support.publishNews(body) }); return;
-        }
-        // 改：只动内容与可见设置，不动 id 与日期；字段没给就保持原样。
-        if (path === 'operator/news' && method === 'PATCH') {
-          const body = await readJson(req);
-          const result = await support.editNews(body);
-          json(res, 200, { news: result.item, changed: result.changed }); return;
-        }
-        // 删：物理删除，当天可以重发；原文进留痕表，`deleted: null` 表示本来就没有。
-        // `publishId` 必填：同一天重发沿用同一个 id，只带 id 的旧请求会误删新稿；
-        // 也不用 createdAt——两次发布可以落在同一毫秒。
-        if (path === 'operator/news' && method === 'DELETE') {
-          const id = (url.searchParams.get('id') ?? '').trim();
-          if (!id) throw new HttpError(400, '需要新闻 id');
-          const publishId = (url.searchParams.get('publishId') ?? '').trim();
-          if (!publishId) throw new HttpError(400, '需要 publishId（本次发布的唯一标识）');
-          json(res, 200, { ok: true, deleted: await support.deleteNews(id, publishId) }); return;
-        }
-        if (path === 'operator/audit' && method === 'GET') {
-          json(res, 200, { audit: await support.auditList(Number(url.searchParams.get('limit') ?? 20)) }); return;
-        }
-      }
-      throw new HttpError(404, '没有这个反馈通道地址');
+      await serveSupportRoute(req, res, url, method, {
+        db: this.db,
+        now: this.now,
+        recruitSnapshot: this.recruitSnapshot,
+        story: this.story,
+        cooOrSeat: (r) => this.cooOrSeat(r),
+        supportActor: (r, u) => this.supportActor(r, u),
+        personInfo: (cooId) => this.dm.personInfo(cooId),
+        requireWebPost: (r) => this.requireWebPost(r),
+        checkOperator: (r) => this.checkOperator(r),
+      });
+      return;
     }
 
     if (method === 'GET' && url.pathname === '/healthz') {
@@ -1442,151 +1189,8 @@ export class WorldServer {
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/v1/parent/session') {
-      const body = await readJson(req);
-      const key = typeof body.key === 'string' ? body.key.trim() : '';
-      this.checkParentKeyRate(req);
-      const account = key ? await this.coo.verifyOwnerKey(key) : null;
-      if (!account) throw new HttpError(401, '这个家长链接不对，或已经失效了');
-      const session = await this.coo.createSession(account.id);
-      if (!session) throw new HttpError(403, '这个家长账户被停用了');
-      res.setHeader('set-cookie', this.parentCookie(session.token, req));
-      json(res, 200, {
-        account: { id: account.id, cooId: account.cooId, displayName: account.displayName },
-        expiresAt: session.expiresAt,
-      });
-      return;
-    }
-
-    if (method === 'GET' && url.pathname === '/v1/parent/me') {
-      const session = await this.parentSession(req);
-      json(res, 200, {
-        account: { id: session.account.id, cooId: session.account.cooId, displayName: session.account.displayName },
-        expiresAt: session.expiresAt,
-        seat: await this.parentSeatView(session.account.cooId),
-      });
-      return;
-    }
-
-    /**
-     * 家长自己的战绩：账户属于 owner，战绩属于他下场时用的玩家身份。
-     * 还没下过场（没有玩家身份）就回空账，不临时建一个——建身份要换 secret，不能因为看了一眼就换。
-     */
-    if (method === 'GET' && url.pathname === '/v1/parent/history') {
-      const { account } = await this.parentSession(req);
-      const playerCooId = await this.coo.playerCooOf(account.id);
-      let page: Awaited<ReturnType<typeof personalHistory>> = { items: [], next: null };
-      let ledger: { games: number; wins: number; losses: number; draws: number } | null = null;
-      if (playerCooId) {
-        try {
-          page = await personalHistory(this.db, playerCooId, historyQuery(url.searchParams));
-        } catch (error) { throw new HttpError(400, messageOf(error)); }
-        const summary = await new LedgerDb(this.db, { now: this.now }).summaryFor(playerCooId);
-        ledger = { games: summary.games, wins: summary.wins, losses: summary.losses, draws: summary.draws };
-      }
-      res.setHeader('cache-control', 'private, no-store');
-      json(res, 200, {
-        player: playerCooId !== null,
-        ledger,
-        // 玩法名由服务端给，家长页不必再抄一份会漂移的名称表。
-        games: Object.entries(GAME_LABELS).map(([id, label]) => ({ id, label })),
-        items: page.items.map((item) => ({
-          ...item,
-          gameLabel: item.game ? gameLabelOf(item.game) : '',
-        })),
-        next: page.next,
-      }, req);
-      return;
-    }
-
-    if (method === 'GET' && url.pathname === '/v1/parent/view') {
-      const session = await this.parentSession(req);
-      const since = Number(url.searchParams.get('since') ?? 0) || 0;
-      const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
-      const compact = url.searchParams.get('view') === 'compact-v1';
-      const view = await this.parentView(session.account.cooId, since, limit, compact);
-      res.setHeader('cache-control', 'private, no-store');
-      if (!compact) {
-        json(res, 200, view, req);
-        return;
-      }
-      const { events: rawEvents, mail, ...state } = view;
-      const events = rawEvents.map(compactParentEvent);
-      const versions = { state: payloadVersion(state), events: payloadVersion(events), mail: payloadVersion(mail) };
-      json(res, 200, {
-        now: this.now(), versions,
-        ...(versions.state === url.searchParams.get('stateVersion') ? {} : { state }),
-        ...(versions.events === url.searchParams.get('eventsVersion') ? {} : { events }),
-        ...(versions.mail === url.searchParams.get('mailVersion') ? {} : { mail }),
-      }, req);
-      return;
-    }
-
-    if (method === 'GET' && url.pathname === '/v1/parent/table') {
-      const { account } = await this.parentSession(req);
-      const seat = await activeSeatForCoo(this.db, account.cooId);
-      const tableId = url.searchParams.get('table');
-      if (!seat || !tableId) throw new HttpError(404, '孩子当前没有在这张牌桌上');
-      const host = await this.host(seat.roomId);
-      const active = await host.tableLock(account.cooId);
-      if (active?.tableId !== tableId) throw new HttpError(404, '孩子当前没有在这张牌桌上');
-      const table = await host.tablePublic(tableId);
-      if (!table || (table.status !== 'bidding' && table.status !== 'playing')) {
-        throw new HttpError(404, '孩子当前没有在这张牌桌上');
-      }
-      if (table.frozen) throw new HttpError(409, '这张牌桌已暂停，暂时无法观看。');
-      const tableSeats = new Set((table.seats as Array<{ id: string }> | undefined)?.map(player => player.id));
-      const seats = (await activeSeats(this.db, seat.roomId)).filter(player => tableSeats.has(player.id))
-        .map(({ id, name, kind }) => ({ id, name, kind }));
-      const online = this.onlineSeatIds(seat.roomId).filter(id => tableSeats.has(id));
-      // Reading the public view and its seat metadata can overlap with settlement.
-      if ((await host.tableLock(account.cooId))?.tableId !== tableId) {
-        throw new HttpError(404, '孩子当前没有在这张牌桌上');
-      }
-      res.setHeader('Cache-Control', 'private, no-store');
-      json(res, 200, { table, seats, online, now: this.now() }, req);
-      return;
-    }
-
-    if (method === 'POST' && url.pathname === '/v1/parent/play') {
-      const body = await readJson(req);
-      // 带钥匙时一次做完「换会话 + 领席位」：跨境链路上每多一个来回就是两三秒。
-      const key = typeof body.key === 'string' ? body.key.trim() : '';
-      if (key) {
-        this.checkParentKeyRate(req);
-        const account = await this.coo.verifyOwnerKey(key);
-        if (!account) throw new HttpError(401, '这个家长链接不对，或已经失效了');
-        const fresh = await this.coo.createSession(account.id);
-        if (!fresh) throw new HttpError(403, '这个家长账户被停用了');
-        res.setHeader('set-cookie', this.parentCookie(fresh.token, req));
-        json(res, 200, await this.parentPlay(account, body));
-        return;
-      }
-      const session = await this.parentSession(req);
-      json(res, 200, await this.parentPlay(session.account, body));
-      return;
-    }
-
-    if (method === 'POST' && url.pathname === '/v1/parent/rename') {
-      const session = await this.parentSession(req);
-      const body = await readJson(req);
-      json(res, 200, await this.parentRename(session.account, body));
-      return;
-    }
-
-    if (method === 'POST' && url.pathname === '/v1/parent/logout') {
-      const token = cookieOf(req, 'parlor_parent');
-      if (token) await this.coo.revokeSession(token);
-      res.setHeader('set-cookie', this.clearParentCookie(req));
-      json(res, 200, { ok: true });
-      return;
-    }
-
-    if (method === 'POST' && url.pathname === '/v1/parent/leave') {
-      this.requireWebPost(req);
-      const { account } = await this.parentSession(req);
-      json(res, 200, await this.leaveOwnSeat(account.cooId, await readJson(req)));
-      return;
+    if (url.pathname.startsWith('/v1/parent/')) {
+      if (await serveParentRoute(req, res, url, method, this.parentRouteContext())) return;
     }
 
     if (method === 'POST' && url.pathname === '/v1/me/rename') {
@@ -1912,13 +1516,13 @@ export class WorldServer {
     if (method === 'POST' && url.pathname === '/v1/dm') {
       const cooId = await this.cooOrSeat(req);
       const body = await readJson(req);
-      json(res, 200, await this.sendDm(cooId, body));
+      json(res, 200, await this.dm.sendDm(cooId, body));
       return;
     }
 
     if (method === 'GET' && url.pathname === '/v1/dm/threads') {
       const cooId = await this.cooOrSeat(req);
-      json(res, 200, await this.dmThreads(cooId));
+      json(res, 200, await this.dm.dmThreads(cooId));
       return;
     }
 
@@ -1928,7 +1532,7 @@ export class WorldServer {
       if (!peer) throw new HttpError(400, '要看和谁的会话？');
       const before = Number(url.searchParams.get('before') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 50) || 50;
-      json(res, 200, await this.dmThreadPage(cooId, peer, before, limit));
+      json(res, 200, await this.dm.dmThreadPage(cooId, peer, before, limit));
       return;
     }
 
@@ -1946,7 +1550,7 @@ export class WorldServer {
       const cooId = await this.cooOrSeat(req);
       if (!this.peopleRates.take(cooId, this.now())) throw new HttpError(429, '搜人太频繁，请稍后再试');
       const q = (url.searchParams.get('q') ?? '').trim();
-      json(res, 200, await this.searchPeople(cooId, q));
+      json(res, 200, await this.dm.searchPeople(cooId, q));
       return;
     }
 
@@ -2297,265 +1901,11 @@ export class WorldServer {
     }
 
     if (url.pathname === '/v1/owner') {
-      // 0.13.x 的家长链接是 /v1/owner?token=<每厅 ownerToken>。迁移把哈希存进
-      // room_seats.legacy_owner_token_hash；这里认出来就换一个 HttpOnly 会话，跳到新页面。
-      const token = url.searchParams.get('token') ?? '';
-      if (!token) throw new HttpError(410, '旧家长链接缺 token；请从扩展面板重新拿');
-      const hash = createHash('sha256').update(token).digest('hex');
-      const seat = await this.db.prepare(
-        'SELECT room_id, coo_id FROM room_seats WHERE legacy_owner_token_hash = ? LIMIT 1',
-      ).get(hash) as { room_id: string; coo_id: string } | undefined;
-      if (!seat) throw new HttpError(410, '这个旧家长链接已经失效；请从扩展面板重新拿');
-      const account = await this.ensureAccount(req, seat.coo_id);
-      const session = await this.coo.createSession(account.account.id);
-      if (!session) throw new HttpError(403, '这个家长账户被停用了');
-      res.writeHead(302, {
-        'set-cookie': this.parentCookie(session.token, req),
-        location: '/parent',
-        'cache-control': 'no-store',
-        'referrer-policy': 'no-referrer',
-        deprecation: 'true',
-      });
-      res.end();
+      await serveLegacyOwnerRoute(req, res, url, this.parentRouteContext());
       return;
     }
 
     throw new HttpError(404, '没有这个地址');
-  }
-
-  /**
-   * 一个人的展示信息：当前席位名优先，其次 coo 显示名。
-   * online 只认**正在连着的客户端**（SSE），不认库里有没有旧席位——席位只在主动离开/换厅时释放，
-   * 几天没来的人也会留着一个活跃席位，拿它当在线会把人全标成在线。
-   */
-  private async personInfo(
-    cooId: string,
-    fallbackName = '',
-    viewer = '',
-  ): Promise<{ cooId: string; name: string; online: boolean; room: string | null; handle: string }> {
-    const seat = await activeSeatForCoo(this.db, cooId);
-    const row = await this.db.prepare('SELECT display_name FROM coos WHERE id = ?').get(cooId) as { display_name?: string } | undefined;
-    const name = seat?.name || (row?.display_name ?? '').trim() || fallbackName || '某人';
-    // 私密厅的实时位置不给没有权限的人看。
-    let room = seat?.roomId ?? null;
-    if (room) {
-      const info = await getRoom(this.db, room);
-      if (info && info.visibility === 'private' && (!viewer || !await hasRoomAccess(this.db, room, viewer))) room = null;
-    }
-    return { cooId, name, online: this.isOnline(cooId), room, handle: await registeredHandle(this.db, cooId) };
-  }
-
-  /** 有没有正在连着的客户端（网页或 Coo）；不看席位在不在。 */
-  private isOnline(cooId: string): boolean {
-    for (const clients of this.sse.values()) {
-      for (const client of clients) if (client.cooId === cooId) return true;
-    }
-    return false;
-  }
-
-  /**
-   * 按短号找 cooId：# 后面可以是前 8 位，也可以是完整 id。
-   * 前缀撞了不猜，列出完整 id 让调用方选（不建唯一约束）。
-   */
-  private async cooByHandle(handle: string): Promise<string> {
-    const assigned = await this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
-    if (assigned) return assigned.coo_id;
-    const exact = await this.db.prepare("SELECT id FROM coos WHERE status = 'active' AND id = ?").get(handle) as
-      { id: string } | undefined;
-    if (exact) return exact.id;
-    // 全局短号是登记值；不能把别人的已分配短号当作本地某个 ID 的前缀。
-    if (this.identityAuthority) throw new HttpError(404, `这台服务器尚不认识短号「#${handle}」`);
-    const rows = await this.db.prepare(
-      "SELECT id FROM coos WHERE status = 'active' AND id LIKE ? ESCAPE '\\' ORDER BY created_at, id LIMIT 6",
-    ).all(`${likePrefix(handle)}%`) as { id: string }[];
-    if (rows.length === 0) throw new HttpError(404, `没有找到号「#${handle}」`);
-    if (rows.length > 1) {
-      throw new HttpError(409, `这个号对上了 ${rows.length} 个人，用完整 id 再发一次：${rows.map((row) => row.id).join('、')}`);
-    }
-    return rows[0].id;
-  }
-
-  /** 找人：优先 cooId（搜索结果带的就是它），退一步按当前唯一同名席位。 */
-  private async dmPeer(value: string, fromCooId: string): Promise<{ cooId: string; name: string; online: boolean; room: string | null }> {
-    const needle = value.trim();
-    if (!needle) throw new HttpError(400, '要写给谁？');
-    const handle = parseHandleQuery(needle);
-    if (handle !== null) {
-      return this.personInfo(await this.cooByHandle(handle), '', fromCooId);
-    }
-    if (isCooId(needle)) {
-      const row = await this.db.prepare("SELECT id FROM coos WHERE id = ? AND status = 'active'").get(needle);
-      if (!row) throw new HttpError(404, '没有这个人');
-      return this.personInfo(needle, '', fromCooId);
-    }
-    const bySeatId = await this.db.prepare(
-      'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND id = ?',
-    ).get(needle) as { coo_id: string } | undefined;
-    if (bySeatId) return this.personInfo(bySeatId.coo_id, '', fromCooId);
-    // COLLATE NOCASE 只有 SQLite 有：改成 lower() 两边都对得上。
-    const seats = await this.db.prepare(
-      'SELECT coo_id FROM room_seats WHERE released_at IS NULL AND lower(name) = lower(?)',
-    ).all(needle) as { coo_id: string }[];
-    const ids = [...new Set(seats.map((row) => row.coo_id))].filter((id) => id !== fromCooId);
-    if (this.identityAuthority && seats.length > 1) throw new HttpError(409, '有多个同名的人，请用 #短号');
-    if (ids.length === 1) return this.personInfo(ids[0], '', fromCooId);
-    if (ids.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
-    // 不在座的人：按 coo 显示名再找一次，这样 Coo 能回已经走开的私聊。
-    const coos = await this.db.prepare(
-      "SELECT id FROM coos WHERE status = 'active' AND lower(display_name) = lower(?)",
-    ).all(needle) as { id: string }[];
-    const names = [...new Set(coos.map((row) => row.id))].filter((id) => id !== fromCooId);
-    if (this.identityAuthority && coos.length > 1) throw new HttpError(409, '有多个同名的人，请用 #短号');
-    if (names.length === 1) return this.personInfo(names[0], '', fromCooId);
-    if (names.length > 1) throw new HttpError(409, '有多个同名的人，用搜索结果选一个');
-    throw new HttpError(404, `没有找到「${needle}」（离线的人要用搜索结果选）`);
-  }
-
-  /** 私聊：对方离线也照常投信箱；在线时顺手往他所在的客厅推一条事件。 */
-  private async sendDm(cooId: string, body: Record<string, unknown>) {
-    if (await this.webPlayers.isGuest(cooId)) throw new HttpError(403, '试玩期间暂不能发送私聊');
-    const seat = await activeSeatForCoo(this.db, cooId);
-    if (!seat) throw new HttpError(403, '你不在任何客厅里；先进一个客厅再发私聊');
-    const peer = await this.dmPeer(typeof body.to === 'string' ? body.to : '', cooId);
-    if (peer.cooId === cooId) throw new HttpError(400, '不能给自己发私聊');
-    // 狼人杀进行中：同桌参与者之间不能私聊（防绕开单次发言与狼聊限制）。
-    // 只拦「两端都在同一张进行中的狼人杀桌」；桌外人不受影响。
-    // 只查已建好的 host（不在这里新建）；正在建的等它建完，别漏掉桌锁。
-    const roomHost = this.hosts.get(seat.roomId) ?? await this.hostPending.get(seat.roomId);
-    if (roomHost && await roomHost.chatLockedFor(cooId) && (await roomHost.lockedTablePeerCooIds(cooId)).has(peer.cooId)) {
-      throw new HttpError(409, '狼人杀进行中，同桌的人之间不能私聊；想说的留到发言机会或局后再说');
-    }
-    const raw = typeof body.text === 'string' ? body.text.trim() : '';
-    const interpretation = /^【解签[ \t]+([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})】([\s\S]*)/im.exec(raw);
-    const text = interpretation ? interpretation[2].trim() : raw;
-    if (!text) throw new HttpError(400, '消息不能是空的');
-    if (text.length > 2000) throw new HttpError(400, '一条最多 2000 字');
-    this.checkDmRate(cooId);
-    const { letter, expired } = await withTransaction(this.db, async () => {
-      const expired = !!interpretation && await this.divination.interpret(cooId, peer.cooId, interpretation[1].toLowerCase(), text) === 'expired';
-      await touchActivity(this.db, seat.roomId, cooId, this.now());
-      const letter = await new MailDb(this.db, { now: this.now }).append({
-        to: peer.cooId, fromCooId: cooId, room: seat.roomId, kind: 'whisper', fromName: seat.name, text,
-      });
-      return { letter, expired };
-    });
-    const target = await activeSeatForCoo(this.db, peer.cooId);
-    if (target) {
-      try {
-        await (await this.host(target.roomId)).whisperNotice(cooId, seat.name, {
-          cooId: target.cooId, id: target.id, name: target.name,
-        }, text, { seq: letter.seq, ts: letter.ts, room: seat.roomId });
-      } catch { /* 推事件失败不影响信 */ }
-    }
-    let notice: string | undefined;
-    if (expired) {
-      notice = '这支签已过 24 小时解签期，正文已作为普通私信寄给家长。';
-    } else if (!interpretation && /【解签|解签[ \t]*【/.test(raw)) {
-      notice = '已作为普通私信寄出。要在问卦阁记为解读，请把来信里的「【解签 编号】」原样放在解读开头。';
-    }
-    return {
-      message: { seq: letter.seq, ts: letter.ts, text: letter.text, fromName: seat.name, fromMe: true, unread: false },
-      peer,
-      ...(notice ? { notice } : {}),
-    };
-  }
-
-  private async dmThreads(cooId: string): Promise<Record<string, unknown>> {
-    const mail = new MailDb(this.db, { now: this.now });
-    const threads = await Promise.all((await mail.threads(cooId)).map(async (thread) => {
-      const info = await this.personInfo(thread.peer, '', cooId);
-      return { ...thread, name: info.name, online: info.online, room: info.room, handle: info.handle };
-    }));
-    return { threads, unread: await mail.dmUnread(cooId) };
-  }
-
-  private async dmThreadPage(cooId: string, peer: string, before: number, limit: number): Promise<Record<string, unknown>> {
-    if (!isCooId(peer)) throw new HttpError(400, '对方身份不对');
-    const page = await new MailDb(this.db, { now: this.now }).thread(cooId, peer, before, limit);
-    return { peer: await this.personInfo(peer, '', cooId), ...page };
-  }
-
-  /** 搜人：在线的人 + 我聊过的人；空查询就是全部候选；带 # 就是按号找。 */
-  private async searchPeople(cooId: string, query: string): Promise<Record<string, unknown>> {
-    const handle = parseHandleQuery(query);
-    if (handle !== null) {
-      // 按号找人：不看在线或聊过。拿到号就能找到，这正是号的意义。
-      const assigned = await this.db.prepare("SELECT h.coo_id FROM global_handles h JOIN coos c ON c.id=h.coo_id WHERE h.handle=? AND c.status='active'").get(handle) as { coo_id: string } | undefined;
-      if (assigned) return { people: assigned.coo_id === cooId ? [] : [await this.personInfo(assigned.coo_id)] };
-      if (this.identityAuthority) {
-        const exact = await this.db.prepare("SELECT id FROM coos WHERE id=? AND status='active'").get(handle) as { id: string } | undefined;
-        return { people: exact && exact.id !== cooId ? [await this.personInfo(exact.id)] : [] };
-      }
-      const rows = await this.db.prepare(
-        `SELECT id FROM coos
-          WHERE status = 'active' AND id <> ? AND id LIKE ? ESCAPE '\\'
-          ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at, id
-          LIMIT ?`,
-      ).all<{ id: string }>(cooId, `${likePrefix(handle)}%`, handle, PEOPLE_LIMIT);
-      return { people: await this.peopleById(rows.map(row => row.id), cooId, this.onlineCooIds()) };
-    }
-    const needle = query.trim().toLowerCase();
-    // 与私聊列表一样只看最近 500 封有寄件人的信。收、发两路分别用索引取最近记录。
-    const recent = await this.db.prepare(`
-      WITH recent AS (
-        SELECT id
-          FROM (
-            (SELECT seq, from_coo_id AS id FROM mail
-              WHERE coo_id = ? AND from_coo_id IS NOT NULL ORDER BY seq DESC LIMIT 500)
-            UNION ALL
-            (SELECT seq, coo_id AS id FROM mail
-              WHERE from_coo_id = ? AND coo_id <> ? ORDER BY seq DESC LIMIT 500)
-          ) AS messages
-         ORDER BY seq DESC LIMIT 500
-      )
-      SELECT DISTINCT id FROM recent
-    `).all<{ id: string }>(cooId, cooId, cooId);
-    const online = this.onlineCooIds();
-    const candidates = new Set([...online, ...recent.map(row => row.id)]);
-    candidates.delete(cooId);
-    const people = (await this.peopleById(candidates, cooId, online))
-      .filter(person => !needle || person.name.toLowerCase().includes(needle))
-      .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, 'zh'))
-      .slice(0, PEOPLE_LIMIT);
-    return { people };
-  }
-
-  private onlineCooIds(): Set<string> {
-    const online = new Set<string>();
-    for (const clients of this.sse.values()) {
-      for (const client of clients) online.add(client.cooId);
-    }
-    return online;
-  }
-
-  private async peopleById(ids: Iterable<string>, viewer: string, online: ReadonlySet<string>) {
-    const candidates = [...ids];
-    if (candidates.length === 0) return [];
-    // 私密厅权限沿用 hasRoomAccess：房主、房主的家长玩家或有明确授权的身份。
-    const rows = await this.db.prepare(`
-      SELECT c.id, c.display_name, s.name AS seat_name, h.handle,
-             CASE WHEN r.visibility = 'private' AND r.owner_coo_id IS DISTINCT FROM ?
-                    AND family.id IS NULL AND access.coo_id IS NULL
-                  THEN NULL ELSE s.room_id END AS room_id
-        FROM jsonb_array_elements_text(CAST(? AS jsonb)) WITH ORDINALITY AS p(id, position)
-        JOIN coos c ON c.id = p.id
-        LEFT JOIN room_seats s ON s.coo_id = c.id AND s.released_at IS NULL
-        LEFT JOIN global_handles h ON h.coo_id = c.id
-        LEFT JOIN rooms r ON r.id = s.room_id
-        LEFT JOIN accounts family ON family.coo_id = r.owner_coo_id AND family.player_coo_id = ? AND family.status = 'active'
-        LEFT JOIN room_access access ON access.room_id = r.id AND access.coo_id = ? AND access.status = 'active'
-       WHERE c.status = 'active'
-       ORDER BY p.position
-    `).all<{ id: string; display_name: string; seat_name: string | null; handle: string | null; room_id: string | null }>(
-      viewer, JSON.stringify(candidates), viewer, viewer,
-    );
-    return rows.map(row => ({
-      cooId: row.id,
-      name: row.seat_name || row.display_name.trim() || row.display_name || '某人',
-      online: online.has(row.id),
-      room: row.room_id,
-      handle: row.handle ?? row.id.slice(0, 8).toLowerCase(),
-    }));
   }
 
   private checkDmRate(cooId: string): void {
@@ -2642,7 +1992,7 @@ export class WorldServer {
         token: moved.token,
         leaveSeq: moved.leaveEvent.seq,
         joinSeq: moved.joinEvent.seq,
-        ...(snapshot ? { snapshot: { ...snapshot, online: this.onlineSeatIds(target.id) } } : {}),
+        ...(snapshot ? { snapshot: { ...snapshot, online: this.sseHub.onlineSeatIds(target.id) } } : {}),
       });
       return;
     }
@@ -2665,7 +2015,7 @@ export class WorldServer {
       const since = Number(url.searchParams.get('since') ?? 0) || 0;
       const limit = Number(url.searchParams.get('limit') ?? 30) || 30;
       const snapshot: RoomSnapshot = await host.snapshot(seat.cooId, { since, limit });
-      json(res, 200, { ...snapshot, online: this.onlineSeatIds(roomId) }, req);
+      json(res, 200, { ...snapshot, online: this.sseHub.onlineSeatIds(roomId) }, req);
       return;
     }
 
@@ -2783,7 +2133,7 @@ export class WorldServer {
         saidEvent = await host.tableSay(seat.cooId, typeof body.text === 'string' ? body.text : '', tableArg);
       } else if (type === 'whisper') {
         // 私聊走全局那条：对方在别的客厅或不在线也照样投信箱（Coo 也能跨厅回）。
-        const result = await this.sendDm(seat.cooId, body);
+        const result = await this.dm.sendDm(seat.cooId, body);
         const { message } = result;
         delivered = [{
           to: result.peer.name,
@@ -3046,7 +2396,7 @@ export class WorldServer {
         );
       }
       await this.seatAuth(req, roomId, token);
-      await this.stream(req, res, roomId, token, Number(url.searchParams.get('since') ?? 0) || 0);
+      await this.sseHub.open(req, res, roomId, await this.host(roomId), token, Number(url.searchParams.get('since') ?? 0) || 0);
       return;
     }
 
@@ -3066,76 +2416,6 @@ export class WorldServer {
       };
     }
     return mail.list(cooId, room, limit, query.get('peek') !== '1', query.get('newest') === '1');
-  }
-
-  private async stream(req: IncomingMessage, res: ServerResponse, roomId: string, token: string, since: number): Promise<void> {
-    const host = await this.host(roomId);
-    const seat = await host.seatByToken(token);
-    const locationCapable = headerValue(req, 'x-parlor-capabilities').split(',').map(value => value.trim()).includes('seat-location-v1')
-      || new URL(req.url ?? '/', 'http://localhost').searchParams.get('cap') === 'seat-location-v1';
-    const compactTableEvents = headerValue(req, 'x-parlor-stream') === 'compact-table-v1';
-    const clientVersion = headerValue(req, 'x-parlor-client').trim();
-    const source = compactTableEvents ? 'web' : clientVersion ? 'coo' : 'other';
-    if (locationCapable) {
-      await this.db.prepare('UPDATE room_seats SET location_capable=1 WHERE room_id=? AND id=? AND location_capable=0').run(roomId,seat.id);
-    }
-    const allClients = [...this.sse.values()].flatMap(set => [...set]);
-    if (allClients.length >= 2000 || allClients.filter(client => client.cooId === seat.cooId).length >= 6) {
-      throw new HttpError(429, '实时连接过多，请关闭多余页面后重试');
-    }
-    await host.refreshClientVersion(seat.cooId, clientVersion);
-    // PG 查询会让出事件循环。发出 200 之前先完成在线登记，否则客户端已
-    // 看到 SSE 建连成功时，离线清理仍可能把它当成没有连接的旧席位释放。
-    const initial = await host.eventsSince(seat.cooId, since, 200);
-    const now = this.now();
-    await touchSeatSeen(this.db, roomId, seat.id, now);
-    if (req.destroyed || res.destroyed) return;
-    const client: SseClient = {
-      locationCapable,
-      compactTableEvents,
-      source,
-      cooId: seat.cooId,
-      seatId: seat.id,
-      tokenHash: seat.tokenHash,
-      webSeat: isWebSeatToken(token),
-      seatName: seat.name,
-      since,
-      lastPing: now,
-      openedAt: now,
-      closed: false,
-      res,
-    };
-    let clients = this.sse.get(roomId);
-    if (!clients) {
-      clients = new Set();
-      this.sse.set(roomId, clients);
-    }
-    const latestClients = [...this.sse.values()].flatMap(set => [...set]);
-    if (latestClients.length >= 2000 || latestClients.filter(c => c.cooId === seat.cooId).length >= 6) throw new HttpError(429,'实时连接过多，请关闭多余页面后重试');
-    clients.add(client);
-    this.sseTraffic.opened += 1;
-    // 掉线排查用：一行开、一行关（谁断的、持续多久）。不带令牌。
-    console.log(`parlor: SSE 打开 ${roomId}/${seat.name}（这一厅 ${clients.size} 条） source=${client.source}`);
-    req.on('close', () => {
-      clients?.delete(client);
-      if (clients?.size === 0) this.sse.delete(roomId);
-      // 断连回调是同步的：写不进去（席位已释放/库关了）就算了，别抛未处理的拒绝。
-      void touchSeatSeen(this.db, roomId, seat.id, this.now()).catch(() => { /* 席位已释放/库关了 */ });
-      if (client.closed) return;
-      client.closed = true;
-      this.sseTraffic.closed += 1;
-      const ms = Math.max(0, this.now() - client.openedAt);
-      console.log(`parlor: SSE 关闭 ${roomId}/${client.seatName} 持续 ${Math.round(ms / 1000)} 秒（${client.closeReason ?? '客户端断开'}） source=${client.source}`);
-    });
-    res.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-    });
-    res.flushHeaders?.();
-    this.writeSseFrame(client, 'retry: 3000\n\n');
-    for (const event of initial) if (!this.writeEvent(roomId, client, event, true)) break;
   }
 
   private checkParentKeyRate(req: IncomingMessage): void {
@@ -3164,95 +2444,6 @@ export class WorldServer {
     return session;
   }
 
-  private async divinationAccount(req: IncomingMessage): Promise<ParentAccount | undefined> {
-    const web = cookieOf(req, 'parlor_web');
-    const session = web ? await this.webPlayers.session(web) : undefined;
-    if (session) return session.account_id ? this.coo.byId(session.account_id) : undefined;
-    const parent = cookieOf(req, 'parlor_parent');
-    return parent ? (await this.coo.verifySession(parent))?.account : undefined;
-  }
-
-  private async divinationChatter(req: IncomingMessage, account?: ParentAccount): Promise<{ id: string; name: string; cooId: string | null } | null> {
-    if (account) {
-      const cooId = await this.coo.playerCooOf(account.id);
-      const name = cooId ? await this.coo.cooDisplayName(cooId) : null;
-      return { id: account.id, name: name || account.displayName, cooId };
-    }
-    if (!bearer(req) && !headerValue(req, 'x-parlor-coo') && !headerValue(req, GLOBAL_HEADER)) return null;
-    const cooId = await this.cooOrSeat(req);
-    if (await this.webPlayers.isGuest(cooId)) return null;
-    const seat = await activeSeatForCoo(this.db, cooId);
-    return seat ? { id: cooId, name: seat.name, cooId } : null;
-  }
-
-  private async divinationRoute(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
-    res.setHeader('cache-control', 'no-store');
-    const account = await this.divinationAccount(req);
-    if (req.method === 'GET' && path === 'unread') {
-      json(res, 200, { canReceive: !!account, draw: account ? await this.divination.unread(account.id) : null });
-      return;
-    }
-    if (req.method === 'GET' && path === 'room') {
-      const [today, chat, chatter] = await Promise.all([
-        this.divination.today(account?.id), this.divination.chat(), this.divinationChatter(req, account),
-      ]);
-      json(res, 200, { ...today, chat, canDraw: !!account, canChat: !!chatter });
-      return;
-    }
-    if (req.method === 'POST' && path === 'chat') {
-      const chatter = await this.divinationChatter(req, account);
-      if (!chatter) throw new HttpError(403, '请登录正式茶馆账号后发言');
-      const seat = chatter.cooId && await activeSeatForCoo(this.db, chatter.cooId);
-      if (seat && await (await this.host(seat.roomId)).chatLockedFor(seat.cooId)) {
-        throw new HttpError(409, '狼人杀进行中，请等这局结束再来闲聊');
-      }
-      this.checkWebRate(this.divinationChatRates, chatter.id);
-      await this.divination.say(chatter.name, (await readJson(req)).text);
-      json(res, 200, { ok: true });
-      return;
-    }
-    if (req.method === 'POST' && (path === 'draw' || path === 'seen')) {
-      if (!account) throw new HttpError(401, '请先用家长身份进入茶馆');
-      const body = await readJson(req);
-      if (path === 'seen') {
-        await this.divination.seen(account.id, body.id);
-        json(res, 200, { ok: true });
-        return;
-      }
-      const { draw, letter, day } = await this.divination.draw(account, body.requestId, this.hallId, async () => {
-        const existing = await this.coo.playerCooOf(account.id);
-        const name = account.displayName || '家长';
-        if (existing) return { id: existing, name: await this.coo.cooDisplayName(existing) || name };
-        const player = await this.ensurePlayerCoo(account, name);
-        return { id: player.cooId, name: player.name };
-      });
-      if (letter) {
-        try {
-          const target = await activeSeatForCoo(this.db, account.cooId);
-          if (target) await (await this.host(target.roomId)).whisperNotice('system-owner', DIVINATION_NAME, target,
-            letter.text, { seq: letter.seq, ts: letter.ts, room: DIVINATION_ROOM, action: letter.action });
-        } catch { /* 在线提醒失败时，签和信已在同一事务提交。 */ }
-      }
-      json(res, 200, { draw, day });
-      return;
-    }
-    throw new HttpError(404, '没有这个问卦阁接口');
-  }
-
-  private async parentSeatView(cooId: string) {
-    const seat = await activeSeatForCoo(this.db, cooId);
-    if (!seat) return null;
-    const room = await getRoom(this.db, seat.roomId);
-    return {
-      room: seat.roomId,
-      roomName: room?.name ?? seat.roomId,
-      id: seat.id,
-      name: seat.name,
-      kind: seat.kind,
-      tier: seat.tier,
-    };
-  }
-
   /**
    * 邀请/授权要送给谁：活跃席位（Coo id 或席位名）优先；找不到再按家长固定的
    * 下场身份找（人不在座也能邀请）。人类只认有家长账户的；没下过场的家长没有
@@ -3260,7 +2451,7 @@ export class WorldServer {
    */
   private async resolveInviteTarget(to: string): Promise<{ cooId: string; name: string; roomId: string | null; kind: string }> {
     const handle = parseHandleQuery(to);
-    const key = handle !== null ? await this.cooByHandle(handle) : to;
+    const key = handle !== null ? await this.dm.cooByHandle(handle) : to;
     // COLLATE NOCASE 只有 SQLite 有：改成 lower() 两边都对得上。
     const rows = await this.db.prepare(
       `SELECT room_id, id, coo_id, name, kind FROM room_seats
@@ -3308,36 +2499,6 @@ export class WorldServer {
     return target;
   }
 
-  /**
-   * 家长下场：用家长会话给自己领一个 human 席位。
-   * 玩家身份固定在 `accounts.player_coo_id` 上——同一个家长链接在任何浏览器都是同一个人；
-   * 账本与信箱跟孩子那份分开（孩子是 Coo 的 cooId，家长玩家是另一个 human coo）。
-   */
-  private async parentPlay(account: ParentAccount, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const requested = typeof body.room === 'string' && body.room.trim() ? body.room.trim() : '';
-    const childSeat = await activeSeatForCoo(this.db, account.cooId);
-    const wanted = requested || childSeat?.roomId || this.defaultRoomId;
-    const target = (await getRoom(this.db, wanted)) ?? (await resolveRoom(this.db, wanted));
-    if (!target) throw new HttpError(404, `客厅不存在：${wanted}`);
-    if (target.archivedAt !== null) throw new HttpError(409, '这个客厅已经归档了');
-
-    if (this.identityAuthority && this.identityAuthority !== 'self') {
-      return { globalEntry: this.authorityUrl(), room: target.id };
-    }
-    const player = await this.ensurePlayerCoo(account, typeof body.name === 'string' ? body.name : '');
-    if (this.identityAuthority === 'self') await this.registry.enroll(player.cooId, player.secret, player.name, 'human');
-    const { room, seat, token } = await this.enterPlayerRoom(target, player, true);
-    return {
-      room: room.id,
-      roomName: room.name,
-      seat: await seatOfRow(this.db, room.id, seat),
-      token,
-      identity: { cooId: player.cooId, cooSecret: this.identityAuthority ? 'seat-only' : player.secret },
-      player: true,
-      ...(room.id !== target.id ? { fallback: 'room_full' } : {}),
-    };
-  }
-
   private async enterPlayerRoom(target: RoomRow, player: { cooId: string; name: string }, allowHallFallback: boolean) {
     const enter = async (room: RoomRow) => {
       const { cooId, name } = player;
@@ -3357,35 +2518,6 @@ export class WorldServer {
       if (!allowHallFallback || target.kind !== 'room' || !(error instanceof HostError) || error.code !== 'full') throw error;
       return enter(await this.ensureHall());
     }
-  }
-
-  /**
-   * 家长改名字：账户显示名 + 玩家身份名 + 当前席位名一次改完。
-   * 还没下过场就顺手把玩家身份建出来，免得第一次下场又回到默认名。
-   */
-  private async parentRename(account: ParentAccount, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const raw = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
-    if (!raw) throw new HttpError(400, '名字不能为空');
-    if (raw.length > 24) throw new HttpError(400, '名字最多 24 个字');
-
-    const playerId = await this.coo.playerCooOf(account.id);
-    let seat: { room: string; id: string; name: string } | null = null;
-    if (playerId) {
-      const active = await activeSeatForCoo(this.db, playerId);
-      if (active) {
-        // 同厅重名会抛 RoomSeatError('name_taken')，由 statusOf 转成 409。
-        await renameSeat(this.db, active.roomId, active.id, raw);
-        seat = { room: active.roomId, id: active.id, name: raw };
-      }
-      await this.coo.renameCooDisplay(playerId, raw);
-    }
-    const renamed = await this.coo.rename(account.id, raw);
-    if (!renamed) throw new HttpError(409, '改不了名字');
-    if (!playerId && (!this.identityAuthority || this.identityAuthority === 'self')) await this.ensurePlayerCoo(renamed, raw);
-    return {
-      account: { id: renamed.id, cooId: renamed.cooId, displayName: renamed.displayName },
-      seat,
-    };
   }
 
   /** 家长玩家的固定 human 身份；每次下场换一枚新 secret（库里只存哈希）。 */
@@ -3415,74 +2547,6 @@ export class WorldServer {
     return child ? `${child}家的家长` : '家长';
   }
 
-  /** 家长只读视图跟孩子当前席位走，只显示家长需要的通知文案。 */
-  private async parentView(cooId: string, since: number, limit: number, compact: boolean) {
-    const now = this.now();
-    const seat = await activeSeatForCoo(this.db, cooId);
-    const mail = new MailDb(this.db, { now: this.now });
-    const divinationText = '问卦阁已把你的签寄给孩子，正在等解签。';
-    const recentMail = async () => (await mail.parentRecent(cooId, limit)).map(item =>
-      item.action === DIVINATION_REQUEST ? { ...item, text: divinationText } : item);
-    if (!seat) {
-      return {
-        seat: null,
-        room: null,
-        ...(compact ? {} : { latest: 0, now, at: serverClock(now) }),
-        events: [],
-        tablePrivate: null,
-        mail: await recentMail(),
-        mailUnread: await mail.unreadCount(cooId),
-      };
-    }
-    const room = await getRoom(this.db, seat.roomId);
-    const host = await this.host(seat.roomId);
-    const snapshot = await host.snapshot(cooId, { since, limit, parentMessagesOnly: compact });
-    const events = snapshot.events.map(event => {
-      const notice = event.data?.mail as { action?: string } | undefined;
-      return notice?.action === DIVINATION_REQUEST ? { ...event, text: divinationText } : event;
-    });
-    // 家长防偷看：桌上还有「真人」席位时，藏起孩子的暗牌与私牌事件。同桌的 Coo 不算真人。
-    const liveTableId = snapshot.table && snapshot.table.status !== 'ended'
-      ? snapshot.table.id ?? snapshot.table.tableId
-      : undefined;
-    let humanAtTable = false;
-    if (liveTableId) {
-      const row = await this.db.prepare(
-        `SELECT 1 AS hit
-           FROM table_seats ts
-           JOIN room_seats rs ON rs.room_id = ts.room_id AND rs.id = ts.seat_id
-          WHERE ts.table_id = ? AND ts.left_at IS NULL AND rs.kind = 'human'
-          LIMIT 1`,
-      ).get(liveTableId) as { hit?: number } | undefined;
-      humanAtTable = !!row;
-    }
-    const ownerPrivateHidden = !!liveTableId && humanAtTable;
-    const active = await host.tableLock(cooId);
-    const watchTableId = active && snapshot.table?.tableId === active.tableId && !snapshot.table.frozen
-      && (active.status === 'bidding' || active.status === 'playing')
-      ? active.tableId : undefined;
-    return {
-      seat: snapshot.seat,
-      room: { id: seat.roomId, name: room?.name ?? seat.roomId, kind: room?.kind ?? 'room' },
-      ...(compact ? {} : { latest: snapshot.latest, now: snapshot.now, at: snapshot.at }),
-      events: ownerPrivateHidden
-        ? events.filter((event) => event.type !== 'parlor.table.turn')
-        : events,
-      ...(compact ? {} : { tables: snapshot.tables ?? [] }),
-      ...(snapshot.table ? { table: compact
-        ? { label: snapshot.table.label, game: snapshot.table.game, text: snapshot.table.text }
-        : snapshot.table } : {}),
-      ...(watchTableId ? { watchTableId } : {}),
-      tablePrivate: ownerPrivateHidden || !snapshot.tablePrivate ? null
-        : compact ? { text: snapshot.tablePrivate.text } : snapshot.tablePrivate,
-      ...(snapshot.ledger ? { ledger: snapshot.ledger } : {}),
-      ledgerRoom: snapshot.ledgerRoom ?? [],
-      mailUnread: snapshot.mailUnread ?? 0,
-      mail: await recentMail(),
-      ownerPrivateHidden,
-    };
-  }
-
   /** 回放是 7 天；事件表只增不减会一直长，所以每小时清一次。 */
   private async pruneEvents(now: number): Promise<void> {
     await this.story.prune(now);
@@ -3503,12 +2567,6 @@ export class WorldServer {
           AND ended_at IS NOT NULL AND ended_at < ?`,
     ).run(before);
     await expireInvitations(this.db, now);
-  }
-
-  /** 有推送连接的席位（快照里的在线标记）。 */
-  private onlineSeatIds(roomId: string): string[] {
-    const clients = this.sse.get(roomId);
-    return clients ? [...new Set([...clients].map((client) => client.seatId))] : [];
   }
 
   /** 定向邀请限频：一小时最多 20 次，防止拿邀请刷别人的提醒。 */
@@ -3585,116 +2643,5 @@ export class WorldServer {
 
   private sendWeb(rel: string, req: IncomingMessage, res: ServerResponse, page: boolean, noindex = false): void {
     if (!sendWebAsset(rel, req, res, page, undefined, noindex)) throw new HttpError(404, '没有这个文件');
-  }
-
-  /**
-   * 某个客厅刚提交了新事件：如果有人在订阅，下一轮事件循环就推。
-   * 没有订阅者就不记，省得干净。
-   */
-  private markDirty(roomId: string): void {
-    if (this.closing || !this.sse.has(roomId)) return;
-    this.dirtyRooms.add(roomId);
-    if (this.pumpScheduled) return;
-    this.pumpScheduled = true;
-    setImmediate(() => {
-      this.pumpScheduled = false;
-      void this.pump().catch((error) => { console.error('parlor: 推送循环出错', error); });
-    });
-  }
-
-  private writeSseFrame(client: SseClient, frame: string, replay = false, turn = false): boolean {
-    const ready = client.res.write(frame);
-    const bytes = Buffer.byteLength(frame);
-    this.sseTraffic.bytes += bytes;
-    this.sseTraffic.bytesBySource[client.source] += bytes;
-    if (replay) this.sseTraffic.initialReplayBytes += bytes;
-    if (turn) {
-      this.sseTraffic.turnBytes += bytes;
-      this.sseTraffic.turnBytesBySource[client.source] += bytes;
-    }
-    return ready;
-  }
-
-  private writeEvent(room: string, client: SseClient, event: RoomEvent, replay = false): boolean {
-    const turn = event.type === 'parlor.table.turn';
-    const payload = client.compactTableEvents && turn ? { seq: event.seq, type: event.type } : event;
-    const ready = this.writeSseFrame(client, `data: ${JSON.stringify(payload)}\n\n`, replay, turn);
-    client.since = event.seq; // write(false) has accepted this event into the bounded buffer
-    if (!ready) {
-      client.blockedAt = this.now();
-      client.res.once('drain', () => { client.blockedAt = undefined; this.markDirty(room); });
-    }
-    return ready;
-  }
-
-  private async pump(): Promise<void> {
-    if (this.closing) return;
-    // 上一轮还没跑完就跳过这一轮：两条循环同时读 client.since 会把同一批事件推两遍。
-    if (this.pumping) return;
-    this.pumping = true;
-    const now = this.now();
-    const wallTime = Date.now();
-    const elapsed = wallTime - this.sseTrafficSince;
-    if (elapsed >= SSE_TRAFFIC_INTERVAL_MS) {
-      const activeBySource = sseSourceCounts();
-      for (const clients of this.sse.values()) {
-        for (const client of clients) activeBySource[client.source] += 1;
-      }
-      const active = activeBySource.web + activeBySource.coo + activeBySource.other;
-      const traffic = this.sseTraffic;
-      if (active || traffic.opened || traffic.closed || traffic.bytes) {
-        console.log(`parlor: SSE 流量 ${JSON.stringify({ intervalMs: elapsed, active, activeBySource, ...traffic })}`);
-      }
-      this.sseTrafficSince = wallTime;
-      this.sseTraffic = sseTrafficCounters();
-    }
-    // 有 dirty 就只推那些客厅；每 2 秒补一次全扫，兜住漏掉的通知与 ping。
-    const fullSweep = now - this.lastSweepAt >= 2_000;
-    if (fullSweep) this.lastSweepAt = now;
-    const targets = fullSweep ? [...this.sse.keys()] : [...this.dirtyRooms];
-    try {
-      for (const roomId of targets) {
-        this.dirtyRooms.delete(roomId);
-        const clients = this.sse.get(roomId);
-        if (!clients) continue;
-        const seats = new Map((await activeSeats(this.db, roomId)).map(row => [row.cooId, row]));
-        const eventsDb = new EventDb(this.db);
-        const shared = new Map<string, RoomEvent[]>();
-        for (const client of [...clients]) {
-          try {
-            if (client.res.writableLength > 1_048_576 || (client.blockedAt !== undefined && now - client.blockedAt > 30_000)) {
-              clients.delete(client); client.closeReason = '客户端接收过慢'; client.res.destroy(); continue;
-            }
-            if (client.blockedAt !== undefined) continue;
-            const seat = seats.get(client.cooId);
-            if (!seat || seat.id !== client.seatId || seat.tokenHash !== client.tokenHash
-              || (client.webSeat && !await this.webPlayers.seatSession(client.tokenHash))) {
-              clients.delete(client);
-              client.closeReason = '席位已经不在这个客厅';
-              client.res.end();
-              continue;
-            }
-            const key = JSON.stringify([client.cooId, client.since]);
-            const events = shared.get(key) ?? await eventsDb.history(roomId, { cooId:client.cooId, since:client.since, limit:200,
-              interval:{ visibleFromSeq:seat.visibleFromSeq, visibleUntilSeq:seat.visibleToSeq } });
-            shared.set(key, events);
-            for (const event of events) {
-              if (!this.writeEvent(roomId, client, event)) break;
-            }
-            if (events.length === 0 && now - client.lastPing >= 15_000) {
-              this.writeSseFrame(client, ': ping\n\n');
-              client.lastPing = now;
-            }
-          } catch (error) {
-            clients.delete(client);
-            client.closeReason = `写推送失败：${(error as Error)?.message ?? String(error)}`;
-            try { client.res.end(); } catch { /* 已断开 */ }
-          }
-        }
-        if (clients.size === 0) this.sse.delete(roomId);
-      }
-    } finally {
-      this.pumping = false;
-    }
   }
 }
