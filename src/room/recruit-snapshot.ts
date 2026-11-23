@@ -6,7 +6,7 @@
  * tablePublic 的 N+1。结果只在进程内缓存 30 秒——132 个 Coo 每分钟要的是同一份。
  */
 import type { Db } from './db.ts';
-import { tableCapacity } from './table-discovery-db.ts';
+import { tableCapacity } from './table-engine.ts';
 
 export interface RecruitCandidate {
   tableId: string;

@@ -1624,6 +1624,13 @@ export class ParlorWorld implements World {
           lines.push(line);
           break;
         }
+        case 'parlor.table.full': {
+          const hint = '等待桌主开局。';
+          // 兼容正文已经带有开局提示的旧事件。
+          const text = event.text.endsWith(hint) ? event.text : `${event.text} ${hint}`;
+          lines.push(`（桌子）${text}`);
+          break;
+        }
         case 'parlor.table.join':
         case 'parlor.table.start':
         case 'parlor.table.action':
@@ -2621,10 +2628,12 @@ export class ParlorWorld implements World {
       const result = await this.client.enterTable(this.token, { ...target, requestId });
       if (!result.matched) return '暂时没有合适的开放牌桌，你仍在原来的客厅。可以稍后重试或自己开桌。';
       const changed = this.currentRoom !== result.room;
+      const sameSeat = !changed && this.seat?.id === result.seat.id;
       this.currentRoom = result.room;
       this.token = result.token;
       this.seat = { ...this.seat!, ...result.seat } as Seat;
-      this.lastSeq = result.joinSeq;
+      // 同一席位重放入桌回执时，保留已经消费的事件游标，避免重复唤醒。
+      this.lastSeq = sameSeat ? Math.max(this.lastSeq, result.joinSeq) : result.joinSeq;
       if (changed) {
         this.clearPendingMessages();
         this.tableStateCursor = undefined;

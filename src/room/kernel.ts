@@ -5,7 +5,7 @@
 import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
-  DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS, scopeVisibleTo,
+  DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS, scopeVisibleTo, tableFullNotice,
   type ActionRequest, type DeliveryReceipt, type JoinRequest, type JoinResponse, type MonopolyInfo, type MonopolySignupView,
   type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
@@ -722,6 +722,8 @@ export class RoomKernel {
     } catch (error) {
       throw this.tableError(error);
     }
+    const fullNotice = tableFullNotice(table, this.tableId);
+    if (fullNotice) this.record(fullNotice);
   }
 
   startTable(seat: StoredSeat): StartReceipt {

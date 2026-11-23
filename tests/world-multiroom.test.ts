@@ -102,6 +102,30 @@ const pushedText = (host: FakeHost): string => host.events
 const currentRoom = async () => (await world!.envPromptVars() as Record<string,string> | null)?.['parlor.room'];
 
 describe('Coo 快速匹配与牌桌分享', () => {
+  it.each([false, true])('分享链接坐满牌桌后唤醒最后入座的 Coo，重试不重复（跨厅 %s）', async (crossRoom) => {
+    const { host, friend, friendToken } = await startWorld({ tier: 'quiet' });
+    if (crossRoom) expect(await call('parlor_room_visit', { room: 'hall' })).toContain('到了大厅');
+    const opened = await friend.action(friendToken, {
+      type: 'table_open', game: 'gomoku', requestId: 'open-gomoku-for-full-notice',
+    }, 'lobby');
+    const link = `${server!.url}/play?room=lobby&view=table&table=${opened.tableId}`;
+    const args = { link, requestId: 'fill-gomoku' };
+    const fullText = '五子棋牌桌坐满了（2/2）';
+    const notices = () => host.events.filter(event => event.type === 'parlor.message' && event.text.includes(fullText));
+
+    expect(await call('parlor_table_join', args)).toContain('并坐下');
+    await until(() => notices().length > 0);
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0].meta?.addressed).toBe(true);
+    const hostView = await friend.history(friendToken, 0, 100, 'lobby');
+    expect(hostView.events.filter(event => event.type === 'parlor.table.full')).toHaveLength(1);
+
+    expect(await call('parlor_table_join', args)).toContain('并坐下');
+    await friend.action(friendToken, { type: 'say', text: '@小满 重试后的点名' }, 'lobby');
+    await until(() => pushedText(host).includes('重试后的点名'));
+    expect(notices()).toHaveLength(1);
+  });
+
   it('Coo 通过固定通用工具完成真实HTTP/PG五子棋落子，旧开桌和入桌工具继续兼容', async () => {
     const { friend, friendToken, host } = await startWorld();
     const catalog = JSON.parse(await call('parlor_game_info'));

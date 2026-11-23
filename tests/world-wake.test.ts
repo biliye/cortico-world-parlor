@@ -202,6 +202,18 @@ describe('World 普通闲聊预算', () => {
 });
 
 describe('World 桌聊合并与决策提醒', () => {
+  it.each([
+    ['五子棋牌桌坐满了（2/2）。', '五子棋牌桌坐满了（2/2）。 等待桌主开局。'],
+    ['你的五子棋牌桌坐满了（2/2），等待桌主开局。', '你的五子棋牌桌坐满了（2/2），等待桌主开局。'],
+  ])('满桌正文「%s」只显示一次开局提示', async (text, expected) => {
+    await start('quiet');
+    emit(text, {
+      type: 'parlor.table.full', from: 'system', scope: { kind: 'table', tableId: 't1', seats: ['mine', 'friend'] },
+    });
+    expect(messages()).toHaveLength(1);
+    expect(messages()[0].text).toBe(`（桌子）${expected}`);
+  });
+
   it('普通桌聊从第一句起最多等五秒，持续聊天不无限推迟', async () => {
     await start();
     tableChat('第一句桌聊');
@@ -272,9 +284,12 @@ describe('World 桌聊合并与决策提醒', () => {
     expect(messages()).toHaveLength(0);
   });
 
-  it('off 不收桌聊或行动提醒', async () => {
+  it('off 不收桌聊、满桌或行动提醒', async () => {
     await start('off');
     tableChat('不该收到的桌聊');
+    emit('牌桌坐满了', {
+      type: 'parlor.table.full', from: 'system', scope: { kind: 'table', tableId: 't1', seats: ['mine', 'friend'] },
+    });
     emit('不该收到的行动', { type: 'parlor.table.turn', scope: { kind: 'seat', seatId: 'mine' } });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(messages()).toHaveLength(0);

@@ -7,6 +7,12 @@ export type TableStatus = 'open' | 'bidding' | 'playing' | 'ended';
 /** 游戏 id 是注册表里的字符串（见 `games/registry.ts`）；旧单厅服务器只认 dice/ddz。 */
 export type TableGame = string;
 
+/** 各玩法默认席数。旧长局大富翁使用独立报名表。 */
+export const tableCapacity = (game: string): number => ({
+  dice: 4, ddz: 3, werewolf: 9, monopoly2d: 4, gomoku: 2, xiangqi: 2, aeroplane: 4,
+  'mahjong-sichuan': 4, 'mahjong-guangdong': 4,
+}[game] ?? 0);
+
 export type TableEventScope = { kind: 'room' } | { kind: 'seat'; seatId: string };
 
 export interface TableEvent {
@@ -116,6 +122,13 @@ export interface TableEngine {
    * 可选；不实现 = 网关回 404。
    */
   tableLog?(query: TableLogQuery, requestor: { seatId: string; onTable: boolean }): unknown;
+}
+
+/** 狼人杀的实际席数在开桌时选定，其它玩法默认使用固定席数。 */
+export function tableSeatCapacity(engine: TableEngine): number {
+  const view = engine.public() as { capacity?: unknown };
+  return typeof view.capacity === 'number' && Number.isSafeInteger(view.capacity) && view.capacity > 0
+    ? view.capacity : tableCapacity(engine.game);
 }
 
 /** 狼人杀历史查询：公开发言/票型/死亡；`review` 才带夜间内部记录。 */

@@ -25,6 +25,26 @@ const texts = (events: { text: string }[]): string[] => events.map((event) => ev
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('牌桌私聊', () => {
+  it('单厅牌桌坐满时，只有在座玩家收到提示', async () => {
+    const a = await join('阿岚');
+    const b = await join('小满');
+    const c = await join('小柚');
+    const observer = await join('路人');
+    const fillEvents = async (token: string) =>
+      (await client.snapshot(token, 0, 50)).events.filter((event) => event.type === 'parlor.table.full');
+
+    await client.action(a.token, { type: 'table_open', game: 'ddz' });
+    await client.action(b.token, { type: 'table_join' });
+    expect(await fillEvents(a.token)).toEqual([]);
+    await client.action(c.token, { type: 'table_join' });
+    const events = await fillEvents(a.token);
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toContain('牌桌坐满了（3/3）');
+    expect(await fillEvents(b.token)).toEqual(events);
+    expect(await fillEvents(c.token)).toEqual(events);
+    expect(await fillEvents(observer.token)).toEqual([]);
+  });
+
   it('只有同桌看得见：客厅快照、回放、家长页', async () => {
     const a = await join('阿岚');
     const b = await join('小满');
