@@ -3,7 +3,7 @@
  * 狼人杀桌面：房间信息、牌桌和房间聊天各有一栏，按服务器给出的窗口显示操作。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../../lib/game-types.ts';
 import { initialOf } from '../../lib/text.ts';
 import Icon from '../Icon.vue';
 import ClockText from './ClockText.vue';

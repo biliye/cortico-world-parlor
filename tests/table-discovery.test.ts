@@ -13,10 +13,12 @@ interface Actor { token: string; room: string; cooId: string; secret: string }
 let app: WorldServer;
 let now = Date.now();
 let scratch: string | undefined;
+let ipSeq = 0;
 afterEach(async () => { await app?.close(); if (scratch) { rmSync(scratch, { recursive: true, force: true }); scratch = undefined; } });
 async function start(file = ':memory:') {
   now = Date.now();
-  app = await WorldServer.create({ ...(await pgServerStorage(file)), allowGuestJoin: true, inviteCode: 'test', port: 0, now: () => now });
+  ipSeq = 0;
+  app = await WorldServer.create({ ...(await pgServerStorage(file)), allowGuestJoin: true, inviteCode: 'test', port: 0, trustLoopbackProxy: true, now: () => now });
   await app.listen();
 }
 async function call(path: string, actor?: Actor, body?: Json) {
@@ -30,6 +32,7 @@ async function person(name: string, kind = 'pet', room = 'lobby'): Promise<Actor
   const secret = `secret-${cooId}`;
   const response = await fetch(app.url + `/v1/rooms/${room}/join`, { method: 'POST', headers: {
     'content-type': 'application/json', 'x-parlor-coo': cooId, 'x-parlor-coo-secret': secret, 'x-parlor-invite': 'test',
+    'x-forwarded-for': `198.51.100.${++ipSeq}`,
   }, body: JSON.stringify({ name, kind }) });
   const body = await response.json() as Json;
   expect(response.status, JSON.stringify(body)).toBe(200);

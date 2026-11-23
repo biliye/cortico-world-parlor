@@ -24,6 +24,7 @@ const request = async (path: string, body?: unknown, headers: Record<string, str
 
 const setup = async (global: boolean) => {
   server = await WorldServer.create({ ...(await pgServerStorage(':memory:')), port: 0, inviteCode: 'inv',
+    trustLoopbackProxy: true,
     ...(global ? { identityAuthority: 'self' } : {}) });
   await server.listen();
   const child = await request('/v1/rooms/hall/join', { name: '房主Coo', kind: 'pet' },
@@ -183,6 +184,7 @@ describe('删除客厅', () => {
       const joined = await request('/v1/rooms/' + made.body.room.id + '/join', { name: '客人' + i }, {
         'x-parlor-invite': 'inv', 'x-parlor-coo': 'coo-capacity-test-' + i,
         'x-parlor-coo-secret': 'capacity-secret-01234567890123456789-' + i,
+        'x-forwarded-for': `198.51.100.${i + 1}`,
       });
       expect(joined.status, JSON.stringify({ i, body: joined.body })).toBe(i < 30 ? 200 : 409);
     }

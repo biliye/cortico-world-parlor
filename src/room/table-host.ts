@@ -37,8 +37,12 @@ import {
 } from './table-engine.ts';
 import { TABLE_FULL_NOTICE_COOLDOWN_MS, tableFullNotice, type RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
-import { validSeatResults, writeSeatResults } from './table-results.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
+import {
+  abortTable, recordTableRefund, settleTable,
+  type LiveTable, type TableRow, type TableSeatRow, type TableSettlementDeps,
+} from './table-settlement.ts';
+import { hydrateTableRow, recoverRoomTables, type TableRecoveryDeps } from './table-recovery.ts';
 
 const OPEN_MS = 30 * 60_000;
 /** 托管席位（Coo 掉线/被移出）由脚本代打的节拍：一秒一拍，与旧的每秒 tick 一致。 */
@@ -80,55 +84,6 @@ export interface TableSeatLookup {
   activeSeat(cooId: string): Promise<SeatRow | null>;
   /** 客厅里所有活跃席位。 */
   seats(): Promise<SeatRow[]>;
-}
-
-interface LiveTable {
-  id: string;
-  game: string;
-  engine: TableEngine;
-  hostSeatId: string;
-  hostName: string;
-  createdAt: number;
-  startedAt?: number;
-  openDeadlineAt: number;
-  revision: number;
-  stateJson: string;
-  frozen: boolean;
-  /** 被托管（移除/掉线）的席位：轮到他们时脚本代打，不占他们的截止时间。 */
-  autoSeats: Set<string>;
-}
-
-interface TableRow {
-  id: string;
-  room_id: string;
-  game: string;
-  status: string;
-  host_seat_id: string | null;
-  /** SQLite 的 TEXT 是字符串，PostgreSQL 的 JSONB 读出来是对象；统一走 jsonValue。 */
-  state_json: unknown;
-  engine_version: string | null;
-  revision: number;
-  state_version: number;
-  deadline_at: number | null;
-  frozen_at: number | null;
-  recovery_error: string | null;
-  created_at: number;
-  started_at: number | null;
-  ended_at: number | null;
-  end_reason: string | null;
-  updated_at: number;
-}
-
-interface TableSeatRow {
-  table_id: string;
-  room_id: string;
-  seat_id: string;
-  coo_id: string | null;
-  position: number;
-  is_bot: number;
-  auto: number;
-  joined_at: number;
-  left_at: number | null;
 }
 
 export interface TableReceipt {
@@ -222,14 +177,6 @@ const isLive = (status: TableStatus): boolean => status === 'open' || status ===
 const actionHash = (value: unknown): string => createHash('sha256')
   .update(JSON.stringify(value))
   .digest('hex');
-
-/**
- * 快照列的统一形状：SQLite 的 TEXT 读出来是字符串，PostgreSQL 的 JSONB 读出来是对象。
- * 内存缓存按旧约定一律存文本，两种后端写回时都认。
- */
-const stateTextOf = (raw: unknown): string => (
-  typeof raw === 'string' ? raw : JSON.stringify(jsonValue<unknown>(raw, null))
-);
 
 export class TableHost {
   readonly roomId: string;
@@ -1361,334 +1308,63 @@ export class TableHost {
     });
   }
 
-  /**
-   * 一局结束：写公开战绩，并按本局引擎保留的参赛席位落逐席结果。
-   * 终态只写一次（`table_finalizations`），正常结算与作废退款互斥。
-   */
-  private async settle(
+  private settlementDeps(): TableSettlementDeps {
+    return {
+      db: this.db,
+      roomId: this.roomId,
+      ledger: this.ledger,
+      mail: this.mail,
+      now: this.now,
+      onTableResult: this.onTableResult,
+      finalization: (tableId) => this.finalization(tableId),
+      tableSeatRows: (tableId) => this.tableSeatRows(tableId),
+      seatById: (seatId) => this.seatById(seatId),
+      markTableSeatsLeft: (tableId, now) => this.markTableSeatsLeft(tableId, now),
+      clearActivePlayers: (tableId) => this.clearActivePlayers(tableId),
+      updateTableRow: (tableId, status, now, extra) => this.updateTableRow(tableId, status, now, extra),
+      appendTableEvent: (table, event, now) => this.appendTableEvent(table, event, now),
+      removeTableFromCache: (tableId) => { this.tables.delete(tableId); },
+    };
+  }
+
+  private recoveryDeps(): TableRecoveryDeps {
+    return {
+      ...this.settlementDeps(),
+      events: this.events,
+      tables: this.tables,
+      openMs: this.openMs,
+      turnMs: this.turnMs,
+      recovery: this.recovery,
+      seatName: (seatId) => this.seatName(seatId),
+      withCurrentNames: (engine) => this.withCurrentNames(engine),
+      deadlineOf: (engine) => this.deadlineOf(engine),
+      abort: (table, reason, text) => this.abort(table, reason, text),
+    };
+  }
+
+  private settle(
     table: LiveTable, engine: TableEngine, event: TableEvent,
     seatResults: readonly TableSeatResult[] | null | undefined, now: number,
   ): Promise<void> {
-    if (await this.finalization(table.id)) return;
-    const allSeats = await this.tableSeatRows(table.id);
-    const rows = allSeats.filter((row) => row.left_at === null && row.coo_id !== null);
-    const participants = [...new Set(rows.map((row) => row.coo_id!))];
-    const seatToCoo = new Map(rows.map((row) => [row.seat_id, row.coo_id!]));
-    const data = event.data ?? {};
-    const winnerSeatIds = Array.isArray(data.winners)
-      ? data.winners.filter((id): id is string => typeof id === 'string')
-      : [];
-    const winners = [...new Set(winnerSeatIds.map((id) => seatToCoo.get(id)).filter((id): id is string => !!id))];
-    const landlordId = typeof data.landlord === 'string' ? data.landlord : undefined;
-    const landlordName = landlordId === undefined ? undefined : (await this.seatById(landlordId))?.name;
-    const entry = await this.ledger.record({
-      kind: 'game',
-      room: this.roomId,
-      from: 'room',
-      effectId: `${table.id}/result`,
-      game: table.engine.game,
-      participants,
-      winners,
-      text: event.text,
-      visibility: 'room',
-      data: {
-        game: table.engine.game,
-        gameLabel: table.engine.label,
-        tableId: table.id,
-        tie: data.tie === true,
-        ...(typeof data.multiplier === 'number' ? { multiplier: data.multiplier } : {}),
-        ...(data.spring === true ? { spring: true } : {}),
-        ...(data.antiSpring === true ? { antiSpring: true } : {}),
-        ...(landlordId !== undefined
-          ? { landlord: landlordName }
-          : {}),
-      },
-    });
-    const game = gameById(table.game);
-    const eligibleForRating = game?.rated === true && !event.ratingExcluded;
-    const rankedSeats = eligibleForRating && validSeatResults(seatResults, engine.seatIds(), winnerSeatIds, data.tie === true, game.ratingOrder)
-      ? seatResults : null;
-    const ratingSkipped = eligibleForRating && !rankedSeats
-      ? (seatResults?.length ? 'invalid_seat_results' : 'missing_seat_results') : undefined;
-    // 终态表靠主键挡第二次结算；写入保持普通 INSERT，冲突就是要它抛。
-    await this.db.prepare(
-      `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
-       VALUES (?, 'result', ?, ?, ?)`,
-    ).run(table.id, entry.id, now, JSON.stringify({
-      winners, participants,
-      ...(event.ratingExcluded ? { ratingExcluded: true } : {}),
-      ...(ratingSkipped ? { ratingSkipped } : {}),
-    }));
-    if (rankedSeats) {
-      await writeSeatResults(this.db, table.id, table.game, allSeats, rankedSeats, now);
-      this.db.afterCommit(() => this.onTableResult?.(table.game));
-    } else if (ratingSkipped) {
-      this.db.afterCommit(() => console.error('parlor: 等级分赛果缺失或不一致', table.game, table.id));
-    }
-    // 一局结束 = 大家都下桌：席位记录标离桌，active_table_players 清空。
-    // 引擎里的座位还留着给结果页看（谁打了这局），但不再算「人在桌上」。
-    if (this.db.kind === 'postgres') await this.db.prepare(`UPDATE room_seats SET business_active_at=? WHERE room_id=? AND coo_id IN
-      (SELECT coo_id FROM table_seats WHERE table_id=? AND coo_id IS NOT NULL) AND released_at IS NULL`).run(now, this.roomId, table.id);
-    if (table.engine.offlineReminder) await this.mail.readAllTableReminders(this.roomId, table.id, now);
-    await this.markTableSeatsLeft(table.id, now);
-    await this.clearActivePlayers(table.id);
+    return settleTable(this.settlementDeps(), table, engine, event, seatResults, now);
   }
 
-  /** 开桌超时/引擎出错/长停机：整桌作废，只留一条终态。 */
-  private async abort(table: LiveTable, reason: 'timeout' | 'error' | 'offline' | 'restart', text: string): Promise<void> {
-    const now = this.now();
-    await withTransaction(this.db, async () => {
-      if (table.engine.status !== 'open') await this.refund(table, reason, now);
-      if (table.engine.offlineReminder) await this.mail.readAllTableReminders(this.roomId, table.id, now);
-      await this.markTableSeatsLeft(table.id, now);
-      await this.clearActivePlayers(table.id);
-      await this.updateTableRow(table.id, 'abandoned', now, { endedAt: now, endReason: reason });
-      await this.appendTableEvent(table, {
-        type: 'parlor.table.cancel',
-        scope: { kind: 'room' },
-        text,
-        data: { game: table.game, tableId: table.id, reason },
-      }, now);
-    });
-    this.db.afterCommit(() => { this.tables.delete(table.id); });
+  private abort(table: LiveTable, reason: 'timeout' | 'error' | 'offline' | 'restart', text: string): Promise<void> {
+    return abortTable(this.settlementDeps(), table, reason, text);
   }
 
-  /**
-   * 牌桌作废：只留一个终态标记，免得以后被当成「还没结算」。
-   * 0.38.0 起没有押注，也就不再有退款与退注通知——作废只是这局不算数。
-   */
-  private async refund(table: { id: string }, reason: string, now: number): Promise<void> {
-    if (await this.finalization(table.id)) return;
-    await this.db.prepare(
-      `INSERT INTO table_finalizations(table_id, kind, entry_id, at, payload_json)
-       VALUES (?, 'refund', NULL, ?, ?)`,
-    ).run(table.id, now, JSON.stringify({ reason }));
+  private refund(table: { id: string }, reason: string, now: number): Promise<void> {
+    return recordTableRefund(this.settlementDeps(), table, reason, now);
   }
 
   // —— 恢复 ——
 
-  /**
-   * 进程启动后还挂着 open/bidding/playing 的桌子：
-   * - 读得懂快照：短停机把截止时刻搬到现在；超过 30 分钟作废退款；
-   * - 读不懂/版本不认识：只隔离这一桌，不猜、不重发牌；
-   * - 第一版（0.25.0）的旧桌没有快照：作废退款（升级时要先排空旧牌局）。
-   */
-  private async recoverLiveTables(): Promise<void> {
-    const now = this.now();
-    // 最近结束的一桌也装回来：进程重启后网页还要看结果页。
-    // NULLS LAST 写死：SQLite 的 DESC 把 NULL 放最后，PostgreSQL 默认放最前；
-    // 老库里可能有 ended_at 为空的 ended 行，不写清楚两边会挑到不同的桌。
-    const ended = await this.db.prepare(
-      `SELECT * FROM tables WHERE room_id = ? AND status = 'ended' AND state_json IS NOT NULL
-        ORDER BY ended_at DESC NULLS LAST, created_at DESC LIMIT 1`,
-    ).get(this.roomId) as TableRow | undefined;
-    if (ended) {
-      try {
-        const engine = await this.hydrate(ended);
-        this.tables.set(ended.id, {
-          id: ended.id,
-          game: ended.game,
-          engine,
-          hostSeatId: ended.host_seat_id ?? engine.host,
-          hostName: await this.seatName(ended.host_seat_id ?? engine.host),
-          createdAt: ended.created_at,
-          ...(ended.started_at !== null ? { startedAt: ended.started_at } : {}),
-          openDeadlineAt: ended.deadline_at ?? ended.created_at + this.openMs,
-          revision: ended.revision,
-          stateJson: stateTextOf(ended.state_json),
-          frozen: false,
-          autoSeats: new Set(),
-        });
-      } catch (error) {
-        console.error('parlor: 最近结束的牌桌读不回来（只影响结果页）', error);
-      }
-    }
-    const rows = await this.db.prepare(
-      `SELECT * FROM tables WHERE room_id = ? AND status IN ('open','bidding','playing') ORDER BY created_at`,
-    ).all(this.roomId) as unknown as TableRow[];
-    // 之前已经隔离的桌：照样列出来（标 frozen），但不推进、不接动作。
-    for (const row of rows) {
-      if (row.frozen_at === null) continue;
-      this.tables.set(row.id, await this.frozenTable(row));
-    }
-    if (rows.length === 0) return;
-    const newest = rows.reduce((max, row) => Math.max(max, row.updated_at), 0);
-    const lastHealthyAt = this.recovery.lastHealthyAt ?? newest;
-    const downtime = Math.max(0, now - lastHealthyAt);
-    for (const row of rows) {
-      if (row.frozen_at !== null) continue;
-      if (!row.state_json) {
-        await this.abortRow(row, row.status === 'open' ? 'closed' : 'restart',
-          row.status === 'open' ? '没有开局就停机的旧桌子，已经收起来了。' : '升级前的旧牌局没有存档，这局作废。', now);
-        continue;
-      }
-      let engine: TableEngine;
-      try {
-        engine = await this.hydrate(row);
-      } catch (error) {
-        await this.freezeRow(row, error, now);
-        this.tables.set(row.id, await this.frozenTable(row));
-        continue;
-      }
-      const autoRows = await this.db.prepare(
-        "SELECT seat_id FROM table_seats WHERE table_id = ? AND auto = 1 AND left_at IS NULL",
-      ).all(row.id) as unknown as Array<{ seat_id: string }>;
-      const live: LiveTable = {
-        id: row.id,
-        game: row.game,
-        engine,
-        hostSeatId: row.host_seat_id ?? engine.host,
-        hostName: await this.seatName(row.host_seat_id ?? engine.host),
-        createdAt: row.created_at,
-        ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
-        openDeadlineAt: row.deadline_at ?? row.updated_at + this.openMs,
-        revision: row.revision,
-        stateJson: stateTextOf(row.state_json),
-        frozen: false,
-        autoSeats: new Set(autoRows.map((entry) => entry.seat_id)),
-      };
-      if (engine.status === 'open') {
-        if (now >= live.openDeadlineAt) {
-          await this.abort(live, 'timeout', `${engine.label}桌连续 ${Math.round(this.openMs / 60_000)} 分钟没有活动，已经收起来了。`);
-          continue;
-        }
-        this.tables.set(live.id, live);
-        continue;
-      }
-      if (downtime > this.recovery.maxDowntimeMs) {
-        await this.abort(live, 'offline',
-          `${engine.label}桌因为服务停机超过 ${Math.round(this.recovery.maxDowntimeMs / 60_000)} 分钟，这局作废。`);
-        continue;
-      }
-      engine.rearm(now, downtime, this.recovery.minHumanMs);
-      const revision = live.revision + 1;
-      const stateJson = JSON.stringify(engine.exportState());
-      live.revision = revision;
-      live.stateJson = stateJson;
-      this.tables.set(live.id, live);
-      await withTransaction(this.db, async () => {
-        await this.db.prepare(
-          `UPDATE tables SET revision = ?, state_json = ?, state_version = ?, engine_version = ?,
-             deadline_at = ?, updated_at = ? WHERE id = ?`,
-        ).run(
-          revision, stateJson, engine.stateVersion, `${row.game}/${engine.stateVersion}`,
-          this.deadlineOf(engine) ?? null, now, live.id,
-        );
-        await this.appendTableEvent(live, {
-          type: 'parlor.table.resume',
-          scope: { kind: 'room' },
-          text: `${engine.label}桌续上了：服务停了约 ${Math.max(1, Math.round(downtime / 1000))} 秒，牌和轮次都还在。`,
-          data: { game: live.game, tableId: live.id, downtimeMs: downtime },
-        }, now);
-      });
-    }
+  private recoverLiveTables(): Promise<void> {
+    return recoverRoomTables(this.recoveryDeps());
   }
 
-  private async abortRow(row: TableRow, reason: 'closed' | 'restart', text: string, now: number): Promise<void> {
-    const stub: LiveTable = {
-      id: row.id,
-      game: row.game,
-      engine: { label: gameLabelOf(row.game) } as TableEngine,
-      hostSeatId: row.host_seat_id ?? '',
-      hostName: '',
-      createdAt: row.created_at,
-      openDeadlineAt: 0,
-      revision: row.revision,
-      stateJson: '',
-      frozen: false,
-      autoSeats: new Set(),
-    };
-    await withTransaction(this.db, async () => {
-      if (row.status !== 'open') await this.refund(stub, reason, now);
-      if (row.status !== 'open') await this.mail.readAllTableReminders(this.roomId, row.id, now);
-      await this.markTableSeatsLeft(row.id, now);
-      await this.clearActivePlayers(row.id);
-      await this.updateTableRow(row.id, 'abandoned', now, { endedAt: now, endReason: reason });
-      await this.appendTableEvent(stub, {
-        type: 'parlor.table.cancel',
-        scope: { kind: 'room' },
-        text,
-        data: { game: row.game, tableId: row.id, reason },
-      }, now);
-    });
-  }
-
-  private async freezeRow(row: TableRow, error: unknown, now: number): Promise<void> {
-    const message = (error as Error)?.message ?? String(error);
-    console.error(`parlor: 牌桌 ${row.id} 恢复失败，已隔离`, message);
-    await withTransaction(this.db, async () => {
-      await this.db.prepare('UPDATE tables SET frozen_at = ?, recovery_error = ? WHERE id = ?')
-        .run(now, message.slice(0, 500), row.id);
-      await this.mail.readAllTableReminders(this.roomId, row.id, now);
-      await this.events.append(this.roomId, {
-        type: 'parlor.table.frozen',
-        ts: now,
-        from: 'system',
-        scope: { kind: 'room' },
-        text: `${gameLabelOf(row.game)}桌的存档读不出来，已经被隔离；这副牌不会自动重发。`,
-        data: { game: row.game, tableId: row.id },
-      });
-    });
-  }
-
-  private async frozenTable(row: TableRow): Promise<LiveTable> {
-    return {
-      id: row.id,
-      game: row.game,
-      engine: this.frozenStub(row),
-      hostSeatId: row.host_seat_id ?? '',
-      hostName: await this.seatName(row.host_seat_id ?? ''),
-      createdAt: row.created_at,
-      ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
-      openDeadlineAt: 0,
-      revision: row.revision,
-      stateJson: '',
-      frozen: true,
-      autoSeats: new Set(),
-    };
-  }
-
-  /** 已隔离的桌：只用来列出来给人看，任何动作都拒绝。 */
-  private frozenStub(row: TableRow): TableEngine {
-    const label = gameLabelOf(row.game);
-    const stub = {
-      game: row.game,
-      label,
-      status: 'playing' as TableStatus,
-      host: row.host_seat_id ?? '',
-      stateVersion: 0,
-      has: () => false,
-      seatIds: () => [],
-      join: () => { throw new Error('这张桌子已经隔离'); },
-      leave: () => { throw new Error('这张桌子已经隔离'); },
-      start: () => { throw new Error('这张桌子已经隔离'); },
-      act: () => { throw new Error('这张桌子已经隔离'); },
-      tick: () => null,
-      view: () => null,
-      public: () => ({ game: row.game, status: 'playing', host: row.host_seat_id ?? '' }),
-      privateText: () => null,
-      publicText: () => `${label}桌的存档读不出来，已经隔离；这副牌不会自动重发。`,
-      exportState: () => { throw new Error('这张桌子已经隔离'); },
-      restoreState: () => { throw new Error('这张桌子已经隔离'); },
-      rearm: () => { /* 隔离桌不推进 */ },
-      autoPlay: () => null,
-    };
-    return stub as unknown as TableEngine;
-  }
-
-  private async hydrate(row: TableRow): Promise<TableEngine> {
-    const def = gameById(row.game);
-    if (!def) throw new Error(`不认识的桌子类型：${row.game}`);
-    const engine = def.create({
-      host: { id: row.host_seat_id ?? '', name: await this.seatName(row.host_seat_id ?? '') },
-      now: row.created_at,
-      ...(this.turnMs !== undefined ? { turnMs: this.turnMs } : {}),
-    });
-    if (row.state_version !== 0 && row.state_version !== engine.stateVersion) {
-      throw new Error(`存档格式是 ${row.state_version}，这一版只认 ${engine.stateVersion}`);
-    }
-    engine.restoreState(jsonValue(row.state_json, null));
-    return this.withCurrentNames(engine);
+  private hydrate(row: TableRow): Promise<TableEngine> {
+    return hydrateTableRow(this.recoveryDeps(), row);
   }
 
   // —— 小工具 ——

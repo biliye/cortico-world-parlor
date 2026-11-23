@@ -32,6 +32,7 @@ const start = async (): Promise<WorldServer> => {
     port: 0,
     inviteCode: 'inv',
     defaultRoomId: 'lobby',
+    trustLoopbackProxy: true,
   });
   await server.listen();
   return server;
@@ -223,7 +224,7 @@ describe('家长下场', () => {
     const capacity = child.body.maxSeats as number;
     for (let i = 2; i < capacity; i++) {
       const filler = await post(app.url, `/v1/rooms/${room}/join`, { name: `茶客 ${i}` }, {
-        ...cooHeaders(`coo-watchfiller${i}`), 'x-parlor-invite': 'inv',
+        ...cooHeaders(`coo-watchfiller${i}`), 'x-parlor-invite': 'inv', 'x-forwarded-for': `198.51.100.${i}`,
       });
       expect(filler.status).toBe(200);
     }

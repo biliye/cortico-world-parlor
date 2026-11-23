@@ -579,6 +579,15 @@ export class CooAccountDb {
       .run(this.now(), accountId);
   }
 
+  /** 清理已过期或撤销超过保留期的家长会话，避免 account_sessions 无限增长。 */
+  async pruneSessions(now = this.now(), revokedRetentionMs = 7 * 24 * 3_600_000): Promise<number> {
+    const revokedBefore = now - Math.max(0, revokedRetentionMs);
+    const result = await this.db.prepare(
+      'DELETE FROM account_sessions WHERE expires_at <= ? OR (revoked_at IS NOT NULL AND revoked_at <= ?)',
+    ).run(now, revokedBefore);
+    return Number(result.changes);
+  }
+
   private async cooRow(cooId: string): Promise<CooRow | undefined> {
     return await this.db.prepare(`SELECT ${COO_COLUMNS} FROM coos WHERE id = ?`).get(cooId) as CooRow | undefined;
   }

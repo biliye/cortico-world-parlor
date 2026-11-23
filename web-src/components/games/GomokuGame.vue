@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../../lib/game-types.ts';
 
 type Point = { row: number; col: number };
 type Level = 'win' | 'block' | 'shape';

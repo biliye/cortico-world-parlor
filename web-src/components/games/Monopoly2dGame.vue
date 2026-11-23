@@ -7,7 +7,7 @@
  * 规则、租金额、事件结果都在服务器算。
  */
 import { computed, ref } from 'vue';
-import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../../lib/game-types.ts';
 import { initialOf } from '../../lib/text.ts';
 import ClockText from './ClockText.vue';
 import Icon from '../Icon.vue';

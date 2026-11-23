@@ -4,7 +4,7 @@ import {
   AEROPLANE_RULES, COLOURS, FINISH, HANGAR, HOME_START, PLANES_PER_SEAT, positionText, trackIndex,
   type AeroplaneMove, type AeroplaneSeat,
 } from '../../../src/room/games/aeroplane-rules.ts';
-import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../../lib/game-types.ts';
 
 const props = defineProps<{ view: GameView; ctx: GameCtx }>();
 

@@ -2,8 +2,8 @@
  * 客厅 World：连上房间，把可见事件按提醒挡位交给 Core，提供说话/私聊/查看工具。
  * 它不判断谁能看见什么；服务器只发这个席位能看见的事件。
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { EventOrigin, StoragePart, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl } from 'cortico/core/types.ts';
@@ -27,12 +27,17 @@ import {
 } from './room/protocol.ts';
 import { gameById, type GameDefinition } from './room/games/registry.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
-import { formatGomokuAdvice, formatGomokuBoard } from './room/games/gomoku-table.ts';
-import { formatXiangqiAdvice, formatXiangqiBoard, isMove as isXiangqiMove, type Point, type XiangqiHint, type XiangqiMove } from './room/games/xiangqi.ts';
+import type { Point } from './room/games/xiangqi.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
-import { GAME_RESPONSE_MAX_BYTES, type TablePrivateSummary, type TableSummary } from './room/table-engine.ts';
+import { GAME_RESPONSE_MAX_BYTES } from './room/table-engine.ts';
 import { PARLOR_TOOL_DECLS, OPERATION_DECLS, TOOL_OPERATIONS, operationHelp } from './tool-contract.ts';
+import {
+  PendingMessages, collapseRecruitEvents, compactGameResult, formatActionReceipt,
+  formatLedgerDay, formatLedgerTime, formatRecruitLine, formatRoomSnapshot,
+  recruitSignalsOf, renderRoomEvents, type WakeBatch,
+} from './world-render.ts';
+import { cursorStoragePart, identityStoragePart, ownerKeyBinding, roomStoragePart } from './world-storage.ts';
 export { PARLOR_TOOL_DECLS } from './tool-contract.ts';
 
 const ENV_PROMPT_FILE = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
@@ -58,8 +63,6 @@ const ROOM_NAME = 'parlor-room.json';
 const DIGEST_MS = 60_000;
 const CHAT_BATCH_MS = 5_000;
 const LINK_GAP_MS = 60_000;
-const PENDING_MAX = 50;
-const PENDING_TEXT_MAX = 12_000;
 /** 招募去重表只留最近的桌：桌号一次性，旧条目不会被再用到。 */
 const RECRUIT_HINT_MAX = 200;
 /** inbox 探到 404 之后隔多久重探一次：服务器升级到 0.39.0 后最多这么久自动恢复。 */
@@ -72,106 +75,6 @@ const TIER_BUDGET: Readonly<Record<WakeTier, number>> = {
   quiet: 0,
   off: 0,
 };
-
-function xiangqiTurnAction(view: Record<string, unknown>): string {
-  const { tableId, revision, deadline, hintAction } = view;
-  const first = Array.isArray(view.hints) ? view.hints[0] : undefined;
-  if (view.game !== 'xiangqi' || view.canAct !== true || typeof tableId !== 'string'
-    || typeof revision !== 'number' || !isXiangqiMove(first)) return '';
-  const { from, to } = first;
-  const action = hintAction === 'move_hint'
-    ? { table: tableId, revision, action: hintAction, params: { hint: 1 } }
-    : { table: tableId, revision, action: 'move', params: { from, to } };
-  const clock = typeof deadline === 'number' ? `截止 ${serverClockShort(deadline)}（UTC+8）。` : '';
-  const forced = Array.isArray(view.legalMoves) && view.legalMoves.length === 1 ? '这是唯一合法着法。' : '';
-  const chooseOther = hintAction === 'move_hint' && !forced ? '改选其他建议时填对应的 hint 编号。' : '';
-  return `【象棋轮到你】${clock}先落子，再聊天或复盘。${forced}${chooseOther}拿不定主意时直接走首选：parlor_game_action ${JSON.stringify(action)}`;
-}
-
-/** 只裁剪 Coo 工具输出。HTTP 快照仍给网页完整的棋盘数组。 */
-function compactGameResult(result: Record<string, unknown>, from?: Point): Record<string, unknown> {
-  const table = result.table as TableSummary | null | undefined;
-  const view = result.tablePrivate as TablePrivateSummary | null | undefined;
-  const output = { ...result };
-  const formatBoard = (game: string, board: number[], last: unknown) => game === 'xiangqi'
-    ? formatXiangqiBoard(board, last as XiangqiMove | undefined)
-    : formatGomokuBoard(board, last as Parameters<typeof formatGomokuBoard>[1]);
-  const isBoardGame = (game?: string) => game === 'gomoku' || game === 'xiangqi';
-  const hasPublicBoard = table && isBoardGame(table.game) && Array.isArray(table.board);
-  if (hasPublicBoard) {
-    output.table = { ...table, board: formatBoard(table.game, table.board as number[], table.last) };
-  }
-  if (view && isBoardGame(view.game) && Array.isArray(view.board)) {
-    const { board, hints, warning, legalMoves, ...rest } = view;
-    const hasSameBoard = hasPublicBoard && (table.id ?? table.tableId) === view.tableId && table.revision === view.revision;
-    const moves = Array.isArray(hints) ? hints : [];
-    const advice = view.game === 'xiangqi'
-      ? formatXiangqiAdvice(moves as XiangqiHint[], warning as string | undefined)
-      : formatGomokuAdvice(moves as Parameters<typeof formatGomokuAdvice>[0], warning as Parameters<typeof formatGomokuAdvice>[1]);
-    const headline = typeof view.text === 'string' ? view.text.split('\n', 1)[0] : '';
-    const turnAction = xiangqiTurnAction(view);
-    const legalDestinations = from && view.game === 'xiangqi' && view.canAct === true && Array.isArray(legalMoves)
-      ? { from, to: (legalMoves as XiangqiMove[]).filter(move => move.from.row === from.row && move.from.col === from.col).map(move => move.to) }
-      : undefined;
-    output.tablePrivate = {
-      ...rest,
-      text: [turnAction, headline, advice].filter(Boolean).join('\n'),
-      ...(legalDestinations && { legalDestinations }),
-      ...(!hasSameBoard && { board: formatBoard(view.game, board, view.last) }),
-    };
-  }
-  if (Array.isArray(result.tables)) {
-    output.tables = result.tables.map((entry: TableSummary) => {
-      if (!isBoardGame(entry.game)) return entry;
-      const { board: _board, ...summary } = entry;
-      return summary;
-    });
-  }
-  return output;
-}
-
-interface WakeBatch {
-  events: RoomEvent[];
-  omitted: number;
-  focus: boolean;
-}
-
-/** 超出待发上限的旧消息仍在服务器历史里，投递时明确提示省略。 */
-class PendingMessages {
-  private events: RoomEvent[] = [];
-  private omitted = 0;
-  private focus = false;
-  get length(): number { return this.events.length; }
-
-  push(event: RoomEvent): void {
-    this.events.push(event);
-    let chars = this.events.reduce((sum, item) => sum + item.text.length, 0);
-    while (this.events.length > PENDING_MAX || (chars > PENDING_TEXT_MAX && this.events.length > 1)) {
-      chars -= this.events.shift()!.text.length;
-      this.omitted += 1;
-    }
-  }
-
-  merge(batch: WakeBatch): void {
-    this.omitted += batch.omitted;
-    this.focus ||= batch.focus;
-    for (const event of batch.events) this.push(event);
-  }
-
-  take(): WakeBatch {
-    const batch = { events: this.events, omitted: this.omitted, focus: this.focus };
-    this.clear();
-    return batch;
-  }
-
-  clear(): void {
-    this.events = [];
-    this.omitted = 0;
-    this.focus = false;
-  }
-}
-
-const KIND_LABELS: Readonly<Record<string, string>> = { pet: 'Coo', human: '人', observer: '观看' };
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -747,7 +650,7 @@ export class ParlorWorld implements World {
   }
 
   private ownerKeyBinding(issuer: string, key: string): string {
-    return `${issuer}|${createHash('sha256').update(key).digest('base64url')}`;
+    return ownerKeyBinding(issuer, key);
   }
 
   /** 只对签发范围已知的钥匙生成链接或发校验请求；无标记的旧钥匙走身份认证换新。 */
@@ -1533,40 +1436,12 @@ export class ParlorWorld implements World {
     }
   }
 
-  /**
-   * 同一桌、同一版本、同类型的招募事件只留最后一条。
-   * 重连补发会把同一句提示重放一遍，两条一模一样的事实留一条就够；
-   * 按「类型 + 桌号 + 版本」去重，同版本里人数刚变过时保留较新的那条。
-   * 类型进 key 是因为 `open`（开桌）与 `discovery`（改了招募）是两条不同事实；
-   * 跨类型的重复引导不在这里删事实，由 `render()` 按桌号 + 版本补一次。
-   */
   private collapseRecruit(events: RoomEvent[]): RoomEvent[] {
-    const out: RoomEvent[] = [];
-    const seen = new Map<string, number>();
-    for (const event of events) {
-      const signal = event.type === 'parlor.table.discovery'
-        || (event.type === 'parlor.table.open' && event.data?.matchOpen === true);
-      const tableId = signal && typeof event.data?.tableId === 'string' ? event.data.tableId : '';
-      if (!tableId) { out.push(event); continue; }
-      const key = `${event.type}:${tableId}:${Number(event.data?.recruitVersion ?? 0)}`;
-      const at = seen.get(key);
-      if (at === undefined) { seen.set(key, out.length); out.push(event); continue; }
-      out[at] = event;
-    }
-    return out;
+    return collapseRecruitEvents(events);
   }
 
-  /** 从一批事件里取「这桌在等人」的 tableId → recruitVersion。 */
   private recruitSignalsOf(events: RoomEvent[]): Map<string, number> {
-    const signals = new Map<string, number>();
-    for (const event of events) {
-      const signal = event.type === 'parlor.table.discovery'
-        || (event.type === 'parlor.table.open' && event.data?.matchOpen === true);
-      if (!signal) continue;
-      const tableId = typeof event.data?.tableId === 'string' ? event.data.tableId : '';
-      if (tableId) signals.set(tableId, Number(event.data?.recruitVersion ?? 0));
-    }
-    return signals;
+    return recruitSignalsOf(events);
   }
 
   /** 记「这桌的这个版本已经提示过」；超过上限按最早记入的丢，桌号不会被复用。 */
@@ -1598,80 +1473,7 @@ export class ParlorWorld implements World {
   }
 
   private render(events: RoomEvent[]): string {
-    const lines = events.length > 1 ? ['[客厅] 刚才房间里：'] : [];
-    // 「怎么去」按桌号 + 版本各补一次：开桌即开放匹配之后紧接着再提交一次「开放匹配」，
-    // 两条事件事实不同（都会留在摘要里），但版本没变，引导不该出现两遍。
-    // 分开记 join 与「有招募原话」：开桌那条只有 join，招募原话可能由后一条补上。
-    const guided = new Set<string>();
-    const guideOnce = (kind: string, tableId: string, version: number): boolean => {
-      const key = `${kind}:${tableId}:${version}`;
-      if (guided.has(key)) return false;
-      guided.add(key);
-      return true;
-    };
-    for (const event of events) {
-      const name = typeof event.data?.name === 'string' ? event.data.name : event.from;
-      switch (event.type) {
-        case 'parlor.say': lines.push(`${name}：${event.text}`); break;
-        case 'parlor.table.say': lines.push(`${name} 在牌桌上对你们说：${event.text}`); break;
-        case 'parlor.whisper': lines.push(`${name} 悄悄对你说：${event.text}`); break;
-        case 'parlor.joined':
-        case 'parlor.left':
-        case 'parlor.tier': lines.push(`（系统）${event.text}`); break;
-        case 'parlor.invite': lines.push(`（邀请）${event.text}`); break;
-        case 'parlor.table.turn': {
-          const view = event.data?.table;
-          const action = view && typeof view === 'object' ? xiangqiTurnAction(view as Record<string, unknown>) : '';
-          lines.push(...(action ? [action, event.text] : [event.text]));
-          break;
-        }
-        case 'parlor.ledger': lines.push(`（账本）${event.text}`); break;
-        // 开桌即开放匹配也走这一支：这类桌不会再发 discovery，
-        // 不补 join 提示的话同厅桌外的 Coo 只看到一句「开了一张桌」。
-        case 'parlor.table.open':
-        case 'parlor.table.discovery': {
-          // 服务端只写事实（谁、哪桌、几人、改了什么），「怎么去」在 Coo 侧补，
-          // 免得把工具调用语法写进所有人可见的事件流。
-          const game = typeof event.data?.game === 'string' ? event.data.game : '';
-          let line = `（桌子）${event.text}`;
-          // 招募提示关掉时只留事实，「怎么去」的引导也一起停。
-          const notice = this.ctx.cfg.recruitNotice;
-          const tableId = typeof event.data?.tableId === 'string' ? event.data.tableId : '';
-          const version = Number(event.data?.recruitVersion ?? 0);
-          if (notice && game && event.data?.matchOpen === true
-            && (!tableId || guideOnce('join', tableId, version))) {
-            line += `想去就 parlor_table {op:"join",params:{game:"${game}"}}。`;
-          }
-          if (notice && event.data?.recruit === true
-            && (!tableId || guideOnce('recruit', tableId, version))) {
-            line += '这桌有招募原话，用 parlor_query {op:"rooms",params:{recruitments:true}} 看。';
-          }
-          lines.push(line);
-          break;
-        }
-        case 'parlor.table.full': {
-          const hint = '等待桌主开局。';
-          // 兼容正文已经带有开局提示的旧事件。
-          const text = event.text.endsWith(hint) ? event.text : `${event.text} ${hint}`;
-          lines.push(`（桌子）${text}`);
-          break;
-        }
-        case 'parlor.table.join':
-        case 'parlor.table.start':
-        case 'parlor.table.action':
-        case 'parlor.table.werewolf.night':
-        case 'parlor.table.werewolf.dawn':
-        case 'parlor.table.werewolf.speech_open':
-        case 'parlor.table.werewolf.speech':
-        case 'parlor.table.werewolf.vote_open':
-        case 'parlor.table.werewolf.vote':
-        case 'parlor.table.werewolf.hunter':
-        case 'parlor.table.werewolf.shot':
-        case 'parlor.table.end': lines.push(`（桌子）${event.text}`); break;
-        default: lines.push(event.text);
-      }
-    }
-    return lines.join('\n');
+    return renderRoomEvents(events, this.ctx.cfg.recruitNotice);
   }
 
   private async reconcileTier(): Promise<void> {
@@ -1869,14 +1671,7 @@ export class ParlorWorld implements World {
   }
 
   private recruitLine(tables: RecruitTableHint[]): string {
-    const now = Date.now();
-    const parts = tables.map(table => {
-      const minutes = Math.max(1, Math.round((table.deadlineAt - now) / 60_000));
-      return `${gameLabelOf(table.game)} · ${table.roomName}（${table.seats}/${table.capacity}，还有 ${minutes} 分钟）`;
-    });
-    return `（顺带）现在有 ${tables.length} 桌在等人：${parts.join('、')}。`
-      + `想去就 parlor_table {op:"join",params:{game:"${tables[0].game}"}}；`
-      + '只看清单用 parlor_query {op:"rooms",params:{recruitments:true}}。';
+    return formatRecruitLine(tables);
   }
 
   private async rooms(): Promise<string | ToolOutcome> {
@@ -2151,53 +1946,7 @@ export class ParlorWorld implements World {
   }
 
   private formatSnapshot(snapshot: RoomSnapshot): string {
-    const speakers = snapshot.seats.filter((seat) => seat.kind !== 'observer');
-    const online = new Set(snapshot.online ?? []);
-    const lines = [
-      `${snapshot.id === 'hall' ? '大厅' : '客厅'}「${snapshot.name ?? snapshot.id}」 · 会说话的席位 ${speakers.length}/${snapshot.maxSeats}`,
-      `服务器时刻：${snapshot.at}（UTC+8）`,
-      ...(this.focused ? ['你正坐在牌桌上（专注）：客厅普通聊只攒摘要，牌局结束后一并给你。'] : []),
-      ...snapshot.seats.map((seat) => {
-        // 真人席位没有提醒挡位；写「人·离开」会让 Coo 误以为对方不在。
-        const kind = KIND_LABELS[seat.kind] ?? seat.kind;
-        const tier = seat.kind === 'human' ? '' : `·${WAKE_TIER_LABELS[seat.tier] ?? seat.tier}`;
-        const handle = seat.handle ? ` #${seat.handle}` : '';
-        return `- ${seat.name}${handle}（${kind}${tier}${online.has(seat.id) ? '·在线' : ''}）`;
-      }),
-      `最新游标 ${snapshot.latest}`,
-    ];
-    if (snapshot.monopoly?.signup) {
-      const signup = snapshot.monopoly.signup;
-      lines.push(`大富翁报名：${signup.seats.join('、')}（${signup.seats.length}/${signup.size}），`
-        + `${signup.pace === 'quick' ? '试玩 5 分钟/回合' : '标准 30 分钟/回合'}；`
-        + `报名截止 ${serverClock(signup.deadlineAt)}（服务器时刻 UTC+8）`
-        + `${signup.missing > 0 ? `，还差 ${signup.missing} 人（脚本陪练最多补 2 个）` : '，可以开局'}。`);
-    }
-    if (snapshot.monopoly?.fault) lines.push(`大富翁故障：${snapshot.monopoly.fault}（这局被冻结，别当成没开）`);
-    const tables = snapshot.tables ?? [];
-    if (tables.length > 1) {
-      lines.push(`这个客厅有 ${tables.filter((table) => table.status !== 'ended').length} 张桌：`);
-      for (const table of tables) {
-        lines.push(`- ${table.id} · ${table.label} · ${table.status === 'open' ? '等人' : table.status === 'playing' ? '进行中' : table.status}`
-          + `${table.tableId === snapshot.tablePrivate?.tableId ? '（你在这桌）' : ''}`);
-      }
-    }
-    if (snapshot.table) lines.push(snapshot.table.text);
-    if (snapshot.tablePrivate) lines.push(snapshot.tablePrivate.text);
-    if (snapshot.ledger && snapshot.ledger.games > 0) {
-      const perGame = (snapshot.ledger.byGame ?? [])
-        .map((row) => `${gameLabelOf(row.game, row.label)} ${row.games} 局`)
-        .join('、');
-      lines.push(`账本：共 ${snapshot.ledger.games} 局，${snapshot.ledger.wins} 胜 ${snapshot.ledger.losses} 负 ${snapshot.ledger.draws} 平${perGame ? `（${perGame}）` : ''}。`);
-    }
-    if ((snapshot.mailUnread ?? 0) > 0) lines.push(`信箱：${snapshot.mailUnread} 封未读（parlor_query {op:"mail"} 看）。`);
-    if (snapshot.events.length === 0) {
-      lines.push('从那个位置之后没有你能看到的新消息。');
-    } else {
-      lines.push('消息：');
-      for (const event of snapshot.events) lines.push(`#${event.seq} ${serverClockShort(event.ts)} ${this.render([event])}`);
-    }
-    return lines.join('\n');
+    return formatRoomSnapshot(snapshot, this.focused, this.ctx.cfg.recruitNotice);
   }
 
   private async say(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -2512,31 +2261,11 @@ export class ParlorWorld implements World {
   }
 
   private ledgerTime(ts: number): string {
-    try {
-      return new Intl.DateTimeFormat('zh-CN', {
-        timeZone: this.ctx.timezone,
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).format(new Date(ts));
-    } catch {
-      return new Date(ts).toISOString().slice(5, 16).replace('T', ' ');
-    }
+    return formatLedgerTime(ts, this.ctx.timezone);
   }
 
   private ledgerDay(ts: number): string {
-    try {
-      return new Intl.DateTimeFormat('zh-CN', {
-        timeZone: this.ctx.timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      }).format(new Date(ts));
-    } catch {
-      return new Date(ts).toISOString().slice(0, 10);
-    }
+    return formatLedgerDay(ts, this.ctx.timezone);
   }
 
   private async setTier(args: Record<string, unknown>): Promise<string | ToolOutcome> {
@@ -2944,21 +2673,8 @@ export class ParlorWorld implements World {
     }
   }
 
-  /** 动作回执：统一成「服务器已收下 #游标 · 服务器时刻」，再补这次动作的具体结果。 */
-  private receipt(result: ActionResponse, done: string): string {    const lines = [`服务器已收下 #${result.seq} · ${result.at}（服务器时刻 UTC+8）。`, done];
-    if (result.delivered && result.delivered.length > 0) {
-      const inboxes = result.delivered
-        .map((delivery) => `${delivery.to} 的信箱（${delivery.at}）`)
-        .join('、');
-      lines.push(`已投递到：${inboxes}。这只说明信已留底，不代表对方读过。`);
-    }
-    if (result.seats && result.seats.length > 0) {
-      lines.push(`开局时桌上（服务器现读）：${result.seats.join('、')}。`);
-    }
-    if (result.deadlineAt) {
-      lines.push(`下一个截止：${result.deadlineAt}（服务器时刻 UTC+8）${result.turn ? `，轮到 ${result.turn}` : ''}。`);
-    }
-    return lines.join('\n');
+  private receipt(result: ActionResponse, done: string): string {
+    return formatActionReceipt(result, done);
   }
 
   private failed(text: string): ToolOutcome {
@@ -2970,53 +2686,14 @@ export class ParlorWorld implements World {
   }
 
   private roomStorage(): StoragePart {
-    const file = this.roomFile();
-    return {
-      key: 'parlor-room',
-      label: '客厅房间数据',
-      kind: 'disk',
-      location: file,
-      danger: true,
-      note: '删除后房间、席位与聊天记录都会消失；服务器正在跑时要重启才会从空房间重建。',
-      stat: () => {
-        try { return `${Math.ceil(statSync(file).size / 1024)} KB`; } catch { return '不存在'; }
-      },
-      clear: () => {
-        try { rmSync(file, { force: true }); return '房间数据已删除，重启后从空房间开始。'; } catch (error) { return `删不掉：${messageOf(error)}`; }
-      },
-    };
+    return roomStoragePart(this.roomFile());
   }
 
   private identityStorage(): StoragePart {
-    return {
-      key: 'parlor-identity',
-      label: '客厅账本身份',
-      kind: 'disk',
-      location: this.identityFile,
-      danger: true,
-      note: '删掉后会生成新身份，之前的账本记录接不上；席位令牌不受影响。',
-      stat: () => {
-        try { return `${statSync(this.identityFile).size} B`; } catch { return '不存在'; }
-      },
-      clear: () => {
-        try { rmSync(this.identityFile, { force: true }); return '账本身份已删除，下次启动生成新的。'; } catch (error) { return `删不掉：${messageOf(error)}`; }
-      },
-    };
+    return identityStoragePart(this.identityFile);
   }
 
   private cursorStorage(): StoragePart {
-    return {
-      key: 'parlor-cursor',
-      label: '客厅补看游标',
-      kind: 'disk',
-      location: this.cursorFile,
-      note: '只记录读到哪里；删掉后重启会把房间历史重新补看一遍。',
-      stat: () => {
-        try { return `${statSync(this.cursorFile).size} B`; } catch { return '不存在'; }
-      },
-      clear: () => {
-        try { rmSync(this.cursorFile, { force: true }); return '游标已删除。'; } catch (error) { return `删不掉：${messageOf(error)}`; }
-      },
-    };
+    return cursorStoragePart(this.cursorFile);
   }
 }

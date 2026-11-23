@@ -92,10 +92,10 @@ const until = async (predicate: () => boolean, timeout = 8000): Promise<void> =>
 };
 
 /** 边读边攒的 SSE：用来证明「别人在购买阶段就能看到骰点」。 */
-const openStream = async (url: string): Promise<{ text: () => string; stop: () => void }> => {
+const openStream = async (url: string, token: string): Promise<{ text: () => string; stop: () => void }> => {
   const controller = new AbortController();
   let buffer = '';
-  const response = await fetch(url, { signal: controller.signal });
+  const response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
   expect(response.status).toBe(200);
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -179,7 +179,7 @@ describe('快局大富翁：四个身份经真实网关打完一局', () => {
     expect(startView.phase).toBe('await_roll');
 
     // 非行动方的推送：购买阶段也得看见骰点和新落点。
-    const watcher = await openStream(`${app.url}/v1/stream?token=${tokens.B}&since=0`);
+    const watcher = await openStream(`${app.url}/v1/stream?since=0`, tokens.B);
 
     let bought = false;
     let sawBuyWindow = false;

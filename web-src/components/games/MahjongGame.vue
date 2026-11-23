@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { SUITS, TILES, suitOf } from '../../../src/room/games/mahjong-rules.ts';
 import type { MahjongTable } from '../../../src/room/games/mahjong-table.ts';
-import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../../lib/game-types.ts';
 import { mahjongArt, preloadMahjongArt } from '../../lib/mahjong-art.ts';
 import MahjongTileFace from './MahjongTileFace.vue';
 

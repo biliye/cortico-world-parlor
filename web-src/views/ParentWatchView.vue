@@ -2,18 +2,16 @@
 import { computed, onMounted, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import type { HallSeat, TableSummary } from '../api/types.ts';
 import { componentFor, preloadTableArt } from '../lib/game-components.ts';
-import { mountFor, type GameCtx, type GameInstance, type GameView } from '../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../lib/game-types.ts';
 
 const props = defineProps<{ tableId: string }>();
 const live = shallowRef<{ table: TableSummary; seats: HallSeat[]; online: string[]; now: number } | null>(null);
 const table = computed(() => live.value?.table ?? null);
 watch(() => table.value?.game, preloadTableArt, { immediate: true });
 const status = ref('正在连接牌桌…');
-const legacyRoot = ref<HTMLElement | null>(null);
 const component = computed(() => table.value ? componentFor(table.value.game) : null);
 const controller = new AbortController();
 let timer: number | undefined;
-let legacy: GameInstance | undefined;
 let clockOffset = 0;
 
 const me = { id: '', name: '观战' };
@@ -39,16 +37,6 @@ const gameView = computed<GameView | null>(() => {
   const { table, seats, online } = live.value;
   return { table, priv: null, me, seats, names, classes, online, now: ctx.serverNow(), endEvent: null, recent: [] };
 });
-
-watch([gameView, legacyRoot], ([view, root]) => {
-  if (!view || !root || component.value) {
-    legacy?.destroy();
-    legacy = undefined;
-    return;
-  }
-  legacy ??= mountFor(view.table.game)?.(root, ctx);
-  legacy?.update(view);
-}, { flush: 'post' });
 
 async function refresh(): Promise<void> {
   const query = new URLSearchParams({ table: props.tableId });
@@ -79,7 +67,6 @@ onMounted(() => void refresh());
 onBeforeUnmount(() => {
   controller.abort();
   window.clearTimeout(timer);
-  legacy?.destroy();
 });
 </script>
 
@@ -91,7 +78,6 @@ onBeforeUnmount(() => {
     </header>
     <p v-if="status" role="status">{{ status }}</p>
     <component :is="component" v-if="component && gameView" :view="gameView" :ctx="ctx" />
-    <div v-else-if="gameView" ref="legacyRoot" class="game-root" />
   </main>
 </template>
 

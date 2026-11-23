@@ -1,21 +1,19 @@
 <script setup lang="ts">
 /**
- * 牌桌渲染器的宿主：斗地主、狼人杀已经是 Vue 组件；骰子、大富翁仍把旧版
- * `mountX(root, ctx)` 原样挂进来，状态到了就 update。换桌（桌号变了）会销毁重建，
- * 和旧版 play.js 的挂载 key 一样。
+ * 牌桌渲染器的宿主：全部玩法都已组件化为 Vue 桌面组件，
+ * 换桌（桌号变化）按 mountKey 重建实例。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed } from 'vue';
 import type { ChatEvent, HallSeat } from '../api/types.ts';
 import { gameOf } from '../lib/games.ts';
 import { componentFor } from '../lib/game-components.ts';
-import { mountFor, type GameCtx, type GameInstance, type GameView } from '../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../lib/game-types.ts';
 import {
   activePrivate, activeTable, act, log, openRoomTable, rematchRoomTable, serverNow, snapshot, tableIdOf, tableList,
 } from '../stores/parlor.ts';
 import { showToast } from '../stores/ui.ts';
 import { backToRoom } from '../stores/view.ts';
 
-const host = ref<HTMLElement | null>(null);
 const table = activeTable;
 const def = computed(() => (table.value ? gameOf(table.value.game) : null));
 
@@ -36,9 +34,6 @@ const mountKey = computed(() => {
   const current = table.value;
   return current ? current.game + ':' + tableIdOf(current) : '';
 });
-
-let instance: GameInstance | null = null;
-let key = '';
 
 function matchesTable(event: ChatEvent, tableId: string): boolean {
   if (!tableId) return true;
@@ -102,43 +97,6 @@ const gameCtx = {
     void rematchRoomTable(current.game, seatCount);
   },
 } as GameCtx;
-
-function context(): GameCtx {
-  return gameCtx;
-}
-
-function destroy(): void {
-  if (instance) {
-    try {
-      instance.destroy();
-    } catch {
-      /* 渲染器自己清理失败不该拖住换桌 */
-    }
-  }
-  instance = null;
-  key = '';
-}
-
-function sync(): void {
-  const current = table.value;
-  if (!current || !mountable.value || !host.value || componentGame.value) {
-    destroy();
-    return;
-  }
-  const nextKey = current.game + ':' + tableIdOf(current);
-  if (!instance || key !== nextKey) {
-    destroy();
-    const factory = mountFor(current.game);
-    if (!factory) return;
-    key = nextKey;
-    instance = factory(host.value, context());
-  }
-  instance?.update(buildView());
-}
-
-onMounted(sync);
-onBeforeUnmount(destroy);
-watch([table, snapshot, () => log.value.length, componentGame], sync);
 </script>
 
 <template>
@@ -149,5 +107,4 @@ watch([table, snapshot, () => log.value.length, componentGame], sync);
     :view="gameView"
     :ctx="gameCtx"
   />
-  <div v-else ref="host" class="game-root" />
 </template>

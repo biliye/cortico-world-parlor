@@ -23,7 +23,7 @@ afterEach(async () => {
   dir = undefined;
 });
 
-const start = async (options: Pick<WorldServerOptions, 'now' | 'poolMax' | 'host' | 'publicUrl'> = {}): Promise<WorldServer> => {
+const start = async (options: Pick<WorldServerOptions, 'now' | 'poolMax' | 'host' | 'publicUrl' | 'hostIdleEvictMs'> = {}): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-world-'));
   server = await WorldServer.create({ allowGuestJoin: true,
     ...(await pgServerStorage(join(dir, 'parlor.db'))),
@@ -281,8 +281,13 @@ describe('WorldServer 聊天网关', () => {
       authorization: `Bearer ${token}`,
     });
 
+    const rejected = await fetch(`${app.url}/v1/rooms/${roomId}/stream?token=${token}&since=0`);
+    expect(rejected.status).toBe(401);
+    expect(await rejected.text()).toContain('Bearer');
+
     const controller = new AbortController();
-    const response = await fetch(`${app.url}/v1/rooms/${roomId}/stream?token=${token}&since=0`, {
+    const response = await fetch(`${app.url}/v1/rooms/${roomId}/stream?since=0`, {
+      headers: { authorization: `Bearer ${token}` },
       signal: controller.signal,
     });
     expect(response.status).toBe(200);
@@ -422,5 +427,47 @@ describe('网关频控', () => {
     expect(rates.take('another', 101)).toBe(false);
     expect(rates.take('new', 1_000)).toBe(false);
     expect(rates.take('new', 1_100)).toBe(true);
+  });
+
+  it('闲置无人的 RoomHost 会在超期后淘汰并可按需重建，有席位的不淘汰', async () => {
+    let clock = 1_000_000;
+    const app = await start({ now: () => clock, hostIdleEvictMs: 60_000 });
+    const created = await post(app.url, '/v1/rooms', { name: '闲置厅', visibility: 'public' }, cooHeaders(A));
+    const roomId = (created.body.room as { id: string }).id;
+    const joined = await post(app.url, `/v1/rooms/${roomId}/join`, { name: '阿岚' }, cooHeaders(A));
+    const token = joined.body.token as string;
+    expect(app.cachedHostCount).toBeGreaterThanOrEqual(1);
+
+    clock += 120_000;
+    expect(await app.evictIdleHosts(clock)).toBe(0);
+
+    await post(app.url, `/v1/rooms/${roomId}/leave`, {}, { authorization: `Bearer ${token}` });
+    expect(await app.evictIdleHosts(clock + 30_000)).toBe(0);
+    clock += 120_000;
+    expect(await app.evictIdleHosts(clock)).toBeGreaterThanOrEqual(1);
+
+    const rejoined = await post(app.url, `/v1/rooms/${roomId}/join`, { name: '阿岚' }, cooHeaders(A));
+    expect(rejoined.status).toBe(200);
+  });
+
+  it('家长会话清理会删除已过期和超期撤销的记录，保留活跃会话', async () => {
+    let clock = 1_000_000;
+    const app = await start({ now: () => clock });
+    const joined = await post(app.url, '/v1/join', { name: '阿岚' }, cooHeaders(A));
+    const ownerKey = joined.body.ownerKey as string;
+    expect((await post(app.url, '/v1/parent/session', { key: ownerKey })).status).toBe(200);
+    expect((await post(app.url, '/v1/parent/session', { key: ownerKey })).status).toBe(200);
+    expect((await post(app.url, '/v1/parent/session', { key: ownerKey })).status).toBe(200);
+
+    const sessions = await app.dbHandle.prepare('SELECT id FROM account_sessions ORDER BY created_at, id').all() as { id: string }[];
+    expect(sessions.length).toBe(3);
+    await app.dbHandle.prepare('UPDATE account_sessions SET expires_at = ? WHERE id = ?').run(clock - 1, sessions[0].id);
+    await app.dbHandle.prepare('UPDATE account_sessions SET revoked_at = ? WHERE id = ?').run(clock - 8 * 24 * 3_600_000, sessions[2].id);
+
+    const { CooAccountDb } = await import('../src/room/coo-account-db.ts');
+    const pruned = await new CooAccountDb(app.dbHandle, { now: () => clock }).pruneSessions(clock);
+    expect(pruned).toBe(2);
+    const remaining = await app.dbHandle.prepare('SELECT id FROM account_sessions').all() as { id: string }[];
+    expect(remaining.map(r => r.id)).toEqual([sessions[1].id]);
   });
 });

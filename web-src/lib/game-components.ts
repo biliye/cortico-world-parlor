@@ -1,4 +1,4 @@
-/** 已经迁到 Vue 的桌面组件；没列进来的（骰子、旧大富翁）仍走 legacy-games.ts 的旧挂载。 */
+/** 所有玩法的 Vue 牌桌组件；重型或低频玩法按需加载。 */
 import { defineAsyncComponent, defineComponent, h, type Component } from 'vue';
 import DdzGame from '../components/games/DdzGame.vue';
 import WerewolfGame from '../components/games/WerewolfGame.vue';
@@ -68,6 +68,8 @@ const COMPONENTS: Record<string, Component> = {
   gomoku: lazyGame(() => import('../components/games/GomokuGame.vue')),
   xiangqi: lazyGame(() => import('../components/games/XiangqiGame.vue')),
   aeroplane: lazyGame(() => import('../components/games/AeroplaneGame.vue')),
+  dice: lazyGame(() => import('../components/games/DiceGame.vue')),
+  monopoly: lazyGame(() => import('../components/games/MonopolyGame.vue')),
 };
 
 export function componentFor(game: string): Component | null {

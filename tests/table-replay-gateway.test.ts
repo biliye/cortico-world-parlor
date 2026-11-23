@@ -56,6 +56,11 @@ it('Coo 回看已结算斗地主，分页、授权、重启与留存边界沿用
       const view = await state(player);
       await send(player, { type: 'game_action', table, action, params, requestId: id, revision: view.table.revision });
     };
+    for (let step = 0; step < 3; step++) {
+      if ((await state(a)).tablePrivate.yourTurn) break;
+      const passer = (await state(b)).tablePrivate.yourTurn ? b : c;
+      await act(passer, 'bid', { call: false }, `ddz-bid-pass-${step}`);
+    }
     await act(a, 'bid', { call: true }, 'ddz-bid');
     await send(watcher, { type: 'say', text: '无关的房间聊天' });
     const second = (await send(watcher, { type: 'table_open', game: 'dice', requestId: 'other-table' })).tableId!;

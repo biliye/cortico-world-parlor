@@ -48,19 +48,15 @@ describe('牌桌注册表', () => {
     const { componentFor } = await vi.importActual<{ componentFor(game: string): unknown }>(
       '../web-src/lib/game-components.ts',
     );
-    const { mountFor } = await vi.importActual<{ mountFor(game: string): unknown }>(
-      '../web-src/lib/legacy-games.ts',
-    );
     expect(Object.keys(GAME_PRESENTATION).sort()).toEqual(gameIds().sort());
     expect(Object.keys(GAMES).sort()).toEqual([...gameIds(), 'monopoly'].sort());
     for (const { id, label, icon } of GAME_LIST) {
       expect(GAMES[id], id).toMatchObject({ label, icon });
       expect(historyGameLabelOf(id), id).toBe(label);
-      expect(Boolean(componentFor(id)) !== Boolean(mountFor(id)), id).toBe(true);
+      expect(Boolean(componentFor(id)), id).toBe(true);
     }
     expect(GAMES.monopoly.enabled).toBe(false);
-    expect(componentFor('monopoly')).toBeNull();
-    expect(mountFor('monopoly')).toBeTypeOf('function');
+    expect(Boolean(componentFor('monopoly'))).toBe(true);
   });
 
   it('每个玩法图标都能引用到牌桌页的 SVG symbol', () => {
