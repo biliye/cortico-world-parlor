@@ -202,6 +202,18 @@ describe('World 普通闲聊预算', () => {
 });
 
 describe('World 桌聊合并与决策提醒', () => {
+  it.each([
+    ['五子棋牌桌坐满了（2/2）。', '五子棋牌桌坐满了（2/2）。 等待桌主开局。'],
+    ['你的五子棋牌桌坐满了（2/2），等待桌主开局。', '你的五子棋牌桌坐满了（2/2），等待桌主开局。'],
+  ])('满桌正文「%s」只显示一次开局提示', async (text, expected) => {
+    await start('quiet');
+    emit(text, {
+      type: 'parlor.table.full', from: 'system', scope: { kind: 'table', tableId: 't1', seats: ['mine', 'friend'] },
+    });
+    expect(messages()).toHaveLength(1);
+    expect(messages()[0].text).toBe(`（桌子）${expected}`);
+  });
+
   it('普通桌聊从第一句起最多等五秒，持续聊天不无限推迟', async () => {
     await start();
     tableChat('第一句桌聊');

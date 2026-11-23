@@ -1624,7 +1624,13 @@ export class ParlorWorld implements World {
           lines.push(line);
           break;
         }
-        case 'parlor.table.full': lines.push(`（桌子）${event.text} 等待桌主开局。`); break;
+        case 'parlor.table.full': {
+          const hint = '等待桌主开局。';
+          // 兼容正文已经带有开局提示的旧事件。
+          const text = event.text.endsWith(hint) ? event.text : `${event.text} ${hint}`;
+          lines.push(`（桌子）${text}`);
+          break;
+        }
         case 'parlor.table.join':
         case 'parlor.table.start':
         case 'parlor.table.action':

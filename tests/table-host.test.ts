@@ -6,6 +6,7 @@ import { type Db } from '../src/room/db.ts';
 import { RoomHost } from '../src/room/room-host.ts';
 import { createRoom, getRoom, renameSeat } from '../src/room/room-seat-db.ts';
 import { LedgerDb } from '../src/room/ledger-db.ts';
+import { TABLE_FULL_NOTICE_COOLDOWN_MS } from '../src/room/protocol.ts';
 import { DiceTable } from '../src/room/table.ts';
 import { closeTestDb, openTestDb } from './helpers/test-db.ts';
 
@@ -612,7 +613,7 @@ describe('客厅牌桌（五子棋）', () => {
     expect(newPlayerNotices[0].scope).toEqual({ kind: 'table', tableId, seats: [c.seat.id] });
     expect(await notices(A)).toHaveLength(1);
 
-    clock.now = filledAt + 60_000;
+    clock.now = filledAt + TABLE_FULL_NOTICE_COOLDOWN_MS;
     await host.leaveTable(C, tableId, 'leave-after-cooldown');
     await host.joinTable(B, tableId, 'fill-after-cooldown');
     expect(await notices(A)).toHaveLength(2);
