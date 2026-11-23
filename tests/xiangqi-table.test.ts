@@ -130,19 +130,46 @@ describe('象棋走法', () => {
     expect(suggestMoves(board, 1, [finish], () => undefined)).toEqual([{ ...finish, reason: label }]);
   });
 
-  it('推荐考虑回吃，说明直接应手，并把未动棋子的原有威胁另列', () => {
+  it('推荐考虑回吃，说明对手净赚的应手，省略对手净亏的原有交换', () => {
     const board = initialBoard();
     const horse = move(9, 1, 7, 2);
     const cannon = move(7, 1, 0, 1);
     const hints = suggestMoves(board, 1, [cannon, horse], () => undefined);
     expect(hints).toMatchObject([
-      { ...horse, reason: '保持子力，调整站位', positionThreat: '对方炮可吃马（(2,7) → (9,7)），己方可回吃' },
+      { ...horse, reason: '保持子力，调整站位' },
       { ...cannon, reason: '吃马、对方车可吃炮（(0,0) → (0,1)）' },
     ]);
-    const [suggestions, warning] = formatXiangqiAdvice(hints).split('\n');
+    const [suggestions] = formatXiangqiAdvice(hints).split('\n');
     expect(suggestions).toContain('对方车可吃炮');
-    expect(suggestions).not.toContain('对方炮可吃马');
-    expect(warning).toContain('第 1 条建议落子后仍有原局威胁：对方炮可吃马');
+    expect(hints[0].positionThreat).toBeUndefined();
+  });
+
+  it('省略可以等价回吃的直接应手', () => {
+    const board = sparseBoard();
+    set(board, 7, 0, 5);
+    set(board, 0, 2, -5);
+    set(board, 7, 8, 5);
+    const attempt = move(7, 0, 7, 2);
+    const reply = move(0, 2, 7, 2);
+    const next = afterMove(board, attempt);
+    expect(isLegalMove(next, reply, -1)).toBe(true);
+    expect(isLegalMove(afterMove(next, reply), move(7, 8, 7, 2), 1)).toBe(true);
+    expect(suggestMoves(board, 1, [attempt], () => undefined)).toEqual([
+      { ...attempt, reason: '保持子力，调整站位' },
+    ]);
+  });
+
+  it('保留对手净赚的原局威胁，合并多条建议中的同一条', () => {
+    const board = sparseBoard();
+    set(board, 0, 0, -5);
+    set(board, 7, 0, 4);
+    set(board, 7, 7, 4);
+    const hints = suggestMoves(board, 1, [move(5, 4, 4, 4), move(7, 7, 5, 8), move(7, 7, 5, 6)], () => undefined);
+    const threat = '对方车可吃马（(0,0) → (7,0)）';
+    expect(hints.map(hint => hint.positionThreat)).toEqual([threat, threat, threat]);
+    const [suggestions, ...threats] = formatXiangqiAdvice(hints).split('\n');
+    expect(suggestions).not.toContain(threat);
+    expect(threats).toEqual([`第 1、2、3 条建议落子后仍有原局威胁：${threat}`]);
   });
 
   it('本着新暴露的吃子应手仍列在走法理由中', () => {

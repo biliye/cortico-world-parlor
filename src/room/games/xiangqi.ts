@@ -169,7 +169,8 @@ function strongerCapture(current: CaptureReply | undefined, candidate: CaptureRe
   return current;
 }
 
-function formatCaptureReply(board: readonly number[], reply: CaptureReply): string {
+function formatCaptureThreat(board: readonly number[], reply?: CaptureReply): string | undefined {
+  if (!reply || reply.netGain <= 0) return undefined;
   const { move, recapture } = reply;
   return `对方${pieceName(board[indexOf(move.from)])}可吃${pieceName(board[indexOf(move.to)])}（${moveText(move)}）${recapture ? '，己方可回吃' : ''}`;
 }
@@ -222,11 +223,12 @@ export function suggestMoves(
     const score = VALUE[Math.abs(captured)] - replyGain + (check ? 0.3 : 0) + center * 0.03 + develop * 0.08;
     const reasons = [
       inCheck && '应将', check && '将军', captured && `吃${pieceName(captured)}`,
-      strongestReply && formatCaptureReply(next, strongestReply),
+      formatCaptureThreat(next, strongestReply),
     ].filter(Boolean);
+    const positionThreat = formatCaptureThreat(next, existingThreat);
     return {
       ...move, reason: reasons.join('、') || '保持子力，调整站位', score,
-      ...(existingThreat && { positionThreat: formatCaptureReply(next, existingThreat) }),
+      ...(positionThreat && { positionThreat }),
     };
   }).sort((a, b) => b.score - a.score)
     .slice(0, XIANGQI_HINT_LIMIT).map(({ score: _score, ...hint }) => hint);
@@ -247,6 +249,13 @@ export function formatXiangqiBoard(board: readonly number[], last?: XiangqiMove)
 
 export function formatXiangqiAdvice(hints: readonly XiangqiHint[], warning?: string): string {
   const suggestions = hints.map((hint, i) => `${i + 1}. ${moveText(hint)}（${hint.reason}）`);
-  const threats = hints.flatMap((hint, i) => hint.positionThreat ? [`第 ${i + 1} 条建议落子后仍有原局威胁：${hint.positionThreat}`] : []);
+  const threatGroups = new Map<string, number[]>();
+  for (const [index, hint] of hints.entries()) {
+    if (!hint.positionThreat) continue;
+    const numbers = threatGroups.get(hint.positionThreat) ?? [];
+    numbers.push(index + 1);
+    threatGroups.set(hint.positionThreat, numbers);
+  }
+  const threats = [...threatGroups].map(([text, numbers]) => `第 ${numbers.join('、')} 条建议落子后仍有原局威胁：${text}`);
   return [warning, suggestions.length ? `建议走法 ${suggestions.join('；')}` : '', ...threats].filter(Boolean).join('\n');
 }
