@@ -72,10 +72,14 @@ describe('WorldServer 牌桌网关', () => {
     const table = opened.body.tableId;
     expect((await act(app, white, { type: 'table_join', table, requestId: 'gomoku-join' })).status).toBe(200);
     expect((await act(app, black, { type: 'table_start', table, requestId: 'gomoku-start' })).status).toBe(200);
-    const initial = await get(app.url, '/v1/room?limit=1', black);
+    const snapA = await get(app.url, '/v1/room?limit=1', black);
+    const snapB = await get(app.url, '/v1/room?limit=1', white);
+    const [first, second, initial] = (snapA.body.tablePrivate as { canAct?: boolean } | null)?.canAct
+      ? [black, white, snapA]
+      : [white, black, snapB];
     expect(initial.body.tablePrivate).toMatchObject({ canAct: true, hints: [{ row: 7, col: 7 }, expect.any(Object), expect.any(Object)] });
     for (let i = 0; i < 9; i++) {
-      const player = i % 2 === 0 ? black : white;
+      const player = i % 2 === 0 ? first : second;
       const reference = await tableRef(app, player);
       const body = { ...reference, type: 'gomoku_action', row: i % 2, col: Math.floor(i / 2), requestId: `gomoku-${i}` };
       if (i === 0) expect((await act(app, player, { ...body, revision: reference.revision - 1 })).status).toBe(409);
