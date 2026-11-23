@@ -105,7 +105,9 @@ describe('Coo 快速匹配与牌桌分享', () => {
   it.each([false, true])('分享链接坐满牌桌后唤醒最后入座的 Coo，重试不重复（跨厅 %s）', async (crossRoom) => {
     const { host, friend, friendToken } = await startWorld({ tier: 'quiet' });
     if (crossRoom) expect(await call('parlor_room_visit', { room: 'hall' })).toContain('到了大厅');
-    const opened = await friend.action(friendToken, { type: 'table_open', game: 'gomoku' }, 'lobby');
+    const opened = await friend.action(friendToken, {
+      type: 'table_open', game: 'gomoku', requestId: 'open-gomoku-for-full-notice',
+    }, 'lobby');
     const link = `${server!.url}/play?room=lobby&view=table&table=${opened.tableId}`;
     const args = { link, requestId: 'fill-gomoku' };
     const fullText = '你的五子棋牌桌坐满了（2/2）';
