@@ -87,6 +87,8 @@ export interface WorldServerOptions {
   roomArchiveHours?: number;
   /** 牌桌每手/每窗时限基准（staging/测试调短用；不传用各游戏默认）。 */
   tableTurnMs?: number;
+  /** 闲置 RoomHost 缓存淘汰时长（毫秒）；默认 15 分钟，0 = 关。 */
+  hostIdleEvictMs?: number;
   now?: () => number;
 }
 
@@ -241,6 +243,8 @@ const statusOf = (error: unknown): number => {
 const CLOCK_SAFETY_MS = 1_000;
 /** 一张桌、一条承诺都没有时的空扫间隔：只是看一眼有没有新席位/新牌局。 */
 const CLOCK_IDLE_MS = 10_000;
+/** 闲置客厅（无活跃席位、无未结束牌局、无 SSE）从 RoomHost 缓存中淘汰的默认等待时长。 */
+const HOST_IDLE_EVICT_MS = 15 * MINUTE_MS;
 
 const messageOf = (error: unknown): string => (
   error instanceof Error ? error.message : String(error)
@@ -318,6 +322,7 @@ export class WorldServer {
   private readonly offlineReleaseMs: number;
   private readonly cooOfflineReleaseMs: number;
   private readonly tableTurnMs?: number;
+  private readonly hostIdleEvictMs: number;
   private readonly lifecycle: RoomLifecycle;
   private readonly hostName: string;
   private readonly port: number;
@@ -333,6 +338,8 @@ export class WorldServer {
   private lastHeartbeatAt = 0;
   /** 每厅一个 RoomHost：牌桌引擎在内存里，必须跨请求共用同一个实例。 */
   private readonly hosts = new Map<string, RoomHost>();
+  /** 最近一次访问 RoomHost 的时间戳，用于淘汰无席位无牌局无 SSE 的闲置客厅。 */
+  private readonly hostTouchedAt = new Map<string, number>();
   /** 正在建、还没建完的 host：同一客厅并发首访共用同一个 Promise，不会建出两份。 */
   private readonly hostPending = new Map<string, Promise<RoomHost>>();
   /** 定向邀请的限频：每个 Coo 一小时的发送时刻。 */
@@ -392,6 +399,7 @@ export class WorldServer {
     this.offlineReleaseMs = Math.max(0, options.offlineReleaseHours ?? 6) * 3_600_000;
     this.cooOfflineReleaseMs = Math.max(0, options.cooOfflineReleaseHours ?? 6) * 3_600_000;
     this.tableTurnMs = options.tableTurnMs !== undefined && options.tableTurnMs > 0 ? options.tableTurnMs : undefined;
+    this.hostIdleEvictMs = options.hostIdleEvictMs !== undefined ? Math.max(0, options.hostIdleEvictMs) : HOST_IDLE_EVICT_MS;
     this.hostName = options.host ?? '127.0.0.1';
     this.trustLoopbackProxy = options.trustLoopbackProxy ?? (this.publicUrl !== undefined);
     this.port = options.port ?? 0;
@@ -526,6 +534,7 @@ export class WorldServer {
     if (this.janitorFirstTimer) clearTimeout(this.janitorFirstTimer);
     this.janitorFirstTimer = undefined;
     this.hosts.clear();
+    this.hostTouchedAt.clear();
     this.hostPending.clear();
     for (const clients of this.sse.values()) {
       for (const client of clients) {
@@ -616,9 +625,17 @@ export class WorldServer {
     return this.hallIdValue;
   }
 
+  /** 当前缓存在内存里的 RoomHost 数量（便于运维与测试观测）。 */
+  get cachedHostCount(): number {
+    return this.hosts.size;
+  }
+
   private host(roomId: string): Promise<RoomHost> {
     const existing = this.hosts.get(roomId);
-    if (existing) return Promise.resolve(existing);
+    if (existing) {
+      this.hostTouchedAt.set(roomId, this.now());
+      return Promise.resolve(existing);
+    }
     const pending = this.hostPending.get(roomId);
     if (pending) return pending;
     const created = RoomHost.create(this.db, roomId, {
@@ -634,6 +651,7 @@ export class WorldServer {
       },
     }).then((host) => {
       this.hosts.set(roomId, host);
+      this.hostTouchedAt.set(roomId, this.now());
       this.hostPending.delete(roomId);
       return host;
     }, (error: unknown) => {
@@ -643,6 +661,31 @@ export class WorldServer {
     });
     this.hostPending.set(roomId, created);
     return created;
+  }
+
+  /** 淘汰长时间无席位、无未结束牌局且无 SSE 连接的 RoomHost 缓存，防止内存随房间数单调增长。 */
+  async evictIdleHosts(now = this.now(), activeRooms?: ReadonlySet<string>): Promise<number> {
+    if (this.hostIdleEvictMs <= 0 || this.hosts.size === 0) return 0;
+    let active = activeRooms;
+    if (!active) {
+      const occupied = await this.db.prepare(
+        'SELECT DISTINCT room_id FROM room_seats WHERE released_at IS NULL',
+      ).all() as { room_id: string }[];
+      const tables = await this.db.prepare(
+        "SELECT DISTINCT room_id FROM tables WHERE status IN ('open','bidding','playing')",
+      ).all() as { room_id: string }[];
+      active = new Set([...occupied, ...tables].map(row => row.room_id));
+    }
+    let evicted = 0;
+    for (const id of [...this.hosts.keys()]) {
+      if (active.has(id) || this.sse.has(id) || this.hostPending.has(id)) continue;
+      const touched = this.hostTouchedAt.get(id) ?? 0;
+      if (now - touched < this.hostIdleEvictMs) continue;
+      this.hosts.delete(id);
+      this.hostTouchedAt.delete(id);
+      evicted += 1;
+    }
+    return evicted;
   }
 
   /** 统一准入：初次加入、换房、家长下场、邀请跳转、重发令牌都先过这里。 */
@@ -765,9 +808,11 @@ export class WorldServer {
           console.error('parlor: 客厅下一次推进时刻算不出来', error);
         }
       }
+      await this.evictIdleHosts(now, needed);
       if (now - this.lastPrune >= 3_600_000) {
         this.lastPrune = now;
         await this.webPlayers.pruneSessions(now);
+        await this.coo.pruneSessions(now);
         await this.pruneEvents(now);
       }
     } catch (error) {
