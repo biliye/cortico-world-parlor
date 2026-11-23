@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { XiangqiTable } from '../src/room/games/xiangqi-table.ts';
+import { XiangqiTable, XiangqiMoveError } from '../src/room/games/xiangqi-table.ts';
 import {
   afterMove, indexOf, initialBoard, isInCheck, isLegalMove, legalMoves, suggestMoves,
   type XiangqiMove,
@@ -92,9 +92,33 @@ describe('象棋走法', () => {
     expect([...legalMoves(next, -1)]).toEqual([]);
     expect(suggestMoves(board, 1, [finish], () => undefined)).toEqual([{ ...finish, reason: label }]);
   });
+
+  it('推荐会考虑回吃，并指出对手具体的吃子应手', () => {
+    const board = initialBoard();
+    const horse = move(9, 1, 7, 2);
+    const cannon = move(7, 1, 0, 1);
+    const hints = suggestMoves(board, 1, [cannon, horse], () => undefined);
+    expect(hints).toEqual([
+      { ...horse, reason: '对方炮可吃马（(2,7) → (9,7)），己方可回吃' },
+      { ...cannon, reason: '吃马、对方车可吃炮（(0,0) → (0,1)）' },
+    ]);
+  });
 });
 
 describe('象棋牌桌', () => {
+  it('非法着法说明原因并给本手首选，编号落子与对应的坐标一致', () => {
+    const table = started();
+    const before = table.exportState();
+    const [first, second] = table.view(red.id)!.hints!;
+    expect(() => table.act(red.id, move(9, 1, 8, 3), 2)).toThrow(XiangqiMoveError);
+    expect(() => table.act(red.id, move(9, 1, 8, 3), 2)).toThrow(expect.objectContaining({
+      message: '马腿被挡', deadline: 101, alternative: first,
+    }));
+    expect(table.exportState()).toEqual(before);
+    expect(table.act(red.id, { hint: 2 }, 3).views).toEqual([black.id]);
+    expect(table.public().last).toMatchObject({ from: second.from, to: second.to });
+  });
+
   it('真人每手 3 分钟，Coo 每手 60 秒，恢复后仍在各自时限托管', () => {
     const human = { ...red, kind: 'human' as const };
     const table = new XiangqiTable(human);

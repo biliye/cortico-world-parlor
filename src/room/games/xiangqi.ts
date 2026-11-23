@@ -5,6 +5,7 @@ export type Color = 1 | -1;
 export type Point = { row: number; col: number };
 export type XiangqiMove = { from: Point; to: Point };
 export type XiangqiHint = XiangqiMove & { reason: string };
+export const XIANGQI_HINT_LIMIT = 3;
 
 const GENERAL = 1;
 const ADVISOR = 2;
@@ -111,6 +112,45 @@ export function isLegalMove(board: readonly number[], move: XiangqiMove, color: 
     && !isInCheck(afterMove(board, move), color);
 }
 
+/** 只用于已经被拒绝的走法，合法性仍由 isLegalMove 判定。 */
+export function rejectedMoveReason(board: readonly number[], move: unknown, color: Color): string {
+  if (!isMove(move)) return '坐标须使用行 0–9、列 0–8，从黑方左上角起算';
+  const { from, to } = move;
+  const piece = board[indexOf(from)];
+  const target = board[indexOf(to)];
+  if (!piece) return `起点 (${from.row},${from.col}) 没有棋子`;
+  if (piece * color < 0) return '起点是对方棋子';
+  if (indexOf(from) === indexOf(to)) return '起点和落点相同';
+  if (target * color > 0) return '落点被己方棋子占据';
+  if (target === -color * GENERAL) return '应以将死或困毙结束，不能直接吃掉将帅';
+  if (!followsPieceRule(board, from, to, color)) {
+    const dr = Math.abs(from.row - to.row);
+    const dc = Math.abs(from.col - to.col);
+    switch (Math.abs(piece)) {
+      case HORSE:
+        return dr * dc === 2 ? '马腿被挡' : '马须按日字走';
+      case CHARIOT:
+        return dr === 0 || dc === 0 ? '车的行进路线有棋子阻挡' : '车须沿直线走';
+      case CANNON:
+        if (dr !== 0 && dc !== 0) return '炮须沿直线走';
+        return target ? '炮吃子时起点和落点之间须恰好隔一子' : '炮走到空位时不能越过棋子';
+      case ELEPHANT:
+        if (dr !== 2 || dc !== 2) return '相（象）须按田字走';
+        return ownSide(to.row, color) ? '象眼被挡' : '相（象）不能过河';
+      case ADVISOR: return '仕（士）须在九宫内斜走一格';
+      case GENERAL: return '帅（将）须在九宫内直走一格';
+      default: return '兵（卒）只能前进一步，过河后也可横走一格';
+    }
+  }
+  const next = afterMove(board, move);
+  const general = POINTS[next.indexOf(color * GENERAL)];
+  const opposingGeneral = POINTS[next.indexOf(-color * GENERAL)];
+  if (general && opposingGeneral && general.col === opposingGeneral.col && intervening(next, general, opposingGeneral) === 0) {
+    return '这步会造成将帅照面';
+  }
+  return isInCheck(board, color) ? '你正在被将军，这步未能应将' : '走后己方将帅会被将军';
+}
+
 export function* legalMoves(board: readonly number[], color: Color): Generator<XiangqiMove> {
   for (const from of POINTS) {
     if (board[indexOf(from)] * color <= 0) continue;
@@ -121,7 +161,7 @@ export function* legalMoves(board: readonly number[], color: Color): Generator<X
   }
 }
 
-/** 逐着检查对手最重的吃子回应，并优先推荐一步胜与应将。 */
+/** 比较对方吃子与己方合法回吃后的子力差，并优先推荐一步胜与应将。 */
 export function suggestMoves(
   board: readonly number[], color: Color, moves: readonly XiangqiMove[],
   outcome: (move: XiangqiMove, next: number[], check: boolean) => Color | 0 | undefined,
@@ -141,20 +181,40 @@ export function suggestMoves(
       return { ...move, reason: '本着成和', score: -40 };
     }
     const captured = board[indexOf(move.to)];
-    let replyGain = VALUE[Math.abs(next[indexOf(firstReply.value.to)])];
-    for (const reply of replies) replyGain = Math.max(replyGain, VALUE[Math.abs(next[indexOf(reply.to)])]);
+    let replyGain = 0;
+    let strongestCapture: { move: XiangqiMove; gain: number; recapture: boolean } | undefined;
+    let reply: ReturnType<typeof replies.next> = firstReply;
+    while (!reply.done) {
+      const move = reply.value;
+      const gain = VALUE[Math.abs(next[indexOf(move.to)])];
+      if (gain > 0) {
+        const recaptured = VALUE[Math.abs(next[indexOf(move.from)])];
+        const afterReply = afterMove(next, move);
+        const recapture = POINTS.some(from => isLegalMove(afterReply, { from, to: move.to }, color));
+        const netGain = gain - (recapture ? recaptured : 0);
+        if (!strongestCapture || netGain > replyGain || (netGain === replyGain && gain > strongestCapture.gain)) {
+          strongestCapture = { move, gain, recapture };
+          replyGain = netGain;
+        }
+      }
+      reply = replies.next();
+    }
     const piece = board[indexOf(move.from)];
     const center = Math.abs(move.from.col - 4) - Math.abs(move.to.col - 4);
     const develop = (Math.abs(piece) === HORSE || Math.abs(piece) === SOLDIER)
       ? color * (move.from.row - move.to.row) : 0;
-    const score = VALUE[Math.abs(captured)] - replyGain + (check ? 0.3 : 0) + center * 0.03 + develop * 0.08;
+    const score = VALUE[Math.abs(captured)] - Math.max(0, replyGain) + (check ? 0.3 : 0) + center * 0.03 + develop * 0.08;
+    const replyMove = strongestCapture?.move;
+    const replyText = strongestCapture && replyMove
+      ? `对方${pieceName(next[indexOf(replyMove.from)])}可吃${pieceName(next[indexOf(replyMove.to)])}（${moveText(replyMove)}）${strongestCapture.recapture ? '，己方可回吃' : ''}`
+      : '';
     const reasons = [
       inCheck && '应将', check && '将军', captured && `吃${pieceName(captured)}`,
-      replyGain > VALUE[Math.abs(captured)] && '留意对方吃子',
+      replyText,
     ].filter(Boolean);
     return { ...move, reason: reasons.join('、') || '保持子力，调整站位', score };
   }).sort((a, b) => b.score - a.score)
-    .slice(0, 3).map(({ score: _score, ...hint }) => hint);
+    .slice(0, XIANGQI_HINT_LIMIT).map(({ score: _score, ...hint }) => hint);
 }
 
 export function formatXiangqiBoard(board: readonly number[], last?: XiangqiMove): string {
@@ -171,6 +231,6 @@ export function formatXiangqiBoard(board: readonly number[], last?: XiangqiMove)
 }
 
 export function formatXiangqiAdvice(hints: readonly XiangqiHint[], warning?: string): string {
-  const suggestions = hints.map(hint => `${moveText(hint)}（${hint.reason}）`);
+  const suggestions = hints.map((hint, i) => `${i + 1}. ${moveText(hint)}（${hint.reason}）`);
   return [warning, suggestions.length ? `建议走法 ${suggestions.join('；')}` : ''].filter(Boolean).join('\n');
 }

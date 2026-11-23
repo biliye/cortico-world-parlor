@@ -19,6 +19,7 @@ import { LedgerDb } from './ledger-db.ts';
 import { MailDb } from './mail-db.ts';
 import { serverClock } from './clock.ts';
 import { gameById, gameIds, gameLabelOf } from './games/registry.ts';
+import { XiangqiMoveError } from './games/xiangqi-table.ts';
 import { jsonValue } from './storage/json.ts';
 import { isUniqueViolation } from './storage/errors.ts';
 import {
@@ -1016,6 +1017,11 @@ export class TableHost {
     try {
       step = draft.act(seat.id, action, now);
     } catch (error) {
+      if (error instanceof XiangqiMoveError && error.alternative) {
+        throw new HostError('invalid', error.message, {
+          table: table.id, revision: table.revision, deadline: error.deadline, move: error.alternative,
+        });
+      }
       return asHostError(error);
     }
     const revision = table.revision + 1;
