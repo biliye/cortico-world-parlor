@@ -333,12 +333,19 @@ describe('对外页的静态契约', () => {
     expect(js).toMatch(/const FOLLOW = 0\.1\d/);
     expect(js).toMatch(/Math\.pow\(1 - FOLLOW, dt\)/);
 
-    // 吸附：手停 140ms 后按「要停在哪」重定目标，循环照旧跑着，减速直接接上吸附；
-    // 不是等停稳（mode === 'idle'）再起步——那 140ms 的静止加起步加速度就是僵硬感
+    // 吸附：手停 200ms 后把落点收进最近的屏边界，循环照旧跑着，减速直接接上吸附；
+    // 不是等停稳（mode === 'idle'）再起步——那段静止加起步加速度就是僵硬感
     expect(js).toMatch(/const retarget = \(\) =>/);
     expect(js).toMatch(/Math\.abs\(at - target\)/);
     expect(js).toMatch(/target = clamp\(pick\);\s*\n\s*if \(!frame\) \{/);
     expect(js).not.toContain('settle();');
+    // 2026-11-23：滚四五格停手不再卡在两屏之间，取最近落点，空档不留
+    expect(js).not.toContain('REACH');
+    expect(js).not.toContain('FLING');
+    expect(js).toMatch(/let pick = list\[0\];\s*\n\s*for \(const at of list\)/);
+    // 比视口高的屏不当落点，落进去也不吸（那截要连续读）
+    expect(js).toMatch(/filter\(\(el\) => !el\.classList\.contains\('is-tall'\)\)/);
+    expect(js).toContain('if (inTall(target)) return;');
     // 缓动两头速度都归零：ease-in-out，不是起点就最大速度的 ease-out
     expect(js).toMatch(/p < 0\.5 \? 4 \* p \* p \* p/);
   });

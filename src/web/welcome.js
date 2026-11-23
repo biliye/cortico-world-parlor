@@ -179,8 +179,6 @@
     if (!('scrollBehavior' in root.style)) return;
 
     const FOLLOW = 0.12; // 每帧追掉差距的比例：约 16 帧贴住，尾巴看得见但不拖沓
-    const REACH = 0.38; // 停手时离屏边多近才吸过去（占视口高度，原生 proximity 同档）
-    const FLING = 0.9; //  一口气滚过这么多屏，算「想翻页」，顺势推到前面那一屏
     // 停手多久之后看落点。不能太短：鼠标一格约 100px、慢速连滚的间隔可以到 150ms，
     // 140ms 会在两格之间就把页面往回吸，慢速滚轮永远推不过第一屏（实测 134ms 间隔必现）。
     const SETTLE = 200;
@@ -197,23 +195,35 @@
     let settleTimer = 0;
     let last = 0;
     let lastWheelAt = 0;
-    let burstFrom = scrollY; // 这一口气滚轮的起点（目标是滚到哪儿，不是现在在哪儿）
 
     const maxY = () => Math.max(0, root.scrollHeight - innerHeight);
     const clamp = (y) => Math.min(Math.max(y, 0), maxY());
     const headH = () => (bar ? bar.offsetHeight : 0);
     const locked = () => root.classList.contains('ef-rule-open');
 
-    /** 落点：每屏的顶对齐到顶栏下沿；最后再补一个文档底。 */
+    /**
+     * 落点：每屏的顶对齐到顶栏下沿；最后再补一个文档底。
+     * 比视口高的屏（.is-tall）不算落点——它本来就要连续读，把它当吸附点等于
+     * 把读到一半的内容拽回屏顶（375×667 的家长屏踩过）。
+     */
     const stops = () => {
-      const list = [...document.querySelectorAll('.screen')].map((el) =>
-        Math.round(el.getBoundingClientRect().top + scrollY - headH()),
-      );
+      const list = [...document.querySelectorAll('.screen')]
+        .filter((el) => !el.classList.contains('is-tall'))
+        .map((el) => Math.round(el.getBoundingClientRect().top + scrollY - headH()));
       // 第一屏的落点就是页顶。scroll-padding 会把它算成 3px（顶上那条三色带），
       // 吸过去等于一进站就先滚掉一条色带，不合适。
       list[0] = 0;
       list.push(maxY());
       return list;
+    };
+
+    /** 落点在某张高屏里：那截要连续读，别吸。 */
+    const inTall = (y) => {
+      for (const el of document.querySelectorAll('.screen.is-tall')) {
+        const top = el.getBoundingClientRect().top + scrollY - headH();
+        if (y > top + 1 && y < top + el.offsetHeight - 2) return true;
+      }
+      return false;
     };
 
     /* 写位置时把浏览器取整后的真值记下来：scroll 事件里靠它分清
@@ -239,12 +249,13 @@
     };
 
     /**
-     * 手停下 200ms 之后看落点，两种情形会吸：
+     * 手停下 200ms 之后把落点收进屏边界，中间态一律不留（2026-11-23：不要留白）。
      *
-     * a. 离某屏边界不到 38% 视口 —— 推一两格会滑回屏顶，推五六格会落到屏顶，
-     *    和原生 proximity 的范围一致（实测 36%–47%，取靠里那一端）。
-     * b. 一口气滚过 0.9 屏、又正好落在两屏中间的空档里 —— 明显是想翻页，
-     *    顺着方向推到前面那一屏，不然会停在一个谁也不挨着的位置。
+     * 取最近的落点：滚过半屏就翻到下一屏，没过半屏就退回上一屏。原来是
+     * 「离屏边不到 38% 才吸」，剩下的空档靠「一口气滚过 0.9 屏」去猜，
+     * 滚四五格停手就卡在两屏之间，上一屏下面露出一块白。
+     *
+     * 唯一的例外是落点在某张比视口高的屏里（.is-tall）：那截要连续读，不吸。
      *
      * 关键在于「还在走的时候就改目标」，而不是等停稳了再起步：先停死、等 200ms、
      * 再动一段，那 200ms 的静止 + 起步的加速度正是「僵硬」的来源。
@@ -255,24 +266,12 @@
       clearTimeout(settleTimer);
       settleTimer = setTimeout(() => {
         if (mode === 'glide' || locked()) return;
+        if (inTall(target)) return;
         const list = stops();
-        let pick = null;
-        let near = innerHeight * REACH;
+        let pick = list[0];
         for (const at of list) {
-          const d = Math.abs(at - target);
-          if (d < near) {
-            near = d;
-            pick = at;
-          }
+          if (Math.abs(at - target) < Math.abs(pick - target)) pick = at;
         }
-        if (pick === null) {
-          const fling = target - burstFrom;
-          if (Math.abs(fling) >= innerHeight * FLING) {
-            const ahead = list.filter((at) => (fling > 0 ? at > target : at < target));
-            pick = ahead.length ? ahead[fling > 0 ? 0 : ahead.length - 1] : null;
-          }
-        }
-        if (pick === null) return;
         target = clamp(pick);
         if (!frame) {
           last = 0;
@@ -331,10 +330,7 @@
           cancelAnimationFrame(frame);
           frame = 0;
         }
-        // 停手超过 220ms 再滚，算新的一口气：翻页判定从这儿重新量
-        const now = performance.now();
-        if (now - lastWheelAt > 220) burstFrom = clamp(target);
-        lastWheelAt = now;
+        lastWheelAt = performance.now();
         target = clamp(target + delta);
         if (!frame) {
           last = 0;
@@ -358,7 +354,6 @@
         // 滚轮刚动过：这一下多半是上一帧写位置的余波，别抢正在进行的手势
         if (performance.now() - lastWheelAt < SETTLE + 60) return;
         target = scrollY;
-        burstFrom = scrollY; // 别人挪的不算「一口气」，别拿它当翻页手势
         mode = 'idle';
         // 键盘、拖滚动条也是「松手就吸」：松手之后同一条减速接上吸附
         retarget();
