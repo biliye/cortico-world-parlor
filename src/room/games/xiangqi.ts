@@ -4,7 +4,7 @@ export const XIANGQI_COLS = 9;
 export type Color = 1 | -1;
 export type Point = { row: number; col: number };
 export type XiangqiMove = { from: Point; to: Point };
-export type XiangqiHint = XiangqiMove & { reason: string };
+export type XiangqiHint = XiangqiMove & { reason: string; positionThreat?: string };
 export const XIANGQI_HINT_LIMIT = 3;
 
 const GENERAL = 1;
@@ -161,6 +161,19 @@ export function* legalMoves(board: readonly number[], color: Color): Generator<X
   }
 }
 
+type CaptureReply = { move: XiangqiMove; gain: number; netGain: number; recapture: boolean };
+
+function strongerCapture(current: CaptureReply | undefined, candidate: CaptureReply): CaptureReply {
+  if (!current || candidate.netGain > current.netGain
+    || (candidate.netGain === current.netGain && candidate.gain > current.gain)) return candidate;
+  return current;
+}
+
+function formatCaptureReply(board: readonly number[], reply: CaptureReply): string {
+  const { move, recapture } = reply;
+  return `对方${pieceName(board[indexOf(move.from)])}可吃${pieceName(board[indexOf(move.to)])}（${moveText(move)}）${recapture ? '，己方可回吃' : ''}`;
+}
+
 /** 比较对方吃子与己方合法回吃后的子力差，并优先推荐一步胜与应将。 */
 export function suggestMoves(
   board: readonly number[], color: Color, moves: readonly XiangqiMove[],
@@ -181,20 +194,22 @@ export function suggestMoves(
       return { ...move, reason: '本着成和', score: -40 };
     }
     const captured = board[indexOf(move.to)];
-    let replyGain = 0;
-    let strongestCapture: { move: XiangqiMove; gain: number; recapture: boolean } | undefined;
+    let strongestReply: CaptureReply | undefined;
+    let existingThreat: CaptureReply | undefined;
     let reply: ReturnType<typeof replies.next> = firstReply;
     while (!reply.done) {
-      const move = reply.value;
-      const gain = VALUE[Math.abs(next[indexOf(move.to)])];
+      const response = reply.value;
+      const gain = VALUE[Math.abs(next[indexOf(response.to)])];
       if (gain > 0) {
-        const recaptured = VALUE[Math.abs(next[indexOf(move.from)])];
-        const afterReply = afterMove(next, move);
-        const recapture = POINTS.some(from => isLegalMove(afterReply, { from, to: move.to }, color));
+        const recaptured = VALUE[Math.abs(next[indexOf(response.from)])];
+        const afterReply = afterMove(next, response);
+        const recapture = POINTS.some(from => isLegalMove(afterReply, { from, to: response.to }, color));
         const netGain = gain - (recapture ? recaptured : 0);
-        if (!strongestCapture || netGain > replyGain || (netGain === replyGain && gain > strongestCapture.gain)) {
-          strongestCapture = { move, gain, recapture };
-          replyGain = netGain;
+        const capture = { move: response, gain, netGain, recapture };
+        if (indexOf(response.to) === indexOf(move.to) || !isLegalMove(board, response, opponent)) {
+          strongestReply = strongerCapture(strongestReply, capture);
+        } else {
+          existingThreat = strongerCapture(existingThreat, capture);
         }
       }
       reply = replies.next();
@@ -203,16 +218,16 @@ export function suggestMoves(
     const center = Math.abs(move.from.col - 4) - Math.abs(move.to.col - 4);
     const develop = (Math.abs(piece) === HORSE || Math.abs(piece) === SOLDIER)
       ? color * (move.from.row - move.to.row) : 0;
-    const score = VALUE[Math.abs(captured)] - Math.max(0, replyGain) + (check ? 0.3 : 0) + center * 0.03 + develop * 0.08;
-    const replyMove = strongestCapture?.move;
-    const replyText = strongestCapture && replyMove
-      ? `对方${pieceName(next[indexOf(replyMove.from)])}可吃${pieceName(next[indexOf(replyMove.to)])}（${moveText(replyMove)}）${strongestCapture.recapture ? '，己方可回吃' : ''}`
-      : '';
+    const replyGain = Math.max(0, strongestReply?.netGain ?? 0, existingThreat?.netGain ?? 0);
+    const score = VALUE[Math.abs(captured)] - replyGain + (check ? 0.3 : 0) + center * 0.03 + develop * 0.08;
     const reasons = [
       inCheck && '应将', check && '将军', captured && `吃${pieceName(captured)}`,
-      replyText,
+      strongestReply && formatCaptureReply(next, strongestReply),
     ].filter(Boolean);
-    return { ...move, reason: reasons.join('、') || '保持子力，调整站位', score };
+    return {
+      ...move, reason: reasons.join('、') || '保持子力，调整站位', score,
+      ...(existingThreat && { positionThreat: formatCaptureReply(next, existingThreat) }),
+    };
   }).sort((a, b) => b.score - a.score)
     .slice(0, XIANGQI_HINT_LIMIT).map(({ score: _score, ...hint }) => hint);
 }
@@ -232,5 +247,6 @@ export function formatXiangqiBoard(board: readonly number[], last?: XiangqiMove)
 
 export function formatXiangqiAdvice(hints: readonly XiangqiHint[], warning?: string): string {
   const suggestions = hints.map((hint, i) => `${i + 1}. ${moveText(hint)}（${hint.reason}）`);
-  return [warning, suggestions.length ? `建议走法 ${suggestions.join('；')}` : ''].filter(Boolean).join('\n');
+  const threats = hints.flatMap((hint, i) => hint.positionThreat ? [`第 ${i + 1} 条建议落子后仍有原局威胁：${hint.positionThreat}`] : []);
+  return [warning, suggestions.length ? `建议走法 ${suggestions.join('；')}` : '', ...threats].filter(Boolean).join('\n');
 }

@@ -186,7 +186,7 @@
               "row",
               "col"
             ],
-            "description": "象棋 state 可选。给定棋子坐标，返回该棋子的合法落点。",
+            "description": "象棋 state 可选。只有轮到你时才返回该坐标的合法落点，空数组表示这个位置没有可走的棋子。",
             "properties": {
               "row": {
                 "type": "integer",

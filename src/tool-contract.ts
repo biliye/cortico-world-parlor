@@ -41,7 +41,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
         game: { type: 'string', description: 'describe 或 ratings 时填写服务器目录里的游戏 id。' },
         table: { type: 'string', description: '桌号。state/history 省略时查自己的桌，replay 省略时查最近对局。' },
         from: { type: 'object', additionalProperties: false, required: ['row', 'col'],
-          description: '象棋 state 可选。给定棋子坐标，返回该棋子的合法落点。',
+          description: '象棋 state 可选。只有轮到你时才返回该坐标的合法落点，空数组表示这个位置没有可走的棋子。',
           properties: { row: { type: 'integer', minimum: 0, maximum: XIANGQI_ROWS - 1 }, col: { type: 'integer', minimum: 0, maximum: XIANGQI_COLS - 1 } } },
         day: { type: 'integer', minimum: 1, description: 'history：按游戏天数筛选狼人杀记录，从第 1 天开始。' },
         seatNo: { type: 'integer', minimum: 1, description: 'history：按座号筛选狼人杀发言与出局记录，从 1 开始。' },

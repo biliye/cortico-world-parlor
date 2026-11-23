@@ -88,7 +88,8 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
   });
 
   it('中国象棋从目录开桌，只有执棋方能收到提示和合法走法', async () => {
-    const [a, b, spectator] = await start({ now: Date.now() });
+    const clock = { now: Date.now() };
+    const [a, b, spectator] = await start(clock);
     const catalog = await a.client.games(a.token, { op: 'list' }, 'lobby');
     expect(catalog.games).toContainEqual(expect.objectContaining({ id: 'xiangqi', label: '中国象棋' }));
     const info = await a.client.games(a.token, { op: 'describe', game: 'xiangqi' }, 'lobby');
@@ -128,9 +129,10 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
     expect(incomplete.body.code).toBe('xiangqi_move_rejected');
     expect((await post(red.token, { ...body, revision: body.revision - 1 })).status).toBe(409);
     expect((await post(spectator.token, body)).status).toBe(403);
+    clock.now += 2500;
     const invalid = await post(red.token, { ...body, action: 'move', params: { from: { row: 9, col: 1 }, to: { row: 8, col: 3 } } });
     expect(invalid.status).toBe(400);
-    expect(invalid.body).toMatchObject({ code: 'xiangqi_move_rejected', error: expect.stringMatching(/马腿被挡.*还剩 60 秒/) });
+    expect(invalid.body).toMatchObject({ code: 'xiangqi_move_rejected', error: expect.stringMatching(/马腿被挡.*还剩 58 秒/) });
     const recovery = JSON.parse(invalid.body.error.match(/parlor_game_action (\{.*\})。换一手/u)?.[1] ?? '{}');
     expect(recovery).toEqual({ table, revision: body.revision, action: 'move', params: { from, to } });
     expect((await read(red)).table.revision).toBe(body.revision);

@@ -1018,8 +1018,9 @@ export class TableHost {
       step = draft.act(seat.id, action, now);
     } catch (error) {
       if (error instanceof XiangqiMoveError && error.alternative) {
+        const { from, to } = error.alternative;
         throw new HostError('invalid', error.message, {
-          table: table.id, revision: table.revision, deadline: error.deadline, move: error.alternative,
+          table: table.id, revision: table.revision, deadline: error.deadline, action: 'move', params: { from, to },
         });
       }
       return asHostError(error);

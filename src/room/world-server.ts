@@ -2879,11 +2879,11 @@ export class WorldServer {
             ...(revisionArg !== undefined ? { revision: revisionArg } : {}),
             ...(requestId ? { requestId } : {}),
           }).catch((error: unknown) => {
-            if (type !== 'game_action' || !(error instanceof HostError) || !error.xiangqiRetry) throw error;
-            const { table, revision, deadline, move: { from, to } } = error.xiangqiRetry;
+            if (type !== 'game_action' || !(error instanceof HostError) || !error.retry) throw error;
+            const { deadline, ...replacement } = error.retry;
             const remaining = secondsLeft(deadline, this.now());
             const recovery = remaining > 0
-              ? `还剩 ${remaining} 秒，仍轮到你。可直接走首选：parlor_game_action ${JSON.stringify({ table, revision, action: 'move', params: { from, to } })}。换一手用新的 requestId（可省略）。`
+              ? `还剩 ${remaining} 秒，仍轮到你。可直接走首选：parlor_game_action ${JSON.stringify(replacement)}。换一手用新的 requestId（可省略）。`
               : '本手时限已到，等下一次回合通知。';
             json(res, 400, { error: `这步没落子：${error.message}。${recovery}`, code: 'xiangqi_move_rejected' });
             return null;

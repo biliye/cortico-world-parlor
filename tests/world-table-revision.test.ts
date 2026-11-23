@@ -108,6 +108,10 @@ describe('World 牌桌版本同步', () => {
       from, to: tablePrivate.legalMoves!.filter(move => move.from.row === from.row && move.from.col === from.col).map(move => move.to),
     });
     expect(games.mock.calls[1][1]).toEqual({ op: 'state' });
+    const empty = { row: 8, col: 4 };
+    expect((await callState(empty)).tablePrivate.legalDestinations).toEqual({ from: empty, to: [] });
+    games.mockResolvedValueOnce({ ...snapshot, table, tablePrivate: { ...tablePrivate, canAct: false } });
+    expect((await callState(from)).tablePrivate.legalDestinations).toBeUndefined();
     const action = expectRevision(8);
     await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(
       { action: 'move', params: { from, to } }, {} as ToolCallContext,
