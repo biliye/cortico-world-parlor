@@ -146,6 +146,17 @@ export class EventDb {
     return row.n;
   }
 
+  /** 查当前席位所属的 Coo 是否已收到提醒，换席位不重置冷却。 */
+  async recentlyNotifiedFullTableSeats(roomId: string, tableId: string, after: number): Promise<Set<string>> {
+    const rows = await this.db.prepare(
+      `SELECT DISTINCT s.id FROM events e
+       JOIN event_audience a ON a.room_id = e.room_id AND a.seq = e.seq
+       JOIN room_seats s ON s.room_id = e.room_id AND s.coo_id = a.coo_id AND s.released_at IS NULL
+       WHERE e.room_id = ? AND e.scope_table_id = ? AND e.type = 'parlor.table.full' AND e.ts > ?`,
+    ).all(roomId, tableId, after) as { id: string }[];
+    return new Set(rows.map(row => row.id));
+  }
+
   append(roomId: string, input: AppendEventInput): Promise<RoomEvent> {
     return withTransaction(this.db, async () => {
       // MAX(a,b) 是 SQLite 的标量写法，PG 没有；CASE 两边都认。

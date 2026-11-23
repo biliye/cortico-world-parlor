@@ -110,13 +110,13 @@ describe('Coo 快速匹配与牌桌分享', () => {
     }, 'lobby');
     const link = `${server!.url}/play?room=lobby&view=table&table=${opened.tableId}`;
     const args = { link, requestId: 'fill-gomoku' };
-    const fullText = '你的五子棋牌桌坐满了（2/2）';
+    const fullText = '五子棋牌桌坐满了（2/2）';
     const notices = () => host.events.filter(event => event.type === 'parlor.message' && event.text.includes(fullText));
 
     expect(await call('parlor_table_join', args)).toContain('并坐下');
     await until(() => notices().length > 0);
     expect(notices()).toHaveLength(1);
-    expect(host.pushOpts[host.events.indexOf(notices()[0])]).toMatchObject({ trigger: 'debounce' });
+    expect(notices()[0].meta?.addressed).toBe(true);
     const hostView = await friend.history(friendToken, 0, 100, 'lobby');
     expect(hostView.events.filter(event => event.type === 'parlor.table.full')).toHaveLength(1);
 

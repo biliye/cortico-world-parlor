@@ -1,5 +1,3 @@
-import type { RoomEvent } from './protocol.ts';
-
 /**
  * 牌桌的通用契约：一房一桌。规则、发牌与隐藏信息都由各游戏实现，内核只管
  * 开桌/坐下/开始/动作/超时，以及把每个席位的私视图变成一段只给它看的话。
@@ -131,20 +129,6 @@ export function tableSeatCapacity(engine: TableEngine): number {
   const view = engine.public() as { capacity?: unknown };
   return typeof view.capacity === 'number' && Number.isSafeInteger(view.capacity) && view.capacity > 0
     ? view.capacity : tableCapacity(engine.game);
-}
-
-/** 在一次入座成功后调用。收件人是此刻的同桌席位。 */
-export function tableFullNotice(engine: TableEngine, tableId: string): Omit<RoomEvent, 'seq' | 'ts'> | undefined {
-  const seats = engine.seatIds();
-  const capacity = tableSeatCapacity(engine);
-  if (seats.length !== capacity || capacity === 0) return;
-  return {
-    type: 'parlor.table.full',
-    from: 'system',
-    scope: { kind: 'table', tableId, seats },
-    text: `你的${engine.label}牌桌坐满了（${capacity}/${capacity}），等待桌主开局。`,
-    data: { tableId, game: engine.game, capacity },
-  };
 }
 
 /** 狼人杀历史查询：公开发言/票型/死亡；`review` 才带夜间内部记录。 */

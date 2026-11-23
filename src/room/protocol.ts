@@ -1,6 +1,6 @@
 /** 客厅线协议：席位、可见性 scope、事件与唤醒判定。线协议与服务器、World 共用。 */
 import type { LedgerEntryView, LedgerSummary } from './ledger.ts';
-import type { TableGame, TablePrivateSummary, TableSummary } from './table-engine.ts';
+import { tableSeatCapacity, type TableEngine, type TableGame, type TablePrivateSummary, type TableSummary } from './table-engine.ts';
 import type { TableRecruitment } from './table-discovery-protocol.ts';
 
 export function isRoomId(value: unknown): value is string {
@@ -83,6 +83,22 @@ export interface RoomEvent {
   text: string;
   mentions?: string[];
   data?: Record<string, unknown>;
+}
+
+export const TABLE_FULL_NOTICE_COOLDOWN_MS = 60_000;
+
+/** 入座成功后生成提醒。同一张桌的收件范围由网关按最近投递记录收窄。 */
+export function tableFullNotice(engine: TableEngine, tableId: string) {
+  const seats = engine.seatIds();
+  const capacity = tableSeatCapacity(engine);
+  if (seats.length !== capacity || capacity === 0) return;
+  return {
+    type: 'parlor.table.full',
+    from: 'system',
+    scope: { kind: 'table', tableId, seats },
+    text: `${engine.label}牌桌坐满了（${capacity}/${capacity}）。`,
+    data: { tableId, game: engine.game, capacity },
+  } satisfies Omit<RoomEvent, 'seq' | 'ts'>;
 }
 
 export interface JoinRequest {

@@ -1624,8 +1624,8 @@ export class ParlorWorld implements World {
           lines.push(line);
           break;
         }
+        case 'parlor.table.full': lines.push(`（桌子）${event.text} 等待桌主开局。`); break;
         case 'parlor.table.join':
-        case 'parlor.table.full':
         case 'parlor.table.start':
         case 'parlor.table.action':
         case 'parlor.table.werewolf.night':

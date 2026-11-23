@@ -24,7 +24,6 @@ import { isUniqueViolation } from './storage/errors.ts';
 import {
   TableError,
   tableCapacity,
-  tableFullNotice,
   tableSeatCapacity,
   type TableEngine,
   type TableEvent,
@@ -35,7 +34,7 @@ import {
   type TableStep,
   type TableSummary,
 } from './table-engine.ts';
-import type { RoomEvent } from './protocol.ts';
+import { TABLE_FULL_NOTICE_COOLDOWN_MS, tableFullNotice, type RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
 import { validSeatResults, writeSeatResults } from './table-results.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
@@ -748,7 +747,15 @@ export class TableHost {
       await this.insertActivePlayer(cooId, table.id, now);
       const row = await this.appendTableEvent(table, event, now);
       const fullNotice = tableFullNotice(draft, table.id);
-      if (fullNotice) await this.events.append(this.roomId, { ...fullNotice, ts: now });
+      if (fullNotice) {
+        const recent = await this.events.recentlyNotifiedFullTableSeats(
+          this.roomId, table.id, now - TABLE_FULL_NOTICE_COOLDOWN_MS,
+        );
+        const seats = fullNotice.scope.seats.filter(seatId => !recent.has(seatId));
+        if (seats.length > 0) {
+          await this.events.append(this.roomId, { ...fullNotice, scope: { ...fullNotice.scope, seats }, ts: now });
+        }
+      }
       await this.updateTableState(table.id, draft, revision, stateJson, now, {});
       await this.finishReceipt(receipt, draft);
       await this.storeReceipt(cooId, requestId, table.id, { type: 'table_join', tableId: table.id }, receipt, now);

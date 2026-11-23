@@ -582,6 +582,43 @@ describe('客厅牌桌（快局大富翁）', () => {
 });
 
 describe('客厅牌桌（五子棋）', () => {
+  it('满桌唤醒按桌和 Coo 间隔一分钟，新补位者可即时收到', async () => {
+    fixture = await setup();
+    const { host, clock } = fixture;
+    await enter(host, A, '阿岚');
+    const b = await enter(host, B, '小满');
+    const c = await enter(host, C, '小柚');
+    const { tableId } = await host.openTable(A, { game: 'gomoku' }, 'open-gomoku');
+    const notices = async (cooId: string) => (await host.snapshot(cooId)).events
+      .filter(event => event.type === 'parlor.table.full' && event.data?.tableId === tableId);
+    const filledAt = clock.now;
+    await host.joinTable(B, tableId, 'first-fill');
+    expect(await notices(A)).toHaveLength(1);
+    expect(await notices(B)).toHaveLength(1);
+
+    clock.now += 10_000;
+    await host.leaveTable(B, tableId, 'leave-first-fill');
+    await host.leave(B, b.seat.id);
+    const returned = await enter(host, B, '小满');
+    expect(returned.seat.id).not.toBe(b.seat.id);
+    await host.joinTable(B, tableId, 'same-coo-new-seat');
+    expect(await notices(A)).toHaveLength(1);
+    expect(await notices(B)).toEqual([]);
+
+    await host.leaveTable(B, tableId, 'leave-for-new-player');
+    await host.joinTable(C, tableId, 'new-player-fills');
+    const newPlayerNotices = await notices(C);
+    expect(newPlayerNotices).toHaveLength(1);
+    expect(newPlayerNotices[0].scope).toEqual({ kind: 'table', tableId, seats: [c.seat.id] });
+    expect(await notices(A)).toHaveLength(1);
+
+    clock.now = filledAt + 60_000;
+    await host.leaveTable(C, tableId, 'leave-after-cooldown');
+    await host.joinTable(B, tableId, 'fill-after-cooldown');
+    expect(await notices(A)).toHaveLength(2);
+    expect(await notices(B)).toHaveLength(1);
+  });
+
   it('五子棋桌落库后重启能接着下，旧版本被拒', async () => {
     fixture = await setup();
     const { host, clock, db } = fixture;

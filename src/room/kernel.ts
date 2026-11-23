@@ -5,7 +5,7 @@
 import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
-  DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS, scopeVisibleTo,
+  DEFAULT_WAKE_TIER, WAKE_TIERS, WAKE_TIER_LABELS, scopeVisibleTo, tableFullNotice,
   type ActionRequest, type DeliveryReceipt, type JoinRequest, type JoinResponse, type MonopolyInfo, type MonopolySignupView,
   type RoomEvent, type RoomSnapshot, type Scope,
   type Seat, type SeatKind, type WakeTier,
@@ -29,7 +29,7 @@ import { resolveGift } from './gifts/catalog.ts';
 import { MailStore, type MailPage, type MailView } from './mail.ts';
 import { ReplayStore } from './replay.ts';
 import {
-  TableError, tableFullNotice,
+  TableError,
   type TableEngine, type TableEvent, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
 } from './table-engine.ts';
 
