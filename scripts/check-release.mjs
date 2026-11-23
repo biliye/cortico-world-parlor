@@ -4,12 +4,13 @@ import { dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 
 const requiredAssets = {
-  play: ['theme.js', 'club.css', 'appearance.css', 'night.css', 'vue-loader.js'],
-  parent: ['parent.css', 'parent.js'],
-  welcome: ['welcome-kit.css', 'welcome.css', 'welcome.js'],
+  play: { prefix: '/play/assets/', files: ['theme.js', 'play.css', 'club.css', 'appearance.css', 'night.css', 'vue-loader.js'] },
+  parent: { prefix: '/parent/assets/', files: ['parent.css', 'parent.js'] },
+  support: { prefix: '/play/assets/', files: ['theme.js', 'support.css', 'support.js'] },
+  identity: { prefix: '/play/assets/', files: ['play.css', 'identity.js'] },
+  welcome: { prefix: '/welcome/assets/', files: ['welcome-kit.css', 'welcome.css', 'welcome.js'] },
 };
 const assetPrefixes = ['/play/assets/', '/parent/assets/', '/welcome/assets/'];
-const unversionedAssets = new Set(['/play/assets/play.css']);
 const localServerScript = 'node --experimental-strip-types scripts/serve.ts';
 const cliProbes = [
   { command: 'parlor-gateway', args: ['--database-url', ''], status: 2, message: '必须配 PARLOR_DATABASE_URL' },
@@ -20,11 +21,10 @@ const cliProbes = [
 
 function checkAssetVersions(root, version, pages) {
   for (const page of pages) {
-    const assets = requiredAssets[page];
+    const { prefix, files } = requiredAssets[page];
     const htmlPath = `src/web/${page}.html`;
     const html = readFileSync(join(root, htmlPath), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-    const prefix = `/${page}/assets/`;
-    const requiredPaths = assets.map(asset => prefix + asset);
+    const requiredPaths = files.map(asset => prefix + asset);
     const urls = [...html.matchAll(/<[a-z][\w:-]*\b[^>]*?\s(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)]
       .map(([, doubleQuoted, singleQuoted, unquoted]) => doubleQuoted ?? singleQuoted ?? unquoted)
       .filter(value => assetPrefixes.some(assetPrefix => value.startsWith(assetPrefix)))
@@ -41,7 +41,6 @@ function checkAssetVersions(root, version, pages) {
         throw new Error(`${htmlPath} 引用的资源未打包：${url.pathname}`);
       }
       const versions = url.searchParams.getAll('v');
-      if (versions.length === 0 && unversionedAssets.has(url.pathname)) continue;
       if (versions.length !== 1 || versions[0] !== version) {
         const actual = versions.length === 0 ? '缺少 v' : JSON.stringify(versions);
         throw new Error(`${htmlPath} 的 ${url.pathname} 应带一个 v=${version}，实际为 ${actual}`);
@@ -146,7 +145,7 @@ function checkRelease(packageDir) {
     checkModules(root, 'src/room/client.ts', version);
   } else if (name === 'cortico-parlor-gateway') {
     if (!manifest.dependencies?.pg || manifest.cortico) throw new Error('网关包清单缺少 pg 或包含 World 注册');
-    checkAssetVersions(root, version, ['play', 'parent', 'welcome']);
+    checkAssetVersions(root, version, ['play', 'parent', 'support', 'identity', 'welcome']);
     // 下面这几个不是页面里 src/href 引到的（分享图在 meta、字体在 CSS、抓取端点根本不在页面里），
     // checkAssetVersions 看不到它们，所以另列一遍：漏了就是首页分享卡片裂图、字体回落、robots/sitemap 404。
     for (const path of [
