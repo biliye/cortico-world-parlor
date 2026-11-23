@@ -29,7 +29,7 @@ import { resolveGift } from './gifts/catalog.ts';
 import { MailStore, type MailPage, type MailView } from './mail.ts';
 import { ReplayStore } from './replay.ts';
 import {
-  TableError,
+  TableError, tableFullNotice,
   type TableEngine, type TableEvent, type TableGame, type TablePrivateSummary, type TableStep, type TableSummary,
 } from './table-engine.ts';
 
@@ -722,6 +722,8 @@ export class RoomKernel {
     } catch (error) {
       throw this.tableError(error);
     }
+    const fullNotice = tableFullNotice(table, this.tableId);
+    if (fullNotice) this.record(fullNotice);
   }
 
   startTable(seat: StoredSeat): StartReceipt {

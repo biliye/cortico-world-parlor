@@ -693,10 +693,10 @@ describe('随机先手与再来一局的边界', () => {
     expect(twelve.tableId).not.toBe(sixSeat.tableId);
   });
 
-  it('狼人杀 12 人桌坐到 9 人时，第 10 个人仍能并进来', async () => {
+  it('狼人杀 12 人桌按实际人数在第 12 人入座时提醒', async () => {
     fixture = await setup();
     const { host } = fixture;
-    const seats = [[A, '阿岚'], [B, '小满'], [C, '小柚'], [D, '客四'], [E, '客五'], [F, '客六'], [G, '客七'], [H, '客八'], [I, '客九'], [J, '客十']] as const;
+    const seats = [[A, '阿岚'], [B, '小满'], [C, '小柚'], [D, '客四'], [E, '客五'], [F, '客六'], [G, '客七'], [H, '客八'], [I, '客九'], [J, '客十'], [K, '客十一'], [L, '客十二']] as const;
     for (const [id, name] of seats) await enter(host, id, name);
     const opened = await host.rematchTable(A, { game: 'werewolf', seatCount: 12 }, 'w12-open');
     for (const [id] of seats.slice(1, 9)) await host.joinTable(id, opened.tableId, `w12-join-${id}`);
@@ -704,6 +704,11 @@ describe('随机先手与再来一局的边界', () => {
     const tenth = await host.rematchTable(J, { game: 'werewolf', seatCount: 12 }, 'w12-tenth');
     expect(tenth.tableId).toBe(opened.tableId);
     expect(tenth.created).toBe(false);
+    const fullNotices = async () => (await host.snapshot(A)).events.filter(event => event.type === 'parlor.table.full');
+    expect(await fullNotices()).toEqual([]);
+    await host.joinTable(K, opened.tableId, 'w12-eleventh');
+    await host.joinTable(L, opened.tableId, 'w12-twelfth');
+    expect(await fullNotices()).toMatchObject([{ data: { tableId: opened.tableId, capacity: 12 } }]);
   });
 
   it('同一个再来一局请求号重传不会另开一桌', async () => {
@@ -739,6 +744,17 @@ describe('再来一局的并发与重放边界', () => {
     // 一个并入原桌、一个另开新桌，谁也不该被拒。
     expect(new Set(ids).size).toBe(2);
     expect(ids).toContain(opened.tableId);
+    const winner = ids[0] === opened.tableId ? C : D;
+    const loser = winner === C ? D : C;
+    const fullNotices = async (cooId: string) => (await host.snapshot(cooId)).events
+      .filter(event => event.type === 'parlor.table.full');
+    await host.rematchTable(winner, { game: 'ddz' }, winner === C ? 'race-c' : 'race-d');
+    const notices = await fullNotices(A);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ data: { tableId: opened.tableId, capacity: 3 } });
+    expect(await fullNotices(B)).toEqual(notices);
+    expect(await fullNotices(winner)).toEqual(notices);
+    expect(await fullNotices(loser)).toEqual([]);
   });
 
   it('同一请求号并发重传，两次都返回同一张桌且不报唯一键冲突', async () => {

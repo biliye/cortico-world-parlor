@@ -23,6 +23,9 @@ import { jsonValue } from './storage/json.ts';
 import { isUniqueViolation } from './storage/errors.ts';
 import {
   TableError,
+  tableCapacity,
+  tableFullNotice,
+  tableSeatCapacity,
   type TableEngine,
   type TableEvent,
   type TableLogQuery,
@@ -34,7 +37,6 @@ import {
 } from './table-engine.ts';
 import type { RoomEvent } from './protocol.ts';
 import type { SeatRow } from './room-seat-db.ts';
-import { tableCapacity } from './table-discovery-db.ts';
 import { validSeatResults, writeSeatResults } from './table-results.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './games/werewolf.ts';
 
@@ -654,7 +656,7 @@ export class TableHost {
     const wanted = isWerewolfSeatCount(input.seatCount) ? input.seatCount : undefined;
     const candidates = this.liveTables().filter((table) => table.engine.status === 'open'
       && table.game === def.id && !table.frozen && this.now() < table.openDeadlineAt
-      && (wanted === undefined || this.capacityOf(table) === wanted));
+      && (wanted === undefined || tableSeatCapacity(table.engine) === wanted));
     for (const table of candidates) {
       // 候选是锁外选的，最后一张席随时会被别人抢走：拿到桌锁后再确认一次，
       // 满了就换下一张，而不是把人踹回去看「最多 N 个人」。
@@ -668,7 +670,7 @@ export class TableHost {
           if (table.frozen || table.engine.status !== 'open' || this.now() >= table.openDeadlineAt) {
             return { kind: 'miss' as const };
           }
-          if (table.engine.seatIds().length >= this.capacityOf(table)) return { kind: 'miss' as const };
+          if (table.engine.seatIds().length >= tableSeatCapacity(table.engine)) return { kind: 'miss' as const };
           const joined = await this.joinLocked(cooId, table, undefined, input.clientVersion);
           const receipt: RematchReceipt = {
             ...joined.receipt, game: def.id, joined: true, created: false,
@@ -690,13 +692,6 @@ export class TableHost {
       ...(input.seatCount !== undefined ? { seatCount: input.seatCount } : {}),
     }, requestId, { receiptKey: key, receiptExtra: { game: def.id, joined: true, created: true } });
     return asResult(opened.receipt as RematchReceipt, def.id);
-  }
-
-  /** 桌子的实际席数：狼人杀把开桌定的人数写进公开视图，其它玩法看注册表。 */
-  private capacityOf(table: LiveTable): number {
-    const view = table.engine.public() as { capacity?: unknown };
-    return typeof view.capacity === 'number' && Number.isSafeInteger(view.capacity) && view.capacity > 0
-      ? view.capacity : tableCapacity(table.game);
   }
 
   private async joinLocked(cooId: string, table: LiveTable, requestId?: string, clientVersion?: string): Promise<TableJoinResult> {
@@ -752,6 +747,8 @@ export class TableHost {
       await this.insertTableSeat(table.id, seat.id, cooId, await this.nextPosition(table.id), false, now);
       await this.insertActivePlayer(cooId, table.id, now);
       const row = await this.appendTableEvent(table, event, now);
+      const fullNotice = tableFullNotice(draft, table.id);
+      if (fullNotice) await this.events.append(this.roomId, { ...fullNotice, ts: now });
       await this.updateTableState(table.id, draft, revision, stateJson, now, {});
       await this.finishReceipt(receipt, draft);
       await this.storeReceipt(cooId, requestId, table.id, { type: 'table_join', tableId: table.id }, receipt, now);
