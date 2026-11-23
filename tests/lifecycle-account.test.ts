@@ -144,8 +144,14 @@ describe('300 分钟闲置、48 小时归档与全局账户', () => {
     const modern = new AbortController();
     const legacy = new AbortController();
     try {
-      await fetch(url + `/v1/rooms/r-life/stream?token=${token}&cap=seat-location-v1`,{signal:modern.signal});
-      await fetch(url + `/v1/rooms/r-life/stream?token=${token}`,{signal:legacy.signal});
+      await fetch(url + '/v1/rooms/r-life/stream?cap=seat-location-v1', {
+        headers: { authorization: `Bearer ${token}` },
+        signal: modern.signal,
+      });
+      await fetch(url + '/v1/rooms/r-life/stream', {
+        headers: { authorization: `Bearer ${token}` },
+        signal: legacy.signal,
+      });
       now += 5 * HOUR;
       expect((await app.runLifecycle()).moved).toBe(0);
       modern.abort();

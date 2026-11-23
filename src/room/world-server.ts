@@ -2269,6 +2269,7 @@ export class WorldServer {
         location: '/parent',
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
+        deprecation: 'true',
       });
       res.end();
       return;
@@ -2990,7 +2991,15 @@ export class WorldServer {
     }
 
     if (action === 'stream' && method === 'GET') {
-      const token = url.searchParams.get('token') ?? bearer(req);
+      const token = bearer(req);
+      if (!token) {
+        throw new HttpError(
+          401,
+          url.searchParams.has('token')
+            ? '实时事件流不再接受 URL token 参数，请改用 Authorization: Bearer 请求头'
+            : '缺少席位令牌',
+        );
+      }
       await this.seatAuth(req, roomId, token);
       await this.stream(req, res, roomId, token, Number(url.searchParams.get('since') ?? 0) || 0);
       return;

@@ -126,9 +126,9 @@ describe('席位离线释放', () => {
     await server!.dbHandle.prepare('UPDATE room_seats SET last_seen_at = ? WHERE room_id = ? AND id = ?')
       .run(now - 2 * HOUR, 'hall', human.seat.id);
 
-    const stream = http.get(
-      `${url}/v1/rooms/hall/stream?token=${encodeURIComponent(human.token)}&since=0`,
-    );
+    const stream = http.get(`${url}/v1/rooms/hall/stream?since=0`, {
+      headers: { authorization: `Bearer ${human.token}` },
+    });
     await new Promise<void>((resolve, reject) => {
       stream.on('response', (response) => { response.resume(); resolve(); });
       stream.on('error', reject);

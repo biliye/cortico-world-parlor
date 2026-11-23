@@ -286,7 +286,10 @@ describe('网页私聊', () => {
 
     // B 真的连着（SSE），才算在线。
     const controller = new AbortController();
-    const stream = await fetch(`${app.url}/v1/stream?token=${bToken}&since=0`, { signal: controller.signal });
+    const stream = await fetch(`${app.url}/v1/stream?since=0`, {
+      headers: { authorization: `Bearer ${bToken}` },
+      signal: controller.signal,
+    });
     expect(stream.status).toBe(200);
 
     const found = await get(app.url, '/v1/people?q=阿', headers(a));

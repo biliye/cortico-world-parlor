@@ -281,8 +281,13 @@ describe('WorldServer 聊天网关', () => {
       authorization: `Bearer ${token}`,
     });
 
+    const rejected = await fetch(`${app.url}/v1/rooms/${roomId}/stream?token=${token}&since=0`);
+    expect(rejected.status).toBe(401);
+    expect(await rejected.text()).toContain('Bearer');
+
     const controller = new AbortController();
-    const response = await fetch(`${app.url}/v1/rooms/${roomId}/stream?token=${token}&since=0`, {
+    const response = await fetch(`${app.url}/v1/rooms/${roomId}/stream?since=0`, {
+      headers: { authorization: `Bearer ${token}` },
       signal: controller.signal,
     });
     expect(response.status).toBe(200);
