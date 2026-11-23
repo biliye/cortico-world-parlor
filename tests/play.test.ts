@@ -533,10 +533,7 @@ describe('网页玩家', () => {
 
   it('网页脚本语法正确，家长页有牌桌面板与下场入口', async () => {
     const files = [
-      'src/web/common.js',
       'src/web/local-history.js',
-      'src/web/games/dice.js',
-      'src/web/games/monopoly.js',
       'src/web/vue-loader.js',
       'src/web/vue/main.js',
     ];

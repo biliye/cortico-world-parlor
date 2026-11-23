@@ -23,7 +23,7 @@ afterEach(async () => {
   dir = undefined;
 });
 
-const start = async (options: Pick<WorldServerOptions, 'now' | 'poolMax' | 'host' | 'publicUrl'> = {}): Promise<WorldServer> => {
+const start = async (options: Pick<WorldServerOptions, 'now' | 'poolMax' | 'host' | 'publicUrl' | 'hostIdleEvictMs'> = {}): Promise<WorldServer> => {
   dir = mkdtempSync(join(tmpdir(), 'parlor-world-'));
   server = await WorldServer.create({ allowGuestJoin: true,
     ...(await pgServerStorage(join(dir, 'parlor.db'))),

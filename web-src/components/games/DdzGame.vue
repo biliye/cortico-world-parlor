@@ -5,7 +5,7 @@
  * 规则、牌型、提示、计分全在服务器；这里只摆牌、按钮和结果。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { GameCtx, GameView } from '../../lib/legacy-games.ts';
+import type { GameCtx, GameView } from '../../lib/game-types.ts';
 import { cardLabel, fmtClock, sortHand } from '../../lib/cards.ts';
 import { initialOf, readable } from '../../lib/text.ts';
 import ClockText from './ClockText.vue';
