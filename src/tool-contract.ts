@@ -1,5 +1,6 @@
 /** 操作参数按需发现；只有 PARLOR_TOOL_DECLS 中的九个工具进入模型上下文。 */
 import type { ToolDef } from 'cortico/core/types.ts';
+import { XIANGQI_COLS, XIANGQI_ROWS } from './room/games/xiangqi.ts';
 import { STORY_ACTIONS, STORY_CHAT_LIMIT, STORY_PART_LIMIT, STORY_TITLE_LIMIT } from './room/story-protocol.ts';
 
 /** 内部操作参数，用于校验和按需帮助，不会注册为模型工具。 */
@@ -39,6 +40,9 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
         op: { type: 'string', enum: ['list', 'describe', 'state', 'history', 'replay', 'replayStep', 'ratings'], description: '默认 list。replay 不带 table 列出本人最近 7 天的已结束对局，带 table 返回一页步骤。replayStep 需要 table 和有本人私视图的 seq。ratings 需要 game。' },
         game: { type: 'string', description: 'describe 或 ratings 时填写服务器目录里的游戏 id。' },
         table: { type: 'string', description: '桌号。state/history 省略时查自己的桌，replay 省略时查最近对局。' },
+        from: { type: 'object', additionalProperties: false, required: ['row', 'col'],
+          description: '象棋 state 可选。只有轮到你时才返回该坐标的合法落点。空数组表示该位置没有合法落点，可能是空点、对方棋子或己方棋子当前无着可走。',
+          properties: { row: { type: 'integer', minimum: 0, maximum: XIANGQI_ROWS - 1 }, col: { type: 'integer', minimum: 0, maximum: XIANGQI_COLS - 1 } } },
         day: { type: 'integer', minimum: 1, description: 'history：按游戏天数筛选狼人杀记录，从第 1 天开始。' },
         seatNo: { type: 'integer', minimum: 1, description: 'history：按座号筛选狼人杀发言与出局记录，从 1 开始。' },
         limit: { type: 'integer', minimum: 1, maximum: 200, description: 'history 默认 100、上限 200。replay 默认和上限均为 50，也受返回字节上限约束。ratings 默认 20、上限 200。' },
@@ -51,7 +55,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'parlor_game_action', tags: ['write'],
-    description: '通用游戏行动。先用 parlor_game_info state 读取桌号、当前动作名及 params 格式；严格回合原样带 revision，窗口制在 params 带 windowId。失败先重查状态；重试同次操作沿用 requestId。',
+    description: '通用游戏行动。回合通知已有完整动作参数时可直接提交，缺参数或版本已过期用 parlor_game_info state 查询。严格回合原样带 revision，窗口制在 params 带 windowId。象棋非法走法可按回包给的参数改走合法着；网络重试同次操作沿用 requestId。',
     parameters: {
       type: 'object', additionalProperties: false,
       properties: {

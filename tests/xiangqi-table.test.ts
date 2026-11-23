@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { XiangqiTable } from '../src/room/games/xiangqi-table.ts';
+import { XiangqiTable, XiangqiMoveError } from '../src/room/games/xiangqi-table.ts';
 import {
-  afterMove, indexOf, initialBoard, isInCheck, isLegalMove, legalMoves, suggestMoves,
+  afterMove, formatXiangqiAdvice, indexOf, initialBoard, isInCheck, isLegalMove, legalMoves, rejectedMoveReason, suggestMoves,
   type XiangqiMove,
 } from '../src/room/games/xiangqi.ts';
 
@@ -80,6 +80,43 @@ describe('象棋走法', () => {
   });
 
   it.each([
+    [move(9, 1, 10, 2), '坐标须使用行 0–9、列 0–8，从黑方左上角起算'],
+    [move(8, 1, 7, 2), '起点 (8,1) 没有棋子'],
+    [move(0, 1, 2, 2), '起点是对方棋子'],
+    [move(9, 1, 9, 1), '起点和落点相同'],
+    [move(9, 1, 9, 2), '落点被己方棋子占据'],
+    [move(9, 1, 8, 3), '马腿被挡'],
+    [move(9, 1, 8, 1), '马须按日字走'],
+    [move(9, 0, 5, 0), '车的行进路线有棋子阻挡'],
+    [move(9, 0, 8, 1), '车须沿直线走'],
+    [move(7, 1, 5, 2), '炮须沿直线走'],
+    [move(7, 1, 2, 1), '炮吃子时起点和落点之间须恰好隔一子'],
+    [move(7, 1, 1, 1), '炮走到空位时不能越过棋子'],
+    [move(9, 2, 8, 1), '相（象）须按田字走'],
+    [move(9, 3, 8, 3), '仕（士）须在九宫内斜走一格'],
+    [move(9, 4, 8, 3), '帅（将）须在九宫内直走一格'],
+    [move(6, 0, 6, 1), '兵（卒）只能前进一步，过河后也可横走一格'],
+  ] as const)('开局非法着法 %j 提示「%s」', (attempt, reason) => {
+    const board = initialBoard();
+    expect(isLegalMove(board, attempt, 1)).toBe(false);
+    expect(rejectedMoveReason(board, attempt, 1)).toBe(reason);
+  });
+
+  it.each<{ pieces: [number, number, number][]; attempt: XiangqiMove; reason: string }>([
+    { pieces: [[1, 4, 5]], attempt: move(1, 4, 0, 4), reason: '应以将死或困毙结束，不能直接吃掉将帅' },
+    { pieces: [[7, 2, 3], [6, 1, 7]], attempt: move(7, 2, 5, 0), reason: '象眼被挡' },
+    { pieces: [[5, 2, 3]], attempt: move(5, 2, 3, 0), reason: '相（象）不能过河' },
+    { pieces: [[5, 4, 0], [4, 4, 7]], attempt: move(4, 4, 4, 5), reason: '这步会造成将帅照面' },
+    { pieces: [[9, 0, -5]], attempt: move(5, 4, 4, 4), reason: '你正在被将军，这步未能应将' },
+    { pieces: [[9, 0, -5], [9, 2, 5]], attempt: move(9, 2, 8, 2), reason: '走后己方将帅会被将军' },
+  ])('指定局面的非法着法提示「$reason」', ({ pieces, attempt, reason }) => {
+    const board = sparseBoard();
+    for (const [row, col, piece] of pieces) set(board, row, col, piece);
+    expect(isLegalMove(board, attempt, 1)).toBe(false);
+    expect(rejectedMoveReason(board, attempt, 1)).toBe(reason);
+  });
+
+  it.each([
     { label: '一步将死', cols: [0, 8], finish: move(2, 0, 0, 0), inCheck: true },
     { label: '一步困毙', cols: [0, 8, 5], finish: move(2, 0, 2, 3), inCheck: false },
   ])('提示识别$label', ({ label, cols, finish, inCheck }) => {
@@ -92,9 +129,79 @@ describe('象棋走法', () => {
     expect([...legalMoves(next, -1)]).toEqual([]);
     expect(suggestMoves(board, 1, [finish], () => undefined)).toEqual([{ ...finish, reason: label }]);
   });
+
+  it('推荐考虑回吃，说明对手净赚的应手，省略对手净亏的原有交换', () => {
+    const board = initialBoard();
+    const horse = move(9, 1, 7, 2);
+    const cannon = move(7, 1, 0, 1);
+    const hints = suggestMoves(board, 1, [cannon, horse], () => undefined);
+    expect(hints).toMatchObject([
+      { ...horse, reason: '保持子力，调整站位' },
+      { ...cannon, reason: '吃马、对方车可吃炮（(0,0) → (0,1)）' },
+    ]);
+    const [suggestions] = formatXiangqiAdvice(hints).split('\n');
+    expect(suggestions).toContain('对方车可吃炮');
+    expect(hints[0].positionThreat).toBeUndefined();
+  });
+
+  it('省略可以等价回吃的直接应手', () => {
+    const board = sparseBoard();
+    set(board, 7, 0, 5);
+    set(board, 0, 2, -5);
+    set(board, 7, 8, 5);
+    const attempt = move(7, 0, 7, 2);
+    const reply = move(0, 2, 7, 2);
+    const next = afterMove(board, attempt);
+    expect(isLegalMove(next, reply, -1)).toBe(true);
+    expect(isLegalMove(afterMove(next, reply), move(7, 8, 7, 2), 1)).toBe(true);
+    expect(suggestMoves(board, 1, [attempt], () => undefined)).toEqual([
+      { ...attempt, reason: '保持子力，调整站位' },
+    ]);
+  });
+
+  it('保留对手净赚的原局威胁，合并多条建议中的同一条', () => {
+    const board = sparseBoard();
+    set(board, 0, 0, -5);
+    set(board, 7, 0, 4);
+    set(board, 7, 7, 4);
+    const hints = suggestMoves(board, 1, [move(5, 4, 4, 4), move(7, 7, 5, 8), move(7, 7, 5, 6)], () => undefined);
+    const threat = '对方车可吃马（(0,0) → (7,0)）';
+    expect(hints.map(hint => hint.positionThreat)).toEqual([threat, threat, threat]);
+    const [suggestions, ...threats] = formatXiangqiAdvice(hints).split('\n');
+    expect(suggestions).not.toContain(threat);
+    expect(threats).toEqual([`第 1、2、3 条建议落子后仍有原局威胁：${threat}`]);
+  });
+
+  it('本着新暴露的吃子应手仍列在走法理由中', () => {
+    const board = sparseBoard();
+    set(board, 0, 0, -5);
+    set(board, 5, 0, 5);
+    set(board, 7, 0, 4);
+    const uncover = move(5, 0, 5, 1);
+    const reply = move(0, 0, 7, 0);
+    expect(isLegalMove(board, uncover, 1)).toBe(true);
+    expect(isLegalMove(board, reply, -1)).toBe(false);
+    expect(isLegalMove(afterMove(board, uncover), reply, -1)).toBe(true);
+    expect(suggestMoves(board, 1, [uncover], () => undefined)).toEqual([
+      { ...uncover, reason: '对方车可吃马（(0,0) → (7,0)）' },
+    ]);
+  });
 });
 
 describe('象棋牌桌', () => {
+  it('非法着法说明原因并给本手首选，编号落子与对应的坐标一致', () => {
+    const table = started();
+    const before = table.exportState();
+    const [first, second] = table.view(red.id)!.hints!;
+    expect(() => table.act(red.id, move(9, 1, 8, 3), 2)).toThrow(XiangqiMoveError);
+    expect(() => table.act(red.id, move(9, 1, 8, 3), 2)).toThrow(expect.objectContaining({
+      message: '马腿被挡', deadline: 101, alternative: first,
+    }));
+    expect(table.exportState()).toEqual(before);
+    expect(table.act(red.id, { hint: 2 }, 3).views).toEqual([black.id]);
+    expect(table.public().last).toMatchObject({ from: second.from, to: second.to });
+  });
+
   it('真人每手 3 分钟，Coo 每手 60 秒，恢复后仍在各自时限托管', () => {
     const human = { ...red, kind: 'human' as const };
     const table = new XiangqiTable(human);

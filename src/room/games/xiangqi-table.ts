@@ -1,7 +1,7 @@
 import { TableError, type TableEngine, type TableEvent, type TableSeat, type TableStatus, type TableStep } from '../table-engine.ts';
 import {
   afterMove, colorName, formatXiangqiAdvice, formatXiangqiBoard, indexOf, initialBoard, isInCheck,
-  isLegalMove, isMove, legalMoves, moveText, pieceName, suggestMoves,
+  isLegalMove, isMove, legalMoves, moveText, pieceName, rejectedMoveReason, suggestMoves,
   type Color, type XiangqiHint, type XiangqiMove,
 } from './xiangqi.ts';
 
@@ -19,6 +19,18 @@ const causeLabel = {
 type Result = { winner: Color | 0; cause: keyof typeof causeLabel };
 type PlayedMove = XiangqiMove & { piece: number; captured: number; check: boolean };
 type TurnAdvice = { legalMoves: XiangqiMove[]; hints: XiangqiHint[]; warning?: string };
+
+export class XiangqiMoveError extends TableError {
+  readonly deadline: number;
+  readonly alternative: XiangqiMove | undefined;
+
+  constructor(message: string, deadline: number, alternative: XiangqiMove | undefined) {
+    super('bad_action', message);
+    this.deadline = deadline;
+    this.alternative = alternative;
+  }
+}
+
 const positionKey = (board: readonly number[], turn: Color) => `${turn}:${board.join(',')}`;
 const colorAt = (ply: number): Color => ply % 2 === 0 ? 1 : -1;
 
@@ -154,10 +166,21 @@ export class XiangqiTable implements TableEngine {
         this.event('resign', `${seat.name} 认输了。`, { seat: seatId }),
       ]);
     }
-    if (!isMove(action) || !isLegalMove(this.match.board, action, color)) {
-      throw new TableError('bad_action', '这步棋不合法，请检查棋子走法、将帅照面或是否需要应将。');
+    const { hint, invalidMove } = (action as { hint?: unknown; invalidMove?: string } | null) ?? {};
+    if (invalidMove) return this.rejectMove(invalidMove);
+    if (typeof hint === 'number') {
+      const { hints } = this.advice ??= this.match.advice();
+      const chosen = Number.isSafeInteger(hint) && hint >= 1 ? hints[hint - 1] : undefined;
+      if (!chosen) return this.rejectMove(`本手只有 ${hints.length} 条建议着法`);
+      return this.play(chosen, now, false);
     }
-    return this.play(action, now, false);
+    if (isMove(action) && isLegalMove(this.match.board, action, color)) return this.play(action, now, false);
+    return this.rejectMove(rejectedMoveReason(this.match.board, action, color));
+  }
+
+  private rejectMove(reason: string): never {
+    const [alternative] = (this.advice ??= this.match.advice()).hints;
+    throw new XiangqiMoveError(reason, this.deadline, alternative);
   }
 
   private play(move: XiangqiMove, now: number, automatic: boolean): TableStep {
@@ -225,7 +248,7 @@ export class XiangqiTable implements TableEngine {
     if (!this.has(seatId)) return null;
     const canAct = this.status === 'playing' && this.seatOf(this.match.turn).id === seatId;
     const advice = canAct ? this.advice ??= this.match.advice() : undefined;
-    return { ...this.public(), seat: seatId, canAct, yourTurn: canAct, ...advice };
+    return { ...this.public(), seat: seatId, canAct, yourTurn: canAct, ...advice, ...(advice && { hintAction: 'move_hint' }) };
   }
 
   publicText(): string {

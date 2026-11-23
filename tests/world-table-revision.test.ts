@@ -17,6 +17,7 @@ let world: ReturnType<typeof PARLOR.create>;
 let receive: (event: RoomEvent) => void;
 let snapshot: RoomSnapshot;
 let seq: number;
+let host: FakeHost;
 
 const call = async (name: string) => {
   const result = await toolForOperation(world, name)!.handler(
@@ -53,7 +54,8 @@ beforeEach(async () => {
     await new Promise<void>(resolve => signal!.addEventListener('abort', () => resolve(), { once: true }));
   });
   world = PARLOR.create(ctx);
-  await world.start(new FakeHost());
+  host = new FakeHost();
+  await world.start(host);
 });
 
 afterEach(async () => {
@@ -81,8 +83,8 @@ describe('World 牌桌版本同步', () => {
     const games = vi.spyOn(ParlorClient.prototype, 'games').mockResolvedValue({
       ...snapshot, seq: ++seq, table, tablePrivate, tables: [table],
     });
-    const callState = async () => {
-      const output = await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler({ op: 'state' }, {} as ToolCallContext);
+    const callState = async (from?: { row: number; col: number }) => {
+      const output = await world.tools().find(tool => tool.name === 'parlor_game_info')!.handler({ op: 'state', ...(from && { from }) }, {} as ToolCallContext);
       return JSON.parse(typeof output === 'string' ? output : output.text);
     };
     const state = await callState();
@@ -102,13 +104,39 @@ describe('World 牌桌版本同步', () => {
     expect(state.tablePrivate.legalMoves).toBeUndefined();
     expect(tablePrivate.legalMoves).toHaveLength(44);
     const { from, to } = tablePrivate.hints![0];
+    expect((await callState(from)).tablePrivate.legalDestinations).toEqual({
+      from, to: tablePrivate.legalMoves!.filter(move => move.from.row === from.row && move.from.col === from.col).map(move => move.to),
+    });
+    expect(games.mock.calls[1][1]).toEqual({ op: 'state' });
+    const empty = { row: 8, col: 4 };
+    expect((await callState(empty)).tablePrivate.legalDestinations).toEqual({ from: empty, to: [] });
+    games.mockResolvedValueOnce({ ...snapshot, table, tablePrivate: { ...tablePrivate, canAct: false } });
+    expect((await callState(from)).tablePrivate.legalDestinations).toBeUndefined();
     const action = expectRevision(8);
     await world.tools().find(tool => tool.name === 'parlor_game_action')!.handler(
       { action: 'move', params: { from, to } }, {} as ToolCallContext,
     );
     expect(action.mock.calls[0][1]).toMatchObject({ action: 'move', table: 't1', revision: 8, params: { from, to } });
+
+    const nextView = { ...tablePrivate, revision: 9, legalMoves: [{ from, to }] };
+    receive({ seq: ++seq, ts: Date.now(), from: 'system', type: 'parlor.table.turn', scope: { kind: 'seat', seatId: 'mine' },
+      text: tablePrivate.text, data: { tableId: 't1', table: nextView },
+    });
+    expect(host.events.at(-1)?.text).toContain('这是唯一合法着法');
+    const recommended = { table: 't1', revision: 9, action: 'move_hint', params: { hint: 1 } };
+    expect(host.events.at(-1)?.text).toContain(JSON.stringify(recommended));
+    const tool = world.tools().find(tool => tool.name === 'parlor_game_action')!;
+    await tool.handler({ action: 'move_hint', params: { hint: 1 } }, {} as ToolCallContext);
+    expect(action).toHaveBeenCalledTimes(1);
+    const correction = '这步没落子：马腿被挡。还剩 20 秒。';
+    action.mockRejectedValueOnce(new ParlorHttpError(400, correction, 'xiangqi_move_rejected'));
+    expect(await tool.handler(recommended, {} as ToolCallContext)).toEqual({ failed: true, text: `客厅：${correction}` });
+    expect(action.mock.calls[1][1]).toMatchObject(recommended);
+
+    games.mockResolvedValueOnce({ ...snapshot, table, tablePrivate: { ...tablePrivate, hintAction: undefined } });
+    expect((await callState()).tablePrivate.text).toContain(JSON.stringify({ table: 't1', revision: 8, action: 'move', params: { from, to } }));
     games.mockResolvedValueOnce({ ...snapshot, table, tablePrivate: null });
-    expect((await callState()).tablePrivate).toBeNull();
+    expect((await callState(from)).tablePrivate).toBeNull();
   });
 
   it('五子棋 state 只给一份点阵，旧服务器的通用行动回执也精简', async () => {

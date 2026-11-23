@@ -22,7 +22,7 @@ import { GAME_LIST, gameByActionType, gameById } from './games/registry.ts';
 import { GAME_LABELS, gameLabelOf } from './game-labels.ts';
 import { RatingBoards } from './ratings/board.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActionBody, gameCatalog, gameState, validateParameters } from './game-api.ts';
-import { GAME_RESPONSE_MAX_BYTES, type TableLogQuery } from './table-engine.ts';
+import { GAME_RESPONSE_MAX_BYTES, secondsLeft, type TableLogQuery } from './table-engine.ts';
 import { TABLE_REPLAY_LIMIT, readTableReplay, type TableReplayQuery } from './table-replay.ts';
 import { likePrefix, parseHandleQuery } from './handles.ts';
 import { isBlockedPort } from './ports.ts';
@@ -2863,15 +2863,32 @@ export class WorldServer {
             throw new HttpError(400, `这张桌子不是${game.label}桌`);
           }
           let gameBody = body;
+          let invalidXiangqiMove: string | undefined;
           if (type === 'game_action') {
             try { gameBody = gameActionBody(game, body.action as string, body.params); }
-            catch (error) { throw new HttpError(400, (error as Error).message); }
+            catch (error) {
+              if (game.id !== 'xiangqi' || (body.action !== 'move' && body.action !== 'move_hint')) {
+                throw new HttpError(400, messageOf(error));
+              }
+              invalidXiangqiMove = messageOf(error);
+            }
           }
-          const receipt = await host.tableAction(seat.cooId, game.toAction(gameBody), {
+          const action = invalidXiangqiMove === undefined ? game.toAction(gameBody) : { invalidMove: invalidXiangqiMove };
+          const receipt = await host.tableAction(seat.cooId, action, {
             ...(tableArg ? { tableId: tableArg } : { tableId: target.id ?? target.tableId }),
             ...(revisionArg !== undefined ? { revision: revisionArg } : {}),
             ...(requestId ? { requestId } : {}),
+          }).catch((error: unknown) => {
+            if (type !== 'game_action' || !(error instanceof HostError) || !error.retry) throw error;
+            const { deadline, ...replacement } = error.retry;
+            const remaining = secondsLeft(deadline, this.now());
+            const recovery = remaining > 0
+              ? `还剩 ${remaining} 秒，仍轮到你。可直接走首选：parlor_game_action ${JSON.stringify(replacement)}。换一手用新的 requestId（可省略）。`
+              : '本手时限已到，等下一次回合通知。';
+            json(res, 400, { error: `这步没落子：${error.message}。${recovery}`, code: 'xiangqi_move_rejected' });
+            return null;
           });
+          if (!receipt) return;
           if (type === 'game_action') {
             this.pokeClock();
             const ts = receipt.ts ?? this.now();

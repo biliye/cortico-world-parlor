@@ -28,7 +28,7 @@ import {
 import { gameById, type GameDefinition } from './room/games/registry.ts';
 import { GAME_ACTION_SCHEMA, compactGameState, describeGame, gameActions, gameCatalog, validateParameters, type GameQuery } from './room/game-api.ts';
 import { formatGomokuAdvice, formatGomokuBoard } from './room/games/gomoku-table.ts';
-import { formatXiangqiAdvice, formatXiangqiBoard, type XiangqiHint, type XiangqiMove } from './room/games/xiangqi.ts';
+import { formatXiangqiAdvice, formatXiangqiBoard, isMove as isXiangqiMove, type Point, type XiangqiHint, type XiangqiMove } from './room/games/xiangqi.ts';
 import { isWerewolfSeatCount, WEREWOLF_SEAT_COUNT } from './room/games/werewolf.ts';
 import type { LedgerEntryView } from './room/ledger.ts';
 import { GAME_RESPONSE_MAX_BYTES, type TablePrivateSummary, type TableSummary } from './room/table-engine.ts';
@@ -73,8 +73,23 @@ const TIER_BUDGET: Readonly<Record<WakeTier, number>> = {
   off: 0,
 };
 
+function xiangqiTurnAction(view: Record<string, unknown>): string {
+  const { tableId, revision, deadline, hintAction } = view;
+  const first = Array.isArray(view.hints) ? view.hints[0] : undefined;
+  if (view.game !== 'xiangqi' || view.canAct !== true || typeof tableId !== 'string'
+    || typeof revision !== 'number' || !isXiangqiMove(first)) return '';
+  const { from, to } = first;
+  const action = hintAction === 'move_hint'
+    ? { table: tableId, revision, action: hintAction, params: { hint: 1 } }
+    : { table: tableId, revision, action: 'move', params: { from, to } };
+  const clock = typeof deadline === 'number' ? `截止 ${serverClockShort(deadline)}（UTC+8）。` : '';
+  const forced = Array.isArray(view.legalMoves) && view.legalMoves.length === 1 ? '这是唯一合法着法。' : '';
+  const chooseOther = hintAction === 'move_hint' && !forced ? '改选其他建议时填对应的 hint 编号。' : '';
+  return `【象棋轮到你】${clock}先落子，再聊天或复盘。${forced}${chooseOther}拿不定主意时直接走首选：parlor_game_action ${JSON.stringify(action)}`;
+}
+
 /** 只裁剪 Coo 工具输出。HTTP 快照仍给网页完整的棋盘数组。 */
-function compactGameResult(result: Record<string, unknown>): Record<string, unknown> {
+function compactGameResult(result: Record<string, unknown>, from?: Point): Record<string, unknown> {
   const table = result.table as TableSummary | null | undefined;
   const view = result.tablePrivate as TablePrivateSummary | null | undefined;
   const output = { ...result };
@@ -87,16 +102,21 @@ function compactGameResult(result: Record<string, unknown>): Record<string, unkn
     output.table = { ...table, board: formatBoard(table.game, table.board as number[], table.last) };
   }
   if (view && isBoardGame(view.game) && Array.isArray(view.board)) {
-    const { board, hints, warning, legalMoves: _legalMoves, ...rest } = view;
+    const { board, hints, warning, legalMoves, ...rest } = view;
     const hasSameBoard = hasPublicBoard && (table.id ?? table.tableId) === view.tableId && table.revision === view.revision;
     const moves = Array.isArray(hints) ? hints : [];
     const advice = view.game === 'xiangqi'
       ? formatXiangqiAdvice(moves as XiangqiHint[], warning as string | undefined)
       : formatGomokuAdvice(moves as Parameters<typeof formatGomokuAdvice>[0], warning as Parameters<typeof formatGomokuAdvice>[1]);
     const headline = typeof view.text === 'string' ? view.text.split('\n', 1)[0] : '';
+    const turnAction = xiangqiTurnAction(view);
+    const legalDestinations = from && view.game === 'xiangqi' && view.canAct === true && Array.isArray(legalMoves)
+      ? { from, to: (legalMoves as XiangqiMove[]).filter(move => move.from.row === from.row && move.from.col === from.col).map(move => move.to) }
+      : undefined;
     output.tablePrivate = {
       ...rest,
-      text: [headline, advice].filter(Boolean).join('\n'),
+      text: [turnAction, headline, advice].filter(Boolean).join('\n'),
+      ...(legalDestinations && { legalDestinations }),
       ...(!hasSameBoard && { board: formatBoard(view.game, board, view.last) }),
     };
   }
@@ -1599,7 +1619,12 @@ export class ParlorWorld implements World {
         case 'parlor.left':
         case 'parlor.tier': lines.push(`（系统）${event.text}`); break;
         case 'parlor.invite': lines.push(`（邀请）${event.text}`); break;
-        case 'parlor.table.turn': lines.push(event.text); break;
+        case 'parlor.table.turn': {
+          const view = event.data?.table;
+          const action = view && typeof view === 'object' ? xiangqiTurnAction(view as Record<string, unknown>) : '';
+          lines.push(...(action ? [action, event.text] : [event.text]));
+          break;
+        }
         case 'parlor.ledger': lines.push(`（账本）${event.text}`); break;
         // 开桌即开放匹配也走这一支：这类桌不会再发 discovery，
         // 不补 join 提示的话同厅桌外的 Coo 只看到一句「开了一张桌」。
@@ -2661,6 +2686,8 @@ export class ParlorWorld implements World {
     if (!this.client || !this.token) return this.failed('还没连上客厅');
     try {
       validateParameters(PARLOR_TOOL_DECLS.find(decl => decl.name === 'parlor_game_info')!.parameters, args);
+      const { from, ...query } = args;
+      if (from !== undefined && args.op !== 'state') return this.failed('按棋子查询象棋落点时用 op: state');
       if (!this.multiRoom) {
         if (args.op === 'state') return this.tableView(args);
         if (args.op === 'describe') {
@@ -2674,7 +2701,7 @@ export class ParlorWorld implements World {
       }
       const token = this.token;
       const room = this.currentRoom;
-      const result = await this.client.games(token, args as GameQuery, this.roomArg());
+      const result = await this.client.games(token, query as GameQuery, this.roomArg());
       if (args.op === 'state' && this.seat && this.token === token && this.currentRoom === room
         && Number.isSafeInteger(result.seq) && (!args.table || args.table === this.myTableId
           || (result.tablePrivate as { seat?: string } | null)?.seat === this.seat.id)) {
@@ -2682,7 +2709,7 @@ export class ParlorWorld implements World {
           latest: result.seq as number, events: [], seats: [], maxSeats: 30, now: Date.now(), at: String(result.at ?? ''),
         });
       }
-      const text = JSON.stringify(args.op === 'state' ? compactGameResult(compactGameState(result)) : result);
+      const text = JSON.stringify(args.op === 'state' ? compactGameResult(compactGameState(result), from as Point | undefined) : result);
       if ((args.op === 'state' || args.op === 'history') && Buffer.byteLength(text) > GAME_RESPONSE_MAX_BYTES) {
         return this.failed(args.op === 'history'
           ? '历史回包太大；请按天筛选或减少 limit，并使用支持分页的茶馆服务器。'
@@ -2704,6 +2731,9 @@ export class ParlorWorld implements World {
       return this.gameAct(game, { ...(args.params as Record<string, unknown>), ...(game.actionKey ? { [game.actionKey]: args.action } : {}),
         ...(args.requestId !== undefined ? { requestId: args.requestId } : {}), ...(args.table !== undefined ? { table: args.table } : {}),
       });
+    }
+    if (args.action === 'move_hint' && args.revision === undefined) {
+      return this.failed('按编号走棋请带推荐通知里的 revision；缺少版本时查当前象棋桌面。');
     }
     const requestId = args.requestId === undefined ? randomUUID() : args.requestId;
     const { game: _game, ...input } = args;
@@ -2738,6 +2768,7 @@ export class ParlorWorld implements World {
         tableId, seq, revision: result.revision, ts, at, text, deadline, deadlineAt, turn, windowId, inspection,
       });
     } catch (error) {
+      if (error instanceof ParlorHttpError && error.code === 'xiangqi_move_rejected') return this.failed(error.message);
       return this.failed(`${messageOf(error)}\n本次 requestId: ${String(requestId)}。结果不明时先查 state；重试同次操作沿用此编号。`);
     }
   }

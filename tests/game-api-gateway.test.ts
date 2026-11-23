@@ -88,11 +88,12 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
   });
 
   it('中国象棋从目录开桌，只有执棋方能收到提示和合法走法', async () => {
-    const [a, b, spectator] = await start({ now: Date.now() });
+    const clock = { now: Date.now() };
+    const [a, b, spectator] = await start(clock);
     const catalog = await a.client.games(a.token, { op: 'list' }, 'lobby');
     expect(catalog.games).toContainEqual(expect.objectContaining({ id: 'xiangqi', label: '中国象棋' }));
     const info = await a.client.games(a.token, { op: 'describe', game: 'xiangqi' }, 'lobby');
-    expect(info.game).toMatchObject({ revisionMode: 'strict', actions: [{ action: 'move' }, { action: 'resign' }] });
+    expect(info.game).toMatchObject({ revisionMode: 'strict', actions: [{ action: 'move' }, { action: 'move_hint' }, { action: 'resign' }] });
     const opened = await a.client.action(a.token, { type: 'table_open', game: 'xiangqi', requestId: 'xiangqi-open' }, 'lobby');
     const table = opened.tableId!;
     await b.client.action(b.token, { type: 'table_join', table, requestId: 'xiangqi-join' }, 'lobby');
@@ -117,24 +118,41 @@ describe('通用游戏 HTTP JSON 网关（真实 PG）', () => {
       expect(gzip.headers.get('vary')).toBe('accept-encoding');
       expect(await gzip.json()).toEqual(await plain.json());
     }
-    expect(state.availableActions.map((entry: { action: string }) => entry.action)).toEqual(['move', 'resign']);
+    expect(state.availableActions.map((entry: { action: string }) => entry.action)).toEqual(['move', 'move_hint', 'resign']);
     const { from, to } = state.tablePrivate.hints[0];
     const body = {
-      type: 'game_action', table, action: 'move', params: { from, to },
+      type: 'game_action', table, action: 'move_hint', params: { hint: 1 },
       revision: state.table.revision, requestId: 'xiangqi-move',
     };
-    expect((await post(red.token, { ...body, params: { from } })).status).toBe(400);
+    const incomplete = await post(red.token, { ...body, action: 'move', params: { from } });
+    expect(incomplete.status).toBe(400);
+    expect(incomplete.body.code).toBe('xiangqi_move_rejected');
     expect((await post(red.token, { ...body, revision: body.revision - 1 })).status).toBe(409);
     expect((await post(spectator.token, body)).status).toBe(403);
-    const moved = await post(red.token, body);
+    clock.now += 2500;
+    const invalid = await post(red.token, { ...body, action: 'move', params: { from: { row: 9, col: 1 }, to: { row: 8, col: 3 } } });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toMatchObject({ code: 'xiangqi_move_rejected', error: expect.stringMatching(/马腿被挡.*还剩 58 秒/) });
+    const recovery = JSON.parse(invalid.body.error.match(/parlor_game_action (\{.*\})。换一手/u)?.[1] ?? '{}');
+    expect(recovery).toEqual({ table, revision: body.revision, action: 'move', params: { from, to } });
+    expect((await read(red)).table.revision).toBe(body.revision);
+    const recovered = { ...body, ...recovery, requestId: 'xiangqi-recovery' };
+    const moved = await post(red.token, recovered);
     expect(moved.status).toBe(200);
-    expect((await post(red.token, body)).body).toEqual(moved.body);
+    expect((await post(red.token, recovered)).body).toEqual(moved.body);
     expect((await read(red)).tablePrivate.hints).toBeUndefined();
     const reply = await read(black);
     expect(reply.table.last).toMatchObject({ from, to });
     expect(reply.tablePrivate.hints).toHaveLength(3);
-    expect((await post(black.token, { ...body, action: 'resign', params: {}, revision: reply.table.revision, requestId: 'xiangqi-resign' })).status).toBe(200);
-    expect((await read(spectator)).table).toMatchObject({ status: 'ended', cause: 'resign', winner: state.table.turn });
+    expect((await post(red.token, { ...body, ...recovery, requestId: 'expired-recovery' })).status).toBe(409);
+    const hint = { ...body, revision: reply.table.revision, params: { hint: 2 } };
+    const hinted = await post(black.token, hint);
+    expect(hinted.status).toBe(200);
+    expect((await post(black.token, hint)).body).toEqual(hinted.body);
+    const [expected, redTurn] = [reply.tablePrivate.hints[1], (await read(red)).table];
+    expect(redTurn.last).toMatchObject({ from: expected.from, to: expected.to });
+    expect((await post(red.token, { ...body, action: 'resign', params: {}, revision: redTurn.revision, requestId: 'xiangqi-resign' })).status).toBe(200);
+    expect((await read(spectator)).table).toMatchObject({ status: 'ended', cause: 'resign', winner: reply.table.turn });
   });
 
   it('认证后可发现目录和参数；别的客厅不能复用席位令牌', async () => {

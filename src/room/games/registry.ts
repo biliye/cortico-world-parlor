@@ -20,7 +20,7 @@ import { DEFAULT_RULES, SEAT_COUNT as MONOPOLY2D_SEATS } from './monopoly2d-rule
 import { Monopoly2dTable } from './monopoly2d-table.ts';
 import { GOMOKU_SIZE, GomokuTable } from './gomoku-table.ts';
 import { XiangqiTable } from './xiangqi-table.ts';
-import { XIANGQI_COLS, XIANGQI_ROWS, isMove, moveText } from './xiangqi.ts';
+import { XIANGQI_COLS, XIANGQI_HINT_LIMIT, XIANGQI_ROWS, isMove, moveText } from './xiangqi.ts';
 import { WerewolfTable, WEREWOLF_MIN_CLIENT } from './werewolf-table.ts';
 import type { WerewolfSeatCount } from './werewolf.ts';
 import { AEROPLANE_RULES, PLANES_PER_SEAT } from './aeroplane-rules.ts';
@@ -403,26 +403,32 @@ const xiangqi: GameDefinition = {
   actionType: 'xiangqi_action',
   revisionMode: 'strict',
   randomizeFirstSeat: true,
-  toAction: (body) => body.resign === true ? { resign: true } : { from: body.from, to: body.to },
+  toAction: (body) => {
+    if (body.resign === true) return { resign: true };
+    if (typeof body.hint === 'number') return { hint: body.hint };
+    return { from: body.from, to: body.to };
+  },
   actionKey: 'action',
-  availableActions: view => view.canAct === true ? ['move', 'resign'] : [],
+  availableActions: view => view.canAct === true ? ['move', 'move_hint', 'resign'] : [],
   action: {
-    description: '轮到你时用 move 走棋，params 要带 from 和 to，各含 row、col；用 resign 认输，params 为 {}。先用 parlor_game_info {op:"state"} 查看棋盘、revision 和走棋建议。',
+    description: '轮到你时用 move 走棋，params 带 from 和 to，各含 row、col；用 move_hint 采纳本手的建议，params 只带 hint（从 1 起）；用 resign 认输，params 为 {}。用回合通知或 state 中的当前 revision。',
     parameters: {
       type: 'object', additionalProperties: false,
       properties: {
-        action: { type: 'string', enum: ['move', 'resign'] },
+        action: { type: 'string', enum: ['move', 'move_hint', 'resign'] },
         from: xiangqiPointSchema, to: xiangqiPointSchema,
+        hint: { type: 'integer', minimum: 1, maximum: XIANGQI_HINT_LIMIT },
       },
       required: ['action'],
     },
-    toBody: ({ action, from, to }) => {
-      if (action === 'resign' && from === undefined && to === undefined) return { type: 'xiangqi_action', resign: true };
+    toBody: ({ action, from, to, hint }) => {
+      if (action === 'resign' && from === undefined && to === undefined && hint === undefined) return { type: 'xiangqi_action', resign: true };
+      if (action === 'move_hint' && from === undefined && to === undefined && typeof hint === 'number') return { type: 'xiangqi_action', hint };
       const move = { from, to };
-      if (action !== 'move' || !isMove(move)) throw new Error('move 要给 from 和 to；resign 不带坐标');
+      if (action !== 'move' || hint !== undefined || !isMove(move)) throw new Error('move 只填 from 和 to；move_hint 只填 hint；resign 的 params 为 {}');
       return { type: 'xiangqi_action', ...move };
     },
-    done: body => isMove(body) ? `走棋 ${moveText(body)}。` : '认输了。',
+    done: body => isMove(body) ? `走棋 ${moveText(body)}。` : body.resign ? '认输了。' : `走了第 ${body.hint} 条建议。`,
   },
 };
 
