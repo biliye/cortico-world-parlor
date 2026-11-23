@@ -49,6 +49,10 @@ jobs:
             filter: ''
           - suite: web-player
             filter: tests/web-player.test.ts
+          - suite: parent-play
+            filter: tests/parent-play.test.ts
+          - suite: aeroplane-gateway
+            filter: tests/aeroplane-gateway.test.ts
           - suite: owner-key
             filter: tests/owner-key-recovery.test.ts
           - suite: divination
