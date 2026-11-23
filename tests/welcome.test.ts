@@ -8,7 +8,8 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync, statSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fillOrigin, isPublicAsset, ORIGIN_TOKEN, sendWebAsset } from '../src/room/web-assets.ts';
 import { RULE_PAGES, renderRuleDialog, renderRulesMarkup } from '../src/room/game-rules-doc.ts';
 import { WEREWOLF_MAX_DAYS } from '../src/room/games/werewolf.ts';
@@ -25,6 +26,84 @@ const page = read('welcome.html');
 /** 注释里会提到 <style>、CSP 这类字样，和 check-release 一样先剥掉注释再判。 */
 const markup = page.replace(/<!--[\s\S]*?-->/g, '');
 const assetRefs = [...page.matchAll(/(?:src|href)="(\/welcome\/assets\/[^"]*)"/g)].map(([, url]) => url);
+
+function welcomeScroll(start: number, tall = false) {
+  const events = new EventTarget();
+  let y = start;
+  const tallScreen = {
+    offsetHeight: 800,
+    getBoundingClientRect: () => ({ top: 600 - y }),
+  };
+  const nativeScroll = (top: number) => {
+    y = top;
+    events.dispatchEvent(new Event('scroll'));
+  };
+  const scrollTo = vi.fn(({ top }: { top: number }) => {
+    y = Math.round(top);
+  });
+  runInNewContext(read('welcome.js'), {
+    document: {
+      documentElement: {
+        style: { scrollBehavior: '' },
+        scrollHeight: 2000,
+        classList: { add: () => {}, contains: () => false },
+      },
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: (selector: string) => tall && selector === '.screen.is-tall' ? [tallScreen] : [],
+      addEventListener: () => {},
+    },
+    window: { scrollTo },
+    innerHeight: 600,
+    get scrollY() { return y; },
+    matchMedia: (query: string) => ({ matches: query.includes('pointer: fine') }),
+    addEventListener: events.addEventListener.bind(events),
+    requestAnimationFrame: (callback: (now: number) => void) => setTimeout(() => callback(Date.now()), 16),
+    cancelAnimationFrame: clearTimeout,
+    setTimeout,
+    clearTimeout,
+  });
+  return {
+    nativeScroll,
+    scrollTo,
+    position: () => y,
+    wheel: (deltaY: number) => events.dispatchEvent(
+      Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode: 0 }),
+    ),
+  };
+}
+
+describe('对外页的桌面滚动', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('原生滚动保留小幅位移，并取消上一段滚轮追帧与吸附', () => {
+    const { nativeScroll, scrollTo, position, wheel } = welcomeScroll(0);
+    nativeScroll(40);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(40);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    wheel(200);
+    vi.advanceTimersByTime(64);
+    expect(position()).toBeGreaterThan(40);
+    nativeScroll(140);
+    scrollTo.mockClear();
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(140);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('高屏内的小数滚轮位移取整后结束追帧', () => {
+    const { scrollTo, position, wheel } = welcomeScroll(700, true);
+    wheel(12.5);
+    vi.advanceTimersByTime(1000);
+    expect(position()).toBe(713);
+    scrollTo.mockClear();
+    vi.advanceTimersByTime(1000);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
 
 describe('对外页的静态契约', () => {
   it('页头写明变体与语言，标题和描述不是空的', () => {
@@ -345,9 +424,11 @@ describe('对外页的静态契约', () => {
     expect(js).toMatch(/let pick = list\[0\];\s*\n\s*for \(const at of list\)/);
     // 比视口高的屏不当落点，落进去也不吸（那截要连续读）
     expect(js).toMatch(/filter\(\(el\) => !el\.classList\.contains\('is-tall'\)\)/);
-    expect(js).toContain('if (inTall(target)) return;');
-    // 缓动两头速度都归零：ease-in-out，不是起点就最大速度的 ease-out
-    expect(js).toMatch(/p < 0\.5 \? 4 \* p \* p \* p/);
+    expect(js).toContain('inTall(target)) return;');
+    // 追帧即时写位置，锚点可以沿用浏览器的平滑滚动和历史记录。
+    expect(js).toContain("window.scrollTo({ top: y, behavior: 'instant' })");
+    expect(css).toMatch(/html\s*\{[^}]*scroll-behavior:\s*smooth/);
+    expect(css).not.toMatch(/html\.is-smooth\s*\{[^}]*scroll-behavior:/);
   });
 
   /**

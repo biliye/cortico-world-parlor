@@ -50,7 +50,6 @@ html {
    吸附改由脚本在一段缓动里完成。触屏没有这个类，仍走上面那条。 */
 html.is-smooth {
   scroll-snap-type: none;
-  scroll-behavior: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {

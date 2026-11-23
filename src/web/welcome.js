@@ -1,10 +1,9 @@
 /**
- * 对外页的脚本负责五件事：
+ * 对外页的脚本负责六件事：
  * 1. 明暗：在 body 解析前就把存过的偏好写到 <html> 上，避免先画一帧纸色再跳成深色；
  * 2. 换色动效：从顶栏那颗按钮向外扩散（View Transitions）；不支持的浏览器整页淡过去；
  * 3. 滚轮：桌面上接管竖直滚轮，先推目标再逐帧追（有减速尾巴）；停手 200ms 后
- *    离屏边够近、或一口气滚过 0.9 屏，就把目标改到那一屏，减速直接接上吸附。
- *    键盘、滚动条、触屏仍由浏览器自己滚（之后同样接一段软吸附）；页内锚点走缓动；
+ *    把落点收进最近的屏边，高屏里可以持续滚动。键盘、滚动条、触屏和页内锚点由浏览器处理；
  * 4. 滚动驱动：封面会名随滚动上移淡出、门厅的实景回正、上一屏内容提前离场、
  *    顶栏下沿一条线标读到哪儿了；
  * 5. 换屏进场：滚到下一屏时给 .screen 挂 is-in，CSS 再按 --i 依次抬起子元素；
@@ -161,14 +160,12 @@
 
   /**
    * 桌面上的竖直滚轮改成「先推目标、再逐帧追」：一次滚轮只把目标推远一点，
-   * 画面用十几帧追上去，手停下来之后还有一小段减速尾巴；手停 200ms 后若落点
-   * 离某屏边界不到 38% 视口，或一口气滚过 0.9 屏，就把目标改到那一屏——
-   * 减速直接接上吸附，中间没有「停死 → 等 → 再起步」，这就是软吸附。
+   * 画面用十几帧追上去。手停 200ms 后把目标改到最近的屏边，
+   * 还在进行的减速直接接上吸附。比视口高的屏可以停在内容中间。
    *
    * 只接管竖直滚轮：Ctrl+滚轮（缩放）、横向滚动、规则弹层打开时都不拦。
-   * 键盘、滚动条、地址栏带 # 的落点统一交给浏览器——scroll 事件里发现位置
-   * 不是这一帧写下去的，就把目标对齐过去，「键盘翻过页、下一格滚轮又把页面
-   * 拽回原处」不会发生；松手之后照样接一段同样的软吸附。
+   * 键盘、滚动条和页内锚点保留浏览器的默认滚动。
+   * 它们挪动页面时，结束上一段滚轮追帧与吸附，把下次滚轮的起点对齐到当前位置。
    *
    * 触屏设备整个不注册：原生滚动本来就有惯性，接管只会更差；
    * 那些设备上的翻页吸附仍由 CSS 的 scroll-snap 负责（见 welcome.css 的 is-smooth）。
@@ -187,14 +184,8 @@
     let target = scrollY;
     let applied = scrollY;
     let frame = 0;
-    let mode = 'idle'; // idle | follow | glide
-    let glideFrom = 0;
-    let glideTo = 0;
-    let glideAt = 0;
-    let glideDur = 0;
     let settleTimer = 0;
     let last = 0;
-    let lastWheelAt = 0;
 
     const maxY = () => Math.max(0, root.scrollHeight - innerHeight);
     const clamp = (y) => Math.min(Math.max(y, 0), maxY());
@@ -226,26 +217,17 @@
       return false;
     };
 
-    /* 写位置时把浏览器取整后的真值记下来：scroll 事件里靠它分清
-       「这一帧是我写的」还是「别人挪的」，差两三个像素不算别人。 */
+    // 逐帧更新直接写位置，页内锚点的缓动仍由 CSS 的 scroll-behavior 提供。
     const paint = (y) => {
-      window.scrollTo(0, y);
+      window.scrollTo({ top: y, behavior: 'instant' });
       applied = scrollY;
     };
 
-    /** 定长缓动：吸附与锚点跳转都走它，收尾比指数逼近干净。
-     *  曲线是 ease-in-out：两头速度都归零。用 ease-out 的话起点就是最大速度，
-     *  刚静止下来的画面会被「拽」一下——僵硬感有一半来自这里。 */
-    const glide = (to) => {
-      glideFrom = scrollY;
-      glideTo = clamp(to);
-      const dist = glideTo - glideFrom;
-      if (Math.abs(dist) < 1) return;
-      glideAt = performance.now();
-      glideDur = Math.min(680, 240 + Math.abs(dist) * 0.55);
-      target = glideTo;
-      mode = 'glide';
-      if (!frame) frame = requestAnimationFrame(step);
+    const stopWheel = () => {
+      clearTimeout(settleTimer);
+      cancelAnimationFrame(frame);
+      frame = 0;
+      target = applied = scrollY;
     };
 
     /**
@@ -265,8 +247,7 @@
     const retarget = () => {
       clearTimeout(settleTimer);
       settleTimer = setTimeout(() => {
-        if (mode === 'glide' || locked()) return;
-        if (inTall(target)) return;
+        if (locked() || inTall(target)) return;
         const list = stops();
         let pick = list[0];
         for (const at of list) {
@@ -282,22 +263,15 @@
 
     const step = (now) => {
       frame = 0;
-      if (mode === 'glide') {
-        const p = Math.min((now - glideAt) / glideDur, 1);
-        const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-        paint(glideFrom + (glideTo - glideFrom) * e);
-        if (p < 1) {
-          frame = requestAnimationFrame(step);
-          return;
-        }
-        mode = 'idle';
-        paint(glideTo);
+      if (locked() || scrollY !== applied) {
+        stopWheel();
         return;
       }
-      const gap = clamp(target) - scrollY;
-      if (Math.abs(gap) < 0.4) {
-        mode = 'idle';
-        paint(clamp(target));
+      const destination = clamp(target);
+      const gap = destination - scrollY;
+      // 浏览器可能把滚动位置取整。最后一次交给浏览器取整，避免在相邻像素之间反复来回。
+      if (Math.abs(gap) <= 1) {
+        paint(destination);
         return;
       }
       /* 按「过去了几个 60Hz 帧」折算，120Hz 屏不会比 60Hz 快一倍；
@@ -322,15 +296,8 @@
         // 已经在两端还往外滚：不拦，留给系统的回弹
         if ((scrollY <= 0 && delta < 0) || (scrollY >= maxY() - 0.5 && delta > 0)) return;
         event.preventDefault();
-        if (mode === 'glide') {
-          // 吸附途中又滚了：从当前位置接过来，不和那段缓动抢
-          // （目标是缓动的终点，直接加位移会一下冲出去）
-          mode = 'follow';
-          target = scrollY;
-          cancelAnimationFrame(frame);
-          frame = 0;
-        }
-        lastWheelAt = performance.now();
+        // 原生滚动可能已经改了位置，scroll 事件还没派发。
+        if (scrollY !== applied) stopWheel();
         target = clamp(target + delta);
         if (!frame) {
           last = 0;
@@ -341,36 +308,21 @@
       { passive: false },
     );
 
-    // 别人挪的（键盘、滚动条、浏览器恢复上次位置）：把目标对齐过去，不要拽回来；
-    // 正在跑的吸附缓动也要停，否则它会把位置又推回原来的落点。
-    //
-    // 这里刻意不 cancelAnimationFrame：scroll 事件可能比滚轮晚一拍送进来，
-    // 取消掉刚排上的那一帧，整段滚轮就会毫无反应（实测向上连滚六格画面不动）。
-    // 只把 mode 退回 idle、目标对齐到现位置，等下一帧自己收住就够了。
     addEventListener(
       'scroll',
       () => {
-        if (Math.abs(scrollY - applied) <= 2) return;
-        // 滚轮刚动过：这一下多半是上一帧写位置的余波，别抢正在进行的手势
-        if (performance.now() - lastWheelAt < SETTLE + 60) return;
-        target = scrollY;
-        mode = 'idle';
-        // 键盘、拖滚动条也是「松手就吸」：松手之后同一条减速接上吸附
-        retarget();
+        if (scrollY !== applied) stopWheel();
       },
       { passive: true },
     );
 
-    // 页内锚点也走同一段缓动：滚轮是缓的、点一下「下滑」瞬移，会是两种语言
+    // 在浏览器开始滚向锚点之前停下追帧，保留链接的焦点、地址和历史行为。
     document.addEventListener('click', (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
-      if (!link) return;
-      const id = link.getAttribute('href').slice(1);
-      const box = id ? document.getElementById(id) : null;
-      if (!box) return;
-      event.preventDefault();
-      glide(box.getBoundingClientRect().top + scrollY - (box.classList.contains('screen') ? headH() : 0));
+      if (link) stopWheel();
     });
+    addEventListener('popstate', stopWheel);
 
     addEventListener('resize', () => {
       target = clamp(target);
