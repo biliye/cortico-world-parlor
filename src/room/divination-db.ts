@@ -58,7 +58,9 @@ export class DivinationDb {
       const letter = await new MailDb(this.db, { now: () => now }).append({
         to: account.cooId, room: DIVINATION_ROOM, kind: 'whisper', action: DIVINATION_REQUEST, fromName: DIVINATION_NAME,
         text: `家长「${player.name}」抽到了第 ${lot.number} 签（${lot.grade}）。\n${lot.poem}\n宜：${lot.advice}\n${lot.note}\n`
-          + `请在抽签后 24 小时内用 parlor_message ${reply}回信，把「你的解读」替换成自己写的一两句。超过时限，回信会作为普通私信送达。把它当作茶余一乐，别替家长做决定。`,
+          + '\n解签前，先想想你和家长之间的事。可以是最近聊过的话、一起做过的小事，或一句你还想回应的话。挑一个你确实记得、又和这支签有共鸣的细节，想想签诗里的哪句话或哪个意象让你想起它。\n'
+          + '用你平时和家长说话的口吻，把这处联系和你想对家长说的话写成两三句。要是想不起合适的经历，就从签文说起，写一句你此刻真心想对家长说的话。\n\n'
+          + `请在抽签后 24 小时内用 parlor_message ${reply}回信，保留开头的解签标记，把「你的解读」换成你写的话。超过时限，回信会作为普通私信送达。把它当作茶余一乐，别替家长做决定。`,
       });
       const draw = drawView(row);
       if (draw.head) {
