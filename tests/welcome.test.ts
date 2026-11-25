@@ -524,13 +524,13 @@ describe('对外页的静态契约', () => {
     // 375×667 那一档整页收一档字号与块间距，家长屏才装得下页脚
     expect(css).toMatch(/@media \(max-width: 599px\) and \(max-height: 720px\)/);
 
-    // 横屏手机（844×390）：连续滚 + 图回右侧 + 三栏与八格重排 + 刘海让位
+    // 横屏手机（844×390）：连续滚、图回右侧、玩法重排并为刘海留位。
     const land = css.indexOf('@media (orientation: landscape) and (max-height: 560px)');
     expect(land).toBeGreaterThan(-1);
     const block = css.slice(land, land + 2200);
     expect(block).toMatch(/scroll-snap-type:\s*none/);
     expect(block).toMatch(/\.hall\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.02fr\)/);
-    expect(block).toMatch(/\.rule-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4/);
+    expect(block).toMatch(/\.rule-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3/);
     expect(block).toContain('env(safe-area-inset-left)');
 
     // 窄机（320–375）把会名收一档字号，不再 display:none
@@ -552,10 +552,10 @@ describe('对外页的静态契约', () => {
 
 /**
  * 规则页由 `src/room/game-rules-doc.ts` 生成：这里核四件事 ——
- * 两段生成物都真的写进了页面、八格按钮与八块规则一一对上、
+ * 两段生成物都真的写进了页面、按钮与规则一一对上、
  * 没脚本时规则仍读得到、#66 里玩家问到的口径都在。
  */
-describe('八种玩法的规则页', () => {
+describe('玩法规则页', () => {
   const slice = (begin: string, end: string) => {
     const from = page.indexOf(begin);
     const to = page.indexOf(end);
@@ -572,18 +572,18 @@ describe('八种玩法的规则页', () => {
     expect(dialog).toBe(renderRuleDialog().trim());
   });
 
-  it('八格按钮与八块规则一一对上，编号 01–08', () => {
+  it('按钮与规则一一对上，且编号连续', () => {
     const buttons = [...cards.matchAll(/class="rule-card"[^>]*\bdata-rule="([^"]+)"/g)].map(([, id]) => id);
     const articles = [...dialog.matchAll(/class="rule"\s+id="rule-([^"]+)"/g)].map(([, id]) => id);
     expect(buttons).toEqual(RULE_PAGES.map((rule) => rule.id));
     expect(articles).toEqual(buttons);
     expect([...buttons].sort()).toEqual([...ENABLED_GAMES].sort());
-    expect(RULE_PAGES.map((rule) => rule.no)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
+    expect(RULE_PAGES.map((rule) => rule.no)).toEqual(buttons.map((_id, index) => String(index + 1).padStart(2, '0')));
     // 按钮与规则块靠 data-rule 对上，脚本就是按它找的
     for (const id of buttons) expect(dialog).toContain(`data-rule="${id}"`);
   });
 
-  it('没有脚本时八块规则平铺在页面里，仍读得到', () => {
+  it('没有脚本时规则平铺在页面里，仍读得到', () => {
     // 规则块默认不带 hidden：脚本跑起来才收成一块
     expect(dialog).not.toMatch(/<article class="rule"[^>]*\shidden/);
     // 弹层放在所有屏之后：平铺时不会把某一屏撑破

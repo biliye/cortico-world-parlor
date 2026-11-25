@@ -519,7 +519,7 @@ html.is-smooth {
   padding-left: 0;
 }
 
-/* 栏号：只做指示，不进阅读顺序（aria-hidden），和玩法八格的编号同一套语汇 */
+/* 栏号：只做指示，不进阅读顺序（aria-hidden），与玩法编号用同一风格。 */
 .what-cols .n {
   color: var(--ef-ink-2);
   font-family: var(--ef-font-ui);
@@ -559,12 +559,12 @@ html.is-smooth {
   }
 }
 
-/* ---------- 第 2 屏：八种玩法 ---------- */
+/* ---------- 第 2 屏：玩法 ---------- */
 
-/* 八格玩法平分一屏，规则不在这一屏里占地：点一格才从弹层长出来。
+/* 玩法平铺，点一格才打开规则弹层。
    整屏因此都能滚，滚轮不会被规则面板吃掉。 */
 /* 高度只给「至少一屏」，不给「正好一屏」：手机上字号、系统字号、横屏都会把
-   八格撑高，写死高度再配 overflow:hidden 等于把最后一行悄悄裁掉。 */
+   网格撑高，写死高度再配 overflow:hidden 会裁掉最后一行。 */
 .games-screen {
   min-height: calc(100svh - var(--top-h) - var(--tri-h));
   min-height: max(calc(100svh - var(--top-h) - var(--tri-h)), 32rem);
@@ -578,11 +578,11 @@ html.is-smooth {
    入场时每格自己淡入，底色一透就会整块闪一下灰。 */
 .rule-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-auto-rows: minmax(min-content, 1fr);
   flex: 1;
   /* 不写 min-height: 0：那一行会让网格被压到比内容还矮，说明文字溢到下一格。
-     留 min-content，八格撑高时把整屏一起撑高（屏高已改成 min-height）。 */
+     留 min-content，网格撑高时把整屏一起撑高。 */
   min-height: min-content;
   gap: 1px;
   margin: 0;
@@ -634,7 +634,7 @@ html.is-smooth {
   color: color-mix(in srgb, var(--ef-ink) 26%, transparent);
 }
 
-/* 底下那条黄线只在悬停/聚焦时长出来：八格都安静，指到哪一格哪一格亮 */
+/* 底下那条黄线只在悬停或聚焦时出现。 */
 .rule-card::after {
   content: '';
   position: absolute;
@@ -690,7 +690,7 @@ html.is-smooth {
 /* ---------- 规则弹层 ---------- */
 
 /* 点一格，规则从那一格展开成一层：正文在层里滚，滚到底也不会带动身后的页。
-   没脚本（<html> 上没挂 ef-rules）时退回页面里的一段平铺，八块仍然读得到。 */
+   没脚本（<html> 上没挂 ef-rules）时在页面内平铺规则。 */
 .rule-dialog {
   width: min(52rem, calc(100vw - 2rem));
   max-width: none;
@@ -793,7 +793,7 @@ html.ef-rule-open {
   background: rgb(0 0 0 / 0.54);
 }
 
-/* 没脚本（不支持 showModal 就不挂 ef-rules）：弹层退回页面里的一段，八块全展开。
+/* 没脚本（不支持 showModal 就不挂 ef-rules）：在页面内展开全部规则。
    放在所有屏之后，所以只会让页面变长，不会把某一屏的固定高度撑破。 */
 html:not(.ef-rules) .rule-dialog {
   display: block;
@@ -970,7 +970,7 @@ html:not(.ef-rules) .rule + .rule {
   line-height: 1.75;
 }
 
-/* 平板往下：八格改两列四行，仍是一屏 */
+/* 平板往下：玩法改为两列。 */
 @media (max-width: 1023px) {
   .rule-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1016,7 +1016,7 @@ html:not(.ef-rules) .rule + .rule {
   }
 }
 
-/* 矮窗口（1080×675 这类）：标题区收一点，把高度让给八格 */
+/* 矮窗口（如 1080×675）：缩小标题区的间距，给玩法网格留空间。 */
 @media (max-height: 780px) {
   .games-screen > .lead {
     margin-bottom: 0.6rem;
@@ -1452,13 +1452,13 @@ html.ef-theme-fade *::after {
     border-left: 0;
   }
 
-  /* 八格回到四列，行高按内容走——横屏没有「正好一屏」这回事 */
+  /* 横屏回到三列，行高由内容决定。 */
   .games-screen {
     min-height: 0;
   }
 
   .rule-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .rule-card {

@@ -10,7 +10,7 @@ export type TableGame = string;
 /** 各玩法默认席数。旧长局大富翁使用独立报名表。 */
 export const tableCapacity = (game: string): number => ({
   dice: 4, ddz: 3, werewolf: 9, monopoly2d: 4, gomoku: 2, xiangqi: 2, aeroplane: 4,
-  'mahjong-sichuan': 4, 'mahjong-guangdong': 4,
+  'mahjong-sichuan': 4, 'mahjong-guangdong': 4, 'four-colour': 4,
 }[game] ?? 0);
 
 export type TableEventScope = { kind: 'room' } | { kind: 'seat'; seatId: string };

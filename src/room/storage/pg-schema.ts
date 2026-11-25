@@ -17,7 +17,7 @@ import { TABLE_DISCOVERY_SCHEMA_SQL } from '../table-discovery-db.ts';
 import { SEAT_RESULTS_SCHEMA_SQL } from '../table-results.ts';
 import { STORY_SCHEMA_SQL } from './story-schema.ts';
 
-export const PG_SCHEMA_VERSION = 22;
+export const PG_SCHEMA_VERSION = 23;
 
 export const PG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -620,5 +620,11 @@ export const PG_MIGRATIONS: PgMigration[] = [
       WHERE from_coo_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS ix_mail_sent_recent ON mail(from_coo_id, seq DESC)
       WHERE from_coo_id IS NOT NULL;
+  ` },
+  { version: 23, name: 'tables-game-four-colour', sql: `
+    ALTER TABLE tables DROP CONSTRAINT IF EXISTS tables_game_check;
+    ALTER TABLE tables ADD CONSTRAINT tables_game_check
+      CHECK (game IN ('dice','ddz','monopoly','werewolf','monopoly2d','gomoku','xiangqi','aeroplane',
+        'mahjong-sichuan','mahjong-guangdong','four-colour'));
   ` },
 ];

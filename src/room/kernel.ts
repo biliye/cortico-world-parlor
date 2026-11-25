@@ -827,6 +827,7 @@ export class RoomKernel {
     if (!table) return undefined;
     return {
       ...(table.public() as Record<string, unknown>),
+      tableId: this.tableId,
       game: table.game,
       label: table.label,
       status: table.status,

@@ -57,6 +57,7 @@ describe('牌桌私聊', () => {
     const mine = await client.snapshot(a.token, 0, 50);
     const said = mine.events.find((event) => event.type === 'parlor.table.say');
     expect(said?.text).toBe('这手我先让');
+    expect(mine.table?.tableId).toBe(said?.data?.tableId);
     expect(said?.scope.kind).toBe('table');
     if (said?.scope.kind === 'table') {
       // 席位快照：那一刻的同桌，脚本陪练不算房间席位。

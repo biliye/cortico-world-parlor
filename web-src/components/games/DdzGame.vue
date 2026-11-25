@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TableSpeech from './TableSpeech.vue';
 /**
  * 斗地主桌面（Vue 版）：DOM 结构与类名沿用旧渲染器，样式仍由 play.css 提供，
  * 所以外观不另起一套；旧渲染器 src/web/games/ddz.js 已随旧页在 0.40.0 删除。
@@ -380,7 +381,7 @@ function endArt(row: { cards?: string[]; handCards?: DdzArt[] } | null, index: n
             <div :class="['ddz-stack', { 'is-turn': isTurn(column.seat) }]" aria-hidden="true">
               <i v-for="index in stackSlots(column.seat)" :key="'cardback-' + index" class="ddz-back" />
             </div>
-            <div :class="['ddz-side-info', { 'is-turn': isTurn(column.seat), 'is-landlord': column.seat.role === 'landlord' }]">
+            <div :class="['ddz-side-info', 'ddz-speech-anchor', { 'is-turn': isTurn(column.seat), 'is-landlord': column.seat.role === 'landlord' }]">
               <span :class="avatarClass(column.seat, 'avatar')">
                 {{ initialOf(column.seat.name) }}
                 <span v-if="isPet(column.seat)" class="avatar-badge"><Icon name="spark" /></span>
@@ -395,6 +396,8 @@ function endArt(row: { cards?: string[]; handCards?: DdzArt[] } | null, index: n
                 <span v-if="isTurn(column.seat)" class="ddz-think">{{ table.status === 'bidding' ? '正在叫…' : '正在想…' }}</span>
               </div>
               <span v-if="column.seat.bot" class="ddz-bot-mark">脚本</span>
+              <TableSpeech v-if="!spectating" :table="view.table.tableId || view.table.id || ''"
+                :sender="column.seat.id" :align="column.side === 'left' ? 'left' : 'right'" />
             </div>
           </div>
 
@@ -482,3 +485,7 @@ function endArt(row: { cards?: string[]; handCards?: DdzArt[] } | null, index: n
     </template>
   </section>
 </template>
+
+<style scoped>
+.ddz-speech-anchor { position: relative; }
+</style>

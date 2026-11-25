@@ -26,6 +26,7 @@ import type { WerewolfSeatCount } from './werewolf.ts';
 import { AEROPLANE_RULES, PLANES_PER_SEAT } from './aeroplane-rules.ts';
 import { AeroplaneTable } from './aeroplane-table.ts';
 import { MAHJONG_DEFINITIONS } from './mahjong-definition.ts';
+import { FOUR_COLOUR_DEFINITION } from './four-colour-definition.ts';
 
 export interface GameCreateContext {
   /** 开桌者：id/name 之外带服务端席位类型与客户端能力版本（狼人杀开局校验用）。 */
@@ -467,7 +468,9 @@ const aeroplane: GameDefinition = {
   },
 };
 
-export const GAME_LIST: readonly GameDefinition[] = [dice, ddz, werewolf, monopoly2d, gomoku, xiangqi, aeroplane, ...MAHJONG_DEFINITIONS];
+export const GAME_LIST: readonly GameDefinition[] = [
+  dice, ddz, werewolf, monopoly2d, gomoku, xiangqi, aeroplane, ...MAHJONG_DEFINITIONS, FOUR_COLOUR_DEFINITION,
+];
 
 const BY_ID = new Map(GAME_LIST.map((game) => [game.id, game]));
 const BY_ACTION = new Map(GAME_LIST.map((game) => [game.actionType, game]));

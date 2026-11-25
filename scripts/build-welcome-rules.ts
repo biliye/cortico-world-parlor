@@ -1,7 +1,7 @@
 /**
  * 把 `src/room/game-rules-doc.ts` 的两块内容写进 `src/web/welcome.html`：
  *
- *   rules:begin / rules:end                 玩法屏上的八格按钮
+ *   rules:begin / rules:end                 玩法屏上的按钮
  *   rules-dialog:begin / rules-dialog:end   规则弹层（放在所有屏之后）
  *
  *   pnpm build:welcome           写入（生成物入库，和 src/web/vue/* 一样）

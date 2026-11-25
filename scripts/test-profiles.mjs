@@ -1,6 +1,6 @@
 // Explicit fast suite: newly added tests stay in the full suite until classified.
 export const unitTests = [
-  'aeroplane-table', 'aeroplane-view', 'announcement-rules', 'check-release', 'client-redirect', 'club-state', 'ddz-e2e-flow', 'ddz-end-web',
+  'aeroplane-table', 'aeroplane-view', 'announcement-rules', 'check-release', 'client-redirect', 'club-state', 'ddz-e2e-flow', 'ddz-end-web', 'four-colour-table',
   'describe-contract', 'doudizhu-assist', 'doudizhu-bot', 'doudizhu-table', 'doudizhu',
   'focus', 'game-actions', 'game-api', 'games-registry', 'gift-catalog', 'gomoku-table', 'gomoku-view', 'history-panel',
   'history-sync', 'identity', 'ledger', 'local-history-web', 'local-history', 'mail', 'mahjong-table', 'mentions',

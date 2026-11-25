@@ -5,6 +5,7 @@ import type { MahjongTable } from '../../../src/room/games/mahjong-table.ts';
 import type { GameCtx, GameView } from '../../lib/game-types.ts';
 import { mahjongArt, preloadMahjongArt } from '../../lib/mahjong-art.ts';
 import MahjongTileFace from './MahjongTileFace.vue';
+import TableSpeech from './TableSpeech.vue';
 
 preloadMahjongArt(true);
 
@@ -182,6 +183,8 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
             <span class="points" :class="{ plus: slot.seat.score > 0, minus: slot.seat.score < 0 }">{{ score(slot.seat.score) }}</span>
             <span v-if="slot.seat.missing != null" class="lack">缺 {{ SUITS[slot.seat.missing] }}</span>
             <span v-if="!slot.show && !slot.isMe" class="hand-count">{{ slot.seat.count }} 张</span>
+            <TableSpeech v-if="mine && !ended && !slot.isMe" :table="view.table.tableId || view.table.id || ''"
+              :sender="slot.seat.id" :align="slot.spot === 'up' ? 'center' : slot.spot === 'right' ? 'right' : 'left'" above />
           </header>
 
           <div v-if="!slot.isMe && !slot.show" class="backs"
@@ -408,6 +411,7 @@ html[data-theme="light"] .mahjong {
 
 /* ── 席位信息 ── */
 .who {
+  position: relative;
   display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; min-width: 0;
   padding: 4px 8px; border-radius: 9px; background: rgba(8, 22, 17, .34);
   border: 1px solid rgba(255, 255, 255, .07);
@@ -720,7 +724,7 @@ button.sz-hand { cursor: pointer; }
     display: block; flex: none; width: 20px; padding: 5px 1px; text-align: center;
     writing-mode: vertical-rl;
   }
-  .seat-left .who > *, .seat-right .who > * { display: inline; margin: 0; padding: 0; }
+  .seat-left .who > :is(span, strong), .seat-right .who > :is(span, strong) { display: inline; margin: 0; padding: 0; }
   .seat-left .who .seat-name, .seat-right .who .seat-name { font-size: 10px; letter-spacing: .06em; }
   .seat-right .who .points, .seat-left .who .points { margin-inline-start: 3px; font-size: 9.5px; }
   .seat-left .who .position, .seat-right .who .position,

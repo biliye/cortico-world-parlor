@@ -4,12 +4,14 @@
  * 换桌（桌号变化）按 mountKey 重建实例。
  */
 import { computed } from 'vue';
+import TableSpeech from './games/TableSpeech.vue';
 import type { ChatEvent, HallSeat } from '../api/types.ts';
 import { gameOf } from '../lib/games.ts';
 import { componentFor } from '../lib/game-components.ts';
 import type { GameCtx, GameView } from '../lib/game-types.ts';
+import { TABLE_SOCIAL_GAMES } from '../stores/chat.ts';
 import {
-  activePrivate, activeTable, act, log, openRoomTable, rematchRoomTable, serverNow, snapshot, tableIdOf, tableList,
+  activePrivate, activeTable, act, log, openRoomTable, rematchRoomTable, serverNow, snapshot, tableChatAvailable, tableIdOf, tableList,
 } from '../stores/parlor.ts';
 import { showToast } from '../stores/ui.ts';
 import { backToRoom } from '../stores/view.ts';
@@ -100,6 +102,8 @@ const gameCtx = {
 </script>
 
 <template>
+  <TableSpeech v-if="gameView && tableChatAvailable && TABLE_SOCIAL_GAMES.includes(gameView.table.game)"
+    :table="tableIdOf(gameView.table)" :names="gameView.names" />
   <component
     :is="componentGame"
     v-if="componentGame && gameView"
