@@ -188,7 +188,8 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
           </header>
 
           <div v-if="!slot.isMe || ended || (slot.show && !myShowdown)" class="seat-rack">
-            <div v-if="!slot.isMe && !slot.show && slot.seat.count" class="backs" aria-hidden="true">
+            <div v-if="!slot.isMe && !slot.show && slot.seat.count" class="backs" :class="{ 'backs-side': slot.vertical }"
+              :style="slot.vertical ? { '--back-count': slot.seat.count } : undefined" aria-hidden="true">
               <span v-for="n in slot.seat.count" :key="n"></span>
             </div>
 
@@ -565,37 +566,74 @@ button.sz-hand { cursor: pointer; }
 
 .hand-count { flex: none; color: var(--mj-sub); font-size: 10.5px; opacity: .8; }
 
-/* 站着的牌露出浅色顶边，右侧面略暗，牌脚紧贴桌布。 */
+/* 对家从正面看，站着的牌只露一线顶面和右侧。 */
 .backs {
   --back-w: clamp(14px, 2cqw, 21px);
   --back-h: clamp(21px, 3.25cqw, 32px);
   --back-top: 5px;
   --back-side: 4px;
-  --rack-slant: 0deg;
   display: grid; flex: none; gap: 1px; grid-auto-flow: column;
 }
-.seat-left .backs, .seat-right .backs {
-  --back-w: var(--side-tile-w);
-  --back-h: var(--side-tile-h);
-  --back-top: 4px;
-  grid-auto-flow: row; transform: skewX(var(--rack-slant)); margin-inline: 5px;
-}
-.seat-left .backs { --rack-slant: -4deg; }
-.seat-right .backs { --rack-slant: 4deg; }
 .backs > span {
-  position: relative; width: var(--back-w); height: var(--back-h); border-radius: 3px;
+  position: relative; width: var(--back-w); height: var(--back-h);
+}
+.backs:not(.backs-side) > span {
+  border-radius: 3px;
   background: linear-gradient(145deg, #78b293, #4e896e 60%, #34624f);
   box-shadow: inset 1px 0 rgba(233, 251, 237, .27), 0 2px 3px rgba(3, 17, 11, .62);
 }
 .backs > span::before, .backs > span::after { content: ''; position: absolute; }
-.backs > span::before {
+.backs:not(.backs-side) > span::before {
   inset: 0 var(--back-side) auto 0; height: var(--back-top); border-radius: 3px 0 1px 0;
   background: linear-gradient(var(--mj-face-hi), var(--mj-wall-hi));
   box-shadow: 0 1px rgba(26, 53, 40, .58);
 }
-.backs > span::after {
+.backs:not(.backs-side) > span::after {
   inset: 0 0 0 auto; width: var(--back-side); border-radius: 0 3px 3px 0;
   background: linear-gradient(#e0cdab 0 var(--back-top), #42745d var(--back-top), #234a3a);
+}
+
+/* 侧家从斜上方看：相邻顶面沿桌边相接，绿色牌背从顶边落向桌面。 */
+.backs-side {
+  --back-w: var(--side-tile-w);
+  --back-h: var(--side-tile-h);
+  --rail-lean: .16;
+  --top-slope: .4;
+  --back-slope: 1.45;
+  --top-width: calc(var(--back-w) * .4);
+  --back-width: calc(var(--back-w) - var(--top-width));
+  --top-drop: calc(var(--top-width) * var(--top-slope));
+  --back-drop: calc(var(--back-width) * var(--back-slope));
+  --end-height: calc(var(--top-drop) + var(--back-drop));
+  position: relative; grid-auto-flow: row; gap: 0;
+  padding-block-end: var(--end-height);
+  margin-inline: calc(1px + (var(--back-h) * var(--back-count) + var(--end-height)) * var(--rail-lean) / 2);
+  transform: scaleX(var(--rail-direction, 1)) matrix(1, 0, calc(-1 * var(--rail-lean)), 1, 0, 0);
+  filter: drop-shadow(0 3px 2px rgba(3, 17, 11, .58));
+}
+.seat-right .backs-side { --rail-direction: -1; }
+.backs-side > span::before, .backs-side > span::after {
+  height: calc(var(--back-h) + .3px);
+  transform-origin: top left;
+}
+.backs-side > span::before {
+  top: 0; left: 0; width: calc(var(--top-width) + .3px);
+  transform: matrix(1, var(--top-slope), 0, 1, 0, 0);
+  background: linear-gradient(90deg, var(--mj-face-hi), var(--mj-wall-hi));
+  box-shadow: inset 0 -1px rgba(108, 86, 54, .32);
+}
+.backs-side > span::after {
+  top: var(--top-drop); left: var(--top-width); width: var(--back-width);
+  transform: matrix(1, var(--back-slope), 0, 1, 0, 0);
+  background: linear-gradient(90deg, #83b99a, #568d72 40%, #3b6c56);
+  box-shadow: inset 0 1px rgba(221, 247, 229, .2), inset 0 -1px rgba(18, 51, 37, .8);
+}
+/* 近端只露出最后一张牌的象牙白端面。 */
+.backs-side::after {
+  content: ''; position: absolute; inset: auto 0 0;
+  height: var(--end-height);
+  clip-path: polygon(0 0, var(--top-width) var(--top-drop), 100% 100%, var(--back-width) var(--back-drop));
+  background: linear-gradient(155deg, var(--mj-face-hi), var(--mj-wall-hi));
 }
 
 .river {
@@ -735,9 +773,7 @@ button.sz-hand { cursor: pointer; }
     gap: 8px 6px;
   }
   .seat-left, .seat-right { --side-tile-w: 20px; --side-tile-h: 15px; }
-  .seat-left .backs, .seat-right .backs { margin-inline: 3px; }
-  .seat-left .backs { --rack-slant: -2deg; }
-  .seat-right .backs { --rack-slant: 2deg; }
+  .backs-side { --rail-lean: .12; --back-slope: 1.3; }
   .hand-rack { display: grid; gap: 2px; }
   .own-melds { grid-row: 1; justify-self: end; max-inline-size: 100%; padding-block: 3px 0; }
   .hand:only-child { justify-content: start; }
