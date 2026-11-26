@@ -157,7 +157,7 @@ export type ActionRequest =
   /** 再来一局：本厅同玩法有开着的空桌就并进去，没有就开一张新的（不复用刚结束的那张）。 */
   | { type: 'table_rematch'; game?: TableGame; requireHuman?: boolean; seatCount?: 6 | 9 | 12; requestId?: string }
   | { type: 'table_leave'; requestId?: string; table?: string }
-  | { type: 'table_start'; requestId?: string; table?: string }
+  | { type: 'table_start'; requestId?: string; table?: string; callLastCard?: boolean }
   | {
     type: 'table_action'; action: 'roll' | 'stand'; die?: number;
     /** 多桌：动作打给哪一张；不传就只有一张桌时的兼容默认。 */
@@ -190,7 +190,7 @@ export type ActionRequest =
   | ({ type: 'aeroplane_action'; table?: string; requestId?: string; revision?: number }
     & ({ action: 'roll' | 'resign' } | { action: 'move'; plane: number }))
   | ({ type: 'four-colour_action'; table?: string; requestId?: string; revision?: number }
-    & ({ action: 'draw' | 'pass' } | { action: 'play'; card: number; colour?: FourColour }))
+    & ({ action: 'draw' | 'pass' | 'call' | 'catch' } | { action: 'play'; card: number; colour?: FourColour; call?: boolean }))
   | {
     type: 'mahjong-sichuan_action' | 'mahjong-guangdong_action'; table?: string; requestId?: string;
     action: 'exchange' | 'missing' | 'discard' | 'pung' | 'kong' | 'hu' | 'pass';

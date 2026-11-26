@@ -56,3 +56,65 @@ it('四彩牌从目录开桌，私有发牌和桌聊遵守席位范围，出牌�
   expect(await post(move)).toEqual(played);
   expect((await read(observer)).table).toMatchObject({ colour: 'green', seats: [{ count: 6 }, { count: 7 }] });
 });
+
+it('手动喊牌从通用游戏动作可用，仅同桌可抓漏喊且罚摸的牌只发给本人', async () => {
+  vi.spyOn(gameById('four-colour')!, 'create')
+    .mockImplementation(({ host, turnMs }) => new FourColourTable(host, turnMs, () => 0));
+  const originalStart = FourColourTable.prototype.start;
+  vi.spyOn(FourColourTable.prototype, 'start').mockImplementation(function (this: FourColourTable, ...args) {
+    const step = originalStart.apply(this, args);
+    const state = this.exportState() as { players: Array<{ hand: number[] }>; stock: number[]; discard: number[]; colour: string };
+    state.players[0].hand = [1, 2];
+    state.players[1].hand = [3, 4];
+    state.discard = [0];
+    state.colour = 'red';
+    state.stock = Array.from({ length: 103 }, (_, index) => index + 5);
+    this.restoreState(state);
+    return step;
+  });
+  app = await WorldServer.create({ ...await pgServerStorage(':memory:'), port: 0, inviteCode: 'inv' });
+  await app.listen();
+  const room = 'lobby';
+  const [a, b, observer] = await Promise.all(['a', 'b', 'observer'].map(async name => {
+    const client = new ParlorClient(app!.url, { cooId: `coo-call-${name}`, cooSecret: `colour-call-${name}-0123456789` });
+    return { client, token: (await client.join('inv', { name }, room)).token };
+  }));
+  const { tableId: table } = await a.client.action(a.token, { type: 'table_open', game: 'four-colour', requestId: 'open' }, room);
+  await b.client.action(b.token, { type: 'table_join', table, requestId: 'join' }, room);
+  const post = async (token: string, body: Record<string, unknown>) => {
+    const response = await fetch(`${app!.url}/v1/rooms/${room}/action`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ table, ...body }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const start = { type: 'table_start', requestId: 'start', callLastCard: true };
+  expect((await post(b.token, start)).status).toBe(403);
+  const started = await post(a.token, start);
+  expect(started.status).toBe(200);
+  expect(await post(a.token, start)).toMatchObject({ status: 200, body: { revision: started.body.revision, seq: started.body.seq } });
+  expect((await post(a.token, { ...start, callLastCard: false })).status).toBe(409);
+
+  const read = (player: typeof a) => player.client.games(player.token, { op: 'state', table }, room);
+  const initial = await read(a);
+  expect(initial.table).toMatchObject({ callLastCard: true });
+  const revision = (initial.table as { revision: number }).revision;
+  const action = (name: string, requestId: string, rev: number, params = {}) => ({
+    type: 'game_action', action: name, params, requestId, revision: rev,
+  });
+  expect((await post(a.token, action('play', 'play', revision, { card: 1 }))).status).toBe(200);
+  const caller = await read(a);
+  const catcher = await read(b);
+  expect(caller).toMatchObject({ availableActions: [{ action: 'call' }], tablePrivate: { hand: [{ id: 2 }], yourTurn: false } });
+  expect(catcher).toMatchObject({ availableActions: [{ action: 'catch' }], tablePrivate: { hand: [{ id: 3 }, { id: 4 }], yourTurn: false } });
+  expect(await read(observer)).toMatchObject({ tablePrivate: null, availableActions: [] });
+  const catchRevision = (catcher.table as { revision: number }).revision;
+  expect((await post(observer.token, action('catch', 'spectator', catchRevision))).status).toBe(403);
+  expect((await post(b.token, action('catch', 'stale', revision))).status).toBe(409);
+  const caught = await post(b.token, action('catch', 'catch', catchRevision));
+  expect(caught.status).toBe(200);
+  expect(await post(b.token, action('catch', 'catch', catchRevision))).toEqual(caught);
+  const final = await read(a);
+  expect(final.tablePrivate).toMatchObject({ hand: [{ id: 2 }, { id: 107 }, { id: 106 }] });
+  expect((await read(b)).tablePrivate).toMatchObject({ hand: [{ id: 3 }, { id: 4 }] });
+});

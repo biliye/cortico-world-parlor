@@ -2235,7 +2235,10 @@ export class WorldServer {
         touchedTable = before ? (before.tableId ?? before.id) : undefined;
         tablesChanged = true;
       } else if (type === 'table_start') {
-        const receipt = await host.startTable(seat.cooId, tableArg, requestId);
+        if (body.callLastCard !== undefined && typeof body.callLastCard !== 'boolean') {
+          throw new HttpError(400, 'callLastCard 必须是 true 或 false');
+        }
+        const receipt = await host.startTable(seat.cooId, tableArg, requestId, { callLastCard: body.callLastCard });
         tableId = receipt.tableId;
         revision = receipt.revision;
         receiptSeq = receipt.seq;

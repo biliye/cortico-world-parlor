@@ -201,8 +201,8 @@ async function invite(): Promise<void> {
               type="button"
               :disabled="busy || !canStartTable(table)"
               :title="tableStartBlockers(table).join('；')"
-              @click="start"
-            >开始</button>
+              @click="table.game === 'four-colour' ? watch(table) : start()"
+            >{{ table.game === 'four-colour' ? '选择开局规则' : '开始' }}</button>
             <button v-else-if="seatedAt(table)" class="btn ghost small" type="button" :disabled="busy" @click="leave">退桌</button>
             <button class="btn ghost small" type="button" @click="watch(table)">
               {{ seatedAt(table) ? '回到我的桌 ↗' : table.status === 'ended' ? '查看结果 ↗' : '围观这桌 ↗' }}

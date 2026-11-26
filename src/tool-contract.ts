@@ -291,6 +291,7 @@ export const OPERATION_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       additionalProperties: false,
       properties: {
         table: { type: 'string', description: 'Table id; omit for your current table.' },
+        callLastCard: { type: 'boolean', description: '仅四彩牌。true 启用手动喊牌与漏喊罚牌，默认自动提醒剩一张。' },
       },
     },
   },

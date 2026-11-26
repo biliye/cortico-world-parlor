@@ -59,6 +59,11 @@ export interface TableSeat {
   clientVersion?: string;
 }
 
+export interface TableStartOptions {
+  /** 四彩牌可选的手动喊牌规则。 */
+  callLastCard?: boolean;
+}
+
 export interface TableEngine {
   readonly game: string;
   /** 给人看的游戏名（「骰子」「斗地主」）；账本原样存进 `data.gameLabel`。 */
@@ -92,7 +97,7 @@ export interface TableEngine {
   join(seat: TableSeat): TableEvent;
   /** 未开局时主动离桌；开局后不能离（调用方先判状态，引擎再兜一层）。 */
   leave(seatId: string): TableEvent;
-  start(by: string, now: number): TableStep;
+  start(by: string, now: number, options?: TableStartOptions): TableStep;
   act(seatId: string, action: unknown, now: number): TableStep;
   tick(now: number): TableStep | null;
   /**

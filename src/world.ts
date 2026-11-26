@@ -263,6 +263,7 @@ export class ParlorWorld implements World {
       tool('parlor_table_start', (args) => this.tableRequest({
         type: 'table_start',
         ...(typeof args.table === 'string' && args.table.trim() ? { table: args.table.trim() } : {}),
+        ...(typeof args.callLastCard === 'boolean' ? { callLastCard: args.callLastCard } : {}),
       }, '桌子开始了；轮到你时会被叫醒。')),
       tool('parlor_table_view', (args) => this.tableView(args)),
       tool('parlor_table_say', (args) => this.tableSay(args)),
