@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ParlorClient } from '../src/room/client.ts';
 import { FourColourTable } from '../src/room/games/four-colour-table.ts';
 import { gameById } from '../src/room/games/registry.ts';
+import type { ActionResponse } from '../src/room/protocol.ts';
 import { WorldServer } from '../src/room/world-server.ts';
 import { pgServerStorage } from './helpers/pg.ts';
 
@@ -92,7 +93,8 @@ it('手动喊牌从通用游戏动作可用，仅同桌可抓漏喊且罚摸的�
   expect((await post(b.token, start)).status).toBe(403);
   const started = await post(a.token, start);
   expect(started.status).toBe(200);
-  expect(await post(a.token, start)).toMatchObject({ status: 200, body: { revision: started.body.revision, seq: started.body.seq } });
+  const { revision: startRevision, seq: startSeq } = started.body as ActionResponse;
+  expect(await post(a.token, start)).toMatchObject({ status: 200, body: { revision: startRevision, seq: startSeq } });
   expect((await post(a.token, { ...start, callLastCard: false })).status).toBe(409);
 
   const read = (player: typeof a) => player.client.games(player.token, { op: 'state', table }, room);
