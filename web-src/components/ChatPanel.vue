@@ -11,7 +11,7 @@ import {
   roomPlaceholder, roomScopeText, tableEmptyText, tablePlaceholder, tableScopeText,
 } from '../lib/chat-copy.ts';
 import {
-  chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, TABLE_QUICK_PHRASES, tab, toggleChat, unread,
+  chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, TABLE_QUICK_PHRASES, TABLE_SOCIAL_GAMES, tab, toggleChat, unread,
 } from '../stores/chat.ts';
 import { openThread as openDmThread, openWindow as openDmWindow } from '../stores/dm.ts';
 import {
@@ -183,6 +183,8 @@ const placeholder = computed(() => {
 });
 
 const canSend = computed(() => tab.value === 'room' || (tab.value === 'table' && tableOpen.value));
+const showQuickPhrases = computed(() => tab.value === 'table' && tableOpen.value
+  && TABLE_SOCIAL_GAMES.includes(activeTable.value?.game ?? ''));
 
 function onInput(): void {
   saveDraftFor(scopeKey.value, input.value);
@@ -360,7 +362,7 @@ function closeDrawer(): void {
             <svg class="icon" aria-hidden="true"><use href="#i-send" /></svg>
           </button>
         </div>
-        <div v-if="tab === 'table' && tableOpen" class="quick-phrases" role="group" aria-label="牌桌快捷语">
+        <div v-if="showQuickPhrases" class="quick-phrases" role="group" aria-label="牌桌快捷语">
           <button v-for="phrase in TABLE_QUICK_PHRASES" :key="phrase" type="button"
             :disabled="sending" @click="sendMessage(phrase, false)">{{ phrase }}</button>
         </div>

@@ -396,7 +396,7 @@ export function renderRulesMarkup(pages: readonly RulePage[] = RULE_PAGES): stri
 
 /**
  * 生成规则弹层（`welcome.html` 的 rules-dialog 标记之间，放在所有屏之后）。
- * 八块规则都在层里，脚本只显示点中的那一块；没脚本时连同弹层一起退回页面里的平铺段落。
+ * 所有规则都在层里，脚本只显示点中的那一块；没脚本时连同弹层一起退回页面里的平铺段落。
  */
 export function renderRuleDialog(pages: readonly RulePage[] = RULE_PAGES): string {
   const articles = pages.map((page) => [
