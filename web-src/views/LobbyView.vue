@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /** 大厅：发现是「舞台 + 海报墙」；我的客厅是个人席位墙；收藏是书签清单。数据仍来自 /v1/hall 与 /v1/rooms。 */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import HallPaper from '../components/HallPaper.vue';
 import LobbyMatching from '../components/LobbyMatching.vue';
 import LobbyScene from '../components/LobbyScene.vue';
+import RoomPagination from '../components/RoomPagination.vue';
 import { api } from '../api/client.ts';
 import { createRoomCarousel, type CarouselModel } from '../lib/room-carousel.ts';
 import { gameLabel } from '../lib/games.ts';
@@ -160,6 +161,13 @@ const pageRooms = computed(() => {
 watch([section, query, filter], () => { roomPage.value = 1; });
 watch(roomPageCount, (count) => { roomPage.value = Math.min(roomPage.value, count); });
 
+async function changePageFromBottom(page: number): Promise<void> {
+  roomPage.value = page;
+  await nextTick();
+  directoryEl.value?.focus({ preventScroll: true });
+  directoryEl.value?.scrollIntoView({ block: 'start' });
+}
+
 function initial(name: string): string {
   return (name || '？').trim().slice(0, 1).toUpperCase();
 }
@@ -301,7 +309,7 @@ async function createRoom(): Promise<void> {
         <!-- 首屏与目录之间：每日新闻 + 公告栏，往下滚一屏就到。 -->
         <HallPaper />
 
-        <section id="hall-rooms" ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅">
+        <section id="hall-rooms" ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅" tabindex="-1">
           <header class="directory-head">
             <h2>全部客厅</h2>
             <span class="directory-count">{{ filteredRooms.length }} 间</span>
@@ -322,11 +330,14 @@ async function createRoom(): Promise<void> {
             </div>
           </header>
 
-          <nav v-if="hallLoaded && roomPageCount > 1" class="directory-pagination" aria-label="客厅分页">
-            <button class="btn ghost small" type="button" :disabled="roomPage === 1" @click="roomPage--">上一页</button>
-            <span class="directory-count" role="status">第 {{ roomPage }} / {{ roomPageCount }} 页</span>
-            <button class="btn ghost small" type="button" :disabled="roomPage === roomPageCount" @click="roomPage++">下一页</button>
-          </nav>
+          <RoomPagination
+            v-if="hallLoaded && roomPageCount > 1"
+            :page="roomPage"
+            :page-count="roomPageCount"
+            label="客厅分页（列表上方）"
+            @change="roomPage = $event"
+          />
+          <span v-if="roomPageCount > 1" class="directory-page-status" role="status">第 {{ roomPage }} / {{ roomPageCount }} 页</span>
 
           <p v-if="notice" class="warn">{{ notice }}</p>
           <p v-if="!hallLoaded" class="muted hall-note">正在加载客厅…</p>
@@ -366,6 +377,13 @@ async function createRoom(): Promise<void> {
               </div>
             </article>
           </div>
+          <RoomPagination
+            v-if="hallLoaded && roomPageCount > 1"
+            :page="roomPage"
+            :page-count="roomPageCount"
+            label="客厅分页（列表下方）"
+            @change="changePageFromBottom"
+          />
           <p class="muted hall-note">公开客厅谁都能进；不公开的要先被邀请。</p>
         </section>
 
