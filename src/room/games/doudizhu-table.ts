@@ -221,6 +221,7 @@ export class DoudizhuTable implements TableEngine {
   view(seatId: string): unknown | null {
     const seat = this.seats.find((entry) => entry.id === seatId);
     if (!seat) return null;
+    const assist = this.status === 'playing' && this.turnId === seat.id ? this.assistFor(seat) : undefined;
     return {
       game: this.game,
       seat: seat.id,
@@ -243,9 +244,8 @@ export class DoudizhuTable implements TableEngine {
         }
         : null,
       multiplier: 2 ** this.bombs,
-      /** 网页按钮的「提示」：复用脚本的最少合法牌，规则仍只在服务端算。 */
-      hint: this.hintFor(seat),
-      assist: this.status === 'playing' && this.turnId === seat.id ? this.assistFor(seat) : undefined,
+      hint: this.hintFor(seat, assist),
+      assist,
       /** 有上一手才能过；自己领出时必须出牌。 */
       canPass: this.status === 'playing' && this.turnId === seat.id && !!this.lastPlay,
     };
@@ -767,12 +767,16 @@ export class DoudizhuTable implements TableEngine {
   }
 
   /** 轮到自己时给网页一个可点的建议；不轮到时没有。 */
-  private hintFor(seat: Seat): { bid?: boolean; cards?: Card[]; label?: string; pass?: boolean } | undefined {
+  private hintFor(seat: Seat, assist?: DoudizhuAssist): { bid?: boolean; cards?: Card[]; label?: string; pass?: boolean } | undefined {
     if (this.status !== 'bidding' && this.status !== 'playing') return undefined;
     if (this.turnId !== seat.id) return undefined;
     if (this.status === 'bidding') return { bid: chooseBid(seat.hand) };
     const cards = chooseMove(seat.hand, this.lastPlay?.move ?? null, this.botContext(seat));
-    if (!cards || cards.length === 0) return { pass: true };
+    if (!cards?.length) {
+      // 陪练可能为了留炸弹或让队友而过牌；网页提示仍须给出可压牌。
+      const legal = assist?.suggestions.find(entry => entry.action.move === 'play');
+      return legal?.action.move === 'play' ? { cards: legal.action.cards, label: legal.label } : { pass: true };
+    }
     const entry = parseMove(cards);
     return { cards: [...cards], ...(entry ? { label: moveLabel(entry) } : {}) };
   }
