@@ -19,28 +19,28 @@ export const FOUR_COLOUR_DEFINITION: GameDefinition = {
   toAction: ({ action, card, colour, call }) => ({ action, card, colour, ...(call === undefined ? {} : { call }) }),
   availableActions: view => Array.isArray(view.actions) ? view.actions : [],
   action: {
-    description: '轮到你时可摸牌（draw）、出牌（play）或摸牌后结束回合（pass）。手动喊牌模式下，出到只剩一张时可在 play 加 call:true 一起喊；喊牌窗口内本人可补喊（call），同桌可抓漏喊（catch）。',
+    description: '轮到你时可摸牌（draw）、出牌（play）或摸牌后结束回合（pass）。出到只剩一张时必须由本人喊牌（call），超时罚摸两张。也可在 play 加 call:true 随出牌一起喊。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        action: { type: 'string', enum: ['draw', 'play', 'pass', 'call', 'catch'] },
+        action: { type: 'string', enum: ['draw', 'play', 'pass', 'call'] },
         card: { type: 'integer', minimum: 0, description: 'play 时给出本人桌面里的牌 id。' },
         colour: { type: 'string', enum: FOUR_COLOURS, description: '只在出变色牌时指定颜色。' },
-        call: { type: 'boolean', description: '手动喊牌模式下，play 后恰好只剩一张时可填 true 一起喊牌。' },
+        call: { type: 'boolean', description: 'play 后恰好只剩一张时可填 true 一起喊牌。' },
       },
       required: ['action'],
     },
     toBody: ({ action, card, colour, call }) => {
-      if ((action === 'draw' || action === 'pass' || action === 'call' || action === 'catch')
+      if ((action === 'draw' || action === 'pass' || action === 'call')
         && card === undefined && colour === undefined && call === undefined) return { type: actionType, action };
       if (action === 'play' && typeof card === 'number' && Number.isSafeInteger(card) && card >= 0
         && (colour === undefined || isFourColour(colour)) && (call === undefined || typeof call === 'boolean')) {
         return { type: actionType, action, card, ...(colour === undefined ? {} : { colour }), ...(call === undefined ? {} : { call }) };
       }
-      throw new Error('draw、pass、call、catch 不带参数；play 要填手牌 id（card），变色牌还要填 colour，可用 call:true 一起喊牌。');
+      throw new Error('draw、pass、call 不带参数；play 要填手牌 id（card），变色牌还要填 colour，可用 call:true 一起喊牌。');
     },
     done: body => ({ play: body.call === true ? '出了一张牌并喊牌。' : '出了一张牌。', draw: '摸了一张牌。', pass: '结束了回合。',
-      call: '喊牌了。', catch: '抓到漏喊。' })[String(body.action)] ?? '四彩牌动作已完成。',
+      call: '喊牌了。' })[String(body.action)] ?? '四彩牌动作已完成。',
   },
 };

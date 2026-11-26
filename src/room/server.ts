@@ -523,7 +523,6 @@ export class ParlorServer {
       case 'table_open': this.kernel.openTable(seat, body.game); break;
       case 'table_join': this.kernel.joinTable(seat); break;
       case 'table_start': {
-        if (body.callLastCard !== undefined) throw new HttpError(400, '手动喊牌只适用于多厅网关的四彩牌');
         const receipt = this.kernel.startTable(seat);
         seats = receipt.seats;
         deadline = receipt.deadline;

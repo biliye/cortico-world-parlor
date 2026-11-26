@@ -34,7 +34,7 @@ import {
   type LedgerEntry,
 } from './ledger.ts';
 import { TableHost, type StartReceipt, type TableLeaveResult, type TableLockInfo, type TableOpenResult, type TableReceipt, type TableRematchResult } from './table-host.ts';
-import type { TableLogQuery, TablePrivateSummary, TableStartOptions, TableSummary } from './table-engine.ts';
+import type { TableLogQuery, TablePrivateSummary, TableSummary } from './table-engine.ts';
 import type { DeliveryReceipt, RoomEvent, RoomSnapshot, Seat, SeatKind, WakeTier } from './protocol.ts';
 import { SlidingRateLimit } from './rate-limit.ts';
 
@@ -724,8 +724,8 @@ export class RoomHost {
     return this.tableHost.leave(cooId, tableId, requestId);
   }
 
-  startTable(cooId: string, tableId?: string, requestId?: string, options?: TableStartOptions): Promise<StartReceipt> {
-    return this.tableHost.start(cooId, tableId, requestId, options);
+  startTable(cooId: string, tableId?: string, requestId?: string): Promise<StartReceipt> {
+    return this.tableHost.start(cooId, tableId, requestId);
   }
 
   tableAction(cooId: string, action: unknown, options: { tableId?: string; revision?: number; requestId?: string } = {}): Promise<TableReceipt> {

@@ -58,7 +58,7 @@ it('四彩牌从目录开桌，私有发牌和桌聊遵守席位范围，出牌�
   expect((await read(observer)).table).toMatchObject({ colour: 'green', seats: [{ count: 6 }, { count: 7 }] });
 });
 
-it('手动喊牌从通用游戏动作可用，仅同桌可抓漏喊且罚摸的牌只发给本人', async () => {
+it('只有本人收到喊牌决策且可以喊，超时由网关罚摸并保护私牌', async () => {
   vi.spyOn(gameById('four-colour')!, 'create')
     .mockImplementation(({ host, turnMs }) => new FourColourTable(host, turnMs, () => 0));
   const originalStart = FourColourTable.prototype.start;
@@ -73,7 +73,8 @@ it('手动喊牌从通用游戏动作可用，仅同桌可抓漏喊且罚摸的�
     this.restoreState(state);
     return step;
   });
-  app = await WorldServer.create({ ...await pgServerStorage(':memory:'), port: 0, inviteCode: 'inv' });
+  const clock = { now: Date.now() };
+  app = await WorldServer.create({ ...await pgServerStorage(':memory:'), port: 0, inviteCode: 'inv', now: () => clock.now });
   await app.listen();
   const room = 'lobby';
   const [a, b, observer] = await Promise.all(['a', 'b', 'observer'].map(async name => {
@@ -89,13 +90,12 @@ it('手动喊牌从通用游戏动作可用，仅同桌可抓漏喊且罚摸的�
     });
     return { status: response.status, body: await response.json() };
   };
-  const start = { type: 'table_start', requestId: 'start', callLastCard: true };
+  const start = { type: 'table_start', requestId: 'start' };
   expect((await post(b.token, start)).status).toBe(403);
   const started = await post(a.token, start);
   expect(started.status).toBe(200);
   const { revision: startRevision, seq: startSeq } = started.body as ActionResponse;
   expect(await post(a.token, start)).toMatchObject({ status: 200, body: { revision: startRevision, seq: startSeq } });
-  expect((await post(a.token, { ...start, callLastCard: false })).status).toBe(409);
 
   const read = (player: typeof a) => player.client.games(player.token, { op: 'state', table }, room);
   const initial = await read(a);
@@ -106,17 +106,30 @@ it('手动喊牌从通用游戏动作可用，仅同桌可抓漏喊且罚摸的�
   });
   expect((await post(a.token, action('play', 'play', revision, { card: 1 }))).status).toBe(200);
   const caller = await read(a);
-  const catcher = await read(b);
+  const next = await read(b);
   expect(caller).toMatchObject({ availableActions: [{ action: 'call' }], tablePrivate: { hand: [{ id: 2 }], yourTurn: false } });
-  expect(catcher).toMatchObject({ availableActions: [{ action: 'catch' }], tablePrivate: { hand: [{ id: 3 }, { id: 4 }], yourTurn: false } });
+  expect(next).toMatchObject({ availableActions: [], tablePrivate: { hand: [{ id: 3 }, { id: 4 }], yourTurn: false } });
   expect(await read(observer)).toMatchObject({ tablePrivate: null, availableActions: [] });
-  const catchRevision = (catcher.table as { revision: number }).revision;
-  expect((await post(observer.token, action('catch', 'spectator', catchRevision))).status).toBe(403);
-  expect((await post(b.token, action('catch', 'stale', revision))).status).toBe(409);
-  const caught = await post(b.token, action('catch', 'catch', catchRevision));
-  expect(caught.status).toBe(200);
-  expect(await post(b.token, action('catch', 'catch', catchRevision))).toEqual(caught);
+  const callRevision = (caller.table as { revision: number }).revision;
+  const turnEvent = (await b.client.snapshot(b.token, 0, 50, room)).events.find(event => event.type === 'parlor.table.turn'
+    && (event.data?.table as { revision?: number })?.revision === callRevision);
+  expect(turnEvent?.data?.decision).toBe(false);
+  expect((await post(observer.token, action('call', 'spectator', callRevision))).status).toBe(403);
+  expect((await post(b.token, action('call', 'wrong-player', callRevision))).status).toBe(403);
+  expect((await post(a.token, action('call', 'stale', revision))).status).toBe(409);
+  const called = await post(a.token, action('call', 'call', callRevision));
+  expect(called.status).toBe(200);
+  expect(await post(a.token, action('call', 'call', callRevision))).toEqual(called);
+
+  const afterCall = await read(b);
+  const afterCallRevision = (afterCall.table as { revision: number }).revision;
+  expect((await post(b.token, action('play', 'second-play', afterCallRevision, { card: 3 }))).status).toBe(200);
+  const pending = await read(b);
+  clock.now = (pending.table as { deadline: number }).deadline;
+  expect((await post(b.token, action('call', 'expired', (pending.table as { revision: number }).revision))).status).toBe(409);
+  await app['tickClock']();
   const final = await read(a);
-  expect(final.tablePrivate).toMatchObject({ hand: [{ id: 2 }, { id: 107 }, { id: 106 }] });
-  expect((await read(b)).tablePrivate).toMatchObject({ hand: [{ id: 3 }, { id: 4 }] });
+  expect(final.table).toMatchObject({ pendingCall: null, seats: [{ count: 1 }, { count: 3 }] });
+  expect(final.tablePrivate).toMatchObject({ hand: [{ id: 2 }], yourTurn: true });
+  expect((await read(b)).tablePrivate).toMatchObject({ hand: [{ id: 4 }, { id: 107 }, { id: 106 }] });
 });

@@ -47,7 +47,7 @@ function selectCard(card: number): void {
   if (isPlayable(card)) selected.value = selected.value === card ? null : card;
 }
 
-async function submit(action: 'draw' | 'play' | 'pass' | 'call' | 'catch', colour?: FourColour): Promise<void> {
+async function submit(action: 'draw' | 'play' | 'pass' | 'call', colour?: FourColour): Promise<void> {
   if (busy.value || !actions.value.includes(action)) return;
   const card = selectedCard.value;
   if (action === 'play' && (!card || !isPlayable(card.id) || (card.colour === null && !colour))) return;
@@ -70,7 +70,7 @@ async function submit(action: 'draw' | 'play' | 'pass' | 'call' | 'catch', colou
     <div class="colour-felt">
       <header class="colour-status">
         <strong v-if="ended">本局结束</strong>
-        <strong v-else-if="table.pendingCall">{{ callerName }} 的喊牌时间</strong>
+        <strong v-else-if="table.pendingCall">{{ actions.includes('call') ? '请喊牌，超时罚摸两张' : '等待 ' + callerName + ' 喊牌' }}</strong>
         <strong v-else-if="mine?.yourTurn">轮到你</strong>
         <span v-else>轮到 {{ turnName || '同桌玩家' }}</span>
         <span v-if="!ended" class="direction">{{ table.direction === 1 ? '↻ 顺时针' : '↺ 逆时针' }}</span>
@@ -118,9 +118,8 @@ async function submit(action: 'draw' | 'play' | 'pass' | 'call' | 'catch', colou
           <button v-if="mine" class="btn" type="button" @click="ctx.rematch">再来一局</button>
           <button class="btn ghost" type="button" @click="ctx.showLobby">返回客厅</button>
         </div>
-        <div v-else-if="table.pendingCall && actions.length" class="colour-actions">
-          <button v-if="actions.includes('call')" class="btn" type="button" :disabled="busy" @click="submit('call')">喊牌</button>
-          <button v-if="actions.includes('catch')" class="btn" type="button" :disabled="busy" @click="submit('catch')">抓漏喊</button>
+        <div v-else-if="actions.includes('call')" class="colour-actions">
+          <button class="btn" type="button" :disabled="busy" @click="submit('call')">喊牌</button>
         </div>
         <div v-else-if="mine && actions.length" class="colour-actions">
           <label v-if="canCallOnPlay"><input v-model="callOnPlay" type="checkbox" :disabled="busy" /> 出牌时一起喊牌</label>

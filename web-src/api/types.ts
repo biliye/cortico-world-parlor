@@ -80,6 +80,7 @@ export interface TableSummary {
   host?: string;
   seats?: TableSeat[];
   turn?: string;
+  pendingCall?: string | null;
   deadline?: number;
   multiplier?: number;
   round?: number;

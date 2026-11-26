@@ -41,7 +41,7 @@ interface DdzPriv {
   hand?: string[];
   handCards?: DdzArt[];
   status?: string;
-  hint?: { bid?: boolean; cards?: string[]; label?: string; pass?: boolean };
+  hint?: { bid?: boolean; cards?: string[]; label?: string; pass?: boolean; passReason?: string };
   canPass?: boolean;
   deadline?: number;
   landlord?: string;
@@ -243,7 +243,8 @@ const statusText = computed(() => {
   if (myTurn.value && priv.value) {
     if (Array.isArray(hint?.cards) && hint.cards.length) {
       const labels = hint.cards.map((card) => cardLabel(card)).join(' ');
-      return '提示：可以出 ' + labels + (hint.label ? '（' + hint.label + '）' : '');
+      const prefix = hint.passReason ? '提示：' + hint.passReason + '。也可以出 ' : '提示：可以出 ';
+      return prefix + labels + (hint.label ? '（' + hint.label + '）' : '');
     }
     return '';
   }

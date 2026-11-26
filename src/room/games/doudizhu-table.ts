@@ -767,7 +767,7 @@ export class DoudizhuTable implements TableEngine {
   }
 
   /** 轮到自己时给网页一个可点的建议；不轮到时没有。 */
-  private hintFor(seat: Seat, assist?: DoudizhuAssist): { bid?: boolean; cards?: Card[]; label?: string; pass?: boolean } | undefined {
+  private hintFor(seat: Seat, assist?: DoudizhuAssist): { bid?: boolean; cards?: Card[]; label?: string; pass?: boolean; passReason?: string } | undefined {
     if (this.status !== 'bidding' && this.status !== 'playing') return undefined;
     if (this.turnId !== seat.id) return undefined;
     if (this.status === 'bidding') return { bid: chooseBid(seat.hand) };
@@ -775,7 +775,9 @@ export class DoudizhuTable implements TableEngine {
     if (!cards?.length) {
       // 陪练可能为了留炸弹或让队友而过牌；网页提示仍须给出可压牌。
       const legal = assist?.suggestions.find(entry => entry.action.move === 'play');
-      return legal?.action.move === 'play' ? { cards: legal.action.cards, label: legal.label } : { pass: true };
+      if (legal?.action.move !== 'play') return { pass: true };
+      const first = assist?.suggestions[0];
+      return { cards: legal.action.cards, label: legal.label, ...(first?.action.move === 'pass' ? { passReason: first.reason } : {}) };
     }
     const entry = parseMove(cards);
     return { cards: [...cards], ...(entry ? { label: moveLabel(entry) } : {}) };

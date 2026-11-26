@@ -922,8 +922,8 @@ export async function rematchRoomTable(game: string, seatCount?: 6 | 9 | 12): Pr
   return true;
 }
 
-export async function startRoomTable(callLastCard = false): Promise<boolean> {
-  return (await act({ type: 'table_start', ...(callLastCard ? { callLastCard: true } : {}) })) !== null;
+export async function startRoomTable(): Promise<boolean> {
+  return (await act({ type: 'table_start' })) !== null;
 }
 
 export async function leaveRoomTable(): Promise<boolean> {

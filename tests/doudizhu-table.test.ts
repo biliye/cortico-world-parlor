@@ -19,7 +19,7 @@ interface DdzView {
   cardsLeft: Record<string, number>;
   multiplier: number;
   lastPlay: { cards: string[]; playedCards: PhysCardView[] } | null;
-  hint?: { cards?: string[]; label?: string; pass?: boolean };
+  hint?: { cards?: string[]; label?: string; pass?: boolean; passReason?: string };
 }
 
 interface DdzPublic {
@@ -73,8 +73,18 @@ describe('斗地主桌', () => {
   ])('陪练会留牌时，网页仍能提示 $label', ({ target, hand, cards, label }) => {
     const table = compoundTable(hand, target);
     table.act('a', { move: 'play', cards: target }, 0);
-    expect(viewOf(table, 'b').hint).toEqual({ cards, label });
+    expect(viewOf(table, 'b').hint).toMatchObject({ cards, label });
     expect(table.act('b', { move: 'play', cards }, 1).events[0].text).toContain(label);
+  });
+
+  it('队友领牌时提示保留让牌理由，也给一手可选的合法压牌', () => {
+    const table = compoundTable();
+    table.act('a', { move: 'play', cards: ['3'] }, 0);
+    table.act('b', { move: 'play', cards: ['9'] }, 1);
+    const hint = viewOf(table, 'c').hint;
+    expect(hint).toMatchObject({ passReason: expect.stringContaining('队友当前领牌，可选择让牌') });
+    expect(hint?.cards?.length ?? 0).toBeGreaterThan(0);
+    expect(() => table.act('c', { move: 'play', cards: hint!.cards }, 2)).not.toThrow();
   });
 
   it('实际出牌拒绝 66699 压 22244，拒绝后不扣手牌、不换回合', () => {

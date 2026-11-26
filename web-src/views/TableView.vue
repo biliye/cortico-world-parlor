@@ -15,8 +15,6 @@ import { backToRoom } from '../stores/view.ts';
 
 const table = activeTable;
 watch(() => table.value?.game, preloadTableArt, { immediate: true });
-const callLastCard = ref(false);
-watch(() => tableIdOf(table.value), () => { callLastCard.value = false; });
 const notice = ref('');
 const busy = ref(false);
 const now = ref(serverNow());
@@ -121,7 +119,11 @@ async function run(task: () => Promise<unknown>): Promise<void> {
         </div>
       </div>
       <div class="turn-box">
-        <div v-if="table.turn || myTurn" class="turn-copy">
+        <div v-if="table.pendingCall" class="turn-copy">
+          <span class="turn-kicker">喊牌倒计时</span>
+          <span class="turn-name">{{ table.pendingCall === meId ? meName : names.get(table.pendingCall) }}</span>
+        </div>
+        <div v-else-if="table.turn || myTurn" class="turn-copy">
           <span class="turn-kicker">{{ myTurn ? '轮到你' : '轮到' }}</span>
           <span class="turn-name">{{ myTurn ? meName : (botTurn ? turnName + ' · 脚本' : turnName) }}</span>
         </div>
@@ -170,14 +172,10 @@ async function run(task: () => Promise<unknown>): Promise<void> {
         </div>
       </section>
       <section class="panel">
-        <p v-if="seated && host && table.game === 'four-colour'">
-          <label><input v-model="callLastCard" type="checkbox" :disabled="busy" /> 启用手动喊牌与漏喊罚牌</label>
-        </p>
         <div class="actions">
           <button v-if="canJoin" class="btn primary" type="button" :disabled="busy"
             @click="run(() => joinRoomTable(tableIdOf(table)))">坐下</button>
-          <button v-if="canStart" class="btn primary" type="button" :disabled="busy"
-            @click="run(() => startRoomTable(table?.game === 'four-colour' && callLastCard))">开始</button>
+          <button v-if="canStart" class="btn primary" type="button" :disabled="busy" @click="run(startRoomTable)">开始</button>
           <button v-if="seated" class="btn ghost" type="button" :disabled="busy" @click="run(leaveRoomTable)">退桌</button>
           <button class="btn ghost" type="button" @click="backToRoom">回到客厅</button>
         </div>

@@ -31,7 +31,6 @@ import {
   type TableLogQuery,
   type TablePrivateSummary,
   type TableSeatResult,
-  type TableStartOptions,
   type TableStatus,
   type TableStep,
   type TableSummary,
@@ -888,24 +887,20 @@ export class TableHost {
     }
   }
 
-  async start(cooId: string, tableId?: string, requestId?: string, options: TableStartOptions = {}): Promise<StartReceipt> {
+  async start(cooId: string, tableId?: string, requestId?: string): Promise<StartReceipt> {
     const table = await this.requireMyTable(cooId, tableId);
     const releaseTable = await this.lockTable(table.id);
     try {
     const seat = await this.requireSeat(cooId);
     if (table.frozen) throw new HostError('conflict', '这张桌子恢复失败，已经被隔离开了');
     if (seat.id !== table.hostSeatId) throw new HostError('forbidden', '只有开桌的人可以开始');
-    if (options.callLastCard !== undefined && table.game !== 'four-colour') {
-      throw new HostError('invalid', 'callLastCard 仅适用于四彩牌');
-    }
-    const intent = { type: 'table_start', tableId: table.id, ...(options.callLastCard ? { callLastCard: true } : {}) };
-    const replay = await this.replayReceipt(cooId, requestId, intent);
+    const replay = await this.replayReceipt(cooId, requestId, { type: 'table_start', tableId: table.id });
     if (replay) return { ...replay, seats: replay.seats ?? [] };
     const now = this.now();
     const draft = await this.draft(table);
     let step: TableStep;
     try {
-      step = draft.start(seat.id, now, options);
+      step = draft.start(seat.id, now);
     } catch (error) {
       return asHostError(error);
     }
@@ -921,10 +916,10 @@ export class TableHost {
       await this.recordStep(table, draft, step, now);
       await this.updateTableState(table.id, draft, revision, stateJson, now, { startedAt: now });
       await this.finishReceipt(receipt, draft);
-      await this.storeReceipt(cooId, requestId, table.id, intent, receipt, now);
+      await this.storeReceipt(cooId, requestId, table.id, { type: 'table_start', tableId: table.id }, receipt, now);
     }).catch(async (error: unknown) => {
       if (requestId && isUniqueViolation(error)) {
-        const existing = await this.replayReceipt(cooId, requestId, intent);
+        const existing = await this.replayReceipt(cooId, requestId, { type: 'table_start', tableId: table.id });
         if (existing) return { ...existing, seats: existing.seats ?? [] };
       }
       throw error;
