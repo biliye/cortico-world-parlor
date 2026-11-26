@@ -334,7 +334,7 @@ async function createRoom(): Promise<void> {
             v-if="hallLoaded && roomPageCount > 1"
             :page="roomPage"
             :page-count="roomPageCount"
-            label="客厅分页（列表上方）"
+            position="列表上方"
             @change="roomPage = $event"
           />
           <span v-if="roomPageCount > 1" class="directory-page-status" role="status">第 {{ roomPage }} / {{ roomPageCount }} 页</span>
@@ -381,7 +381,7 @@ async function createRoom(): Promise<void> {
             v-if="hallLoaded && roomPageCount > 1"
             :page="roomPage"
             :page-count="roomPageCount"
-            label="客厅分页（列表下方）"
+            position="列表下方"
             @change="changePageFromBottom"
           />
           <p class="muted hall-note">公开客厅谁都能进；不公开的要先被邀请。</p>
