@@ -187,29 +187,32 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
               :sender="slot.seat.id" :align="slot.spot === 'up' ? 'center' : slot.spot === 'right' ? 'right' : 'left'" above />
           </header>
 
-          <div v-if="!slot.isMe && !slot.show" class="backs"
-            :class="slot.vertical ? 'backs-v' : 'backs-h'" aria-hidden="true">
-            <span v-for="n in slot.seat.count" :key="n"></span>
-          </div>
-
-          <div v-if="slot.seat.melds.length && (!slot.isMe || ended)" class="melds"
-            :class="{ 'melds-col': slot.vertical }" :aria-label="meldSummary(slot.seat)">
-            <span v-for="(meld, index) in slot.seat.melds" :key="index" class="meld"
-              :class="{ kong: meld.kind !== 'pung' }"
-              :title="meld.tile === null ? '暗杠' : claimLabels[meld.kind] + tileText(meld.tile)">
-              <span v-for="n in (meld.kind === 'pung' ? 3 : 4)" :key="n" class="tile sz-mini"
-                :class="{ back: meld.tile === null }">
-                <MahjongTileFace v-if="meld.tile !== null" :tile="meld.tile" />
+          <div v-if="!slot.isMe || ended || (slot.show && !myShowdown)" class="seat-rack">
+            <div v-if="!slot.isMe && !slot.show && slot.seat.count" class="backs" :class="{ 'backs-side': slot.vertical }"
+              :style="slot.vertical ? { '--back-count': slot.seat.count } : undefined" aria-hidden="true">
+              <span v-for="n in slot.seat.count" :key="n">
+                <span v-if="slot.vertical && n === slot.seat.count" class="back-end"></span>
               </span>
-            </span>
-          </div>
+            </div>
 
-          <div v-if="slot.show && !(slot.isMe && myShowdown)" class="showdown" :class="{ 'is-win': !!slot.seat.win }" aria-label="摊开的手牌">
-            <span class="showdown-tag">摊牌</span>
-            <span v-for="(tile, index) in slot.show.tiles" :key="index" class="tile sz-show"
-              :class="{ win: index === slot.show.winIndex }" :title="tileText(tile)">
-              <MahjongTileFace :tile="tile" />
-            </span>
+            <div v-if="slot.show" class="showdown" :class="{ 'is-win': !!slot.seat.win }" aria-label="摊开的手牌">
+              <span class="showdown-tag">摊牌</span>
+              <span v-for="(tile, index) in slot.show.tiles" :key="index" class="tile sz-show"
+                :class="{ win: index === slot.show.winIndex }" :title="tileText(tile)">
+                <MahjongTileFace :tile="tile" />
+              </span>
+            </div>
+
+            <div v-if="slot.seat.melds.length && (!slot.isMe || ended)" class="melds"
+              :aria-label="meldSummary(slot.seat)">
+              <span v-for="(meld, index) in slot.seat.melds" :key="index" class="meld"
+                :title="meld.tile === null ? '暗杠' : claimLabels[meld.kind] + tileText(meld.tile)">
+                <span v-for="n in (meld.kind === 'pung' ? 3 : 4)" :key="n" class="tile sz-mini"
+                  :class="{ back: meld.tile === null }">
+                  <MahjongTileFace v-if="meld.tile !== null" :tile="meld.tile" />
+                </span>
+              </span>
+            </div>
           </div>
 
           <component v-if="slot.seat.river.length" :is="ended ? 'details' : 'div'" class="river-area">
@@ -233,7 +236,8 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
       </div>
     </div>
 
-    <div v-if="mine && !ended && !myShowdown" class="dock" :aria-label="actions.length ? '可选动作' : undefined">
+    <section v-if="mine && !ended" class="hand-panel" aria-label="你的手牌和操作">
+      <div v-if="!myShowdown" class="dock" :aria-label="actions.length ? '可选动作' : undefined">
         <template v-if="actions.includes('exchange')">
           <button class="act act-primary" type="button" :disabled="busy || selected.length !== 3"
             @click="submit('exchange', { tiles: selected.map(i => hand[i].tile) })"><span>确认换牌</span></button>
@@ -255,9 +259,8 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
             class="act" :class="{ 'act-gold': response.id === 'hu', 'act-quiet': response.id === 'pass' }" type="button"
             :disabled="busy" @click="submit(response.id)"><span>{{ response.label }}</span></button>
         </template>
-    </div>
+      </div>
 
-    <section v-if="mine && !ended" class="hand-panel" aria-label="你的手牌和操作">
       <div class="hand-heading">
         <span v-if="myShowdown" class="hand-label">{{ mySlot?.seat.win?.from === null ? '自摸' : '点炮胡牌' }} · 观战中</span>
         <span v-else class="hand-label">你的手牌</span>
@@ -267,32 +270,34 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
         <span v-if="myScore != null" class="hand-score" :class="{ plus: myScore > 0, minus: myScore < 0 }">{{ score(myScore) }} 分</span>
       </div>
 
-      <div v-if="mine.ownMelds.length" class="own-melds" aria-label="你的副露">
-        <span v-for="(meld, index) in mine.ownMelds" :key="index" class="meld" :class="{ kong: meld.kind !== 'pung' }"
-          :title="meld.tile === null ? '暗杠' : claimLabels[meld.kind] + tileText(meld.tile)">
-          <span v-for="n in (meld.kind === 'pung' ? 3 : 4)" :key="n" class="tile sz-mini"
-            :class="{ back: meld.tile === null }">
-            <MahjongTileFace v-if="meld.tile !== null" :tile="meld.tile" />
-          </span>
-        </span>
-      </div>
+      <div class="hand-rack">
+        <div class="hand">
+          <template v-if="myShowdown">
+            <span v-for="(tile, index) in myShowdown.tiles" :key="index" class="tile sz-hand"
+              :class="{ win: index === myShowdown.winIndex }" role="img"
+              :aria-label="tileText(tile) + (index === myShowdown.winIndex ? '，胡牌张' : '')">
+              <MahjongTileFace :tile="tile" />
+            </span>
+          </template>
+          <template v-else>
+            <button v-for="({ tile, drawn }, index) in hand" :key="index" type="button" class="tile sz-hand"
+              :class="{ selected: selected.includes(index), drawn }"
+              :aria-pressed="selected.includes(index)" :aria-label="tileText(tile) + (drawn ? '，刚摸到' : '')"
+              :disabled="busy || !canSelect(tile)" @click="select(index)">
+              <MahjongTileFace :tile="tile" />
+            </button>
+          </template>
+        </div>
 
-      <div class="hand">
-        <template v-if="myShowdown">
-          <span v-for="(tile, index) in myShowdown.tiles" :key="index" class="tile sz-hand"
-            :class="{ win: index === myShowdown.winIndex }" role="img"
-            :aria-label="tileText(tile) + (index === myShowdown.winIndex ? '，胡牌张' : '')">
-            <MahjongTileFace :tile="tile" />
+        <div v-if="mine.ownMelds.length" class="melds own-melds" aria-label="你的副露">
+          <span v-for="(meld, index) in mine.ownMelds" :key="index" class="meld"
+            :title="meld.tile === null ? '暗杠' : claimLabels[meld.kind] + tileText(meld.tile)">
+            <span v-for="n in (meld.kind === 'pung' ? 3 : 4)" :key="n" class="tile sz-mini"
+              :class="{ back: meld.tile === null }">
+              <MahjongTileFace v-if="meld.tile !== null" :tile="meld.tile" />
+            </span>
           </span>
-        </template>
-        <template v-else>
-          <button v-for="({ tile, drawn }, index) in hand" :key="index" type="button" class="tile sz-hand"
-            :class="{ selected: selected.includes(index), drawn }"
-            :aria-pressed="selected.includes(index)" :aria-label="tileText(tile) + (drawn ? '，刚摸到' : '')"
-            :disabled="busy || !canSelect(tile)" @click="select(index)">
-            <MahjongTileFace :tile="tile" />
-          </button>
-        </template>
+        </div>
       </div>
 
       <div class="hand-foot">
@@ -332,13 +337,12 @@ async function submit(action: string, fields: Record<string, unknown> = {}) {
   --mj-tile-edge: rgba(34, 26, 15, .52);
   --mj-tile-shadow: rgba(4, 12, 9, .58);
   --mj-tile-ink: #23332b;
-  --rv-w: clamp(30px, 5.6cqw, 54px);
-  --rv-h: calc(var(--rv-w) * 1.15);
+  --rv-w: clamp(24px, 4.4cqw, 43px);
   width: 100%;
   max-width: 960px;
   margin-inline: auto;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   container-type: inline-size;
 }
@@ -371,9 +375,7 @@ html[data-theme="light"] .mahjong {
 .felt {
   position: relative;
   display: grid;
-  /* 左右两家跨满三行（手牌背撑到桌边全长），对家/自己只占中间一列 —— 桌面密度接近雀魂 */
-  /* 左右两列给固定上限：由侧家内容（信息卡 + 牌背 + 副露 + 牌河）撑宽会把中间列挤没，对家牌河就会溢出叠到中央 */
-  grid-template-columns: fit-content(290px) minmax(0, 1fr) fit-content(290px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.48fr) minmax(0, 1fr);
   grid-template-areas:
     "left up   right"
     "left core right"
@@ -386,24 +388,36 @@ html[data-theme="light"] .mahjong {
 }
 
 .seat { position: relative; z-index: 1; min-width: 0; color: var(--mj-ink); }
-.seat-up { grid-area: up; display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
-.seat-up > .who, .seat-up > .river-area, .seat-up > .melds { align-self: center; }
-.seat-me {
-  grid-area: dn; display: flex; flex-direction: column; align-items: center;
-  gap: 5px; padding-block: 2px 6px;
+.seat-up, .seat-me { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.seat-up { grid-area: up; }
+.seat-me { grid-area: dn; padding-block: 2px 6px; }
+.mahjong:not(.ended) .seat-me > .seat-rack { order: 1; }
+.seat-left, .seat-right {
+  --rv-w: clamp(23px, 3.9cqw, 38px);
+  --side-tile-w: 25px;
+  --side-tile-h: 18px;
+  display: grid; align-items: center; gap: 6px;
 }
-.seat-left, .seat-right { display: flex; align-items: stretch; justify-content: center; gap: 7px; width: 100%; }
-.seat-left { grid-area: left; }
-.seat-right { grid-area: right; flex-direction: row-reverse; }
-.seat-left > .who, .seat-right > .who,
-.seat-left > .river-area, .seat-right > .river-area,
-.seat-left > .melds, .seat-right > .melds,
-.seat-left > .showdown, .seat-right > .showdown { align-self: center; }
-.seat-left > .river-area, .seat-right > .river-area, .mahjong:not(.ended) .seat-me > .river-area {
-  min-width: 0; overflow-x: auto; scrollbar-width: thin; padding: 2px 2px 4px;
+.seat-left {
+  grid-area: left;
+  grid-template: 'who rack river' / auto auto minmax(0, 1fr);
 }
-.mahjong:not(.ended) .seat-me > .river-area { max-inline-size: 100%; }
-.mahjong:not(.ended) .seat-me .river-h { grid-template-columns: repeat(6, var(--rv-w)); justify-content: safe center; }
+.seat-right {
+  grid-area: right;
+  grid-template: 'river rack who' / minmax(0, 1fr) auto auto;
+}
+.who { grid-area: who; }
+.seat-rack { grid-area: rack; display: flex; align-items: center; gap: 9px; min-width: 0; max-inline-size: 100%; }
+/* 副露总排在座位右端。对家和右家转向桌心后，视觉顺序随之反向。 */
+.seat-up > .seat-rack { flex-direction: row-reverse; align-items: flex-start; }
+.seat-left > .seat-rack, .seat-right > .seat-rack { flex-direction: column; gap: 8px; }
+.seat-right > .seat-rack { flex-direction: column-reverse; }
+.mahjong:not(.ended) .river-area {
+  grid-area: river; min-width: 0; max-inline-size: 100%;
+  overflow-x: auto; scrollbar-width: thin; padding: 2px 2px 5px; box-sizing: border-box;
+}
+.seat-left > .river-area { justify-self: end; }
+.seat-right > .river-area { justify-self: start; }
 
 .seat.current .seat-name { color: #ffe2ab; text-shadow: 0 0 14px rgba(240, 185, 94, .45); }
 .seat.current .position { border-color: transparent; background: var(--mj-gold); color: #2b1a06; font-weight: 700; }
@@ -421,9 +435,6 @@ html[data-theme="light"] .mahjong {
   box-sizing: border-box; padding: 5px 6px; text-align: right;
 }
 .seat-left .who .seat-name, .seat-right .who .seat-name { font-size: 12px; line-height: 1.25; }
-/* 侧家这一列被两边的固定轨道夹着：副露必须收窄，否则整组往桌外溢（flex-end 时向起点方向溢出） */
-.seat-left .melds, .seat-right .melds { max-width: 52px; }
-.seat-left .melds .sz-mini, .seat-right .melds .sz-mini { width: 18px; height: 21px; font-size: 9px; }
 .position { flex: none; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--mj-line); background: rgba(0, 0, 0, .2); color: var(--mj-sub); font-size: 10px; letter-spacing: .08em; }
 .position.self { border-color: transparent; background: var(--mj-gold); color: #2b1a06; font-weight: 700; }
 .seat-name { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
@@ -433,7 +444,6 @@ html[data-theme="light"] .mahjong {
 .points.plus { color: #ffd998; }
 .points.minus { color: #a9c6b4; opacity: .85; }
 .lack { flex: none; padding: 0 6px; border-radius: 999px; background: var(--mj-lack-bg); color: var(--mj-lack-ink); font-size: 10.5px; }
-.meld-line { margin: 0; max-width: 82px; color: var(--mj-sub); font-size: 10px; line-height: 1.3; text-align: right; overflow-wrap: anywhere; }
 
 /* ── 牌面：实体瓷砖（亮顶面 + 前壁厚度 + 接触阴影，参照雀魂的实牌观感） ──
    结构：.tile 自身是整块牌（背景只在下沿 --thick 露出来 = 前壁），
@@ -493,38 +503,52 @@ html[data-theme="light"] .mahjong {
     0 1px 0 rgba(255, 255, 255, .18);
 }
 
-/* 牌河里的牌是平放的：前壁几乎看不见，投影也收紧，避免压到下一行 */
-.river .tile {
+/* 牌河和副露平放在桌上，沿用相同的落影。 */
+:is(.river, .meld) .tile {
   box-shadow:
     0 0 0 1px var(--mj-tile-edge),
     0 calc(var(--thick) + 1px) 2px -1px rgba(0, 0, 0, .48);
 }
 
 .sz-river { width: var(--rv-w); height: var(--rv-h); font-size: calc(var(--rv-w) * .44); border-radius: 3px; --thick: 3px; }
-.sz-mini { width: 27px; height: 31px; font-size: 12px; border-radius: 3px; --thick: 2.5px; }
+.sz-mini { width: clamp(19px, 2.4cqw, 24px); aspect-ratio: 1 / 1.14; font-size: 11px; border-radius: 3px; --thick: 3px; }
+.sz-mini .face { inset: 2px 2px calc(var(--thick) + 1px); width: auto; height: auto; }
 .sz-show { width: 30px; height: 35px; font-size: 14px; border-radius: 3px; --thick: 2.5px; }
 .sz-hand { width: clamp(40px, 4.4vw, 54px); aspect-ratio: 1 / 1.32; font-size: 20px; border-radius: 5px; --thick: 4px; }
 button.sz-hand { cursor: pointer; }
 .sz-hand::before { border-radius: 5px 5px 1px 1px; }
 
 /* ── 副露 / 摊牌 / 牌河 ── */
-.melds { display: flex; flex-wrap: wrap; gap: 5px; }
-.meld { display: inline-flex; gap: 1px; padding: 2px; border-radius: 5px; background: rgba(0, 0, 0, .24); box-shadow: inset 0 0 0 1px rgba(240, 185, 94, .26); }
-.meld.kong { box-shadow: inset 0 0 0 1px rgba(168, 206, 255, .26); }
+.melds { display: flex; flex-wrap: wrap; gap: 7px 9px; }
+.meld { display: inline-flex; flex: none; gap: 2px; }
+.seat-up .melds { justify-content: flex-end; }
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .melds { flex-direction: column; }
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .meld { position: relative; flex-direction: column; }
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .meld::before {
+  content: ''; position: absolute; inset: -2px; border-radius: 4px; pointer-events: none;
+  background: rgba(8, 22, 17, .22); box-shadow: inset 0 0 0 1px rgba(239, 231, 197, .23);
+}
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .sz-mini {
+  width: var(--side-tile-w); height: max(16px, var(--side-tile-h)); font-size: 9px;
+}
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .sz-mini .face { inset-block: 1px var(--thick); }
 
 .showdown { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 4px 6px 5px; border-radius: 8px; background: rgba(255, 255, 255, .05); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07); }
 .showdown.is-win { background: rgba(255, 255, 255, .09); box-shadow: inset 0 0 0 1px rgba(240, 185, 94, .34); }
 .showdown-tag { flex: none; margin-inline-end: 3px; color: #f7d79b; font-size: 10px; letter-spacing: .1em; white-space: nowrap; }
 .tile.win { z-index: 1; transform: translateY(-2px); outline: 2px solid var(--mj-gold); outline-offset: 1px; }
 
-/* 侧家的摊牌沿桌边竖着摆，14 张塞不进一条窄边，用 3 列小牌网格 */
-.seat-left .showdown, .seat-right .showdown {
-  display: grid; grid-template-columns: repeat(3, 18px); justify-content: start;
-  gap: 2px; padding: 4px 5px;
+/* 局中侧家摊牌仍留在各自桌边。 */
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .showdown {
+  --show-tile-w: max(16px, var(--side-tile-h));
+  display: grid; grid-template-columns: repeat(2, var(--show-tile-w));
+  gap: 2px; padding: 4px 3px;
 }
-.seat-left .showdown-tag, .seat-right .showdown-tag { grid-column: 1 / -1; margin: 0 0 1px; }
-.seat-left .showdown .sz-show, .seat-right .showdown .sz-show { width: 18px; height: 21px; font-size: 9px; }
-.seat-left .showdown .tile.win, .seat-right .showdown .tile.win { transform: none; outline-width: 1.5px; }
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .showdown-tag { grid-column: 1 / -1; margin: 0 0 1px; }
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .sz-show {
+  width: var(--show-tile-w); height: max(21px, var(--side-tile-w)); font-size: 9px;
+}
+.mahjong:not(.ended) :is(.seat-left, .seat-right) .tile.win { transform: none; outline-width: 1.5px; }
 .mahjong.ended .felt {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-areas: "left up" "dn right";
@@ -536,7 +560,8 @@ button.sz-hand { cursor: pointer; }
   border-radius: 8px; background: rgba(8, 22, 17, .55);
 }
 .mahjong.ended .felt .seat > * { align-self: stretch; }
-.mahjong.ended .felt .showdown { display: flex; }
+.mahjong.ended .seat-rack { flex-direction: column; align-items: stretch; }
+.mahjong.ended .melds { justify-content: flex-start; }
 .mahjong.ended .river-area > summary {
   color: var(--mj-ink); font-size: 12px; cursor: pointer; padding-block: 4px;
 }
@@ -547,30 +572,87 @@ button.sz-hand { cursor: pointer; }
 
 .hand-count { flex: none; color: var(--mj-sub); font-size: 10.5px; opacity: .8; }
 
-/* 对手手牌背：只是「还有多少张」的示意，尺寸固定在牌河牌的一半上下，不抢牌河的视觉 */
-.backs { flex: none; display: grid; gap: 0; opacity: .92; }
-/* 对家横排：13 张按固定牌宽紧贴居中。不能均分整行宽，否则牌与牌之间会被拉出大片空隙 */
-.backs-h {
-  grid-auto-flow: column; grid-template-rows: 27px;
-  grid-auto-columns: 20px; justify-content: center; width: 100%;
+/* 对家从正面看，站着的牌只露一线顶面和右侧。 */
+.backs {
+  --back-w: clamp(14px, 2cqw, 21px);
+  --back-h: clamp(21px, 3.25cqw, 32px);
+  --back-top: 5px;
+  --back-side: 4px;
+  display: grid; flex: none; gap: 1px; grid-auto-flow: column;
 }
-/* 侧家竖排：固定牌高，整列约桌高一半；居中而不是撑满整桌 */
-.backs-v { grid-auto-flow: row; grid-auto-rows: 23px; grid-template-columns: 18px; height: auto; align-self: center; }
 .backs > span {
-  border-radius: 2px;
-  /* 牌背比桌面亮一档：同色系会糊成一片，桌面看着就是空的 */
-  background: linear-gradient(174deg, #8ecfb2, #5b9c82 52%, #356b57);
-  box-shadow:
-    0 0 0 1px rgba(6, 20, 15, .5),
-    inset 0 1px 0 rgba(255, 255, 255, .46),
-    inset 0 -2px 0 rgba(18, 52, 40, .35),
-    0 3px 5px -2px rgba(0, 0, 0, .55);
+  position: relative; width: var(--back-w); height: var(--back-h);
+}
+.backs:not(.backs-side) > span {
+  border-radius: 3px;
+  background: linear-gradient(145deg, #78b293, #4e896e 60%, #34624f);
+  box-shadow: inset 1px 0 rgba(233, 251, 237, .27), 0 2px 3px rgba(3, 17, 11, .62);
+}
+.backs > span::before, .backs > span::after { content: ''; position: absolute; }
+.backs:not(.backs-side) > span::before {
+  inset: 0 var(--back-side) auto 0; height: var(--back-top); border-radius: 3px 0 1px 0;
+  background: linear-gradient(var(--mj-face-hi), var(--mj-wall-hi));
+  box-shadow: 0 1px rgba(26, 53, 40, .58);
+}
+.backs:not(.backs-side) > span::after {
+  inset: 0 0 0 auto; width: var(--back-side); border-radius: 0 3px 3px 0;
+  background: linear-gradient(#e0cdab 0 var(--back-top), #42745d var(--back-top), #234a3a);
 }
 
-.river { flex: none; list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-/* 用 minmax 而不是固定尺寸：桌面被挤窄时牌河自己缩，不会溢出叠到别家 */
-.river-h { grid-template-columns: repeat(6, minmax(0, var(--rv-w))); justify-content: center; }
-.river-v { grid-template-rows: repeat(6, minmax(0, var(--rv-h))); grid-auto-flow: column; grid-auto-columns: minmax(0, var(--rv-w)); align-content: center; }
+/* 侧家从斜上方看：相邻顶面沿桌边相接，绿色牌背从顶边落向桌面。 */
+.backs-side {
+  --back-w: var(--side-tile-w);
+  --back-h: var(--side-tile-h);
+  --rail-lean: .16;
+  --top-slope: .4;
+  --back-slope: 1.15;
+  --top-width: calc(var(--back-w) * .4);
+  --back-width: calc(var(--back-w) - var(--top-width));
+  --top-drop: calc(var(--top-width) * var(--top-slope));
+  --back-drop: calc(var(--back-width) * var(--back-slope));
+  --end-height: calc(var(--top-drop) + var(--back-drop));
+  grid-auto-flow: row; gap: 0;
+  margin-inline: calc(1px + (var(--back-h) * var(--back-count) + var(--end-height)) * var(--rail-lean) / 2);
+  transform: scaleX(var(--rail-direction, 1)) matrix(1, 0, calc(-1 * var(--rail-lean)), 1, 0, 0);
+  filter: drop-shadow(0 3px 2px rgba(3, 17, 11, .58));
+}
+.seat-right .backs-side { --rail-direction: -1; }
+.backs-side > span::before, .backs-side > span::after {
+  height: calc(var(--back-h) + .3px);
+  transform-origin: top left;
+}
+.backs-side > span::before {
+  top: 0; left: 0; width: calc(var(--top-width) + .3px);
+  transform: matrix(1, var(--top-slope), 0, 1, 0, 0);
+  border-radius: 1.1px 0 0 1.1px;
+  background: linear-gradient(90deg, var(--mj-face-hi), var(--mj-wall-hi));
+  box-shadow: inset 0 1px rgba(255, 255, 255, .5), inset 0 -1px rgba(93, 69, 42, .53);
+}
+.backs-side > span::after {
+  top: var(--top-drop); left: var(--top-width); width: var(--back-width);
+  transform: matrix(1, var(--back-slope), 0, 1, 0, 0);
+  border-radius: 0 1px 1px 0;
+  background: linear-gradient(90deg, #83b99a, #568d72 40%, #3b6c56);
+  box-shadow: inset 0 1px rgba(221, 247, 229, .28), inset 0 -1px rgba(12, 39, 28, .86);
+}
+/* 末张与端面共用可见高度，桌边间距从完整的牌轮廓算起。 */
+.backs-side > span:last-child { height: calc(var(--back-h) + var(--end-height)); }
+.backs-side > span:last-child::before, .backs-side > span:last-child::after {
+  height: var(--back-h); border-end-start-radius: 0; border-end-end-radius: 0; box-shadow: none;
+}
+.back-end {
+  position: absolute; inset: var(--back-h) 0 0; z-index: 1;
+  height: var(--end-height);
+  clip-path: polygon(0 0, var(--top-width) var(--top-drop), 100% 100%, var(--back-width) var(--back-drop));
+  background: linear-gradient(160deg, var(--mj-face-hi), var(--mj-wall-hi) 76%, var(--mj-wall-lo));
+}
+
+.river {
+  --rv-h: calc(var(--rv-w) * 1.15);
+  flex: none; list-style: none; margin: 0; padding: 0; display: grid; gap: 4px;
+}
+.river-h { grid-template-columns: repeat(6, var(--rv-w)); }
+.river-v { grid-template-rows: repeat(6, var(--rv-h)); grid-auto-flow: column; grid-auto-columns: var(--rv-w); }
 .seat.won .river { opacity: .6; }
 .river > .tile.latest { z-index: 2; outline: 2px solid var(--mj-gold); outline-offset: 1px; box-shadow: 0 0 12px rgba(240, 185, 94, .35); }
 .river > .tile.taken::before { background: linear-gradient(180deg, #e6ddc4, #cfc3a2); outline: 1px dashed rgba(96, 72, 46, .55); outline-offset: -1px; }
@@ -585,7 +667,7 @@ button.sz-hand { cursor: pointer; }
   grid-area: core; position: relative; z-index: 1;
   justify-self: center; align-self: center;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  width: clamp(120px, 15cqw, 144px); aspect-ratio: 1;
+  width: clamp(108px, 13.2cqw, 126px); aspect-ratio: 1;
   padding: 10px; box-sizing: border-box; border-radius: 18px;
   background: radial-gradient(120% 110% at 50% -8%, #3d5249, #1d2b26 76%);
   box-shadow:
@@ -604,7 +686,7 @@ button.sz-hand { cursor: pointer; }
 /* ── 牌桌和手牌之间预留动作区 ── */
 .dock {
   display: flex; align-items: center; justify-content: safe center; gap: 8px;
-  block-size: 56px; min-width: 0; padding-inline: 8px;
+  block-size: 46px; min-width: 0; padding-inline: 8px;
   overflow-x: auto; scrollbar-width: thin;
 }
 .dock .act {
@@ -639,7 +721,7 @@ button.sz-hand { cursor: pointer; }
 /* ── 手牌区 ── */
 .hand-panel {
   min-width: 0;
-  display: grid; gap: 2px; padding: 10px 15px 15px; border-radius: 16px;
+  display: grid; gap: 5px; padding: 6px 15px 12px; border-radius: 12px 12px 16px 16px;
   background-image:
     radial-gradient(130% 96% at 50% -18%, rgba(255, 255, 255, .08), transparent 62%),
     var(--mj-cloth-img, none);
@@ -661,9 +743,14 @@ button.sz-hand { cursor: pointer; }
 .hand-score { color: var(--mj-sub); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 700; }
 .hand-score.plus { color: #ffd998; }
 .hand-score.minus { color: #a9c6b4; }
-.own-melds { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin-top: 8px; }
-.own-melds .meld { background: rgba(0, 0, 0, .26); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
-.hand { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: center; gap: 3px; margin: 12px 0 14px; padding-top: 10px; }
+.hand-rack { display: flex; align-items: flex-end; gap: 14px; min-width: 0; }
+/* 自己的副露固定在右下角，手牌在左侧剩余空间内居中。 */
+.own-melds { flex: none; justify-content: flex-end; max-inline-size: 64%; padding: 0 2px 7px; }
+.own-melds .sz-mini { width: clamp(19px, 3.15cqw, 30px); }
+.hand {
+  display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: flex-end; justify-content: center; gap: 12px 3px;
+  min-width: 0; padding: 12px 3px 7px;
+}
 .hand .tile.drawn { margin-inline-start: 14px; }
 .hand .tile.drawn::after { content: ''; position: absolute; top: 2px; bottom: 2px; left: -8px; width: 1px; background: rgba(255, 255, 255, .22); }
 /* 选中的牌被拿起来：影子散开、轮廓点亮 */
@@ -689,61 +776,55 @@ button.sz-hand { cursor: pointer; }
 .waiting { color: var(--mj-sub); font-size: 13px; }
 .tips { margin: 8px 0 0; padding: 8px 10px 8px 26px; border-radius: 9px; background: rgba(0, 0, 0, .3); color: var(--mj-sub); font-size: 12.5px; }
 
-/* 桌面不够宽时退回「上下两行 + 左右两列」的紧凑环：侧家不再跨满三行，牌背恢复小尺寸 */
+/* 窄桌让对家和自己横跨桌面，为两侧手牌留出各自的桌边。 */
 @container (max-width: 760px) {
   .felt {
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     grid-template-areas: "up up up" "left core right" "dn dn dn";
-    gap: 6px 5px;
+    gap: 8px 6px;
   }
-  .seat-up { align-items: center; }
-  .seat-left, .seat-right { align-items: center; }
-  .backs-h { grid-auto-columns: 19px; grid-template-rows: 26px; justify-content: center; width: auto; }
-  .backs-v { grid-auto-rows: 21px; grid-template-columns: 17px; height: auto; }
+  .seat-left, .seat-right { --side-tile-w: 20px; --side-tile-h: 15px; }
+  .backs-side { --rail-lean: .12; --back-slope: 1.1; }
+  .hand-rack { display: grid; gap: 2px; }
+  .own-melds { grid-row: 1; justify-self: end; max-inline-size: 100%; padding-block: 3px 0; }
+}
+
+@container (max-width: 560px) {
+  .felt { padding: 29px 15px 24px; border-radius: 14px; gap: 6px 4px; }
+  .seat-left, .seat-right {
+    --side-tile-w: 20px; --side-tile-h: 13px;
+    gap: 5px 3px;
+  }
+  .seat-left { grid-template: 'who who' auto 'rack river' 1fr / auto minmax(0, 1fr); }
+  .seat-right { grid-template: 'who who' auto 'river rack' 1fr / minmax(0, 1fr) auto; }
+  .seat-left .who, .seat-right .who {
+    width: auto; flex-direction: row; justify-content: flex-start; align-items: center;
+    gap: 2px 4px; padding: 3px 4px; text-align: start;
+  }
+  .seat-right .who { justify-content: flex-end; }
+  .seat-left .who .seat-name, .seat-right .who .seat-name { font-size: 11px; }
+  .seat-left .who :is(.points, .lack, .hand-count), .seat-right .who :is(.points, .lack, .hand-count) { font-size: 9px; }
+  .mahjong:not(.ended) :is(.seat-left, .seat-right) .position,
+  .mahjong:not(.ended) .seat-me.is-self .who { display: none; }
+  .core { width: 70px; border-radius: 12px; padding: 6px; }
+  .core-cap { font-size: 9px; letter-spacing: .12em; }
+  .core-num { font-size: 24px; }
+  .core-turn { font-size: 9px; }
+  .hand-panel { padding-inline: 9px; }
+  .dock { block-size: 40px; }
+  .sz-show { width: 22px; height: 26px; font-size: 11.5px; }
+  .sz-hand { width: 40px; font-size: 17px; }
 }
 
 @media (max-width: 720px) {
-  .mahjong { --rv-w: 30px; --rv-h: 35px; }
-  .core { width: 112px; border-radius: 14px; }
-  .core-num { font-size: 28px; }
-  .seat-left .who, .seat-right .who { width: 68px; }
   .dock { gap: 6px; }
   .dock .act { min-width: 56px; padding: 9px 12px; font-size: 13.5px; }
 }
 
 @media (max-width: 560px) {
-  .mahjong { --rv-w: 28px; --rv-h: 33px; }
-  .felt { padding: 28px 15px 24px; border-radius: 14px; gap: 5px 3px; }
   .hud-line strong { font-size: 16px; }
-  .core { width: 82px; border-radius: 12px; padding: 6px; }
-  .core-cap { font-size: 9px; letter-spacing: .12em; }
-  .core-num { font-size: 24px; }
-  .core-turn { font-size: 9px; }
-  /* 窄屏两侧只有一百来像素：信息卡立起来当细条，手牌背收起 */
-  .seat-left .who, .seat-right .who {
-    display: block; flex: none; width: 20px; padding: 5px 1px; text-align: center;
-    writing-mode: vertical-rl;
-  }
-  .seat-left .who > :is(span, strong), .seat-right .who > :is(span, strong) { display: inline; margin: 0; padding: 0; }
-  .seat-left .who .seat-name, .seat-right .who .seat-name { font-size: 10px; letter-spacing: .06em; }
-  .seat-right .who .points, .seat-left .who .points { margin-inline-start: 3px; font-size: 9.5px; }
-  .seat-left .who .position, .seat-right .who .position,
-  .seat-left .who .hand-count, .seat-right .who .hand-count,
-  .seat-left .who .lack, .seat-right .who .lack { display: none; }
-  .seat-left .backs, .seat-right .backs { display: none; }
-  .seat-left .melds-col .sz-mini, .seat-right .melds-col .sz-mini { width: 14px; height: 17px; font-size: 7.5px; }
-  .mahjong:not(.ended) .seat-me.is-self .who { display: none; }
-  .mahjong.ended .felt .who {
-    display: flex; width: auto; padding: 4px; text-align: start; writing-mode: horizontal-tb;
-  }
-  .mahjong.ended .felt .who .position { display: inline; }
-  .melds-col .sz-mini { width: 15px; height: 18px; font-size: 8px; }
-  .sz-show { width: 22px; height: 26px; font-size: 11.5px; }
-  .sz-mini { width: 20px; height: 24px; font-size: 10px; }
-  .dock { block-size: 44px; }
   .dock .act { min-width: 50px; padding: 8px 11px; font-size: 13px; }
-  .hand { flex-wrap: nowrap; justify-content: start; overflow-x: auto; padding: 10px 3px 4px; scrollbar-width: thin; }
-  .sz-hand { width: 40px; height: 52px; font-size: 17px; }
+  .hand { flex-wrap: nowrap; justify-content: start; overflow-x: auto; scrollbar-width: thin; }
 }
 @media (prefers-reduced-motion: reduce) {
   .tile { transition: none; }
