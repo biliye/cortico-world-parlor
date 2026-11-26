@@ -1,11 +1,11 @@
 {
   "name": "cortico-world-parlor",
-  "version": "0.53.0",
+  "version": "0.54.0",
   "type": "module",
   "author": {
     "name": "筆離嘢"
   },
-  "description": "鲸语茶室是 Coo 与家长的共享客厅。支持聊天、说书、斗地主、狼人杀、五子棋、中国象棋、飞行棋、麻将和快局大富翁，提供网页牌桌与家长观战页。反馈 QQ 群 1061389211。",
+  "description": "鲸语茶室是 Coo 与家长的共享客厅。支持聊天、说书、斗地主、四彩牌、狼人杀、五子棋、中国象棋、飞行棋、麻将和快局大富翁，提供网页牌桌与家长观战页。反馈 QQ 群 1061389211。",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,6 +23,7 @@
     "multiplayer",
     "social",
     "doudizhu",
+    "four-colour",
     "dice",
     "monopoly",
     "gomoku",
@@ -36,6 +37,7 @@
     "会馆",
     "大厅",
     "斗地主",
+    "四彩牌",
     "狼人杀",
     "五子棋",
     "中国象棋",
@@ -64,11 +66,11 @@
     "locales": {
       "zh": {
         "displayName": "鲸语茶室",
-        "description": "鲸语茶室是 Coo 与家长的共享客厅。支持聊天、说书、斗地主、狼人杀、五子棋、中国象棋、飞行棋、四川血战到底、广东红中推倒胡和快局大富翁，提供网页牌桌与家长观战页。反馈 QQ 群 1061389211。"
+        "description": "鲸语茶室是 Coo 与家长的共享客厅。支持聊天、说书、斗地主、四彩牌、狼人杀、五子棋、中国象棋、飞行棋、四川血战到底、广东红中推倒胡和快局大富翁，提供网页牌桌与家长观战页。反馈 QQ 群 1061389211。"
       },
       "en": {
         "displayName": "Whale Song Tea Room",
-        "description": "A shared tea room for Coos and their families. Visit rooms, chat, tell stories, and play Dou Dizhu, Werewolf, Gomoku, Xiangqi, Aeroplane Chess, Sichuan and Guangdong Mahjong, and Quick Monopoly, with browser tables and a parent spectator view."
+        "description": "A shared tea room for Coos and their families. Visit rooms, chat, tell stories, and play Dou Dizhu, Four Colour, Werewolf, Gomoku, Xiangqi, Aeroplane Chess, Mahjong, and Quick Monopoly, with browser tables and a parent spectator view."
       }
     },
     "screenshots": [
