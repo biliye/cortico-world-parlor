@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /** 大厅：发现是「舞台 + 海报墙」；我的客厅是个人席位墙；收藏是书签清单。数据仍来自 /v1/hall 与 /v1/rooms。 */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AnnouncementBanner from '../components/AnnouncementBanner.vue';
 import HallPaper from '../components/HallPaper.vue';
 import LobbyMatching from '../components/LobbyMatching.vue';
 import LobbyScene from '../components/LobbyScene.vue';
+import RoomPagination from '../components/RoomPagination.vue';
 import { api } from '../api/client.ts';
 import { createRoomCarousel, type CarouselModel } from '../lib/room-carousel.ts';
 import { gameLabel } from '../lib/games.ts';
@@ -18,6 +19,9 @@ import {
 import type { RoomCard } from '../api/types.ts';
 
 const section = hallSection;
+const ROOMS_PER_PAGE = 6;
+const roomPage = ref(1);
+const hallPeopleOpen = ref(false);
 const filter = ref('all');
 const gameFilters = [
   { id: 'all', label: '全部' },
@@ -147,6 +151,22 @@ const filteredRooms = computed(() => {
     return true;
   });
 });
+
+const roomPageCount = computed(() => Math.max(1, Math.ceil(filteredRooms.value.length / ROOMS_PER_PAGE)));
+const pageRooms = computed(() => {
+  const start = (roomPage.value - 1) * ROOMS_PER_PAGE;
+  return filteredRooms.value.slice(start, start + ROOMS_PER_PAGE);
+});
+
+watch([section, query, filter], () => { roomPage.value = 1; });
+watch(roomPageCount, (count) => { roomPage.value = Math.min(roomPage.value, count); });
+
+async function changePageFromBottom(page: number): Promise<void> {
+  roomPage.value = page;
+  await nextTick();
+  directoryEl.value?.focus({ preventScroll: true });
+  directoryEl.value?.scrollIntoView({ block: 'start' });
+}
 
 function initial(name: string): string {
   return (name || '？').trim().slice(0, 1).toUpperCase();
@@ -289,7 +309,7 @@ async function createRoom(): Promise<void> {
         <!-- 首屏与目录之间：每日新闻 + 公告栏，往下滚一屏就到。 -->
         <HallPaper />
 
-        <section id="hall-rooms" ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅">
+        <section id="hall-rooms" ref="directoryEl" class="directory hall-rooms" aria-label="全部客厅" tabindex="-1">
           <header class="directory-head">
             <h2>全部客厅</h2>
             <span class="directory-count">{{ filteredRooms.length }} 间</span>
@@ -310,6 +330,15 @@ async function createRoom(): Promise<void> {
             </div>
           </header>
 
+          <RoomPagination
+            v-if="hallLoaded && roomPageCount > 1"
+            :page="roomPage"
+            :page-count="roomPageCount"
+            position="列表上方"
+            @change="roomPage = $event"
+          />
+          <span v-if="roomPageCount > 1" class="directory-page-status" role="status">第 {{ roomPage }} / {{ roomPageCount }} 页</span>
+
           <p v-if="notice" class="warn">{{ notice }}</p>
           <p v-if="!hallLoaded" class="muted hall-note">正在加载客厅…</p>
           <p v-else-if="hallError && !rooms.length" class="warn hall-note">取不到大厅：{{ hallError }}</p>
@@ -318,7 +347,7 @@ async function createRoom(): Promise<void> {
               <p>{{ emptyText() }}</p>
               <button class="btn ghost small" type="button" @click="showDiscover">去发现客厅 ↗</button>
             </div>
-            <article v-for="room in filteredRooms" :key="room.id" class="poster club-room-card" @click="enter(room)">
+            <article v-for="room in pageRooms" :key="room.id" class="poster club-room-card" @click="enter(room)">
               <div class="poster-art" :class="artFor(room)">
                 <span class="poster-chip" :class="{ live: isLive(room) }">
                   <i class="dot" :class="{ live: isLive(room) }" />{{ isLive(room) ? '正在对局' : '等你入座' }}
@@ -348,6 +377,13 @@ async function createRoom(): Promise<void> {
               </div>
             </article>
           </div>
+          <RoomPagination
+            v-if="hallLoaded && roomPageCount > 1"
+            :page="roomPage"
+            :page-count="roomPageCount"
+            position="列表下方"
+            @change="changePageFromBottom"
+          />
           <p class="muted hall-note">公开客厅谁都能进；不公开的要先被邀请。</p>
         </section>
 
@@ -355,17 +391,26 @@ async function createRoom(): Promise<void> {
           <div class="people-head">
             <h2>大厅里</h2>
             <span class="directory-count">{{ visibleSeats.length }} 人</span>
+            <button
+              class="btn ghost small people-toggle"
+              type="button"
+              :aria-expanded="hallPeopleOpen"
+              aria-controls="hall-people-list"
+              @click="hallPeopleOpen = !hallPeopleOpen"
+            >{{ hallPeopleOpen ? '收起名单' : '展开名单' }}</button>
           </div>
-          <div class="member-row">
-            <p v-if="!visibleSeats.length" class="muted">大厅里现在没有在线的人。</p>
-            <span v-for="person in visibleSeats" :key="person.id" class="member-chip">
-              <span class="avatar avatar-xs">{{ initial(person.name) }}</span>
-              <span>
-                <strong>{{ person.name }}<template v-if="snapshot?.seat && person.id === snapshot.seat.id">（你）</template></strong>
-                <small>{{ person.kind }}<template v-if="person.handle"> · #{{ person.handle }}</template></small>
+          <div id="hall-people-list" :hidden="!hallPeopleOpen">
+            <div v-if="hallPeopleOpen" class="member-row">
+              <p v-if="!visibleSeats.length" class="muted">大厅里现在没有在线的人。</p>
+              <span v-for="person in visibleSeats" :key="person.id" class="member-chip">
+                <span class="avatar avatar-xs">{{ initial(person.name) }}</span>
+                <span>
+                  <strong>{{ person.name }}<template v-if="snapshot?.seat && person.id === snapshot.seat.id">（你）</template></strong>
+                  <small>{{ person.kind }}<template v-if="person.handle"> · #{{ person.handle }}</template></small>
+                </span>
+                <span v-if="person.kind === 'pet'" class="tag tag-coo">Coo</span>
               </span>
-              <span v-if="person.kind === 'pet'" class="tag tag-coo">Coo</span>
-            </span>
+            </div>
           </div>
         </section>
 

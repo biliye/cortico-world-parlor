@@ -849,6 +849,33 @@ html.vue-app .filter:hover { color: var(--text); }
 html.vue-app .filter.is-on { background: rgba(240, 185, 94, .14); color: var(--lime); }
 html.vue-app .refresh { font-size: 12px; color: var(--dim); padding: 4px 2px; }
 html.vue-app .refresh:hover { color: var(--lime); }
+html.vue-app .directory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+html.vue-app .directory-page-select {
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  padding: 0 10px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+html.vue-app .directory-page-select option { background: var(--panel); color: var(--text); }
+html.vue-app .directory-page-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
 
 html.vue-app .posters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
 html.vue-app .poster {
@@ -1136,8 +1163,9 @@ html.vue-app .people, html.vue-app .create {
   background: var(--panel);
   padding: 20px 22px 22px;
 }
-html.vue-app .people-head { display: flex; align-items: center; gap: 12px; }
+html.vue-app .people-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 html.vue-app .people-head h2, html.vue-app .create h2 { margin: 0; font-size: 19px; font-weight: 700; }
+html.vue-app .people-toggle { margin-left: auto; }
 html.vue-app .member-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 html.vue-app .member-chip {
   display: inline-flex;
