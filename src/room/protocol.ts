@@ -190,7 +190,7 @@ export type ActionRequest =
   | ({ type: 'aeroplane_action'; table?: string; requestId?: string; revision?: number }
     & ({ action: 'roll' | 'resign' } | { action: 'move'; plane: number }))
   | ({ type: 'four-colour_action'; table?: string; requestId?: string; revision?: number }
-    & ({ action: 'draw' | 'pass' } | { action: 'play'; card: number; colour?: FourColour }))
+    & ({ action: 'draw' | 'pass' | 'call' } | { action: 'play'; card: number; colour?: FourColour; call?: boolean }))
   | {
     type: 'mahjong-sichuan_action' | 'mahjong-guangdong_action'; table?: string; requestId?: string;
     action: 'exchange' | 'missing' | 'discard' | 'pung' | 'kong' | 'hu' | 'pass';

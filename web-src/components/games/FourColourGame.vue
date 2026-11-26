@@ -19,8 +19,11 @@ const ended = computed(() => table.value.status === 'ended');
 const actions = computed(() => props.view.table.frozen ? [] : mine.value?.actions ?? []);
 const selected = ref<number | null>(null);
 const busy = ref(false);
+const callOnPlay = ref(false);
 const selectedCard = computed(() => mine.value?.hand.find(card => card.id === selected.value));
 const turnName = computed(() => table.value.seats.find(seat => seat.id === table.value.turn)?.name);
+const callerName = computed(() => table.value.seats.find(seat => seat.id === table.value.pendingCall)?.name);
+const canCallOnPlay = computed(() => !!(table.value.callLastCard && selectedCard.value && mine.value?.hand.length === 2));
 // 手牌很多时限制桌边牌堆的长度，名牌继续显示实际张数。
 const MAX_VISIBLE_BACKS = 7;
 const opponents = computed(() => {
@@ -34,6 +37,7 @@ const opponents = computed(() => {
 watch(() => mine.value?.playable, (playable) => {
   if (selected.value !== null && !playable?.includes(selected.value)) selected.value = null;
 });
+watch(selected, () => { callOnPlay.value = false; });
 
 function isPlayable(card: number): boolean {
   return actions.value.includes('play') && !!mine.value?.playable.includes(card);
@@ -43,7 +47,7 @@ function selectCard(card: number): void {
   if (isPlayable(card)) selected.value = selected.value === card ? null : card;
 }
 
-async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Promise<void> {
+async function submit(action: 'draw' | 'play' | 'pass' | 'call', colour?: FourColour): Promise<void> {
   if (busy.value || !actions.value.includes(action)) return;
   const card = selectedCard.value;
   if (action === 'play' && (!card || !isPlayable(card.id) || (card.colour === null && !colour))) return;
@@ -51,7 +55,9 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
   try {
     const result = await props.ctx.act({
       type: 'four-colour_action', action,
-      ...(action === 'play' && card ? { card: card.id, ...(colour ? { colour } : {}) } : {}),
+      ...(action === 'play' && card ? {
+        card: card.id, ...(colour ? { colour } : {}), ...(canCallOnPlay.value && callOnPlay.value ? { call: true } : {}),
+      } : {}),
     });
     if (result) selected.value = null;
   } catch { /* 状态层统一提示提交错误。 */ }
@@ -64,6 +70,7 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
     <div class="colour-felt">
       <header class="colour-status">
         <strong v-if="ended">本局结束</strong>
+        <strong v-else-if="table.pendingCall">{{ actions.includes('call') ? '请喊牌，超时罚摸两张' : '等待 ' + callerName + ' 喊牌' }}</strong>
         <strong v-else-if="mine?.yourTurn">轮到你</strong>
         <span v-else>轮到 {{ turnName || '同桌玩家' }}</span>
         <span v-if="!ended" class="direction">{{ table.direction === 1 ? '↻ 顺时针' : '↺ 逆时针' }}</span>
@@ -111,7 +118,11 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
           <button v-if="mine" class="btn" type="button" @click="ctx.rematch">再来一局</button>
           <button class="btn ghost" type="button" @click="ctx.showLobby">返回客厅</button>
         </div>
+        <div v-else-if="actions.includes('call')" class="colour-actions">
+          <button class="btn" type="button" :disabled="busy" @click="submit('call')">喊牌</button>
+        </div>
         <div v-else-if="mine && actions.length" class="colour-actions">
+          <label v-if="canCallOnPlay"><input v-model="callOnPlay" type="checkbox" :disabled="busy" /> 出牌时一起喊牌</label>
           <template v-if="selectedCard?.colour === null">
             <span>选择颜色</span>
             <button v-for="colour in FOUR_COLOURS" :key="colour" type="button" class="btn ghost colour-choice"

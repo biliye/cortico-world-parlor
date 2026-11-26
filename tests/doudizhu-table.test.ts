@@ -19,6 +19,7 @@ interface DdzView {
   cardsLeft: Record<string, number>;
   multiplier: number;
   lastPlay: { cards: string[]; playedCards: PhysCardView[] } | null;
+  hint?: { cards?: string[]; label?: string; pass?: boolean; passReason?: string };
 }
 
 interface DdzPublic {
@@ -42,7 +43,7 @@ const HOST = { id: 'a', name: '阿岚' };
 const GUEST = { id: 'b', name: '小满' };
 
 /** 完整 54 张物理牌重新分配：a 持 22244，b 持 66699，不省略持牌校验。 */
-const compoundTable = (): DoudizhuTable => {
+const compoundTable = (secondRanks = ['6','6','6','9','9'], firstRanks = ['2','2','2','4','4']): DoudizhuTable => {
   const table = new DoudizhuTable({ host: HOST, now: 0, rng: seeded(5) });
   table.join(GUEST); table.join({ id: 'c', name: '第三位' });
   table.start('a', 0); table.act('a', { move: 'bid', call: true }, 0);
@@ -53,7 +54,7 @@ const compoundTable = (): DoudizhuTable => {
     if (index < 0) throw new Error('测试牌组缺牌');
     return pool.splice(index, 1)[0];
   });
-  const first = take(['2','2','2','4','4']), second = take(['6','6','6','9','9']);
+  const first = take(firstRanks), second = take(secondRanks);
   first.push(...pool.splice(0, 20 - first.length));
   second.push(...pool.splice(0, 17 - second.length));
   const hands = [first, second, pool];
@@ -66,6 +67,26 @@ const compoundTable = (): DoudizhuTable => {
 };
 
 describe('斗地主桌', () => {
+  it.each([
+    { target: ['2','2','2','4','4'], hand: ['6','6','6','9','9'], cards: ['8','8','8','8'], label: '炸弹 8' },
+    { target: ['2','2','2','2'], hand: ['SJ','BJ'], cards: ['SJ','BJ'], label: '王炸' },
+  ])('陪练会留牌时，网页仍能提示 $label', ({ target, hand, cards, label }) => {
+    const table = compoundTable(hand, target);
+    table.act('a', { move: 'play', cards: target }, 0);
+    expect(viewOf(table, 'b').hint).toMatchObject({ cards, label });
+    expect(table.act('b', { move: 'play', cards }, 1).events[0].text).toContain(label);
+  });
+
+  it('队友领牌时提示保留让牌理由，也给一手可选的合法压牌', () => {
+    const table = compoundTable();
+    table.act('a', { move: 'play', cards: ['3'] }, 0);
+    table.act('b', { move: 'play', cards: ['9'] }, 1);
+    const hint = viewOf(table, 'c').hint;
+    expect(hint).toMatchObject({ passReason: expect.stringContaining('队友当前领牌，可选择让牌') });
+    expect(hint?.cards?.length ?? 0).toBeGreaterThan(0);
+    expect(() => table.act('c', { move: 'play', cards: hint!.cards }, 2)).not.toThrow();
+  });
+
   it('实际出牌拒绝 66699 压 22244，拒绝后不扣手牌、不换回合', () => {
     const table = compoundTable();
     table.act('a', { move: 'play', cards: ['2','2','2','4','4'] }, 0);

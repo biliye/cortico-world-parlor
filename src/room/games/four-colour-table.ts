@@ -1,8 +1,8 @@
 import { randomInt } from 'node:crypto';
 import { GAME_PRESENTATION } from '../game-labels.ts';
-import { TableError, type TableEngine, type TableEvent, type TableSeat, type TableStep } from '../table-engine.ts';
+import { TableError, secondsLeft, type TableEngine, type TableEvent, type TableSeat, type TableStep } from '../table-engine.ts';
 import {
-  COLOUR_LABELS, FOUR_COLOUR_TURN_MS, FOUR_COLOURS, NUMBER_RANKS, fourColourFaceText, isFourColour,
+  COLOUR_LABELS, FOUR_COLOUR_CALL_MS, FOUR_COLOUR_TURN_MS, FOUR_COLOURS, NUMBER_RANKS, fourColourFaceText, isFourColour,
   type FourColour, type FourColourCard, type FourColourFace,
 } from './four-colour-rules.ts';
 
@@ -31,6 +31,9 @@ interface State {
   colour: FourColour | null;
   deadline: number;
   drawn: number | null;
+  /** 旧版已经开局的桌保留自动提醒；每次新开局都启用本人喊牌。 */
+  callLastCard: boolean;
+  pendingCall: string | null;
   last: string;
 }
 
@@ -47,7 +50,7 @@ export class FourColourTable implements TableEngine {
     this.turnMs = turnMs;
     this.state = {
       version: 1, status: 'open', players: [{ ...host, hand: [] }], stock: [], discard: [],
-      current: 0, direction: 1, colour: null, deadline: 0, drawn: null, last: '',
+      current: 0, direction: 1, colour: null, deadline: 0, drawn: null, callLastCard: false, pendingCall: null, last: '',
     };
   }
 
@@ -92,9 +95,10 @@ export class FourColourTable implements TableEngine {
     this.state.current = this.randomIndex(this.state.players.length);
     this.state.status = 'playing';
     this.state.deadline = now + this.turnMs;
+    this.state.callLastCard = true;
     this.state.last = `${this.current.name} 先出牌。`;
     return {
-      events: [this.event('start', `四彩牌开始了。开桌牌是 ${fourColourFaceText(FACES[opening])}，${this.state.last}`, { first: this.current.id })],
+      events: [this.event('start', `四彩牌开始了。剩一张记得喊牌。开桌牌是 ${fourColourFaceText(FACES[opening])}，${this.state.last}`, { first: this.current.id })],
       views: [this.current.id],
       refreshViews: this.seatIds().filter(id => id !== this.current.id),
     };
@@ -103,16 +107,29 @@ export class FourColourTable implements TableEngine {
   act(id: string, input: unknown, now: number): TableStep {
     if (this.status !== 'playing') throw new TableError('not_started', '这张桌子没在玩');
     if (!this.has(id)) throw new TableError('not_seated', '你不在桌上');
+    const move = input as { action?: unknown; card?: unknown; colour?: unknown; call?: unknown } | null;
+    if (this.state.pendingCall !== null) {
+      if (now >= this.state.deadline) throw new TableError('expired', '喊牌时限已过，等服务器推进后再看桌面');
+      if (id !== this.state.pendingCall) throw new TableError('not_turn', '正在等剩一张的玩家喊牌');
+      if (move?.action !== 'call' || move.card !== undefined || move.colour !== undefined || move.call !== undefined) {
+        throw new TableError('bad_action', '你现在需要喊牌，否则超时罚摸两张');
+      }
+      return this.finishCall(now, true);
+    }
     if (id !== this.current.id) throw new TableError('not_turn', '还没轮到你');
     if (now >= this.state.deadline) throw new TableError('expired', '回合已到期，等服务器推进后再看桌面');
-    const move = input as { action?: unknown; card?: unknown; colour?: unknown } | null;
     if (move?.action === 'play' && validCardId(move.card) && this.playable().includes(move.card)) {
       const face = FACES[move.card];
       if (face.colour === null ? isFourColour(move.colour) : move.colour === undefined) {
-        return this.play(move.card, face.colour ?? move.colour as FourColour, now);
+        const call = move.call === true;
+        if ((move.call !== undefined && typeof move.call !== 'boolean')
+          || (call && (!this.state.callLastCard || this.current.hand.length !== 2))) {
+          throw new TableError('bad_action', '本局须喊牌且出完恰好剩一张时，才可以一起喊牌');
+        }
+        return this.play(move.card, face.colour ?? move.colour as FourColour, now, false, call);
       }
     }
-    if (move?.card === undefined && move?.colour === undefined) {
+    if (move?.card === undefined && move?.colour === undefined && move?.call === undefined) {
       if (move?.action === 'draw' && this.state.drawn === null) return this.draw(now);
       if (move?.action === 'pass' && this.state.drawn !== null) return this.pass(now);
     }
@@ -120,10 +137,14 @@ export class FourColourTable implements TableEngine {
   }
 
   autoPlay(id: string, now: number): TableStep | null {
-    if (this.status !== 'playing' || this.current.id !== id) return null;
+    if (this.status !== 'playing' || this.state.pendingCall !== null || this.current.id !== id) return null;
     const candidates = this.playable();
     const card = candidates.find(card => FACES[card].colour !== null) ?? candidates[0];
-    if (card !== undefined) return this.play(card, FACES[card].colour ?? this.preferredColour(), now, true);
+    if (card !== undefined) {
+      // 代打一并完成喊牌，避免全桌托管时反复罚摸、无人能打完。
+      const call = this.state.callLastCard && this.current.hand.length === 2;
+      return this.play(card, FACES[card].colour ?? this.preferredColour(), now, true, call);
+    }
     if (this.state.drawn !== null) return this.pass(now, true);
     const drawn = this.draw(now, true);
     if (this.state.drawn === null) return drawn;
@@ -132,7 +153,8 @@ export class FourColourTable implements TableEngine {
   }
 
   tick(now: number): TableStep | null {
-    return this.status === 'playing' && now >= this.state.deadline ? this.autoPlay(this.current.id, now) : null;
+    if (this.status !== 'playing' || now < this.state.deadline) return null;
+    return this.state.pendingCall === null ? this.autoPlay(this.current.id, now) : this.finishCall(now, false);
   }
 
   nextWakeAt(): number | undefined { return this.status === 'playing' ? this.state.deadline : undefined; }
@@ -142,12 +164,12 @@ export class FourColourTable implements TableEngine {
   }
 
   public() {
-    const { players, colour, deadline, direction, status, last, stock } = this.state;
+    const { players, colour, deadline, direction, status, last, stock, callLastCard, pendingCall } = this.state;
     return {
       game: this.game, label: this.label, host: this.host, status,
       seats: players.map(({ id, name, kind, hand }) => ({ id, name, kind, count: hand.length })),
-      top: this.top, colour, direction, stockCount: stock.length, last,
-      turn: status === 'playing' ? this.current.id : undefined,
+      top: this.top, colour, direction, stockCount: stock.length, last, callLastCard, pendingCall,
+      turn: status === 'playing' && pendingCall === null ? this.current.id : undefined,
       deadline: status === 'playing' ? deadline : undefined,
       winners: status === 'ended' ? [this.current.id] : undefined,
     };
@@ -156,10 +178,12 @@ export class FourColourTable implements TableEngine {
   view(id: string) {
     const player = this.state.players.find(player => player.id === id);
     if (!player) return null;
-    const yourTurn = this.status === 'playing' && this.current.id === id;
+    const { pendingCall } = this.state;
+    const yourTurn = this.status === 'playing' && pendingCall === null && this.current.id === id;
     const playable = yourTurn ? this.playable() : [];
     const actions = yourTurn ? [this.state.drawn === null ? 'draw' : 'pass'] : [];
     if (playable.length) actions.unshift('play');
+    if (pendingCall === id) actions.push('call');
     return {
       ...this.public(), seat: id, yourTurn, hand: player.hand.map(cardAt), playable, actions,
       drawn: yourTurn ? this.state.drawn : null,
@@ -169,17 +193,25 @@ export class FourColourTable implements TableEngine {
   publicText(): string {
     if (this.status === 'open') return `【四彩牌】${this.state.players.length}/4 人，至少两人开局。`;
     if (this.status === 'ended') return `【四彩牌】${this.current.name} 出完手牌，赢得本局。`;
+    if (this.state.pendingCall !== null) {
+      const caller = this.state.players.find(player => player.id === this.state.pendingCall)!;
+      return `【四彩牌】${caller.name} 剩一张，正在等待喊牌。`;
+    }
     return `【四彩牌】当前是 ${fourColourFaceText(this.top!)}（接 ${COLOUR_LABELS[this.state.colour!]}色），轮到 ${this.current.name}。`;
   }
 
-  privateText(id: string): string | null {
+  privateText(id: string, now: number): string | null {
     const view = this.view(id);
     if (!view) return null;
+    if (view.pendingCall === id) {
+      return `${this.publicText()}还剩 ${secondsLeft(this.state.deadline, now)} 秒，请用 parlor_game_action {action:"call",params:{}} 喊牌，超时罚摸两张。`;
+    }
     if (!view.yourTurn) return this.publicText();
     const choices = view.hand.filter(card => view.playable.includes(card.id))
       .map(card => `${card.id}=${fourColourFaceText(card)}`);
     return this.publicText() + (choices.length ? `可出的牌：${choices.join('、')}。` : '没有可出的牌。')
-      + (view.drawn === null ? '可以摸一张。' : '已摸牌，可以结束回合。');
+      + (view.drawn === null ? '可以摸一张。' : '已摸牌，可以结束回合。')
+      + (view.callLastCard && view.hand.length === 2 && choices.length ? '出牌时在 params 加 call:true 可一起喊牌。' : '');
   }
 
   exportState(): unknown { return structuredClone(this.state); }
@@ -205,12 +237,16 @@ export class FourColourTable implements TableEngine {
     const validPlay = cards.length === FACES.length && new Set(cards).size === cards.length
       && !!top && isFourColour(state.colour) && (top.colour === null || top.colour === state.colour)
       && (state.status === 'ended' ? emptyHands === 1 && state.players[state.current].hand.length === 0 : emptyHands === 0);
+    const pendingCall = state.pendingCall === undefined ? null : state.pendingCall;
     if ((state.status === 'open' ? cards.length || state.colour !== null : !validPlay)
       || (state.drawn !== null && (state.status !== 'playing' || !validCardId(state.drawn)
-        || !state.players[state.current].hand.includes(state.drawn)))) {
+        || !state.players[state.current].hand.includes(state.drawn)))
+      || (state.callLastCard !== undefined && typeof state.callLastCard !== 'boolean')
+      || (pendingCall !== null && (state.callLastCard !== true || state.status !== 'playing' || state.drawn !== null
+        || state.players.find(seat => seat.id === pendingCall)?.hand.length !== 1))) {
       throw new Error('无法读取四彩牌存档');
     }
-    this.state = structuredClone(state);
+    this.state = structuredClone({ ...state, callLastCard: state.callLastCard ?? false, pendingCall });
   }
 
   private shuffle(cards: number[]): number[] {
@@ -266,14 +302,17 @@ export class FourColourTable implements TableEngine {
     return this.advance(1, now, [this.actionEvent('pass', `${this.current.name} 结束了回合。`, auto)]);
   }
 
-  private play(id: number, colour: FourColour, now: number, auto = false): TableStep {
+  private play(id: number, colour: FourColour, now: number, auto = false, call = false): TableStep {
     const player = this.current;
     const face = FACES[id];
     this.state.discard.push(id);
     this.state.colour = colour;
     player.hand.splice(player.hand.indexOf(id), 1);
     let text = `${player.name} 出了 ${fourColourFaceText(face)}${face.colour === null ? `，换成${COLOUR_LABELS[colour]}色` : ''}。`;
-    if (player.hand.length === 1) text += '只剩 1 张！';
+    const pendingCall = this.state.callLastCard && player.hand.length === 1 && !call ? player.id : null;
+    if (player.hand.length === 1) {
+      text += call ? `${player.name} 喊牌：只剩 1 张！` : pendingCall ? '等待喊牌。' : '只剩 1 张！';
+    }
     if (face.rank === 'reverse') this.state.direction = this.state.direction === 1 ? -1 : 1;
     const next = this.state.players[this.nextIndex(1)];
     const penalty = face.rank === 'draw2' ? 2 : face.rank === 'draw4' ? 4 : 0;
@@ -281,7 +320,7 @@ export class FourColourTable implements TableEngine {
     if (penalty) text += `${next.name} 摸 ${this.take(next, penalty).length} 张。`;
     if (skip && player.hand.length > 0) text += `跳过 ${next.name}。`;
     const events = [this.actionEvent('play', text, auto)];
-    if (player.hand.length > 0) return this.advance(skip ? 2 : 1, now, events);
+    if (player.hand.length > 0) return this.advance(skip ? 2 : 1, now, events, pendingCall);
     this.state.status = 'ended';
     this.state.drawn = null;
     this.state.deadline = 0;
@@ -294,16 +333,26 @@ export class FourColourTable implements TableEngine {
     return (this.state.current + size + steps * this.state.direction) % size;
   }
 
-  private advance(steps: number, now: number, events: TableEvent[]): TableStep {
+  private advance(steps: number, now: number, events: TableEvent[], pendingCall: string | null = null): TableStep {
     this.state.current = this.nextIndex(steps);
     this.state.drawn = null;
-    this.state.deadline = now + this.turnMs;
+    this.state.pendingCall = pendingCall;
+    this.state.deadline = now + (pendingCall === null ? this.turnMs : FOUR_COLOUR_CALL_MS);
+    if (pendingCall !== null) return { events, views: [pendingCall], refreshViews: this.seatIds().filter(id => id !== pendingCall) };
     return { events, views: [this.current.id] };
   }
 
-  private actionEvent(action: string, text: string, auto: boolean): TableEvent {
+  private finishCall(now: number, called: boolean): TableStep {
+    const caller = this.state.players.find(player => player.id === this.state.pendingCall)!;
+    const text = called ? `${caller.name} 喊牌：只剩 1 张！` : `${caller.name} 未及时喊牌，罚摸 ${this.take(caller, 2).length} 张。`;
+    const event = this.actionEvent(called ? 'call' : 'call_missed', text, !called, caller.id);
+    const step = this.advance(0, now, [event]);
+    return { ...step, refreshViews: this.seatIds().filter(id => id !== this.current.id) };
+  }
+
+  private actionEvent(action: string, text: string, auto: boolean, seat = this.current.id): TableEvent {
     this.state.last = text;
-    return this.event('action', text, { seat: this.current.id, action, auto });
+    return this.event('action', text, { seat, action, auto });
   }
 
   private event(type: string, text: string, data: Record<string, unknown>): TableEvent {
