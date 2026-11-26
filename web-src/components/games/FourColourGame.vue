@@ -21,6 +21,8 @@ const selected = ref<number | null>(null);
 const busy = ref(false);
 const selectedCard = computed(() => mine.value?.hand.find(card => card.id === selected.value));
 const turnName = computed(() => table.value.seats.find(seat => seat.id === table.value.turn)?.name);
+// 手牌很多时限制桌边牌堆的长度，名牌继续显示实际张数。
+const MAX_VISIBLE_BACKS = 7;
 const opponents = computed(() => {
   const seats = table.value.seats;
   const own = seats.findIndex(seat => seat.id === props.view.me.id);
@@ -69,9 +71,14 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
 
       <div v-for="opponent in opponents" :key="opponent.id" class="colour-seat"
         :class="['spot-' + opponent.spot, { 'their-turn': table.turn === opponent.id }]">
-        <span class="colour-avatar">{{ initialOf(opponent.name) }}</span>
-        <span class="colour-name">{{ opponent.name }}</span>
-        <span class="colour-count" :class="{ 'last-card': opponent.count === 1 }">{{ opponent.count }} 张</span>
+        <div v-if="opponent.count > 0" class="opponent-stack" aria-hidden="true">
+          <FourColourCard v-for="index in Math.min(opponent.count, MAX_VISIBLE_BACKS)" :key="index" class="opponent-back" />
+        </div>
+        <div class="colour-seat-tag">
+          <span class="colour-avatar" aria-hidden="true">{{ initialOf(opponent.name) }}</span>
+          <span class="colour-name" :title="opponent.name">{{ opponent.name }}</span>
+          <span class="colour-count" :class="{ 'last-card': opponent.count === 1 }">{{ opponent.count }} 张</span>
+        </div>
         <TableSpeech v-if="mine && !ended" :table="view.table.tableId || view.table.id || ''"
           :sender="opponent.id" :align="opponent.spot === 'left' ? 'left' : opponent.spot === 'right' ? 'right' : 'center'" />
       </div>
@@ -160,33 +167,50 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
   justify-self: center;
   display: grid;
   justify-items: center;
-  width: min(100%, 128px);
+  width: min(100%, 192px);
   min-width: 0;
-  gap: 4px;
-  padding: 8px 4px;
+  gap: 8px;
+  font-size: 13px;
+}
+.colour-seat-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px;
   box-sizing: border-box;
+  min-width: 0;
   border: 1px solid #7d956a;
   border-radius: 11px;
   background: #17372e;
-  font-size: 13px;
 }
 .spot-left { grid-area: left; }
 .spot-top { grid-area: top; }
 .spot-right { grid-area: right; }
 .spot-bottom { grid-area: bottom; }
-.their-turn { border-color: #f2ca78; box-shadow: 0 0 0 1px #f2ca78; }
+.their-turn .colour-seat-tag { border-color: #f2ca78; box-shadow: 0 0 0 1px #f2ca78; }
+.opponent-stack {
+  --opponent-card-width: clamp(27px, 3vw, 48px);
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.opponent-stack > .opponent-back { width: var(--opponent-card-width); flex: 0 0 auto; }
+.opponent-back + .opponent-back { margin-inline-start: calc(var(--opponent-card-width) * -.57); }
 .colour-avatar {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  flex: none;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: #d4deac;
   color: #243325;
   font-weight: 700;
 }
 .colour-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
-.colour-count { font-family: var(--num); }
+.colour-count { font-family: var(--num); white-space: nowrap; }
 .colour-centre { grid-area: centre; display: grid; justify-items: center; gap: 10px; }
 .colour-piles { display: flex; justify-content: center; gap: clamp(12px, 3vw, 45px); }
 .colour-pile { display: grid; justify-items: center; gap: 7px; font-size: 12px; }
@@ -222,6 +246,19 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
 .colour-hand .card-button { width: clamp(43px, 6vw, 75px); }
 .colour-hand .card-button:disabled { opacity: .84; }
 .colour-result { color: #ffdf97; }
+@media (min-width: 661px) {
+  .spot-left, .spot-right { width: min(100%, 118px); }
+  .spot-left { justify-self: start; }
+  .spot-right { justify-self: end; }
+  :is(.spot-left, .spot-right) .opponent-stack {
+    --opponent-card-width: clamp(42px, 4.5vw, 68px);
+    flex-direction: column;
+  }
+  :is(.spot-left, .spot-right) .opponent-back + .opponent-back {
+    margin-block-start: calc(var(--opponent-card-width) * -1.24);
+    margin-inline-start: 0;
+  }
+}
 @media (max-width: 660px) {
   .colour-felt {
     grid-template-areas: 'status status status' 'left top right' 'centre centre centre' '. bottom .' 'controls controls controls';
@@ -230,6 +267,15 @@ async function submit(action: 'draw' | 'play' | 'pass', colour?: FourColour): Pr
     gap: 9px;
     min-height: 400px;
   }
+  .colour-seat-tag {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 4px;
+    font-size: 12px;
+  }
+  .colour-count { grid-column: 1 / -1; }
+  .opponent-stack { --opponent-card-width: clamp(20px, 6vw, 29px); }
+  .opponent-back + .opponent-back { margin-inline-start: calc(var(--opponent-card-width) * -.72); }
   .colour-hand { max-height: 188px; overflow: auto; }
 }
 </style>
