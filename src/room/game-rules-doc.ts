@@ -1,5 +1,5 @@
 /**
- * 对外页「八种玩法」的内容源：玩法屏上的八格按钮，加上点开后那层规则弹层。
+ * 对外页的内容源：玩法屏上的按钮，以及点开后的规则弹层。
  *
  * 这是给玩家读的规则，不是给 Coo 的动作说明（后者在 `registry.ts` 的 `rules` 里）。
  * 能引用实现的地方一律引用：秒数、人数、天数、牌张数、发牌配置都从 `src/room/games/*` 取，
@@ -36,6 +36,7 @@ import {
 } from './games/monopoly2d-rules.ts';
 import { MAHJONG_RULES } from './games/mahjong-rules.ts';
 import { MAHJONG_REPLY_MS, MAHJONG_TURN_MS } from './games/mahjong-table.ts';
+import { FOUR_COLOUR_PLAY_RULES, FOUR_COLOUR_TIMING_RULE, FOUR_COLOUR_TURN_MS, FOUR_COLOUR_WIN_RULE } from './games/four-colour-rules.ts';
 
 /** 一条规则：字符串排成列表项，`{ name, text }` 排成「名字 + 说明」的两列。 */
 export type RuleEntry = string | { readonly name: string; readonly text: string };
@@ -47,7 +48,7 @@ export interface RuleBlock {
 
 export interface RulePage {
   readonly id: string;
-  /** 页面上的编号 01–08，和首屏跑马灯、左列按钮是同一个号。 */
+  /** 页面编号，和首屏跑马灯、左列按钮相同。 */
   readonly no: string;
   readonly label: string;
   /** 一句话定位，放在玩法名下面。 */
@@ -74,7 +75,7 @@ const cardRange = (): string => MONOPOLY_CARDS
 const label = (id: keyof typeof GAME_PRESENTATION): string => GAME_PRESENTATION[id].label;
 
 /**
- * 顺序就是页面上 01–08 的顺序，和首屏跑马灯一致。
+ * 与页面上的编号和首屏跑马灯同序。
  * 每一条都要能在 `src/room/games/*` 里找到出处，改动前先去那边核一遍。
  */
 export const RULE_PAGES: readonly RulePage[] = [
@@ -338,6 +339,18 @@ export const RULE_PAGES: readonly RulePage[] = [
       },
     ],
   },
+  {
+    id: 'four-colour',
+    no: '09',
+    label: label('four-colour'),
+    kicker: '同色、同点数或同符号都能接，先打完就赢。',
+    facts: ['2–4 席', '每人 7 张', `每回合 ${sec(FOUR_COLOUR_TURN_MS)}`],
+    blocks: [
+      { title: '怎么打', items: FOUR_COLOUR_PLAY_RULES },
+      { title: '胜负与收尾', items: [FOUR_COLOUR_WIN_RULE] },
+      { title: '时长与超时', items: [FOUR_COLOUR_TIMING_RULE] },
+    ],
+  },
 ];
 
 const ESCAPES: Readonly<Record<string, string>> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
@@ -363,7 +376,7 @@ const renderEntries = (items: readonly RuleEntry[]): string => {
 };
 
 /**
- * 生成玩法屏上的八格按钮（`welcome.html` 的 rules 标记之间）。
+ * 生成玩法屏上的按钮（`welcome.html` 的 rules 标记之间）。
  * 按钮只放编号、名字和一句话；规则本体在弹层里，见 `renderRuleDialog`。
  * 只用 class，不写内联 style —— 页面 CSP 是 `style-src 'self'`。
  */
@@ -383,7 +396,7 @@ export function renderRulesMarkup(pages: readonly RulePage[] = RULE_PAGES): stri
 
 /**
  * 生成规则弹层（`welcome.html` 的 rules-dialog 标记之间，放在所有屏之后）。
- * 八块规则都在层里，脚本只显示点中的那一块；没脚本时连同弹层一起退回页面里的平铺段落。
+ * 所有规则都在层里，脚本只显示点中的那一块；没脚本时连同弹层一起退回页面里的平铺段落。
  */
 export function renderRuleDialog(pages: readonly RulePage[] = RULE_PAGES): string {
   const articles = pages.map((page) => [

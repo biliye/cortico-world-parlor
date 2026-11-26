@@ -5,12 +5,50 @@
 import { reactive, ref } from 'vue';
 import { club, saveDraft, draft as readDraft, persistClub } from './club.ts';
 import { seat } from './session.ts';
+import type { ChatEvent } from '../api/types.ts';
 
 export type ChatTab = 'room' | 'table' | 'mail';
 
 export const tab = ref<ChatTab>('room');
 export const unread = reactive({ room: 0, table: 0 });
 export const sheetOpen = ref(false);
+const SPEECH_MS = 4_000;
+export const TABLE_SOCIAL_GAMES = ['ddz', 'mahjong-sichuan', 'mahjong-guangdong', 'four-colour'];
+export const TABLE_QUICK_PHRASES = ['大家好', '好牌！', '稍等一下', '谢谢'];
+
+interface TableSpeech {
+  seq: number;
+  table: string;
+  sender: string;
+  text: string;
+}
+
+const speechBySender = reactive(new Map<string, TableSpeech>());
+const speechTimers = new Map<string, number>();
+
+export function tableSpeech(table: string, sender?: string): TableSpeech | undefined {
+  if (sender) {
+    const speech = speechBySender.get(sender);
+    return speech?.table === table ? speech : undefined;
+  }
+  return [...speechBySender.values()].filter(speech => speech.table === table).sort((a, b) => b.seq - a.seq)[0];
+}
+
+/** 历史快照只进聊天记录。直播补发也只显示还在展示时间内的消息。 */
+export function noteTableSpeech(event: ChatEvent, table: string, now: number): void {
+  const { from, text, seq, ts } = event;
+  if (event.type !== 'parlor.table.say' || !table || event.data?.tableId !== table
+    || !from || from === 'system' || from === seat.value?.seatId || !text?.trim()
+    || typeof seq !== 'number' || typeof ts !== 'number') return;
+  const remaining = Math.min(SPEECH_MS, SPEECH_MS - (now - ts));
+  if (remaining <= 0 || (speechBySender.get(from)?.seq ?? -1) >= seq) return;
+  window.clearTimeout(speechTimers.get(from));
+  speechBySender.set(from, { seq, table, sender: from, text });
+  speechTimers.set(from, window.setTimeout(() => {
+    speechBySender.delete(from);
+    speechTimers.delete(from);
+  }, remaining));
+}
 const floatingChatTable = ref('');
 const floatingChatOpen = ref(false);
 
@@ -92,4 +130,7 @@ export function noteChatEvent(event: { type?: string }): void {
 export function resetChatState(): void {
   unread.room = 0;
   unread.table = 0;
+  for (const timer of speechTimers.values()) window.clearTimeout(timer);
+  speechTimers.clear();
+  speechBySender.clear();
 }

@@ -3,6 +3,7 @@
 import { GAME_PRESENTATION, type GameId } from '../../src/room/game-labels.ts';
 import { MAHJONG_RULES } from '../../src/room/games/mahjong-rules.ts';
 import { AEROPLANE_RULES } from '../../src/room/games/aeroplane-rules.ts';
+import { FOUR_COLOUR_RULES } from '../../src/room/games/four-colour-rules.ts';
 
 export interface GameDef {
   label: string;
@@ -96,6 +97,12 @@ export const GAMES: Record<string, GameDef> = {
     ...GAME_PRESENTATION['mahjong-guangdong'], enabled: true, endScreen: true, minPlayers: 4, botFill: false,
     blurb: '东南西北、中发白齐全，红中百搭，只能自摸。', foot: '四人 · 136 张',
     guide: MAHJONG_RULES['mahjong-guangdong'],
+  },
+  'four-colour': {
+    ...GAME_PRESENTATION['four-colour'], enabled: true, endScreen: true, minPlayers: 2, botFill: false,
+    blurb: '按颜色、数字或功能接牌，先出完手牌就赢。',
+    foot: '2–4 人 · 四色接牌 · 功能牌',
+    guide: FOUR_COLOUR_RULES,
   },
   monopoly: {
     label: '大富翁', icon: 'board', enabled: false, endScreen: false, minPlayers: 2, botFill: true,

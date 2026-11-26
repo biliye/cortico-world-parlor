@@ -2,6 +2,7 @@
 import type { LedgerEntryView, LedgerSummary } from './ledger.ts';
 import { tableSeatCapacity, type TableEngine, type TableGame, type TablePrivateSummary, type TableSummary } from './table-engine.ts';
 import type { TableRecruitment } from './table-discovery-protocol.ts';
+import type { FourColour } from './games/four-colour-rules.ts';
 
 export function isRoomId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -188,6 +189,8 @@ export type ActionRequest =
   } & ({ from: { row: number; col: number }; to: { row: number; col: number } } | { resign: true }))
   | ({ type: 'aeroplane_action'; table?: string; requestId?: string; revision?: number }
     & ({ action: 'roll' | 'resign' } | { action: 'move'; plane: number }))
+  | ({ type: 'four-colour_action'; table?: string; requestId?: string; revision?: number }
+    & ({ action: 'draw' | 'pass' } | { action: 'play'; card: number; colour?: FourColour }))
   | {
     type: 'mahjong-sichuan_action' | 'mahjong-guangdong_action'; table?: string; requestId?: string;
     action: 'exchange' | 'missing' | 'discard' | 'pung' | 'kong' | 'hu' | 'pass';

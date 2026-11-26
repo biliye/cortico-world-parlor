@@ -7,12 +7,12 @@ import { api, beginGlobalEntry, finishGlobalEntry, IdentityExpiredError, parentP
 import { seatChanged } from '../lib/seat-switch.ts';
 import { decideExpiredSeat } from '../lib/seat-errors.ts';
 import { SEAT_EXPIRED_MESSAGE } from '../lib/join.ts';
-import { noteChatEvent, resetChatState } from './chat.ts';
+import { noteChatEvent, noteTableSpeech, resetChatState, TABLE_SOCIAL_GAMES } from './chat.ts';
 import { noteWhisper, resetDmState } from './dm.ts';
 import { resetMailState } from './mail.ts';
 import { saveSeat, seat, clearSeat, readStoredSeat, adoptSeat, STORE_KEY } from './session.ts';
 import { showToast } from './ui.ts';
-import { backToRoom, enterTable, readView, watchTableId } from './view.ts';
+import { backToRoom, enterTable, readView, view, watchTableId } from './view.ts';
 import type { ChatEvent, Directory, HallPayload, HallSeat, RoomCard, SeatConfig, Snapshot, TableSummary } from '../api/types.ts';
 import type { TableEntryResponse, TableRecruitment } from '../../src/room/table-discovery-protocol.ts';
 
@@ -200,6 +200,14 @@ export const myTable = computed<TableSummary | null>(() => {
   const id = typeof priv.tableId === 'string' ? priv.tableId : (typeof priv.id === 'string' ? priv.id : '');
   const found = id ? tableList().find((table) => tableIdOf(table) === id) : null;
   return found || snapshot.value?.table || null;
+});
+
+export const tableChatAvailable = computed(() => {
+  const table = myTable.value;
+  if (!table || table.status === 'ended' || tableIdOf(activeTable.value) !== tableIdOf(table)) return false;
+  if (table.game === 'werewolf' && table.status !== 'open') return false;
+  const me = snapshot.value?.seat?.id;
+  return !!me && !!table.seats?.some(person => person.id === me);
 });
 
 /** 只有看着自己那张桌时才带私视图；看别人的桌子就当旁观者。 */
@@ -406,6 +414,10 @@ function handleEvent(event: ChatEvent): void {
   pushLog(event);
   const type = event.type || '';
   if (!((type === 'parlor.joined' || type === 'parlor.left') && event.data?.presenceWeb === false)) noteChatEvent(event);
+  if (type === 'parlor.table.say' && view.value === 'table' && tableChatAvailable.value
+    && activeTable.value?.status !== 'open' && TABLE_SOCIAL_GAMES.includes(activeTable.value?.game ?? '')) {
+    noteTableSpeech(event, tableIdOf(activeTable.value), serverNow());
+  }
   if (type === 'parlor.whisper') {
     noteWhisper();
     // 私聊会改信箱未读；快照里带着 mailUnread，顶栏角标靠它更新。
@@ -698,13 +710,14 @@ const IDEMPOTENT = new Set([
   'table_open', 'table_join', 'table_leave', 'table_start', 'table_rematch', 'table_action', 'ddz_action', 'werewolf_action', 'monopoly',
   'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'aeroplane_action', 'table_discovery',
   'mahjong-sichuan_action', 'mahjong-guangdong_action',
+  'four-colour_action',
 ]);
 
 /**
  * 严格版本（整桌 revision 乐观锁）的玩法动作。浏览器不引服务端注册表，
  * 这里维护一份最小清单；新增严格模式游戏时同步加一行，测试会盯住发送行为。
  */
-const STRICT_ACTIONS = new Set(['table_action', 'ddz_action', 'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'aeroplane_action']);
+const STRICT_ACTIONS = new Set(['table_action', 'ddz_action', 'monopoly2d_action', 'gomoku_action', 'xiangqi_action', 'aeroplane_action', 'four-colour_action']);
 
 export function newRequestId(): string {
   try {

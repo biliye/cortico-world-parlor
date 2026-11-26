@@ -68,6 +68,7 @@ const COMPONENTS: Record<string, Component> = {
   gomoku: lazyGame(() => import('../components/games/GomokuGame.vue')),
   xiangqi: lazyGame(() => import('../components/games/XiangqiGame.vue')),
   aeroplane: lazyGame(() => import('../components/games/AeroplaneGame.vue')),
+  'four-colour': lazyGame(() => import('../components/games/FourColourGame.vue')),
   dice: lazyGame(() => import('../components/games/DiceGame.vue')),
   monopoly: lazyGame(() => import('../components/games/MonopolyGame.vue')),
 };

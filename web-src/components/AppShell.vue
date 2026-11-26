@@ -13,11 +13,11 @@ import { MAHJONG_GAMES } from '../../src/room/games/mahjong-rules.ts';
 import RatingsPanel from './RatingsPanel.vue';
 import GiftPanel from './GiftPanel.vue';
 import { initialOf } from '../lib/text.ts';
-import { chatExpanded, chooseTab, closeSheet, setFloatingChatTable, sheetOpen, toggleChat } from '../stores/chat.ts';
+import { chatExpanded, chooseTab, closeSheet, setFloatingChatTable, sheetOpen, TABLE_SOCIAL_GAMES, toggleChat } from '../stores/chat.ts';
 import { loadThreads, toggle as toggleDm, unread as dmUnread } from '../stores/dm.ts';
 import { hallSection, selectHallSection } from '../stores/hall.ts';
 import { loadMail, setUnread, unread as mailUnread } from '../stores/mail.ts';
-import { activeTable, connection, goRoom, hallSeats, leaveRoom, snapshot, tableIdOf } from '../stores/parlor.ts';
+import { activeTable, connection, goRoom, hallSeats, leaveRoom, snapshot, tableChatAvailable, tableIdOf } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 import { gateway } from '../stores/server.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
@@ -33,6 +33,7 @@ const onWerewolf = computed(() => view.value === 'table' && !inHall.value && act
 const onMahjong = computed(() => view.value === 'table'
   && MAHJONG_GAMES.some(game => game === activeTable.value?.game));
 const onAeroplane = computed(() => view.value === 'table' && activeTable.value?.game === 'aeroplane');
+const onFourColour = computed(() => view.value === 'table' && activeTable.value?.game === 'four-colour');
 const boardChatInToolbar = computed(() => view.value === 'table'
   && (onMahjong.value || ['monopoly2d', 'gomoku', 'xiangqi', 'aeroplane'].includes(activeTable.value?.game ?? '')));
 const switcherOpen = ref(false);
@@ -59,7 +60,7 @@ watch([sheetOpen, specialView], ([open, special]) => {
   document.body.classList.toggle('sheet-open', open && !special);
 }, { immediate: true });
 
-const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value || onAeroplane.value
+const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value || onAeroplane.value || onFourColour.value
   ? JSON.stringify([snapshot.value?.id, tableIdOf(activeTable.value)])
   : '');
 watch(floatingChatTable, setFloatingChatTable, { immediate: true });
@@ -74,6 +75,17 @@ function openMail(): void {
   chooseTab('mail');
   toggleChat(true);
   void loadMail(true);
+}
+
+function toggleMainChat(): void {
+  if (chatExpanded()) {
+    toggleChat(false);
+    return;
+  }
+  const table = activeTable.value;
+  if (view.value === 'table' && table?.status !== 'open' && tableChatAvailable.value
+    && TABLE_SOCIAL_GAMES.includes(table?.game ?? '')) chooseTab('table');
+  toggleChat(true);
 }
 
 /** 门牌栏的三项只在大厅里换目录范围；不在大厅就先回大厅。 */
@@ -170,7 +182,7 @@ onMounted(() => {
           </button>
           <ThemePicker />
           <button v-if="!specialView" class="tool dock" :class="{ 'board-chat-tool': boardChatInToolbar }" type="button"
-            :aria-expanded="chatExpanded()" aria-label="有话慢慢聊" @click="toggleChat()">
+            :aria-expanded="chatExpanded()" aria-label="有话慢慢聊" @click="toggleMainChat">
             <Icon name="chat" /><span class="tool-label">{{ chatExpanded() ? '收起聊天' : '有话慢慢聊' }}</span>
           </button>
         </div>
@@ -187,7 +199,7 @@ onMounted(() => {
     <RatingsPanel v-model:open="ratingsOpen" />
     <GiftPanel v-model:open="giftOpen" />
     <div v-if="!specialView" class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
-    <button v-if="!specialView && !chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleChat(true)">
+    <button v-if="!specialView && !chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleMainChat">
       <Icon name="chat" />有话慢慢聊
     </button>
     <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>

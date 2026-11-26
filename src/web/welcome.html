@@ -10,7 +10,7 @@
   封面：一屏只放会名，其余全空——上边两行小字、下面一行话和下滑提示、最底一条跑马灯。
         说明、按钮、实景图、三栏从前都堆在这一屏里，每样只分到一小块；现在分给 02、03 两屏。
   主视觉：一张大厅（茶室）实景图，装在切角画框里，右侧出血到视口边；玩法名做成跑马灯。
-  玩法屏：八格玩法按钮平分一屏，点一格从弹层里出来这一玩法的完整规则；
+  玩法屏：点玩法按钮从弹层里打开这一玩法的完整规则；
         规则不占版面，所以整屏都能滚，弹层里的正文自己滚。
         内容由 src/room/game-rules-doc.ts 生成，别手改 rules / rules-dialog 标记之间那两段。
   动效：封面会名逐字推出来，滚动时整块上移、淡出（--sc 由脚本写）；
@@ -34,7 +34,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>鲸语会馆 · 一桌人，慢慢来</title>
-    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，网页开放八种玩法，说书厅里有人讲昨天的事。可从 Coo 一键入场、用账号登录，或凭邀请试玩。">
+    <meta name="description" content="鲸语会馆是一间牌桌会馆：Coo 和真人坐在同一张桌上，网页开放九种玩法，说书厅里有人讲昨天的事。可从 Coo 一键入场、用账号登录，或凭邀请试玩。">
     <meta name="theme-color" content="#f3f1ea" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#1b1a17" media="(prefers-color-scheme: dark)">
     <link rel="canonical" href="{{origin}}/">
@@ -42,7 +42,7 @@
     <meta property="og:site_name" content="鲸语会馆">
     <meta property="og:locale" content="zh_CN">
     <meta property="og:title" content="鲸语会馆 · 一桌人，慢慢来">
-    <meta property="og:description" content="Coo 和真人坐在同一张桌上，网页开放八种玩法。可从 Coo 入场、登录或凭邀请试玩。">
+    <meta property="og:description" content="Coo 和真人坐在同一张桌上，网页开放九种玩法。可从 Coo 入场、登录或凭邀请试玩。">
     <meta property="og:url" content="{{origin}}/">
     <meta property="og:image" content="{{origin}}/welcome/assets/welcome-og.png">
     <meta property="og:image:width" content="1200">
@@ -76,7 +76,7 @@
       <section class="screen cover" id="top">
         <div class="cover-top">
           <ul class="meta ef-facts">
-            <li><span class="ef-field">八种玩法</span></li>
+            <li><span class="ef-field">九种玩法</span></li>
             <li><span class="ef-field">Coo 与真人同桌</span></li>
           </ul>
           <p class="ef-field cover-tag">一桌人，慢慢来</p>
@@ -99,7 +99,7 @@
           </p>
         </div>
 
-        <div class="ef-ticker" aria-label="八种玩法">
+        <div class="ef-ticker" aria-label="九种玩法">
           <div class="track">
             <ul>
               <li><a href="#games"><b>01</b>斗地主</a></li>
@@ -110,6 +110,7 @@
               <li><a href="#games"><b>06</b>快局大富翁</a></li>
               <li><a href="#games"><b>07</b>四川血战到底</a></li>
               <li><a href="#games"><b>08</b>广东推倒胡 · 红中</a></li>
+              <li><a href="#games"><b>09</b>四彩牌</a></li>
             </ul>
             <ul aria-hidden="true">
               <li><a href="#games" tabindex="-1"><b>01</b>斗地主</a></li>
@@ -120,6 +121,7 @@
               <li><a href="#games" tabindex="-1"><b>06</b>快局大富翁</a></li>
               <li><a href="#games" tabindex="-1"><b>07</b>四川血战到底</a></li>
               <li><a href="#games" tabindex="-1"><b>08</b>广东推倒胡 · 红中</a></li>
+              <li><a href="#games" tabindex="-1"><b>09</b>四彩牌</a></li>
             </ul>
           </div>
         </div>
@@ -173,11 +175,11 @@
 
       <section class="screen games-screen" id="games">
         <p class="ef-eyebrow slash">Games</p>
-        <h2 class="ef-bar-title">八种玩法</h2>
-        <p class="lead">点一种玩法，规则就弹出来：几席、几张牌、怎么算赢、超时怎么办。八种都能在网页开桌；坐满就开局，缺人时先坐着聊，Coo 不催。</p>
+        <h2 class="ef-bar-title">九种玩法</h2>
+        <p class="lead">点一种玩法，规则就弹出来：几席、几张牌、怎么算赢、超时怎么办。九种都能在网页开桌；人数够了就开局，缺人时先坐着聊，Coo 不催。</p>
         <!-- 玩法列表与规则面板由 scripts/build-welcome-rules.ts 从
              src/room/game-rules-doc.ts 生成，别直接改这两个标记之间的内容。
-             无脚本时八块规则全部展开，脚本跑起来才收成一块一块的页签。 -->
+             无脚本时规则全部展开，脚本跑起来才收成一块一块的页签。 -->
         <!-- rules:begin -->
         <ol class="rule-grid" aria-label="选一种玩法看规则">
           <li>
@@ -234,6 +236,13 @@
               <span class="n">08</span>
               <span class="g">广东推倒胡·红中</span>
               <span class="d">红中当百搭，只认自摸。</span>
+            </button>
+          </li>
+          <li>
+            <button class="rule-card" type="button" data-rule="four-colour" data-no="09" aria-haspopup="dialog">
+              <span class="n">09</span>
+              <span class="g">四彩牌</span>
+              <span class="d">同色、同点数或同符号都能接，先打完就赢。</span>
             </button>
           </li>
         </ol>
@@ -297,7 +306,7 @@
       <dialog class="rule-dialog" id="rule-dialog" aria-label="玩法规则">
         <div class="rule-dialog-bar">
           <p class="ef-eyebrow slash">Rules</p>
-          <p class="rule-dialog-count"><span class="rule-dialog-no">01</span> / 08</p>
+          <p class="rule-dialog-count"><span class="rule-dialog-no">01</span> / 09</p>
           <button class="rule-close" type="button" data-act="rule-close" aria-label="关掉规则"><span aria-hidden="true">✕</span></button>
         </div>
         <div class="rule-pages">
@@ -599,6 +608,36 @@
                 <h4>时长与超时</h4>
                 <ul>
                   <li>出牌 60 秒；碰、杠、胡的响应窗口 20 秒，超时按「过」处理。</li>
+                </ul>
+              </section>
+            </div>
+          </article>
+          <article class="rule" id="rule-four-colour" data-rule="four-colour" data-no="09" tabindex="0">
+            <header class="rule-head">
+              <p class="ef-field rule-facts"><span>2–4 席</span><span>每人 7 张</span><span>每回合 45 秒</span></p>
+              <h3 class="rule-name">四彩牌</h3>
+              <p class="rule-kicker">同色、同点数或同符号都能接，先打完就赢。</p>
+            </header>
+            <div class="rule-body">
+              <section class="rule-block">
+                <h4>怎么打</h4>
+                <ul>
+                  <li>2–4 人，每人 7 张。按同色、同数字或同符号接牌。</li>
+                  <li>跳过让下一位停一轮，反转改变方向（两人时相当于跳过），+2 让下一位摸两张并停一轮。</li>
+                  <li>变色牌可指定任意颜色。手上没有当前颜色时才可打变色 +4，下一位摸四张并停一轮。罚牌不能叠加。</li>
+                  <li>每回合可摸一张。摸到可接的牌时可打出该牌或结束回合，摸到不能接的牌则自动结束。摸牌堆用完会重洗旧弃牌。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>胜负与收尾</h4>
+                <ul>
+                  <li>先出完手牌者赢，剩一张时桌面会自动提示。</li>
+                </ul>
+              </section>
+              <section class="rule-block">
+                <h4>时长与超时</h4>
+                <ul>
+                  <li>每回合 45 秒，超时由服务器代打。</li>
                 </ul>
               </section>
             </div>

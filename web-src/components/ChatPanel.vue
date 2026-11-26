@@ -11,14 +11,14 @@ import {
   roomPlaceholder, roomScopeText, tableEmptyText, tablePlaceholder, tableScopeText,
 } from '../lib/chat-copy.ts';
 import {
-  chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, tab, toggleChat, unread,
+  chooseTab, closeSheet, draftFor, draftKey, saveDraftFor, sheetOpen, TABLE_QUICK_PHRASES, TABLE_SOCIAL_GAMES, tab, toggleChat, unread,
 } from '../stores/chat.ts';
 import { openThread as openDmThread, openWindow as openDmWindow } from '../stores/dm.ts';
 import {
   acceptInvite, declineInvite, error as mailError, inviteErrorText, items as mailItems,
   loadMail, loading as mailLoading, markAllRead, unread as mailUnread,
 } from '../stores/mail.ts';
-import { act, activeTable, goRoom, log, myTable, snapshot, tableIdOf } from '../stores/parlor.ts';
+import { act, activeTable, goRoom, log, myTable, snapshot, tableChatAvailable as tableOpen, tableIdOf } from '../stores/parlor.ts';
 import { seat } from '../stores/session.ts';
 import { showToast } from '../stores/ui.ts';
 import { enterDivination } from '../stores/view.ts';
@@ -36,16 +36,6 @@ interface Line {
 const inHall = computed(() => snapshot.value?.id === 'hall');
 const roomLabel = computed(() => (inHall.value ? '大厅' : '客厅'));
 const myTableId = computed(() => tableIdOf(myTable.value));
-
-/** 与旧版 tableChatOpen 一致：桌还在、我坐在这张桌上、看着的就是这张桌。 */
-const tableOpen = computed(() => {
-  const table = myTable.value;
-  if (!table || table.status === 'ended') return false;
-  if (tableIdOf(activeTable.value) !== tableIdOf(table)) return false;
-  if (table.game === 'werewolf' && table.status !== 'open') return false;
-  const me = snapshot.value?.seat?.id;
-  return !!me && (table.seats || []).some((person) => person.id === me);
-});
 
 function nameOf(from?: string): string {
   const seats = snapshot.value?.seats || [];
@@ -193,6 +183,8 @@ const placeholder = computed(() => {
 });
 
 const canSend = computed(() => tab.value === 'room' || (tab.value === 'table' && tableOpen.value));
+const showQuickPhrases = computed(() => tab.value === 'table' && tableOpen.value
+  && TABLE_SOCIAL_GAMES.includes(activeTable.value?.game ?? ''));
 
 function onInput(): void {
   saveDraftFor(scopeKey.value, input.value);
@@ -206,22 +198,34 @@ function onKey(event: KeyboardEvent): void {
   void submit();
 }
 
-async function submit(): Promise<void> {
-  if (!canSend.value || !input.value.trim()) return;
-  const text = input.value.trim();
+const sending = ref(false);
+
+async function sendMessage(text: string, fromDraft: boolean): Promise<void> {
+  if (!canSend.value || sending.value || !text) return;
+  const scope = scopeKey.value;
+  const payload = tab.value === 'table' ? { type: 'table_say', table: myTableId.value, text } : { type: 'say', text };
+  sending.value = true;
   notice.value = '';
-  input.value = '';
-  saveDraftFor(scopeKey.value, '');
+  if (fromDraft) {
+    input.value = '';
+    saveDraftFor(scope, '');
+  }
   try {
-    const receipt = await act(tab.value === 'table' ? { type: 'table_say', text } : { type: 'say', text });
+    const receipt = await act(payload);
     if (!receipt) throw new Error('上一个动作还没回话，稍等一下再发');
   } catch (error) {
-    notice.value = (error as Error).message || '没发出去';
-    if (!draftFor(scopeKey.value)) {
-      input.value = text;
-      saveDraftFor(scopeKey.value, text);
+    if (scopeKey.value === scope) notice.value = (error as Error).message || '没发出去';
+    if (fromDraft && !draftFor(scope)) {
+      saveDraftFor(scope, text);
+      if (scopeKey.value === scope) input.value = text;
     }
+  } finally {
+    sending.value = false;
   }
+}
+
+function submit(): Promise<void> {
+  return sendMessage(input.value.trim(), true);
 }
 
 function collapse(): void {
@@ -354,11 +358,15 @@ function closeDrawer(): void {
             @input="onInput"
             @keydown="onKey"
           >
-          <button class="send-btn" type="button" aria-label="发送" :disabled="!canSend" @click="submit">
+          <button class="send-btn" type="button" aria-label="发送" :disabled="!canSend || sending" @click="submit">
             <svg class="icon" aria-hidden="true"><use href="#i-send" /></svg>
           </button>
         </div>
-        <p v-if="notice" class="warn">{{ notice }}</p>
+        <div v-if="showQuickPhrases" class="quick-phrases" role="group" aria-label="牌桌快捷语">
+          <button v-for="phrase in TABLE_QUICK_PHRASES" :key="phrase" type="button"
+            :disabled="sending" @click="sendMessage(phrase, false)">{{ phrase }}</button>
+        </div>
+        <p v-if="notice" class="warn" role="status">{{ notice }}</p>
       </div>
     </section>
   </aside>
@@ -366,4 +374,18 @@ function closeDrawer(): void {
 
 <style scoped>
 .divination-link { font: inherit; color: inherit; text-decoration: underline; text-underline-offset: .15em; border: 0; padding: 0; background: none; cursor: pointer; text-align: start; }
+.quick-phrases { display: flex; flex-wrap: wrap; gap: 6px; margin-block-start: 8px; }
+.quick-phrases button {
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 4px 10px;
+  min-height: 30px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.quick-phrases button:not(:disabled):hover, .quick-phrases button:focus-visible { border-color: var(--accent); }
+.quick-phrases button:disabled { opacity: .6; cursor: wait; }
 </style>
