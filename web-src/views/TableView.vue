@@ -136,12 +136,12 @@ async function run(task: () => Promise<unknown>): Promise<void> {
         </div>
       </div>
     </div>
-    <div v-else class="table-head-host">
+    <div v-else-if="table" class="table-head-host">
       <div class="lobby-head">
         <div>
-          <span class="eyebrow">{{ gameLabel(table?.game || '') }} · {{ STATUS_LABELS[table?.status || ''] || table?.status }}</span>
-          <h1>{{ table?.label || gameLabel(table?.game || '') }}</h1>
-          <p>桌号 {{ (table && (table.tableId || table.id)) || '—' }}</p>
+          <span class="eyebrow">{{ gameLabel(table.game) }} · {{ STATUS_LABELS[table.status] || table.status }}</span>
+          <h1>{{ table.label || gameLabel(table.game) }}</h1>
+          <p>桌号 {{ tableIdOf(table) || '—' }}</p>
         </div>
       </div>
     </div>
@@ -158,7 +158,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
       <section class="panel">
         <div class="panel-head">
           <h2>桌上的人</h2>
-          <span class="muted">{{ seats.length }} 位</span>
+          <span class="muted">{{ seats.length }}<template v-if="table.capacity"> / {{ table.capacity }}</template> 位</span>
         </div>
         <div class="member-row">
           <p v-if="!seats.length" class="muted">还没有人入座。</p>
@@ -177,7 +177,7 @@ async function run(task: () => Promise<unknown>): Promise<void> {
             @click="run(() => joinRoomTable(tableIdOf(table)))">坐下</button>
           <button v-if="canStart" class="btn primary" type="button" :disabled="busy" @click="run(startRoomTable)">开始</button>
           <button v-if="seated" class="btn ghost" type="button" :disabled="busy" @click="run(leaveRoomTable)">退桌</button>
-          <button class="btn ghost" type="button" @click="backToRoom">回到客厅</button>
+          <button class="btn ghost table-back-secondary" type="button" @click="backToRoom">回到客厅</button>
         </div>
         <p v-if="table.game === 'werewolf'" class="muted">
           等待入座 {{ seats.length }}/{{ table.capacity ?? 9 }}，尚未分配角色。坐满且至少有一只 Coo 后，由开桌者开始。

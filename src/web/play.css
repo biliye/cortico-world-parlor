@@ -1715,7 +1715,7 @@ html.card-art-ready .pcard.has-art {
 }
 .pcard:disabled { cursor: default; opacity: 1; }
 html.no-card-art .pcard { border: 1px solid #e0cdb4; }
-html.no-card-art .pcard.has-art { background-image: none; color: var(--paper-ink); }
+html.no-card-art .pcard.has-art { background: #fffdf8; color: var(--paper-ink); }
 html.no-card-art .pcard.has-art.red { color: var(--paper-red); }
 html.no-card-art .pcard.has-art.joker { color: var(--violet); }
 html.no-card-art .pcard.back { border: 0; }

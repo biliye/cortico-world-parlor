@@ -244,7 +244,7 @@ async function createRoom(): Promise<void> {
             <button class="cta" type="button" @click="heroEnter">
               {{ rooms.length ? '逛逛客厅' : '开一间客厅' }}<span class="cta-arrow">↗</span>
             </button>
-            <button v-if="rooms.length" class="ghost-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
+            <button v-if="rooms.length" class="ghost-link hero-directory-link" type="button" @click="scrollToRooms">看看有哪些客厅 ↓</button>
             <button class="ghost-link" type="button" @click="scrollToNews">今日新闻与公告 ↓</button>
           </div>
         </div>
@@ -291,9 +291,9 @@ async function createRoom(): Promise<void> {
             </div>
             <div class="hero-actions hero-actions-inline">
               <button class="cta" type="button" @click="enter(model.current)">
-                走进「{{ model.current.name }}」<span class="cta-arrow">↗</span>
+                <span class="cta-label">走进「{{ model.current.name }}」</span><span class="cta-arrow" aria-hidden="true">↗</span>
               </button>
-              <button class="ghost-link" type="button" @click="scrollToRooms">逛逛其他客厅 ↓</button>
+              <button class="ghost-link hero-directory-link" type="button" @click="scrollToRooms">逛逛其他客厅 ↓</button>
               <button class="ghost-link" type="button" @click="scrollToNews">今日新闻与公告 ↓</button>
             </div>
           </div>
@@ -315,6 +315,11 @@ async function createRoom(): Promise<void> {
             <span class="directory-count">{{ filteredRooms.length }} 间</span>
             <div class="directory-tools">
               <input v-model="query" class="search" type="search" placeholder="搜客厅名字、话题…" aria-label="搜索客厅">
+              <select v-model="filter" class="directory-game-select" aria-label="按游戏筛选客厅">
+                <option v-for="item in gameFilters" :key="item.id" :value="item.id">
+                  {{ item.id === 'all' ? '全部游戏' : item.label }}
+                </option>
+              </select>
               <div class="filters" aria-label="筛选客厅">
                 <button
                   v-for="item in gameFilters"
