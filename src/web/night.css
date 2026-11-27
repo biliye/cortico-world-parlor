@@ -1925,6 +1925,7 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
     border-bottom: 1px solid var(--line);
     background: var(--bg);
   }
+  html.vue-app .topbar .brand { flex: none; white-space: nowrap; }
   html.vue-app .topbar .room-pill { min-width: 0; }
   html.vue-app .room-pill .room-pill-name { min-width: 0; }
   html.vue-app .topbar .presence { display: none; }
@@ -1974,6 +1975,42 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .turn-box { gap: 8px; }
   html.vue-app .table-head { flex-wrap: wrap; }
   html.vue-app .directory, html.vue-app .hall-paper { scroll-margin-top: 12px; }
+}
+
+/* 手机横屏和平板竖屏同样需要给品牌和厅名留出空间。 */
+@media (max-width: 900px) {
+  html.vue-app .topbar .room-pill { min-height: 44px; padding: 0 8px; gap: 5px; }
+  html.vue-app .top-right { flex: none; gap: 0; }
+  html.vue-app .top-right .tool { width: 44px; height: 44px; justify-content: center; padding: 0; }
+  html.vue-app .top-right .tool-label { display: none; }
+  html.vue-app .top-right .tool .icon { width: 18px; height: 18px; }
+  html.vue-app .tool-badge { top: 3px; right: 3px; }
+  html.vue-app .top-right .tools-toggle { display: inline-flex; }
+  html.vue-app .extra-tools { display: block; }
+  html.vue-app .extra-tools-list {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: var(--stage-right);
+    width: 160px;
+    max-height: calc(100dvh - var(--bottom-rail) - 80px - env(safe-area-inset-top));
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--panel);
+    box-shadow: var(--shadow-md);
+  }
+  html.vue-app .extra-tools.is-open .extra-tools-list { display: grid; }
+  html.vue-app .extra-tools-list :is(.tool, .theme-picker) {
+    justify-content: flex-start;
+    width: 100%;
+    height: 44px;
+    padding: 0 12px;
+    border-radius: 10px;
+  }
+  html.vue-app .extra-tools-list .tool-label { display: inline; }
+  html.vue-app .extra-tools-list .theme-picker .icon { display: block; }
 }
 
 /* 小报在平板以下落成单栏：新闻在前、公告在后，分隔线从竖改横。
@@ -2037,41 +2074,9 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
     padding-inline: max(10px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-right));
   }
   html.vue-app .brand span { display: none; }
-  html.vue-app .brand b { font-size: 17px; white-space: nowrap; }
-  html.vue-app .topbar .room-pill { min-height: 44px; padding: 0 8px; gap: 5px; }
+  html.vue-app .brand b { font-size: 17px; }
   html.vue-app .room-pill-arrow { display: none; }
   html.vue-app .conn-chip { position: absolute; top: 100%; left: 14px; background: var(--panel); }
-  html.vue-app .top-right { flex: none; gap: 0; }
-  html.vue-app .top-right .tool { width: 44px; height: 44px; justify-content: center; padding: 0; }
-  html.vue-app .top-right .tool-label { display: none; }
-  html.vue-app .top-right .tool .icon { width: 18px; height: 18px; }
-  html.vue-app .tool-badge { top: 3px; right: 3px; }
-  html.vue-app .top-right .tools-toggle { display: inline-flex; }
-  html.vue-app .extra-tools { display: block; }
-  html.vue-app .extra-tools-list {
-    display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    right: max(10px, env(safe-area-inset-right));
-    width: 160px;
-    max-height: calc(100dvh - var(--bottom-rail) - 70px - env(safe-area-inset-top));
-    overflow-y: auto;
-    padding: 4px;
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
-    background: var(--panel);
-    box-shadow: var(--shadow-md);
-  }
-  html.vue-app .extra-tools.is-open .extra-tools-list { display: grid; }
-  html.vue-app .extra-tools-list :is(.tool, .theme-picker) {
-    justify-content: flex-start;
-    width: 100%;
-    height: 44px;
-    padding: 0 12px;
-    border-radius: 10px;
-  }
-  html.vue-app .extra-tools-list .tool-label { display: inline; }
-  html.vue-app .extra-tools-list .theme-picker .icon { display: block; }
   html.vue-app :is(.composer-row input, .dm-input) { font-size: 16px; }
   html.vue-app .composer-row .send-btn { width: 44px; height: 44px; }
   html.vue-app .directory-head h2 { font-size: 23px; }

@@ -179,7 +179,7 @@ onBeforeUnmount(() => {
         <a class="brand" href="/play"><b>鲸语</b><span>PARLOR CLUB</span></a>
         <span v-if="view === 'divination'" class="room-pill"><span class="room-pill-name">问卦阁</span></span>
         <span v-else-if="seat?.guest" class="room-pill"><span class="room-pill-name">{{ roomLabel }}</span></span>
-        <button v-else class="room-pill" type="button" title="换客厅" :aria-label="'换客厅，当前在' + roomLabel" @click="switcherOpen = true">
+        <button v-else class="room-pill" type="button" :title="'换客厅 · ' + roomLabel" :aria-label="'换客厅，当前在' + roomLabel" @click="switcherOpen = true">
           <i class="live-dot" :class="{ off: !connected }" />
           <span class="room-pill-name">{{ roomLabel }}</span>
           <span class="room-pill-arrow">▾</span>
@@ -192,9 +192,11 @@ onBeforeUnmount(() => {
         <div class="top-right">
           <div ref="toolsRegion" class="extra-tools" :class="{ 'is-open': toolsOpen }"
             @keydown.esc="closeTools(true)">
-            <button ref="toolsToggle" class="tool tools-toggle" type="button" aria-label="更多工具"
+            <button ref="toolsToggle" class="tool tools-toggle" type="button"
+              :aria-label="!toolsOpen && dmUnread ? '更多工具，私聊未读 ' + dmUnread + ' 条' : '更多工具'"
               aria-controls="extra-tools" :aria-expanded="toolsOpen" @click="toolsOpen = !toolsOpen">
               <Icon :name="toolsOpen ? 'close' : 'menu'" />
+              <span v-if="!toolsOpen && dmUnread" class="tool-badge" aria-hidden="true">{{ dmUnread }}</span>
             </button>
             <div id="extra-tools" class="extra-tools-list">
               <button v-if="gateway && seat && view !== 'divination'" class="tool" type="button" title="离开客厅" aria-label="离开客厅"
@@ -208,15 +210,16 @@ onBeforeUnmount(() => {
                 <Icon name="tea" /><span class="tool-label">茶点</span>
               </button>
               <ThemePicker />
+              <button v-if="!seat?.guest" class="tool" type="button" title="私聊"
+                :aria-label="dmUnread ? '私聊，未读 ' + dmUnread + ' 条' : '私聊'" @click="closeTools(true); toggleDm()">
+                <Icon name="user" /><span class="tool-label">私聊</span>
+                <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
+              </button>
             </div>
           </div>
           <button v-if="!specialView" class="tool" type="button" aria-label="信箱" @click="openMail">
             <Icon name="mail" /><span class="tool-label">信箱</span>
             <span v-if="mailUnread" class="tool-badge">{{ mailUnread }}</span>
-          </button>
-          <button v-if="!seat?.guest" class="tool" type="button" title="私聊" aria-label="私聊" @click="toggleDm">
-            <Icon name="user" /><span class="tool-label">私聊</span>
-            <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
           </button>
           <button v-if="!specialView" class="tool dock" type="button"
             :aria-expanded="chatExpanded()" aria-label="有话慢慢聊" @click="toggleMainChat">
