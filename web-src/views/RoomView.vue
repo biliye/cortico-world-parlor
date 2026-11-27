@@ -17,6 +17,8 @@ import type { TableSummary } from '../api/types.ts';
 const notice = ref('');
 const busy = ref(false);
 const accessOpen = ref(false);
+const membersExpanded = ref(false);
+const gamesHeading = ref<HTMLElement | null>(null);
 const requireHuman = ref(false);
 const werewolfSize = ref<6 | 9 | 12>(9);
 
@@ -96,6 +98,11 @@ function backToHall(): void {
   void run(() => goRoom('hall'));
 }
 
+function focusGames(): void {
+  gamesHeading.value?.focus({ preventScroll: true });
+  gamesHeading.value?.scrollIntoView({ block: 'start' });
+}
+
 /** 与旧版同一句话、同一个链接：朋友先进客厅，再选桌。 */
 async function invite(): Promise<void> {
   const room = seat.value?.room || '';
@@ -112,10 +119,10 @@ async function invite(): Promise<void> {
 <template>
   <div class="view view-lobby">
     <AnnouncementBanner />
-    <div class="club-page-nav">
-      <button v-if="!seat?.guest" class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
-      <button v-if="!seat?.guest" class="btn ghost small" type="button" @click="invite">邀请来客厅</button>
-      <button v-if="!seat?.guest" class="btn ghost small" type="button" @click="accessOpen = true">成员管理</button>
+    <div v-if="!seat?.guest" class="club-page-nav">
+      <button class="btn ghost small" type="button" @click="backToHall">← 返回大厅</button>
+      <button class="btn ghost small" type="button" @click="invite">邀请来客厅</button>
+      <button class="btn ghost small" type="button" @click="accessOpen = true">成员管理</button>
     </div>
 
     <AccessDialog v-model:open="accessOpen" />
@@ -134,12 +141,16 @@ async function invite(): Promise<void> {
       <p>同一个客厅，不同的好时光。想玩就入座，想聊就坐一会儿。</p>
     </section>
 
-    <section class="panel members">
+    <section class="panel members" :class="{ 'members-expanded': membersExpanded }">
       <div class="panel-head">
         <h2>房间里的人</h2>
         <span class="muted">{{ seats.length }} 人</span>
+        <button class="btn ghost small members-toggle" type="button" aria-controls="room-members"
+          :aria-expanded="membersExpanded" @click="membersExpanded = !membersExpanded">
+          {{ membersExpanded ? '收起' : '展开' }}
+        </button>
       </div>
-      <div class="member-row">
+      <div id="room-members" class="member-row">
         <span v-for="person in seats" :key="person.id" class="member-chip">
           <span class="avatar avatar-xs">{{ initialOf(person.name) }}</span>
           <span>
@@ -154,9 +165,10 @@ async function invite(): Promise<void> {
       </div>
     </section>
 
-    <div class="club-section-head">
+    <div class="club-section-head room-tables-head">
       <h2>挑张桌，坐下来</h2>
-      <span class="muted">斗地主 3 席 · 狼人杀 6／9／12 席 · 五子棋和中国象棋 2 席 · 大富翁 4 席</span>
+      <span class="muted table-capacity-hint">斗地主 3 席 · 狼人杀 6／9／12 席 · 五子棋和中国象棋 2 席 · 大富翁 4 席</span>
+      <button class="btn ghost small room-open-shortcut" type="button" @click="focusGames">开新桌 ↓</button>
     </div>
 
     <p v-if="notice" class="warn">{{ notice }}</p>
@@ -212,6 +224,7 @@ async function invite(): Promise<void> {
       </article>
     </div>
 
+    <h2 ref="gamesHeading" class="room-games-heading" tabindex="-1">开一张新桌</h2>
     <div class="game-grid">
       <article v-for="game in ENABLED_GAMES" :key="game" class="game-card game-card-live game-card-hero" :class="{ 'aeroplane-card': game === 'aeroplane' }">
         <img v-if="game === 'aeroplane'" :src="aeroplaneCover" class="aeroplane-cover" alt="" loading="lazy" width="760" height="510">

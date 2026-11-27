@@ -248,7 +248,7 @@ function closeDrawer(): void {
         </div>
         <div class="chat-head-actions">
           <button v-if="tab === 'mail' && mailUnread" class="btn ghost small" type="button" :disabled="readingAll" @click="readAll">都看过了</button>
-          <button class="btn ghost small" type="button" aria-label="收起聊天" @click="collapse">收起</button>
+          <button class="btn ghost small chat-collapse" type="button" aria-label="收起聊天" @click="collapse">收起</button>
           <button class="btn ghost small sheet-close" type="button" aria-label="关闭聊天" @click="closeDrawer">✕</button>
         </div>
       </div>

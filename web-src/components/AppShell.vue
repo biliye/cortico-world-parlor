@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 应用外壳：左侧窄门牌栏 + 顶部细条 + 内容 + 浮起来的「有话慢慢聊」。
+ * 应用外壳：门牌栏、顶部工具、内容与聊天抽屉。
  * 三层结构不变：大厅 → 客厅 → 牌桌；门牌栏负责在会馆里走动，顶条负责工具。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -21,7 +21,7 @@ import { activeTable, connection, goRoom, hallSeats, leaveRoom, snapshot, tableC
 import { seat } from '../stores/session.ts';
 import { gateway } from '../stores/server.ts';
 import { toastKind, toastText } from '../stores/ui.ts';
-import { backToRoom, enterDivination, enterStory, view } from '../stores/view.ts';
+import { backToRoom, enterDivination, enterStory, view, watchTableId } from '../stores/view.ts';
 
 defineProps<{ showStory: boolean; showDivination: boolean }>();
 
@@ -34,12 +34,14 @@ const onMahjong = computed(() => view.value === 'table'
   && MAHJONG_GAMES.some(game => game === activeTable.value?.game));
 const onAeroplane = computed(() => view.value === 'table' && activeTable.value?.game === 'aeroplane');
 const onFourColour = computed(() => view.value === 'table' && activeTable.value?.game === 'four-colour');
-const boardChatInToolbar = computed(() => view.value === 'table'
-  && (onMahjong.value || ['monopoly2d', 'gomoku', 'xiangqi', 'aeroplane'].includes(activeTable.value?.game ?? '')));
 const switcherOpen = ref(false);
 const ratingsOpen = ref(false);
 const giftOpen = ref(false);
 const leavingRoom = ref(false);
+const toolsOpen = ref(false);
+const toolsRegion = ref<HTMLElement | null>(null);
+const toolsToggle = ref<HTMLButtonElement | null>(null);
+const stageBody = ref<HTMLElement | null>(null);
 
 const sections = [
   { id: 'all', label: '发现', long: '发现客厅', icon: 'lamp' },
@@ -65,6 +67,10 @@ const floatingChatTable = computed(() => onWerewolf.value || onMahjong.value || 
   : '');
 watch(floatingChatTable, setFloatingChatTable, { immediate: true });
 onBeforeUnmount(() => setFloatingChatTable(''));
+watch([view, hallSection, watchTableId, () => snapshot.value?.id], () => {
+  toolsOpen.value = false;
+  if (stageBody.value && window.matchMedia('(max-width: 1100px)').matches) stageBody.value.scrollTop = 0;
+}, { flush: 'post' });
 
 // 快照里的未读是服务器算的总数；信箱列表本身按需刷新，角标始终跟快照走。
 watch(() => snapshot.value?.mailUnread, (count) => {
@@ -102,13 +108,30 @@ async function confirmLeaveRoom(): Promise<void> {
   finally { leavingRoom.value = false; }
 }
 
+function closeTools(restoreFocus = false): void {
+  if (!toolsOpen.value) return;
+  toolsOpen.value = false;
+  if (restoreFocus) toolsToggle.value?.focus();
+}
+
+function dismissTools(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof Node) || !toolsRegion.value?.contains(target)) closeTools();
+}
+
 onMounted(() => {
   if (!seat.value?.guest) void loadThreads();
+  document.addEventListener('pointerdown', dismissTools);
+  document.addEventListener('focusin', dismissTools);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', dismissTools);
+  document.removeEventListener('focusin', dismissTools);
 });
 </script>
 
 <template>
-  <div class="shell" :class="{ 'chat-open': !specialView && chatExpanded(), 'in-hall': inHall, 'on-werewolf': onWerewolf, 'on-aeroplane': onAeroplane }">
+  <div class="shell" :class="{ 'chat-open': !specialView && chatExpanded(), 'in-hall': inHall }">
     <aside class="rail" aria-label="会馆门牌">
       <a class="rail-mark" href="/play" aria-label="鲸语会馆">
         <Icon name="whale" />
@@ -120,6 +143,7 @@ onMounted(() => {
           class="rail-btn"
           type="button"
           :class="{ 'is-on': !specialView && inHall && hallSection === item.id }"
+          :aria-current="!specialView && inHall && hallSection === item.id ? 'page' : undefined"
           :title="item.long"
           @click="goSection(item.id)"
         >
@@ -143,15 +167,19 @@ onMounted(() => {
         <Icon name="lock" />
         <span>家长</span>
       </a>
-      <span class="rail-me" :title="name + ' · ' + roomLabel">{{ initialOf(name) }}</span>
+      <span class="rail-me rail-me-static" :class="{ 'is-guest': seat?.guest }" :title="name + ' · ' + roomLabel">{{ initialOf(name) }}</span>
+      <a v-if="!seat?.guest" class="rail-me-link" href="/parent" target="_blank" rel="noopener" :title="name + ' · 家长页'">
+        <span class="rail-me" aria-hidden="true">{{ initialOf(name) }}</span>
+        <span>家长页</span>
+      </a>
     </aside>
 
-    <main class="stage" aria-label="大厅、客厅与牌桌">
+    <main id="main" class="stage" aria-label="大厅、客厅与牌桌">
       <header class="topbar">
         <a class="brand" href="/play"><b>鲸语</b><span>PARLOR CLUB</span></a>
         <span v-if="view === 'divination'" class="room-pill"><span class="room-pill-name">问卦阁</span></span>
         <span v-else-if="seat?.guest" class="room-pill"><span class="room-pill-name">{{ roomLabel }}</span></span>
-        <button v-else class="room-pill" type="button" title="换客厅" @click="switcherOpen = true">
+        <button v-else class="room-pill" type="button" title="换客厅" :aria-label="'换客厅，当前在' + roomLabel" @click="switcherOpen = true">
           <i class="live-dot" :class="{ off: !connected }" />
           <span class="room-pill-name">{{ roomLabel }}</span>
           <span class="room-pill-arrow">▾</span>
@@ -160,35 +188,44 @@ onMounted(() => {
           <i class="pulse" :class="{ off: !connected }" />
           <b>{{ presence }}</b> 位朋友在这里
         </span>
-        <span v-if="!specialView && !connected" class="conn-chip">{{ connectionText }}</span>
+        <span v-if="!specialView && !connected" class="conn-chip" role="status">{{ connectionText }}</span>
         <div class="top-right">
-          <button v-if="gateway && seat && view !== 'divination'" class="tool" type="button" title="离开客厅" aria-label="离开客厅"
-            :disabled="leavingRoom" @click="confirmLeaveRoom">
-            <Icon name="arrow" /><span class="tool-label">退厅</span>
-          </button>
-          <button class="tool" type="button" @click="ratingsOpen = true" title="会馆等级分榜" aria-label="会馆等级分榜">
-            <Icon name="board" /><span class="tool-label">榜单</span>
-          </button>
-          <button class="tool" type="button" @click="giftOpen = true" title="茶点：送一份茶或小零食，也可以喝掉/吃掉">
-            <Icon name="tea" /><span class="tool-label">茶点</span>
-          </button>
-          <button v-if="!specialView" class="tool" type="button" @click="openMail">
+          <div ref="toolsRegion" class="extra-tools" :class="{ 'is-open': toolsOpen }"
+            @keydown.esc="closeTools(true)">
+            <button ref="toolsToggle" class="tool tools-toggle" type="button" aria-label="更多工具"
+              aria-controls="extra-tools" :aria-expanded="toolsOpen" @click="toolsOpen = !toolsOpen">
+              <Icon :name="toolsOpen ? 'close' : 'menu'" />
+            </button>
+            <div id="extra-tools" class="extra-tools-list">
+              <button v-if="gateway && seat && view !== 'divination'" class="tool" type="button" title="离开客厅" aria-label="离开客厅"
+                :disabled="leavingRoom" @click="closeTools(true); confirmLeaveRoom()">
+                <Icon name="arrow" /><span class="tool-label">退厅</span>
+              </button>
+              <button class="tool" type="button" @click="closeTools(true); ratingsOpen = true" title="会馆等级分榜" aria-label="会馆等级分榜">
+                <Icon name="board" /><span class="tool-label">榜单</span>
+              </button>
+              <button class="tool" type="button" @click="closeTools(true); giftOpen = true" title="茶点：送一份茶或小零食，也可以喝掉/吃掉">
+                <Icon name="tea" /><span class="tool-label">茶点</span>
+              </button>
+              <ThemePicker />
+            </div>
+          </div>
+          <button v-if="!specialView" class="tool" type="button" aria-label="信箱" @click="openMail">
             <Icon name="mail" /><span class="tool-label">信箱</span>
             <span v-if="mailUnread" class="tool-badge">{{ mailUnread }}</span>
           </button>
-          <button v-if="!seat?.guest" class="tool" type="button" @click="toggleDm">
-            <Icon name="chat" /><span class="tool-label">私聊</span>
+          <button v-if="!seat?.guest" class="tool" type="button" title="私聊" aria-label="私聊" @click="toggleDm">
+            <Icon name="user" /><span class="tool-label">私聊</span>
             <span v-if="dmUnread" class="tool-badge">{{ dmUnread }}</span>
           </button>
-          <ThemePicker />
-          <button v-if="!specialView" class="tool dock" :class="{ 'board-chat-tool': boardChatInToolbar }" type="button"
+          <button v-if="!specialView" class="tool dock" type="button"
             :aria-expanded="chatExpanded()" aria-label="有话慢慢聊" @click="toggleMainChat">
             <Icon name="chat" /><span class="tool-label">{{ chatExpanded() ? '收起聊天' : '有话慢慢聊' }}</span>
           </button>
         </div>
       </header>
 
-      <div class="stage-body">
+      <div ref="stageBody" class="stage-body">
         <slot />
       </div>
     </main>
@@ -199,27 +236,6 @@ onMounted(() => {
     <RatingsPanel v-model:open="ratingsOpen" />
     <GiftPanel v-model:open="giftOpen" />
     <div v-if="!specialView" class="sheet-backdrop" :class="{ 'is-show': sheetOpen }" @click="closeSheet" />
-    <button v-if="!specialView && !chatExpanded() && !boardChatInToolbar" class="chat-fab" type="button" @click="toggleMainChat">
-      <Icon name="chat" />有话慢慢聊
-    </button>
     <div v-if="toastText" class="toast show" :class="{ bad: toastKind === 'bad' }" role="status">{{ toastText }}</div>
   </div>
 </template>
-
-<style scoped>
-.tool.board-chat-tool { display: inline-flex; }
-.shell.on-werewolf > .chat-fab {
-  border: 1px solid var(--line-2);
-  background: var(--panel-2);
-  color: var(--text);
-  box-shadow: 0 4px 16px #0003;
-}
-@media (max-width: 1100px) {
-  .on-aeroplane .top-right .tool.dock { display: inline-flex; }
-}
-@media (max-width: 430px) {
-  .on-aeroplane .topbar { padding-inline: 10px; }
-  .on-aeroplane .topbar .room-pill { min-width: 0; padding-inline: 8px; }
-  .on-aeroplane .top-right .tool { padding-inline: 4px; }
-}
-</style>

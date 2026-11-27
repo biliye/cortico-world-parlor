@@ -75,7 +75,8 @@ html.vue-app body {
   -webkit-font-smoothing: antialiased;
 }
 
-html.vue-app button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+/* 扑克牌按钮沿用牌面自己的字体和底色，图集加载前文字也看得清。 */
+html.vue-app button:where(:not(.pcard)) { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 html.vue-app a { color: inherit; text-decoration: none; }
 html.vue-app svg.icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 html.vue-app .muted { color: var(--muted); }
@@ -188,6 +189,12 @@ html.vue-app .rail-me {
   font-weight: 600;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22);
 }
+html.vue-app .rail-me-link,
+html.vue-app .top-right .tools-toggle,
+html.vue-app .directory-game-select,
+html.vue-app .view-lobby .room-open-shortcut,
+html.vue-app .room-games-heading,
+html.vue-app .members .members-toggle { display: none; }
 
 /* 中：舞台 */
 html.vue-app .stage { position: relative; min-width: 0; height: 100vh; overflow: hidden; }
@@ -256,6 +263,7 @@ html.vue-app .conn-chip {
   padding: 2px 9px;
 }
 html.vue-app .top-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+html.vue-app .extra-tools, html.vue-app .extra-tools-list { display: contents; }
 html.vue-app .tool {
   position: relative;
   height: 34px;
@@ -1356,25 +1364,6 @@ html.vue-app .mail-actions { margin-top: 8px; display: flex; gap: 6px; }
 html.vue-app .mail-go { margin-top: 6px; font-size: 11px; color: var(--lime); }
 html.vue-app .unread-dot { position: absolute; right: 10px; bottom: 10px; width: 6px; height: 6px; border-radius: 50%; background: var(--lime); }
 
-/* 聊天浮动按钮（收起时） */
-html.vue-app .chat-fab {
-  display: none;
-  position: fixed;
-  right: 22px;
-  bottom: 22px;
-  z-index: 45;
-  height: 44px;
-  padding: 0 18px;
-  border-radius: 999px;
-  background: var(--lime);
-  color: var(--lime-ink);
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 700;
-  box-shadow: 0 14px 36px rgba(240, 185, 94, .22);
-}
-
 /* ——— 加入页 ——— */
 html.vue-app .join {
   min-height: 100vh;
@@ -1660,6 +1649,12 @@ html.vue-app .turn-timer.is-off { background: conic-gradient(var(--line-2) 100%,
 html.vue-app .table-head-host { margin-top: 14px; }
 html.vue-app .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 html.vue-app .view-table .panel h2 { font-size: 18px; margin: 0 0 10px; }
+html.vue-app:not(.card-art-ready) .ddz-hand .pcard {
+  justify-content: flex-start;
+  padding-inline: calc(var(--cw) * .09);
+  font-size: calc(var(--cw) * .28);
+}
+html.vue-app:not(.card-art-ready) .ddz-hand .pcard.joker { font-size: calc(var(--cw) * .21); }
 
 /* ——— 弹窗、私聊、公告、提示 ——— */
 html.vue-app .rooms-dialog, html.vue-app .access-dialog {
@@ -1862,38 +1857,78 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 @media (max-width: 1100px) {
   html.vue-app .join-cards { display: none; }
   html.vue-app .join-felt { width: 760px; height: 340px; bottom: -150px; }
-  html.vue-app .shell { grid-template-columns: minmax(0, 1fr); }
+  html.vue-app .shell {
+    --bottom-rail: calc(62px + env(safe-area-inset-bottom));
+    --stage-left: max(20px, env(safe-area-inset-left));
+    --stage-right: max(20px, env(safe-area-inset-right));
+    height: 100dvh;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
   html.vue-app .rail {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    top: auto;
-    height: 62px;
+    grid-row: 2;
+    height: var(--bottom-rail);
     flex-direction: row;
-    justify-content: center;
-    gap: 18px;
-    padding: 0 16px;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 max(12px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(12px, env(safe-area-inset-left));
     border-right: 0;
     border-top: 1px solid var(--line);
     background: color-mix(in srgb, var(--bg-soft) 92%, transparent);
     backdrop-filter: blur(14px);
     z-index: 50;
   }
-  html.vue-app .rail-mark, html.vue-app .rail-sep, html.vue-app .rail-parent { display: none; }
-  html.vue-app .rail-nav { flex-direction: row; gap: 10px; min-width: 0; }
-  html.vue-app .rail-btn { width: 62px; padding: 6px 0 5px; }
-  html.vue-app .rail-me { width: 30px; height: 30px; font-size: 11px; }
-  html.vue-app .stage { height: 100vh; }
-  html.vue-app .stage-body { padding-top: 84px; padding-bottom: 74px; }
-  html.vue-app .stage-body > .view { padding: 0 20px 40px; }
-  /* 内容区左右留白收到 20，纸面实底跟着收，接缝处才不漏画面。 */
-  html.vue-app .hall-floor { margin: 0 -20px; padding: 0 20px; }
-  html.vue-app .shell.chat-open .stage-body > .view { padding-right: 20px; }
-  html.vue-app .topbar { height: 76px; padding: 0 20px; gap: 10px; }
+  html.vue-app .rail-mark,
+  html.vue-app .rail-sep,
+  html.vue-app .rail-spacer,
+  html.vue-app .rail-parent,
+  html.vue-app .rail-me-static:not(.is-guest) { display: none; }
+  html.vue-app .rail-nav { flex: 1; flex-direction: row; justify-content: flex-start; gap: 8px; min-width: 0; }
+  html.vue-app .rail-btn { width: 62px; min-height: 44px; flex: 0 1 62px; padding: 6px 0 5px; white-space: nowrap; }
+  html.vue-app .rail-me { width: 28px; height: 28px; font-size: 11px; flex: none; }
+  html.vue-app .rail-me-link {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 1px;
+    flex: 0 0 54px;
+    min-height: 48px;
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 10px;
+    line-height: 1.2;
+  }
+  html.vue-app .rail-me-link:hover,
+  html.vue-app .rail-me-link:active { background: var(--panel-2); }
+  html.vue-app .stage {
+    grid-row: 1;
+    height: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  html.vue-app .stage-body { height: auto; min-height: 0; padding-top: 0; overscroll-behavior-y: contain; }
+  html.vue-app .stage-body > .view { padding: 0 var(--stage-right) 24px var(--stage-left); }
+  /* 纸面铺到视口两侧，内容仍让出横屏安全区。 */
+  html.vue-app .hall-floor {
+    margin: 0 calc(-1 * var(--stage-right)) 0 calc(-1 * var(--stage-left));
+    padding: 0 var(--stage-right) 0 var(--stage-left);
+  }
+  html.vue-app .hall-floor::after { height: 24px; }
+  html.vue-app .topbar {
+    position: relative;
+    inset: auto;
+    height: auto;
+    min-height: calc(68px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) var(--stage-right) 0 var(--stage-left);
+    gap: 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+  }
+  html.vue-app .topbar .room-pill { min-width: 0; }
+  html.vue-app .room-pill .room-pill-name { min-width: 0; }
   html.vue-app .topbar .presence { display: none; }
   html.vue-app .top-right .tool { padding: 0 9px; }
-  html.vue-app .top-right .tool.dock { display: none; }
   html.vue-app .top-right .theme-picker { padding: 0 8px; }
   html.vue-app .posters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   html.vue-app .mine-grid { grid-template-columns: minmax(0, 1fr); }
@@ -1907,12 +1942,20 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
     right: 0;
     bottom: 0;
     width: auto;
-    height: min(76vh, 620px);
+    height: min(76dvh, 620px);
     z-index: 70;
-    padding: 0 10px calc(10px + env(safe-area-inset-bottom));
+    padding: 0 max(10px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
   html.vue-app .shell.chat-open .right-rail { display: flex; }
-  html.vue-app .chat-panel { border-radius: 22px 22px 16px 16px; }
+  html.vue-app .right-rail .chat-panel {
+    position: static;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    padding: 0;
+    border-radius: 22px 22px 16px 16px;
+    transform: none;
+  }
   html.vue-app .sheet-grip {
     display: block;
     width: 42px;
@@ -1921,14 +1964,16 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
     background: var(--line-2);
     margin: 10px auto 0;
   }
-  html.vue-app .sheet-close { display: inline-flex; }
+  html.vue-app .chat-head-actions .chat-collapse { display: none; }
+  html.vue-app .chat-head-actions .sheet-close { display: inline-flex; width: 44px; height: 44px; }
   html.vue-app .chat-head { padding-top: 12px; }
-  html.vue-app .chat-fab { display: inline-flex; bottom: calc(78px + env(safe-area-inset-bottom)); }
+  html.vue-app .toast { bottom: calc(var(--bottom-rail) + 10px); }
   html.vue-app .join .panel { padding: 26px 22px 24px; }
   html.vue-app .club-table-grid, html.vue-app .game-grid { grid-template-columns: minmax(0, 1fr); }
   html.vue-app .lobby-head h1 { font-size: 34px; }
   html.vue-app .turn-box { gap: 8px; }
   html.vue-app .table-head { flex-wrap: wrap; }
+  html.vue-app .directory, html.vue-app .hall-paper { scroll-margin-top: 12px; }
 }
 
 /* 小报在平板以下落成单栏：新闻在前、公告在后，分隔线从竖改横。
@@ -1946,13 +1991,36 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
 }
 
 @media (max-width: 640px) {
-  html.vue-app .hero h1 { font-size: clamp(40px, 11vw, 54px); }
-  html.vue-app .hero-sub { font-size: 13px; }
-  html.vue-app .hero-actions { flex-wrap: wrap; gap: 12px; }
-  html.vue-app .cta { height: 46px; font-size: 13.5px; }
+  html.vue-app .shell {
+    --stage-left: max(14px, env(safe-area-inset-left));
+    --stage-right: max(14px, env(safe-area-inset-right));
+  }
+  html.vue-app .rail {
+    gap: 2px;
+    padding-inline: max(4px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-right));
+  }
+  html.vue-app .rail-nav { justify-content: space-between; gap: 0; }
+  html.vue-app .rail-btn { min-width: 0; flex: 1 1 0; }
+  html.vue-app .rail-me-link { flex-basis: 46px; }
+  html.vue-app .hero { padding: 20px 0 0; }
+  html.vue-app .hero-copy > .eyebrow { display: none; }
+  html.vue-app .hero h1 { margin: 0; font-size: clamp(32px, 8.5vw, 48px); }
+  html.vue-app .hero h1 br { display: none; }
+  html.vue-app .hero-sub { margin-top: 8px; font-size: 13px; }
+  html.vue-app .hero-sub > span { display: inline; }
+  html.vue-app .hero-dock { margin-top: 16px; padding-bottom: 10px; }
+  html.vue-app .hero-actions { flex-wrap: wrap; gap: 0 14px; margin-top: 14px; }
+  html.vue-app .hero-actions .ghost-link { min-height: 44px; }
+  html.vue-app .cta { min-width: 0; height: 44px; font-size: 13.5px; }
+  html.vue-app .cta-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  html.vue-app .cta-arrow { flex: none; }
+  html.vue-app .hero-now .cta { width: 100%; justify-content: space-between; }
+  html.vue-app .hero-now-main h2 { font-size: 23px; overflow-wrap: anywhere; }
   /* 手机窄栏里把「人数/桌数」和轮播拆成两行，统计不再被挤断。 */
   html.vue-app .hero-now-main { flex: 1 1 100%; }
   html.vue-app .hero-carousel { justify-content: flex-start; padding-bottom: 0; }
+  html.vue-app .hero-carousel :is(.car-btn, .car-pause) { width: 40px; height: 40px; }
+  html.vue-app .hero-carousel .car-dots { display: none; }
   html.vue-app .scard { width: 48px; height: 68px; font-size: 12px; }
   html.vue-app .posters { grid-template-columns: minmax(0, 1fr); }
   /* 手机上画面只铺在首屏那一块，字和牌子挤在一起容易糊，
@@ -1963,19 +2031,75 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   }
   html.vue-app .hall-bg-mark { display: none; }
   html.vue-app .hero-now { padding: 12px 14px 13px; border-radius: 16px; }
-  html.vue-app .topbar { gap: 6px; padding: 0 14px; }
+  html.vue-app .topbar {
+    min-height: calc(56px + env(safe-area-inset-top));
+    gap: 6px;
+    padding-inline: max(10px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-right));
+  }
   html.vue-app .brand span { display: none; }
-  html.vue-app .brand b { font-size: 18px; }
-  html.vue-app .room-pill { padding: 0 9px; }
+  html.vue-app .brand b { font-size: 17px; white-space: nowrap; }
+  html.vue-app .topbar .room-pill { min-height: 44px; padding: 0 8px; gap: 5px; }
   html.vue-app .room-pill-arrow { display: none; }
-  html.vue-app .top-right { gap: 2px; }
-  html.vue-app .top-right .tool { padding: 0 7px; }
+  html.vue-app .conn-chip { position: absolute; top: 100%; left: 14px; background: var(--panel); }
+  html.vue-app .top-right { flex: none; gap: 0; }
+  html.vue-app .top-right .tool { width: 44px; height: 44px; justify-content: center; padding: 0; }
   html.vue-app .top-right .tool-label { display: none; }
   html.vue-app .top-right .tool .icon { width: 18px; height: 18px; }
-  html.vue-app .tool-badge { top: -1px; right: 1px; }
-  html.vue-app .theme-picker { padding: 0 6px; }
-  html.vue-app .theme-picker .theme-picker-label { display: none; }
+  html.vue-app .tool-badge { top: 3px; right: 3px; }
+  html.vue-app .top-right .tools-toggle { display: inline-flex; }
+  html.vue-app .extra-tools { display: block; }
+  html.vue-app .extra-tools-list {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: max(10px, env(safe-area-inset-right));
+    width: 160px;
+    max-height: calc(100dvh - var(--bottom-rail) - 70px - env(safe-area-inset-top));
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--panel);
+    box-shadow: var(--shadow-md);
+  }
+  html.vue-app .extra-tools.is-open .extra-tools-list { display: grid; }
+  html.vue-app .extra-tools-list :is(.tool, .theme-picker) {
+    justify-content: flex-start;
+    width: 100%;
+    height: 44px;
+    padding: 0 12px;
+    border-radius: 10px;
+  }
+  html.vue-app .extra-tools-list .tool-label { display: inline; }
+  html.vue-app .extra-tools-list .theme-picker .icon { display: block; }
+  html.vue-app :is(.composer-row input, .dm-input) { font-size: 16px; }
+  html.vue-app .composer-row .send-btn { width: 44px; height: 44px; }
   html.vue-app .directory-head h2 { font-size: 23px; }
+  html.vue-app .directory { padding-top: 22px; }
+  html.vue-app .directory-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  html.vue-app .directory-tools .search { grid-column: 1 / -1; min-width: 0; }
+  html.vue-app .view-hall :is(.search, .hall-create-row input, .hall-create-row select) { min-height: 44px; font-size: 16px; }
+  html.vue-app .directory-tools .filters { display: none; }
+  html.vue-app .directory-game-select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
+  }
+  html.vue-app .view-hall .refresh { min-height: 44px; padding: 0 12px; }
+  html.vue-app .hall-rooms-list .poster-art { height: 96px; }
+  html.vue-app .poster-fav { width: 44px; height: 44px; font-size: 16px; }
+  html.vue-app .poster-body h3 { overflow-wrap: anywhere; }
+  html.vue-app .poster-body p { min-height: 0; overflow-wrap: anywhere; }
+  html.vue-app .poster-foot { align-items: center; flex-wrap: wrap; gap: 0 8px; padding-top: 2px; }
+  html.vue-app .poster-go { min-height: 44px; }
   html.vue-app .hall-create-row input { min-width: 100%; }
   html.vue-app .join h1 { font-size: 25px; }
   html.vue-app .join .panel { padding: 22px 18px 20px; }
@@ -1991,11 +2115,102 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .fav-row > .btn { display: none; }
   html.vue-app .empty-stage { padding: 32px 16px 30px; }
   /* 小报在手机上一屏放不下，收一档留白与字号，别让首条标题压到「读全文」。 */
-  html.vue-app .hall-paper { padding: 30px 0 38px; scroll-margin-top: 84px; }
+  html.vue-app .hall-paper { padding: 30px 0 38px; }
   html.vue-app .paper-head h2 { font-size: clamp(26px, 7.4vw, 34px); }
   html.vue-app .news-item:first-child .news-title { font-size: 18.5px; }
   html.vue-app .news-head { gap: 2px 10px; }
   html.vue-app .news-body { padding: 12px 13px; font-size: 13px; }
+
+  html.vue-app .club-page-nav { flex-wrap: wrap; gap: 0 4px; padding: 2px 0 0; }
+  html.vue-app .club-page-nav .btn { min-height: 44px; padding-inline: 8px; }
+  html.vue-app :is(.view-lobby, .view-table) .lobby-head { margin-top: 6px; }
+  html.vue-app :is(.view-lobby, .view-table) .lobby-head h1 { margin-top: 5px; font-size: 28px; line-height: 1.2; }
+  html.vue-app :is(.view-lobby, .view-table) .lobby-head :is(h1, p) { overflow-wrap: anywhere; }
+  html.vue-app .view-lobby .club-welcome { display: none; }
+  html.vue-app .view-lobby > .members { margin-top: 14px; padding: 2px 12px; }
+  html.vue-app .members .panel-head h2 { font-size: 14px; }
+  html.vue-app .members .members-toggle { display: inline-flex; min-height: 44px; padding-inline: 10px; border: 0; }
+  html.vue-app .members:not(.members-expanded) .member-row { display: none; }
+  html.vue-app .members.members-expanded .member-row { margin: 0 0 10px; }
+  html.vue-app .room-tables-head { align-items: center; margin-top: 12px; gap: 4px 10px; }
+  html.vue-app .room-tables-head h2 { font-size: 19px; }
+  html.vue-app .room-tables-head .table-capacity-hint { display: none; }
+  html.vue-app .view-lobby .room-open-shortcut { display: inline-flex; min-height: 44px; margin-left: auto; }
+  html.vue-app .club-table-grid { gap: 10px; margin: 6px 0 20px; }
+  html.vue-app .club-table-card { padding: 0; }
+  html.vue-app .club-table-card .club-scene { display: none; }
+  html.vue-app .club-table-card > .club-section-head { padding: 10px 12px 0; }
+  html.vue-app .club-table-copy { padding: 5px 12px 12px; }
+  html.vue-app .club-table-copy :is(h3, p, small) { overflow-wrap: anywhere; white-space: normal; }
+  html.vue-app .club-table-copy small { font-size: 11px; }
+  html.vue-app .room-games-heading { display: block; margin: 0; font-size: 19px; scroll-margin-top: 12px; }
+  html.vue-app .view-lobby .game-grid { gap: 10px; margin-top: 10px; }
+  html.vue-app .view-lobby .game-card { padding: 12px; }
+  html.vue-app .view-lobby .game-card h2 { margin-top: 3px; font-size: 18px; }
+  html.vue-app .view-lobby :is(.club-room-foot, .game-card-foot) .btn,
+  html.vue-app .view-table .actions .btn { min-height: 44px; height: auto; padding-block: 6px; }
+}
+
+@media (max-width: 640px), (max-width: 1100px) and (max-height: 500px) and (orientation: landscape) {
+  html.vue-app .view-table .table-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    gap: 8px;
+    margin-top: 2px;
+    padding: 0 0 8px;
+  }
+  html.vue-app .table-head .game-id { gap: 8px; min-width: 0; }
+  html.vue-app .table-head .game-icon { flex: 0 0 34px; width: 34px; height: 34px; border-radius: 10px; }
+  html.vue-app .view-table .table-head h1 { font-size: 19px; line-height: 1.2; overflow-wrap: anywhere; }
+  html.vue-app .table-head .game-id p { color: var(--muted); white-space: normal; }
+  html.vue-app .table-head .turn-box { min-width: 0; gap: 5px; }
+  html.vue-app .table-head .turn-copy { min-width: 0; max-width: 7em; }
+  html.vue-app .table-head .turn-name { font-size: 12px; overflow-wrap: anywhere; }
+  html.vue-app .table-head .turn-timer { flex: 0 0 39px; width: 39px; height: 39px; }
+  html.vue-app .table-head-host { margin-top: 0; }
+  html.vue-app .view-table > .panel { margin-top: 12px; padding: 12px 14px; }
+  html.vue-app .view-table .panel-head h2 { margin: 0; font-size: 16px; }
+  html.vue-app .view-table .table-back-secondary { display: none; }
+  html.vue-app .view-table > .game-ddz { margin-top: 2px; padding: 0; border: 0; background: transparent; }
+  html.vue-app .ddz-center { min-height: 118px; }
+  html.vue-app .ddz-center:has(.ddz-center-note) { min-height: 54px; }
+  html.vue-app .ddz-hand { padding-top: 24px; }
+  html.vue-app .ddz-board .btn { min-height: 44px; }
+}
+
+@media (max-width: 380px) {
+  html.vue-app .ddz-seat-mine { width: auto; margin-left: auto; overflow-wrap: anywhere; }
+  html.vue-app .ddz-side-info { padding-block: 4px; }
+}
+
+@media (min-width: 641px) and (max-width: 1100px) and (max-height: 500px) and (orientation: landscape) {
+  html.vue-app .shell { --bottom-rail: calc(52px + env(safe-area-inset-bottom)); }
+  html.vue-app .topbar { min-height: calc(50px + env(safe-area-inset-top)); }
+  html.vue-app .view-table:has(> .table-head) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    align-content: start;
+    gap: 4px 12px;
+  }
+  html.vue-app .view-table:has(> .table-head) > :not(.club-page-nav, .table-head) { grid-column: 1 / -1; }
+  html.vue-app .view-table .table-head { margin: 0; padding: 0; }
+  html.vue-app .view-table .ddz-board {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 10px;
+    padding: 10px 12px;
+  }
+  html.vue-app .ddz-board :is(.ddz-topbar, .ddz-bottoms, .ddz-center) { margin: 0; }
+  html.vue-app .ddz-bottom-cards .pcard.small-card { --cw: 24px; }
+  html.vue-app .ddz-board .ddz-grid { grid-column: 1 / -1; gap: 4px 8px; }
+  html.vue-app .ddz-board .ddz-stack { display: none; }
+  html.vue-app .ddz-side .avatar { width: 28px; height: 28px; font-size: 11px; }
+  html.vue-app .ddz-side-info { gap: 1px; padding-block: 4px; }
+  html.vue-app .ddz-center:has(.ddz-center-note) { justify-content: center; padding: 8px; }
+  html.vue-app .ddz-actionbar { padding-top: 2px; }
+  html.vue-app .ddz-hand { padding-block: 18px 4px; }
+  html.vue-app .ddz-hand .pcard { --cw: 50px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
