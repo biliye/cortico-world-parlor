@@ -1916,11 +1916,13 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   }
   html.vue-app .hall-floor::after { height: 24px; }
   html.vue-app .topbar {
+    --topbar-left: var(--stage-left);
+    --topbar-right: var(--stage-right);
     position: relative;
     inset: auto;
     height: auto;
     min-height: calc(68px + env(safe-area-inset-top));
-    padding: env(safe-area-inset-top) var(--stage-right) 0 var(--stage-left);
+    padding: env(safe-area-inset-top) var(--topbar-right) 0 var(--topbar-left);
     gap: 10px;
     border-bottom: 1px solid var(--line);
     background: var(--bg);
@@ -1991,7 +1993,7 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
     display: none;
     position: absolute;
     top: calc(100% + 4px);
-    right: var(--stage-right);
+    right: var(--topbar-right);
     width: 160px;
     max-height: calc(100dvh - var(--bottom-rail) - 80px - env(safe-area-inset-top));
     overflow-y: auto;
@@ -2069,9 +2071,10 @@ html.vue-app[data-theme="light"] .toast.bad { color: #a64347; }
   html.vue-app .hall-bg-mark { display: none; }
   html.vue-app .hero-now { padding: 12px 14px 13px; border-radius: 16px; }
   html.vue-app .topbar {
+    --topbar-left: max(10px, env(safe-area-inset-left));
+    --topbar-right: max(10px, env(safe-area-inset-right));
     min-height: calc(56px + env(safe-area-inset-top));
     gap: 6px;
-    padding-inline: max(10px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-right));
   }
   html.vue-app .brand span { display: none; }
   html.vue-app .brand b { font-size: 17px; }
